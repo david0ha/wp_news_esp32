@@ -1,36 +1,51 @@
 #!/usr/bin/env python3
 """
-Regenerate the Korean fonts in components/news_core/fonts/.
-
-Why this is different from a subset generator
----------------------------------------------
-The board this project forked from could subset its fonts down to seventy
-glyphs, because every string it drew was a literal in its own source. This board
-draws note titles, tag names, agent names and inbox items that arrive from the
-network at runtime. There is no symbol list that can be derived ahead of time,
-and the failure mode of guessing is a tofu box on somebody's note title — on the
-glass, after a two-second refresh, where nobody is watching.
-
-So both faces carry the whole 완성형 set: the 2350 Hangul syllables of
-KS X 1001, plus ASCII, plus the punctuation the UI composes at runtime.
-
-The 2350 are not a hardcoded table. They are exactly the syllables reachable
-through the EUC-KR encoding's Hangul rows (0xB0A1-0xC8FE), so Python's own codec
-generates them — 25 lead bytes x 94 trail bytes = 2350, no data file to rot.
-
-At 1 bpp this costs roughly 100 KB of flash per face against an 8 MB app
-partition. 1 bpp and not 4: the panel binarizes everything anyway, so
-anti-aliasing would cost four times the flash to produce pixels that are then
-thresholded straight back to black and white.
+Regenerate the newspaper faces in components/news_core/fonts/.
 
 Usage
 -----
-    python3 tools/gen_fonts.py --download          # fetch Noto Sans KR itself
-    python3 tools/gen_fonts.py --font /path/NotoSansKR-Regular.otf \\
-                               --font-medium /path/NotoSansKR-Medium.otf
+    python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools
+    /tmp/fontenv/bin/python tools/gen_fonts.py --download
 
-Needs node/npx (it shells out to lv_font_conv). The generated .c files are
+    tools/gen_fonts.py --dry-run          # report the glyph sets and stop
+
+Needs node/npx (it shells out to lv_font_conv) and fontTools (Google ships
+these families as variable fonts; see below). The generated .c files are
 committed, so a normal build never runs this.
+
+
+Why fontTools is needed
+-----------------------
+Three of the four families exist on Google Fonts only as variable fonts, and
+lv_font_conv's parser (opentype.js) reads a variable font's *default* instance
+and nothing else. Asking it for Playfair Display Bold would silently produce
+Playfair Display Regular. So each face is instanced to a fixed point on its
+axes here first, with fontTools, and lv_font_conv only ever sees a static TTF.
+
+That is not just a workaround. Source Serif 4 carries an optical-size axis, and
+this panel has a known physical pixel size, so the right `opsz` for each face is
+a calculation rather than a taste call — see PANEL_DPI below. The 16 px body
+face is instanced at opsz 8, which is a genuinely different drawing: sturdier
+stems, more open counters, exactly what survives a 1-bit render.
+
+
+Why 1 bpp, everywhere
+---------------------
+The panel has no grey. LVGL renders anti-aliased text as intermediate RGB565
+values and main.cpp's flush callback puts those through wp_quantize565(), which
+ordered-dithers them to the six inks. For a photograph that is correct and
+necessary. For text it is destructive: a 16 px serif stem is about 1.5 px wide,
+so half of it is anti-aliasing, and dithering that half turns a solid stem into
+a dotted one. Rendered side by side at 3x, 4 bpp body text has visible holes
+punched through 'm', 'w' and every descender, and the 112 px masthead grows a
+ragged stipple along contours that 1 bpp keeps smooth.
+
+1 bpp also means every text pixel is exactly WP_RGB_BLACK or WP_RGB_WHITE, and
+wp_quantize() maps both to themselves under any dither offset — so text takes
+the quantizer's identity path and cannot pick up a colour fringe.
+
+The saving is incidental but large: all seven faces together cost less than one
+of the two 완성형 Korean faces this board replaced.
 """
 
 import argparse
@@ -39,6 +54,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,133 +62,271 @@ CORE = os.path.join(ROOT, "components", "news_core")
 FONTDIR = os.path.join(CORE, "fonts")
 STRINGS_H = os.path.join(CORE, "include", "ui_strings.h")
 
-# Noto Sans KR — SIL Open Font License 1.1, so the generated bitmaps are
-# redistributable with this repo. A sans face on purpose: this panel is a
-# dashboard, and at 16 px after binarization a serif's thin strokes drop out.
-FONT_URL_BASE = "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/KR/"
-FONT_URLS = {
-    "regular": FONT_URL_BASE + "NotoSansKR-Regular.otf",
-    "medium":  FONT_URL_BASE + "NotoSansKR-Medium.otf",
+# 1600 x 1200 across a 13.3" diagonal: sqrt(1600^2 + 1200^2) / 13.3.
+PANEL_DPI = 150.4
+
+
+# --- sources ---------------------------------------------------------------
+#
+# All four families are SIL Open Font License 1.1, so the generated bitmaps are
+# redistributable with this repo. The four were chosen against the paper being
+# imitated rather than by taste:
+#
+#   masthead   blackletter               <- UnifrakturMaguntia
+#   headlines  a Didone (WP uses Postoni) <- Playfair Display
+#   body/deck  a text serif               <- Source Serif 4
+#   labels     Franklin Gothic            <- Libre Franklin, which is a revival
+#                                            of exactly that face
+GF = "https://github.com/google/fonts/raw/main/ofl/"
+FAMILIES = {
+    "unifraktur": (GF + "unifrakturmaguntia/UnifrakturMaguntia-Book.ttf",
+                   GF + "unifrakturmaguntia/OFL.txt"),
+    "playfair":   (GF + "playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf",
+                   GF + "playfairdisplay/OFL.txt"),
+    "ss4":        (GF + "sourceserif4/SourceSerif4%5Bopsz,wght%5D.ttf",
+                   GF + "sourceserif4/OFL.txt"),
+    "ss4i":       (GF + "sourceserif4/SourceSerif4-Italic%5Bopsz,wght%5D.ttf",
+                   GF + "sourceserif4/OFL.txt"),
+    "franklin":   (GF + "librefranklin/LibreFranklin%5Bwght%5D.ttf",
+                   GF + "librefranklin/OFL.txt"),
 }
-LICENSE_URL = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/LICENSE"
 
 
-def wansung_syllables():
-    """The 2350 KS X 1001 완성형 Hangul syllables.
+def opsz_for(px):
+    """Source Serif 4's optical-size axis, in points, for a pixel size here.
 
-    Derived from the EUC-KR codec rather than tabulated: the encoding's Hangul
-    block is lead 0xB0..0xC8 x trail 0xA1..0xFE, and every one of those pairs
-    decodes to exactly one syllable. If this ever returns something other than
-    2350 the assumption has broken and the caller says so loudly.
+    The axis is calibrated in points at reading distance and this panel's pixel
+    pitch is known, so this is arithmetic, not preference. Clamped to the axis's
+    own 8..60 range: 14 px is 6.7 pt, below anything the family draws.
     """
-    out = []
-    for lead in range(0xB0, 0xC9):
-        for trail in range(0xA1, 0xFF):
-            try:
-                out.append(bytes([lead, trail]).decode("euc-kr"))
-            except UnicodeDecodeError:
-                pass
-    return out
+    return min(60, max(8, round(px * 72.0 / PANEL_DPI)))
 
 
-def ui_string_chars():
-    """Every character in a #define'd string literal in ui_strings.h.
+# name -> (family, size px, variable-font location, what it must cover)
+FACES = [
+    ("ui_font_masthead_112", "unifraktur", 112, None,                              "masthead"),
+    ("ui_font_display_56",   "playfair",    56, {"wght": 800},                     "text"),
+    ("ui_font_display_36",   "playfair",    36, {"wght": 700},                     "text"),
+    ("ui_font_deck_24",      "ss4i",        24, {"wght": 400, "opsz": opsz_for(24)}, "text"),
+    ("ui_font_body_20",      "ss4",         20, {"wght": 400, "opsz": opsz_for(20)}, "text"),
+    ("ui_font_body_16",      "ss4",         16, {"wght": 400, "opsz": opsz_for(16)}, "text"),
+    ("ui_font_label_14",     "franklin",    14, {"wght": 600},                     "text"),
+]
 
-    The 완성형 set covers the Hangul, but not the typography the UI composes at
-    runtime — the interpunct between footer hints, the ↔ after a link count, the
-    percent sign. Those live in ui_strings.h (S_COMPOSED_CHARS exists precisely
-    to hold the ones no other literal contains), so they are collected from
-    there instead of being remembered here.
+
+# --- glyph sets ------------------------------------------------------------
+
+def strings_h():
+    """ui_strings.h with its comments stripped.
+
+    The comments explain the file in prose containing the very typography the
+    literals are being scanned for, so they must go before the scan — otherwise
+    every character used to *describe* the font ends up *in* the font.
     """
     with open(STRINGS_H, encoding="utf-8") as f:
         src = f.read()
-    # Comments first: the header explains itself in prose that contains Hangul
-    # and typography which must NOT end up in the font.
     src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    src = re.sub(r"//[^\n]*", "", src)
+    return re.sub(r"//[^\n]*", "", src)
 
+
+def literal_chars(src, only=None):
+    """Every character inside a string literal in `src`.
+
+    `only` restricts the scan to one #define, which is how the masthead face
+    learns what S_MASTHEAD contains without pulling in the rest of the UI.
+    """
+    if only is not None:
+        m = re.search(r"#define\s+" + only + r"\b(.*?)(?=\n#define|\Z)", src, re.S)
+        src = m.group(1) if m else ""
     chars = set()
     for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', src):
-        lit = lit.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+        lit = (lit.replace("\\n", "\n").replace("\\t", "\t")
+                  .replace('\\"', '"').replace("\\\\", "\\"))
         chars |= {c for c in lit if c.isprintable()}
     return chars
 
 
-def symbol_set():
-    syll = wansung_syllables()
-    if len(syll) != 2350:
-        sys.exit(f"expected 2350 완성형 syllables, generated {len(syll)} — "
-                 "Python's euc-kr codec is not what this script assumes")
+def symbol_sets():
+    src = strings_h()
 
-    chars = set(syll)
-    chars |= {chr(c) for c in range(0x20, 0x7F)}        # printable ASCII
-    chars |= ui_string_chars()
-    chars.discard("\n")
-    chars.discard("\t")
-    return chars
+    # Text faces: ASCII, all of Latin-1 (accented names in bylines and
+    # datelines are routine, and there is no way to subset a headline that has
+    # not arrived yet), every fixed label, and the curated typography.
+    text = {chr(c) for c in range(0x20, 0x7F)}
+    text |= {chr(c) for c in range(0xA0, 0x100)}
+    text.discard("­")     # soft hyphen: a line-break hint, not a glyph.
+                               # Most faces have no outline for it, and asking
+                               # for it makes the "not in the font" report —
+                               # which is there to catch real gaps — cry wolf.
+    text |= literal_chars(src)
+
+    # Masthead: the letters of S_MASTHEAD, plus the whole Latin alphabet and the
+    # punctuation a paper's name plausibly uses, so that editing S_MASTHEAD is a
+    # one-line change and not a one-line change plus a font regeneration. The
+    # failure this buys off is tofu across the largest text on the screen.
+    masthead = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    masthead |= set("abcdefghijklmnopqrstuvwxyz")
+    masthead |= set(" .,'-&")
+    masthead |= literal_chars(src, only="S_MASTHEAD")
+
+    for s in (text, masthead):
+        s.discard("\n")
+        s.discard("\t")
+    return {"text": text, "masthead": masthead}
 
 
-# name -> (size, weight). Both faces are full; see the module docstring.
-FACES = {
-    "ui_font_kr_16": (16, "regular"),
-    "ui_font_kr_20": (20, "medium"),
-}
+# --- conversion ------------------------------------------------------------
+
+def instance(src_ttf, location, out_ttf):
+    """Pin a variable font to one point on its axes."""
+    from fontTools import ttLib
+    from fontTools.varLib import instancer
+
+    font = ttLib.TTFont(src_ttf)
+    if location:
+        if "fvar" not in font:
+            sys.exit(f"{os.path.basename(src_ttf)} is not a variable font, "
+                     f"but the face table asks for {location}")
+        instancer.instantiateVariableFont(font, location, inplace=True,
+                                          updateFontNames=True)
+    font.save(out_ttf)
+    return out_ttf
 
 
-def run_conv(font, name, size, chars):
-    symbols = "".join(sorted(chars))
+def supported(ttf, chars):
+    """Split `chars` into what the font actually has and what it does not.
+
+    lv_font_conv fails the whole face on the first character a font cannot
+    draw, which for a blackletter asked to cover Latin-1 is most of them. The
+    dropped set is printed rather than swallowed: a character missing from a
+    text face is a tofu box waiting to happen and the operator should see it.
+    """
+    from fontTools import ttLib
+
+    cmap = set()
+    for table in ttLib.TTFont(ttf)["cmap"].tables:
+        cmap |= set(table.cmap.keys())
+    have = {c for c in chars if ord(c) in cmap}
+    return have, chars - have
+
+
+def run_conv(ttf, name, size, chars, provenance):
     out = os.path.join(FONTDIR, name + ".c")
     cmd = [
         "npx", "-y", "lv_font_conv@latest",
-        "--font", font,
+        "--font", ttf,
         "--size", str(size),
-        "--bpp", "1",
+        "--bpp", "1",                       # see the module docstring
         "--format", "lvgl",
-        "--symbols", symbols,
+        "--symbols", "".join(sorted(chars)),
         "--no-compress",
         "--lv-font-name", name,
         "-o", out,
     ]
-    print(f"  {name}: {len(chars)} glyphs @ {size}px ...", flush=True)
     subprocess.run(cmd, check=True, cwd=ROOT)
+    normalize_header(out, ttf, provenance)
     return out
+
+
+def normalize_header(path, ttf, provenance):
+    """Take the machine's temp paths back out of the generated file.
+
+    lv_font_conv records its own argv in a comment at the top, and two of those
+    arguments are absolute paths: the instanced TTF in a mkdtemp directory, and
+    the output file. Left alone they make every regeneration produce a diff in
+    all seven faces with nothing in it but a changed random directory name, and
+    they publish the generating machine's home directory into a committed file.
+
+    Substituted rather than deleted, because the rest of that line — the exact
+    symbol list, the bpp, the size — is the only record of how the file was
+    produced, and it should keep being readable.
+    """
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    src = src.replace("--font " + ttf, "--font " + provenance)
+    src = src.replace("-o " + path, "-o " + os.path.relpath(path, ROOT))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--font", help="path to the Regular .otf/.ttf")
-    ap.add_argument("--font-medium", help="path to the Medium .otf/.ttf")
     ap.add_argument("--download", action="store_true",
-                    help="fetch the Noto Sans KR weights into a temp dir")
+                    help="fetch the four families into a temp dir")
+    ap.add_argument("--font-dir",
+                    help="use already-downloaded originals from this directory "
+                         "instead (files named as on Google Fonts)")
     ap.add_argument("--dry-run", action="store_true",
-                    help="report the symbol set and stop")
+                    help="report the glyph sets and the face table, then stop")
     args = ap.parse_args()
 
-    chars = symbol_set()
+    sets = symbol_sets()
+
     if args.dry_run:
-        extra = sorted(c for c in chars if not ("가" <= c <= "힣") and ord(c) > 0x7E)
-        print(f"{len(chars)} symbols "
-              f"(2350 완성형 + {len(chars) - 2350} ASCII/punctuation)")
-        print("non-ASCII, non-Hangul:", "".join(extra))
+        for kind, chars in sorted(sets.items()):
+            extra = sorted(c for c in chars if ord(c) > 0x7E)
+            print(f"{kind}: {len(chars)} glyphs "
+                  f"({len(chars) - len(extra)} ASCII + {len(extra)} beyond)")
+            print("   ", "".join(extra) or "(none)")
+        print()
+        for name, fam, size, loc, kind in FACES:
+            print(f"  {name:22s} {fam:11s} {size:4d}px  bpp1  "
+                  f"{str(loc or 'static'):28s} {kind} ({len(sets[kind])} glyphs)")
         return
 
-    fonts = {"regular": args.font, "medium": args.font_medium}
-    missing = [w for w, p in fonts.items() if not p]
-    if missing:
-        if not args.download:
-            sys.exit("give --font and --font-medium, or --download")
-        tmp = tempfile.mkdtemp()
-        for w in missing:
-            fonts[w] = os.path.join(tmp, os.path.basename(FONT_URLS[w]))
-            print(f"downloading {FONT_URLS[w]}")
-            urllib.request.urlretrieve(FONT_URLS[w], fonts[w])
-        urllib.request.urlretrieve(LICENSE_URL, os.path.join(FONTDIR, "OFL.txt"))
+    if not args.download and not args.font_dir:
+        sys.exit("give --download or --font-dir")
 
+    try:
+        import fontTools  # noqa: F401
+    except ImportError:
+        sys.exit("fontTools is required (Google ships these as variable fonts):\n"
+                 "    python3 -m venv /tmp/fontenv\n"
+                 "    /tmp/fontenv/bin/pip install fonttools\n"
+                 "    /tmp/fontenv/bin/python tools/gen_fonts.py --download")
+
+    tmp = tempfile.mkdtemp(prefix="gen_fonts_")
     os.makedirs(FONTDIR, exist_ok=True)
+
+    originals = {}
+    for fam, (font_url, ofl_url) in FAMILIES.items():
+        base = urllib.parse.unquote(os.path.basename(font_url))
+        if args.font_dir:
+            originals[fam] = os.path.join(args.font_dir, base)
+            if not os.path.exists(originals[fam]):
+                sys.exit(f"missing {originals[fam]}")
+        else:
+            originals[fam] = os.path.join(tmp, base)
+            print(f"downloading {base}")
+            urllib.request.urlretrieve(font_url, originals[fam])
+            # One OFL per *family directory*, not per face: Source Serif's
+            # upright and italic are two files under one licence, and keying
+            # this on the family name would commit that text twice.
+            ofl = os.path.join(FONTDIR,
+                               "OFL-%s.txt" % ofl_url.rsplit("/", 2)[-2])
+            if not os.path.exists(ofl):
+                urllib.request.urlretrieve(ofl_url, ofl)
+
     total = 0
-    for name, (size, weight) in FACES.items():
-        path = run_conv(fonts[weight], name, size, chars)
+    for name, fam, size, loc, kind in FACES:
+        static = instance(originals[fam], loc,
+                          os.path.join(tmp, f"{name}.ttf"))
+        # What goes into the generated file's provenance comment in place of
+        # the mkdtemp path: the family as published plus the axis point it was
+        # pinned to, which together are what actually reproduce this face.
+        provenance = urllib.parse.unquote(os.path.basename(FAMILIES[fam][0]))
+        if loc:
+            provenance += "@" + ",".join(f"{k}={v}" for k, v in sorted(loc.items()))
+        have, missing = supported(static, sets[kind])
+        if missing:
+            print(f"  {name}: {len(missing)} character(s) not in the font, "
+                  f"dropped: {''.join(sorted(missing))}")
+        print(f"  {name}: {len(have)} glyphs @ {size}px "
+              f"{loc or ''} ...", flush=True)
+        path = run_conv(static, name, size, have, provenance)
         total += os.path.getsize(path)
+        print(f"    -> {os.path.getsize(path) // 1024} KiB of C source")
+
     print(f"generated {len(FACES)} faces, {total // 1024} KiB of C source")
 
 

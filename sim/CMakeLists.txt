@@ -37,8 +37,13 @@ add_executable(sim
     ${CORE}/ui_page_notes.c
     ${CORE}/ui_graph.c
     ${CORE}/ui_icons.c
-    ${CORE}/fonts/ui_font_kr_16.c
-    ${CORE}/fonts/ui_font_kr_20.c
+    ${CORE}/fonts/ui_font_masthead_112.c
+    ${CORE}/fonts/ui_font_display_56.c
+    ${CORE}/fonts/ui_font_display_36.c
+    ${CORE}/fonts/ui_font_deck_24.c
+    ${CORE}/fonts/ui_font_body_20.c
+    ${CORE}/fonts/ui_font_body_16.c
+    ${CORE}/fonts/ui_font_label_14.c
     ${CJSON}/cJSON.c)
 
 # ${CORE} (not just ${CORE}/include) is on the path so the simulator can include

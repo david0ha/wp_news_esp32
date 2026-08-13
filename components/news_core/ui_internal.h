@@ -41,15 +41,33 @@ extern "C" {
 #define UI_PAD           14     /* content inset from the panel edge */
 
 /* --- fonts ----------------------------------------------------------------
- * The two Korean faces are FULL 완성형 (see ui_fonts.h), so either can draw any
- * string the network sends. Montserrat is used only where a run of digits
- * wants a proper numeral face. */
-#define UI_F_BODY       (&ui_font_kr_16)
-#define UI_F_HEAD       (&ui_font_kr_20)
-#define UI_F_NUM_SM     (&lv_font_montserrat_14)
-#define UI_F_NUM        (&lv_font_montserrat_20)
-#define UI_F_NUM_LG     (&lv_font_montserrat_28)
-#define UI_F_NUM_XL     (&lv_font_montserrat_44)
+ * The roles, not the faces: a page asks for "a deck" and gets whatever
+ * ui_fonts.h currently sets a deck in. Every text face covers ASCII, Latin-1
+ * and S_DATA_PUNCT, so any of them can draw any string the network sends.
+ *
+ * There is no separate numeral face. The board this forked from drew its
+ * counters in Montserrat because its text face was a Korean sans with no
+ * display sizes; here the text faces are a Didone and a text serif, whose
+ * lining figures are the whole point of the family. LVGL's built-in
+ * Montserrat 14 is still compiled in — it is LV_FONT_DEFAULT and nothing
+ * else — but nothing on this board is drawn with it, because every helper in
+ * this header takes its font explicitly. */
+#define UI_F_MASTHEAD   (&ui_font_masthead_112)
+#define UI_F_LEAD       (&ui_font_display_56)
+#define UI_F_HEADLINE   (&ui_font_display_36)
+#define UI_F_DECK       (&ui_font_deck_24)
+#define UI_F_BODY_LG    (&ui_font_body_20)
+#define UI_F_BODY       (&ui_font_body_16)
+#define UI_F_LABEL      (&ui_font_label_14)
+
+/* Transitional aliases for the four dashboard pages inherited from the board
+ * this forked from, which the front page replaces. They map onto the nearest
+ * newspaper face rather than being kept alive on their own. */
+#define UI_F_HEAD       UI_F_BODY_LG
+#define UI_F_NUM_SM     UI_F_LABEL
+#define UI_F_NUM        UI_F_BODY_LG
+#define UI_F_NUM_LG     UI_F_HEADLINE
+#define UI_F_NUM_XL     UI_F_LEAD
 
 /* --- shapes ---------------------------------------------------------------
  * All coordinates are relative to `par`. Every one of these returns an object

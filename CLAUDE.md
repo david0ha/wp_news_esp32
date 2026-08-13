@@ -124,7 +124,7 @@ components/
     ui_common.c           the shared shapes; ui_internal.h holds the layout grid
     ui_icons.c            vector glyphs
     device_api_json.c     the JSON the companion app receives
-    fonts/                full 완성형 Noto Sans KR faces (OFL) — generated, do not hand-edit
+    fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
     test/host/            unit tests for all of the above
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
   device_api/             STA-mode HTTP/JSON control server + mDNS (wpnews.local)
@@ -144,19 +144,25 @@ tools/
 
 ## Working rules
 
-- **Never hand-edit `components/news_core/fonts/*.c`.** Run `python3 tools/gen_fonts.py --download`.
-  Both faces carry the whole 완성형 set (2350 syllables + ASCII + `S_DATA_PUNCT`) because half the
-  strings on this board arrive over the network and cannot be subset. The 2350 are derived from
-  Python's EUC-KR codec, not tabulated. **All fixed user-visible strings belong in `ui_strings.h`** —
-  that is where the generator reads the punctuation from, and where the simulator's coverage check
-  reads them from.
+- **Never hand-edit `components/news_core/fonts/*.c`.** Run
+  `python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools`, then
+  `/tmp/fontenv/bin/python tools/gen_fonts.py --download`. fontTools is needed because Google
+  publishes three of the four families only as variable fonts, and lv_font_conv would silently take
+  the default instance — Playfair Regular where the table asks for Playfair Bold.
+  The six text faces carry ASCII + Latin-1 + `S_DATA_PUNCT`, because headlines arrive over the
+  network and cannot be subset; only the masthead face is subset, and only to the Latin alphabet.
+  **All fixed user-visible strings belong in `ui_strings.h`** — that is where the generator reads
+  the punctuation from, and where the simulator's coverage check reads them from.
+- **Every face is 1 bpp.** Anti-aliased text goes through the same ordered dither as a photograph
+  and comes out with holes in it; this was measured before it was decided. See
+  [docs/pages.md](docs/pages.md#fonts).
 - **`news_mock.c` and `tools/mock_news_server.py` must stay identical.** `test_news_mock.c`
   asserts it by parsing the server's committed fixture and comparing fingerprints. Change one and
   the test tells you which field diverged; then run
   `python3 tools/mock_news_server.py --write-fixture`.
 - **A rejected payload must leave the previous snapshot alone.** `news_parse()` writes `*out` only
   on success. Blanking the panel is the one failure a user actually notices, and a stale dashboard
-  badged 오래됨 beats an empty one.
+  badged STALE beats an empty one.
 - **The graph layout must stay deterministic and libm-free.** `sin()` agrees between x86 and Xtensa
   only to within an ulp, which is enough to move a node one pixel and fail a screenshot test for a
   reason unrelated to the layout. Hence the integer sine table in `ui_graph.c`.

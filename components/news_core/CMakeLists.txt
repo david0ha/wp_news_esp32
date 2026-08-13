@@ -23,8 +23,13 @@ idf_component_register(
         "ui_page_notes.c"
         "ui_graph.c"
         "ui_icons.c"
-        "fonts/ui_font_kr_16.c"
-        "fonts/ui_font_kr_20.c"
+        "fonts/ui_font_masthead_112.c"
+        "fonts/ui_font_display_56.c"
+        "fonts/ui_font_display_36.c"
+        "fonts/ui_font_deck_24.c"
+        "fonts/ui_font_body_20.c"
+        "fonts/ui_font_body_16.c"
+        "fonts/ui_font_label_14.c"
         "http_port_esp.c"
         "${CJSON_DIR}/cJSON.c"
     INCLUDE_DIRS "include" "${CJSON_DIR}"
@@ -40,6 +45,6 @@ idf_component_register(
 
 # lv_font_conv emits `#include "lvgl/lvgl.h"` unless LV_LVGL_H_INCLUDE_SIMPLE is
 # defined, and the IDF component exposes the header as plain "lvgl.h". Without
-# this the two generated faces in fonts/ are the only files in the project that
-# fail to compile.
+# this the seven generated faces in fonts/ are the only files in the project
+# that fail to compile.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)

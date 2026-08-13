@@ -117,34 +117,64 @@ The inbox header shows `inbox_total`, not the number of visible rows. A count th
 what fits would turn a backlog of forty into a comfortable eight.
 
 This is the page where a subset font would have failed: every title on it arrives over the network.
-See [fonts](#fonts-and-why-both-faces-are-full) below.
+See [fonts](#fonts) below.
 
 The inbox is also the one list that can be *added to* rather than only watched, from the companion
 app's memo box or a `curl`. That write never touches the board — it goes to the machine serving the
 snapshot, which creates the note, and the board sees it on its next poll like any other change. See
 [news-contract.md](news-contract.md#capture).
 
-## Fonts, and why both faces are full
+## Fonts
 
-`ui_font_kr_16` and `ui_font_kr_20` each carry the whole 완성형 set — all 2350 KS X 1001 Hangul
-syllables, plus ASCII, plus the typographic punctuation note titles actually contain. About 100 KB
-of flash each at 1 bpp, against an 8 MB app partition.
+Seven faces, all SIL Open Font License 1.1, chosen against the paper being imitated rather than by
+taste: **UnifrakturMaguntia** for the blackletter masthead, **Playfair Display** for headlines
+(WP sets its own in Postoni, a Didone), **Source Serif 4** for the deck and body, and **Libre
+Franklin** — a revival of Franklin Gothic — for bylines, kickers, captions and the folio line.
 
-The board this project forked from subset its fonts down to seventy glyphs, because every string it
-drew was a literal in its own source. Here, half the strings arrive at runtime. There is no symbol
-list that can be derived ahead of time, and the failure mode of guessing is a tofu box on somebody's
-note title — visible only after a four-second refresh, on a board on a shelf.
+| face | family | size | role |
+|------|--------|------|------|
+| `ui_font_masthead_112` | UnifrakturMaguntia | 112 | the paper's name |
+| `ui_font_display_56`   | Playfair Display 800 | 56 | the lead headline |
+| `ui_font_display_36`   | Playfair Display 700 | 36 | secondary headlines |
+| `ui_font_deck_24`      | Source Serif 4 Italic, opsz 11 | 24 | the standfirst |
+| `ui_font_body_20`      | Source Serif 4, opsz 10 | 20 | the lead story's body |
+| `ui_font_body_16`      | Source Serif 4, opsz 8 | 16 | column body text |
+| `ui_font_label_14`     | Libre Franklin 600 | 14 | bylines, captions, folio, ticker |
 
-1 bpp because the panel binarizes anyway: anti-aliasing would cost four times the flash to produce
-pixels that are then thresholded straight back to black and white.
+118 KB of flash for all seven, against an 8 MB app partition.
 
-The 2350 are not a hardcoded table. `tools/gen_fonts.py` derives them from Python's own EUC-KR
-codec — the encoding's Hangul block is lead `0xB0..0xC8` × trail `0xA1..0xFE`, which is exactly
-25 × 94 = 2350 — so there is no data file to rot.
+### Every face is 1 bpp, and that is a measurement
 
-The remaining gap is a syllable outside 완성형 (old Hangul, or a rare modern combination) or a
-symbol outside `S_DATA_PUNCT`. Those would tofu. The simulator checks every string in the snapshot
-against both faces, so if it ever happens it fails on a laptop with the offending codepoint printed.
+The panel has no grey. LVGL renders anti-aliased text as intermediate RGB565 and the flush callback
+puts that through `wp_quantize565()`, which ordered-dithers to the six inks. For a photograph that
+is correct and necessary. For text it is destructive: a 16 px serif stem is about 1.5 px wide, so
+half of it is anti-aliasing, and dithering that half turns a solid stem into a dotted one. Rendered
+side by side, 4 bpp body text has holes punched through `m`, `w` and every descender, and the 112 px
+masthead grows a ragged stipple along contours that 1 bpp keeps smooth.
+
+At 1 bpp every text pixel is exactly `WP_RGB_BLACK` or `WP_RGB_WHITE`, and `wp_quantize()` maps both
+to themselves under every dither offset — so text takes the quantizer's identity path and cannot
+pick up a colour fringe.
+
+### Optical sizes are calculated
+
+Source Serif 4 carries an `opsz` axis calibrated in points, and this panel's pixel pitch is known
+(1600×1200 over 13.3" is 150.4 dpi), so each face is instanced at the optical size its pixel size
+actually *is*. `ui_font_body_16` is 7.7 pt and instanced at opsz 8 — sturdier stems and more open
+counters than the same family at opsz 20, which is what survives a 1-bit render.
+
+### Coverage
+
+Headlines, decks and body text arrive over the network and cannot be subset, so every *text* face
+carries ASCII, all of Latin-1 (Bogotá, Zürich, Müller are routine in a dateline) and the typography
+in `S_DATA_PUNCT`. The board this forked from subset its fonts to seventy glyphs because every
+string it drew was a literal in its own source; here, half the strings arrive at runtime, and the
+failure mode of guessing is a tofu box on somebody's headline.
+
+The masthead face is the one exception. It is subset — but to the whole Latin alphabet plus
+`" .,'-&"`, not to the letters `S_MASTHEAD` happens to use, so changing the paper's name is one line
+and not one line plus a font regeneration. The simulator checks `S_MASTHEAD` against that face by
+name, and every data string against all six text faces.
 
 ## Where the layout is asserted
 

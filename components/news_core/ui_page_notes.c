@@ -7,8 +7,8 @@
  *   20:41  UC8179 정리     4 ↔ |  [] 회의록 미정리        2일
  *
  * Two independent lists side by side. Both carry titles that came off the
- * network, so both draw from the full 완성형 face and both ellipsize — this is
- * the page where a subset font would have failed on somebody's note title.
+ * network, so both draw from a Latin-1-complete face and both ellipsize — this
+ * is the page where a subset font would have failed on somebody's note title.
  */
 #include "ui_internal.h"
 

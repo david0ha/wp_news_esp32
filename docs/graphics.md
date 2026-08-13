@@ -65,13 +65,15 @@ one, so hairline strokes shimmer and thin fonts break up. Hence:
 - **A sans face** (Noto Sans KR), unlike the serif the fortune board this forked from used. That
   panel was printing a 만세력 slip; this one is a dashboard, and at 16 px after binarization a
   serif's thin strokes drop out entirely while a uniform stroke survives.
-- **1-bpp font generation** (`--bpp 1` in `tools/gen_fonts.py`). Generating at higher bpp and
-  thresholding at runtime looks worse than letting the font converter decide — and costs four times
-  the flash to do it.
-- **Full 완성형 faces, not subsets.** Half the strings on this board arrive over the network, so
-  there is nothing to subset from. See [pages.md](pages.md#fonts-and-why-both-faces-are-full).
-- Latin numerals at display sizes come from LVGL's built-in Montserrat; everything else, including
-  mixed Korean-and-digit strings, is drawn from the Korean faces so a line stays in one voice.
+- **1-bpp font generation** (`--bpp 1` in `tools/gen_fonts.py`), for every face including the
+  112 px masthead. Anti-aliased text goes through the same ordered dither as a photograph, and on a
+  stem 1.5 px wide that punches holes in the letter rather than smoothing it. Measured, not assumed
+  — see [pages.md](pages.md#fonts).
+- **Latin-1-complete text faces, not subsets.** Headlines and body text arrive over the network, so
+  there is nothing to subset from. Only the masthead face is subset, and only to the Latin alphabet.
+- **No separate numeral face.** The text faces here are a Didone and a text serif, whose lining
+  figures are the point of the family. LVGL's Montserrat 14 is still compiled in because
+  `LV_FONT_DEFAULT` must name a built-in face, and nothing is drawn with it.
 
 ## Icons
 

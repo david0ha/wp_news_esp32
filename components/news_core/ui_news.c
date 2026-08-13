@@ -318,7 +318,7 @@ void ui_news_tick(void)
     struct tm lt;
     localtime_r(&now, &lt);
 
-    static const char *WD[7] = { "일", "월", "화", "수", "목", "금", "토" };
+    static const char *WD[7] = S_WEEKDAYS_ABBR;
     int wd = lt.tm_wday;
     if (wd < 0 || wd > 6) wd = 0;
 

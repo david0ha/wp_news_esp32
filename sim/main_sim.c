@@ -202,13 +202,27 @@ static void cover(const lv_font_t *font, const char *label, const char *text)
     }
 }
 
-/* Both faces are full 완성형, so a string drawn at one size must be drawable at
- * the other — and the UI moves strings between the two often enough that
- * checking only the face currently in use would let a regression through. */
-static void cover_both(const char *label, const char *text)
+/* Every text face, not the one the string is currently drawn in.
+ *
+ * The six text faces are deliberately identical in coverage (ASCII + Latin-1 +
+ * S_DATA_PUNCT), and the UI moves strings between them freely — a headline
+ * demoted from the lead to a column changes face without changing content. So
+ * checking only the face in use today would let a regression through until the
+ * day the layout changed.
+ *
+ * ui_font_masthead_112 is deliberately NOT here. It is subset to the Latin
+ * alphabet, it draws exactly one string, and that string is checked against it
+ * by name in check_fixed_strings(). */
+static const lv_font_t *const TEXT_FACES[] = {
+    &ui_font_display_56, &ui_font_display_36, &ui_font_deck_24,
+    &ui_font_body_20,    &ui_font_body_16,    &ui_font_label_14,
+};
+
+static void cover_all(const char *label, const char *text)
 {
-    cover(&ui_font_kr_16, label, text);
-    cover(&ui_font_kr_20, label, text);
+    for (size_t i = 0; i < sizeof(TEXT_FACES) / sizeof(TEXT_FACES[0]); i++) {
+        cover(TEXT_FACES[i], label, text);
+    }
 }
 
 static void check_fixed_strings(void)
@@ -224,40 +238,51 @@ static void check_fixed_strings(void)
         S_STATE_RUNNING, S_STATE_IDLE, S_STATE_ERROR, S_STATE_DONE,
         S_PAGE_NOTES, S_RECENT, S_INBOX, S_DAYS_SUFFIX, S_EMPTY_RECENT, S_EMPTY_INBOX,
         S_WIFI_TITLE, S_RESTARTING,
-        /* Characters that exist only in runtime-composed strings — the ↔ after a
-         * link count, the interpunct between footer hints, the digits of every
-         * number. This is the check that catches the whole class of bug where a
-         * label renders but the space inside it comes out as a box. */
+        /* Characters that exist only in runtime-composed strings — the
+         * separators between footer hints, the digits of every number. This is
+         * the check that catches the whole class of bug where a label renders
+         * but the space inside it comes out as a box. */
         S_COMPOSED_CHARS,
         S_DATA_PUNCT,
         "0123456789",
-        "일월화수목금토",           /* ui_news_tick's weekday table */
     };
     for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
-        cover_both("fixed string", fixed[i]);
+        cover_all("fixed string", fixed[i]);
     }
+
+    /* ui_news_tick composes the date from this table, so it is drawn text even
+     * though no single literal above contains it. */
+    static const char *weekdays[7] = S_WEEKDAYS_ABBR;
+    for (int i = 0; i < 7; i++) cover_all("weekday", weekdays[i]);
+
+    /* The masthead face is subset — the one check that it covers the one string
+     * it exists to draw. Editing S_MASTHEAD without regenerating the fonts is
+     * exactly the mistake this catches, and it is the largest text on the
+     * panel, so it fails here rather than on the glass. */
+    cover(&ui_font_masthead_112, "masthead", S_MASTHEAD);
 }
 
-/* Every string in the snapshot that will be drawn. With a full 완성형 face this
- * should never fail on Hangul — which is the point: if it ever does, the title
- * contains something outside 완성형 (old Hangul, a rare syllable, an emoji) and
- * that is a real decision to make, not a mystery box on the glass. */
+/* Every string in the snapshot that will be drawn. With Latin-1-complete text
+ * faces this should never fail on a name — which is the point: if it ever does,
+ * the payload contains something outside ASCII, Latin-1 and S_DATA_PUNCT (a
+ * Cyrillic byline, a CJK place name, an emoji) and that is a real decision to
+ * make about the font, not a mystery box on the glass. */
 static void check_data_strings(const news_t *v)
 {
-    cover_both("news name", v->news);
-    cover_both("generated_at", v->generated_at);
-    for (int i = 0; i < v->tag_count; i++)    cover_both("tag", v->tags[i].name);
+    cover_all("news name", v->news);
+    cover_all("generated_at", v->generated_at);
+    for (int i = 0; i < v->tag_count; i++)    cover_all("tag", v->tags[i].name);
     for (int i = 0; i < v->agent_count; i++) {
-        cover_both("agent name", v->agents[i].name);
-        cover_both("agent note", v->agents[i].note);
-        cover_both("agent last_run", v->agents[i].last_run);
+        cover_all("agent name", v->agents[i].name);
+        cover_all("agent note", v->agents[i].note);
+        cover_all("agent last_run", v->agents[i].last_run);
     }
-    for (int i = 0; i < v->node_count; i++)   cover_both("node title", v->nodes[i].title);
+    for (int i = 0; i < v->node_count; i++)   cover_all("node title", v->nodes[i].title);
     for (int i = 0; i < v->recent_count; i++) {
-        cover_both("recent title", v->recent[i].title);
-        cover_both("recent time", v->recent[i].time);
+        cover_all("recent title", v->recent[i].title);
+        cover_all("recent time", v->recent[i].time);
     }
-    for (int i = 0; i < v->inbox_count; i++)  cover_both("inbox title", v->inbox[i].title);
+    for (int i = 0; i < v->inbox_count; i++)  cover_all("inbox title", v->inbox[i].title);
 }
 
 /* --- chrome --------------------------------------------------------------

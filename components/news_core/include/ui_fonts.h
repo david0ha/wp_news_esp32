@@ -1,41 +1,62 @@
 /*
- * ui_fonts.h — the Korean faces this board draws with.
+ * ui_fonts.h — the seven faces this board sets a newspaper in.
  *
- * Source: Noto Sans KR, Regular and Medium (SIL Open Font License 1.1 —
- * fonts/OFL.txt). A sans face, unlike the serif the fortune board this code
- * forked from used: that panel was printing a 만세력 slip, this one is a
- * dashboard, and at 16 px on a binarizing panel a uniform stroke stays legible
- * where a serif's thin strokes drop out entirely.
+ * All four families are SIL Open Font License 1.1 (fonts/OFL-*.txt), so the
+ * generated bitmaps ship with this repo. They were chosen against the paper
+ * being imitated rather than by taste:
  *
- * ## Both faces carry the whole 완성형 set, on purpose
+ *   masthead    blackletter                UnifrakturMaguntia
+ *   headlines   a Didone — WP sets its     Playfair Display, at wght 800 for
+ *               headlines in Postoni       the lead and 700 for the rest
+ *   deck/body   a text serif               Source Serif 4
+ *   labels      Franklin Gothic — WP's     Libre Franklin, which is a revival
+ *               byline and kicker face     of exactly that face
  *
- * The fortune board could subset its fonts down to seventy glyphs because every
- * string it drew was a literal in its own source. This board draws note titles,
- * tag names and inbox items that arrive from the network at runtime. There is
- * no symbol list that can be derived ahead of time, and the failure mode of
- * guessing is a tofu box on somebody's note title.
+ * ## Every face is 1 bpp, and that is a measurement, not a default
  *
- * So ui_font_kr_16 and ui_font_kr_20 both contain all 2350 KS X 1001 완성형
- * syllables plus ASCII and punctuation — about 100 KB each at 1 bpp, against an
- * 8 MB app partition. 1 bpp because the panel binarizes anyway: anti-aliasing
- * would cost four times the flash to produce pixels that are then thresholded
- * back to black and white.
+ * The panel has no grey. LVGL renders anti-aliased text as intermediate RGB565
+ * and main.cpp's flush callback puts that through wp_quantize565(), which
+ * ordered-dithers to the six inks. For a photograph that is correct. For text
+ * it is destructive: a 16 px serif stem is about 1.5 px wide, so half of it is
+ * anti-aliasing, and dithering that half turns a solid stem into a dotted one.
+ * Rendered side by side, 4 bpp body text has holes punched through 'm', 'w' and
+ * every descender, and the 112 px masthead grows a ragged stipple along
+ * contours that 1 bpp keeps smooth.
  *
- * The one thing still not covered is a syllable outside 완성형 (old Hangul, or
- * a rare modern combination). Those are vanishingly unlikely in a note title
- * and would show as tofu; if it ever matters, the fix is a different symbol
- * range in tools/gen_fonts.py, not a code change.
+ * At 1 bpp every text pixel is exactly WP_RGB_BLACK or WP_RGB_WHITE, and
+ * wp_quantize() maps both to themselves under every dither offset — so text
+ * takes the quantizer's identity path and cannot pick up a colour fringe.
+ *
+ * ## Optical sizes are calculated, not chosen
+ *
+ * Source Serif 4 carries an `opsz` axis calibrated in points, and this panel's
+ * pixel pitch is known (1600x1200 over 13.3" is 150.4 dpi), so each face is
+ * instanced at the optical size its pixel size actually is. ui_font_body_16 is
+ * 7.7 pt and instanced at opsz 8: sturdier stems and more open counters than
+ * the same family at opsz 20, which is what survives a 1-bit render.
+ *
+ * ## Coverage
+ *
+ * Headlines, decks, bylines and body text arrive over the network and cannot be
+ * subset, so every text face carries ASCII, all of Latin-1 (Bogotá, Zürich,
+ * Müller are routine in a dateline) and the typography in S_DATA_PUNCT. A
+ * character outside that renders as a tofu box; the simulator checks every
+ * string in a snapshot against the face that will draw it, so it fails on a
+ * laptop with the codepoint printed rather than silently on the glass.
+ *
+ * The masthead face carries all of A-Z, a-z and " .,'-&" rather than just the
+ * letters S_MASTHEAD happens to use, so changing the paper's name does not
+ * silently blank the largest text on the screen.
  *
  * ## Do not hand-edit
  *
- * Run
+ *     python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools
+ *     /tmp/fontenv/bin/python tools/gen_fonts.py --download
  *
- *     python3 tools/gen_fonts.py --download
- *
- * The generated .c files are committed so a normal build never needs node.
- *
- * Latin digits at display sizes come from LVGL's built-in Montserrat faces —
- * see sdkconfig.defaults and UI_F_NUM* in ui_internal.h.
+ * fontTools is needed because Google publishes three of these families only as
+ * variable fonts, and lv_font_conv would silently take the default instance —
+ * Playfair Regular where the table asks for Playfair Bold. The generated .c
+ * files are committed, so a normal build needs neither node nor Python.
  */
 #pragma once
 
@@ -45,11 +66,27 @@
 extern "C" {
 #endif
 
-/* Body text: note titles, inbox items, agent notes, table values. */
-extern const lv_font_t ui_font_kr_16;
+/* The paper's name, once, across the top. Subset; see above. */
+extern const lv_font_t ui_font_masthead_112;
 
-/* Headings, the header line, section titles and the stat captions. */
-extern const lv_font_t ui_font_kr_20;
+/* The lead story's headline, and nothing else. */
+extern const lv_font_t ui_font_display_56;
+
+/* Secondary headlines. */
+extern const lv_font_t ui_font_display_36;
+
+/* The standfirst under a headline. Italic, as a deck has been since Caslon. */
+extern const lv_font_t ui_font_deck_24;
+
+/* The lead story's body. */
+extern const lv_font_t ui_font_body_20;
+
+/* Column body text. */
+extern const lv_font_t ui_font_body_16;
+
+/* Bylines, datelines, kickers, section rules, photo captions, the folio line
+ * and the ticker — everything set in small sans caps. */
+extern const lv_font_t ui_font_label_14;
 
 #ifdef __cplusplus
 }

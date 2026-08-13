@@ -11,16 +11,14 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FREERTOS_HZ=1000
 
-# LVGL built-in Montserrat sizes. These cover every Latin glyph on screen: the
-# four headline counters (44), the header clock (28), and the small numerals in
-# the activity chart (14). Korean — including every note title that arrives over
-# the network — comes from the full 완성형 faces in components/news_core/fonts/
-# (see ui_fonts.h).
-CONFIG_LV_FONT_MONTSERRAT_12=y
+# Every glyph on this board comes from the seven generated newspaper faces in
+# components/news_core/fonts/ (see ui_fonts.h). Montserrat 14 is kept for one
+# reason only: LVGL's LV_FONT_DEFAULT choice offers built-in faces and nothing
+# else, and a display created before that symbol resolves will not link. Nothing
+# is actually drawn with it — every helper in ui_internal.h takes its font
+# explicitly — so the other four sizes this board used to carry are gone.
 CONFIG_LV_FONT_MONTSERRAT_14=y
-CONFIG_LV_FONT_MONTSERRAT_20=y
-CONFIG_LV_FONT_MONTSERRAT_28=y
-CONFIG_LV_FONT_MONTSERRAT_44=y
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_14=y
 
 # The news snapshot normally comes from a machine on the same LAN over plain
 # HTTP, so no certificate is involved at all. An https:// URL still works and
