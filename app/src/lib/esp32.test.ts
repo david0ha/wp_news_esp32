@@ -50,14 +50,14 @@ function client(replies: Reply[], extra: Record<string, unknown> = {}) {
 describe('esp32 client — getInfo', () => {
   it('parses device identity and trims the base URL', async () => {
     const { fetchImpl, calls } = fakeFetch([
-      { body: { deviceId: '9F3A', model: 'Obsidian Board', apSsid: 'Obsidian Board-AB12' } },
+      { body: { deviceId: '9F3A', model: 'WP News', apSsid: 'WP News-AB12' } },
     ])
     const c = createEsp32Client({ baseUrl: 'http://192.168.4.1/', fetchImpl })
     const info = await c.getInfo()
     expect(info).toEqual({
       deviceId: '9F3A',
-      model: 'Obsidian Board',
-      apSsid: 'Obsidian Board-AB12',
+      model: 'WP News',
+      apSsid: 'WP News-AB12',
       fw: '',
       ip: '',
     })
@@ -66,11 +66,11 @@ describe('esp32 client — getInfo', () => {
 
   it('parses the STA-mode info (fw + ip present, apSsid empty)', async () => {
     const { client: c } = client([
-      { body: { deviceId: '9F3A', model: 'Obsidian Board', fw: '0.1.0', ip: '192.168.0.42' } },
+      { body: { deviceId: '9F3A', model: 'WP News', fw: '0.1.0', ip: '192.168.0.42' } },
     ])
     expect(await c.getInfo()).toEqual({
       deviceId: '9F3A',
-      model: 'Obsidian Board',
+      model: 'WP News',
       apSsid: '',
       fw: '0.1.0',
       ip: '192.168.0.42',
@@ -124,9 +124,9 @@ describe('esp32 client — scanNetworks', () => {
 })
 
 describe('esp32 client — provision', () => {
-  it('POSTs url-encoded ssid+password+vault_url and resolves on 202', async () => {
+  it('POSTs url-encoded ssid+password+news_url and resolves on 202', async () => {
     const { client: c, calls } = client([{ status: 202, body: { ok: true, state: 'connecting' } }])
-    await c.provision('My Wi-Fi', 'p@ss&w/rd', 'http://mac.local:8123/vault.json')
+    await c.provision('My Wi-Fi', 'p@ss&w/rd', 'http://mac.local:8123/news.json')
     expect(calls[0].url).toBe(`${BASE}/api/provision`)
     expect(calls[0].init?.method).toBe('POST')
     expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe(
@@ -134,16 +134,16 @@ describe('esp32 client — provision', () => {
     )
     expect(calls[0].init?.body).toBe(
       'ssid=My%20Wi-Fi&password=p%40ss%26w%2Frd' +
-        '&vault_url=http%3A%2F%2Fmac.local%3A8123%2Fvault.json',
+        '&news_url=http%3A%2F%2Fmac.local%3A8123%2Fnews.json',
     )
   })
 
-  it('still sends an empty vault_url when none was given', async () => {
+  it('still sends an empty news_url when none was given', async () => {
     // Provisioning REWRITES the whole stored config on the board, so omitting the field would
     // clear the URL regardless. Sending '' states that intent instead of relying on it.
     const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
     await c.provision('Home', 'pw')
-    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&vault_url=')
+    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&news_url=')
   })
 
   it('throws an Esp32Error carrying the firmware error code on 400', async () => {
@@ -154,12 +154,12 @@ describe('esp32 client — provision', () => {
     })
   })
 
-  it('surfaces vault_url_invalid from the provisioning endpoint', async () => {
+  it('surfaces news_url_invalid from the provisioning endpoint', async () => {
     const { client: c } = client([
-      { ok: false, status: 400, body: { ok: false, error: 'vault_url_invalid' } },
+      { ok: false, status: 400, body: { ok: false, error: 'news_url_invalid' } },
     ])
     await expect(c.provision('Home', 'pw', 'ftp://nope')).rejects.toMatchObject({
-      code: 'vault_url_invalid',
+      code: 'news_url_invalid',
     })
   })
 
@@ -263,12 +263,12 @@ describe('esp32 client — getState', () => {
   // The documented payload from docs/app-control.md, verbatim.
   const FULL = {
     deviceId: '1A2B',
-    model: 'Obsidian Board',
+    model: 'WP News',
     fw: '0.1.0',
     ip: '192.168.0.42',
     page: 2,
     pageTitle: '에이전트',
-    vault: {
+    news: {
       valid: true,
       demo: false,
       name: 'second-brain',
@@ -285,7 +285,7 @@ describe('esp32 client — getState', () => {
       inbox: 11,
     },
     source: {
-      url: 'http://mac.local:8123/vault.json',
+      url: 'http://mac.local:8123/news.json',
       lastResult: 'ok',
       pollSeconds: 300,
       ageSeconds: 42,
@@ -303,8 +303,8 @@ describe('esp32 client — getState', () => {
     expect(s.page).toBe(2)
     // The board's page title is Korean; it must survive as-is, not be mangled or dropped.
     expect(s.pageTitle).toBe('에이전트')
-    expect(s.vault.notes).toBe(1428)
-    expect(s.vault.agentsRunning).toBe(2)
+    expect(s.news.notes).toBe(1428)
+    expect(s.news.agentsRunning).toBe(2)
     expect(s.source.lastResult).toBe('ok')
     expect(s.source.ageSeconds).toBe(42)
     expect(s.battery).toEqual({ present: true, percent: 84, millivolts: 4012 })
@@ -314,8 +314,8 @@ describe('esp32 client — getState', () => {
   it('renders an empty object as zeros, not a crash', async () => {
     const { client: c } = client([{ body: {} }])
     const s = await c.getState()
-    expect(s.vault.notes).toBe(0)
-    expect(s.vault.valid).toBe(false)
+    expect(s.news.notes).toBe(0)
+    expect(s.news.valid).toBe(false)
     expect(s.battery.present).toBe(false)
     expect(s.panel.fullRefreshMs).toBe(0)
   })
@@ -349,12 +349,12 @@ describe('esp32 client — getState', () => {
 
   it('coerces garbage numbers to 0 instead of NaN', async () => {
     const { client: c } = client([
-      { body: { page: 'two', vault: { notes: 'many', links: null }, battery: { percent: {} } } },
+      { body: { page: 'two', news: { notes: 'many', links: null }, battery: { percent: {} } } },
     ])
     const s = await c.getState()
     expect(s.page).toBe(0)
-    expect(s.vault.notes).toBe(0)
-    expect(s.vault.links).toBe(0)
+    expect(s.news.notes).toBe(0)
+    expect(s.news.links).toBe(0)
     expect(s.battery.percent).toBe(0)
   })
 
@@ -380,25 +380,25 @@ describe('esp32 client — setPage', () => {
   })
 })
 
-describe('esp32 client — setVaultUrl', () => {
+describe('esp32 client — setNewsUrl', () => {
   it('POSTs the url as JSON', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setVaultUrl('http://mac.local:8123/vault.json')
-    expect(calls[0].url).toBe(`${BASE}/api/vault`)
-    expect(calls[0].init?.body).toBe('{"url":"http://mac.local:8123/vault.json"}')
+    await c.setNewsUrl('http://mac.local:8123/news.json')
+    expect(calls[0].url).toBe(`${BASE}/api/news`)
+    expect(calls[0].init?.body).toBe('{"url":"http://mac.local:8123/news.json"}')
   })
 
   it('sends an empty string through — that is the "use demo data" request', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setVaultUrl('')
+    await c.setNewsUrl('')
     expect(calls[0].init?.body).toBe('{"url":""}')
   })
 
-  it('throws vault_url_invalid on a 400 body', async () => {
+  it('throws news_url_invalid on a 400 body', async () => {
     const { client: c } = client([
-      { ok: false, status: 400, body: { ok: false, error: 'vault_url_invalid' } },
+      { ok: false, status: 400, body: { ok: false, error: 'news_url_invalid' } },
     ])
-    await expect(c.setVaultUrl('nope')).rejects.toMatchObject({ code: 'vault_url_invalid' })
+    await expect(c.setNewsUrl('nope')).rejects.toMatchObject({ code: 'news_url_invalid' })
   })
 })
 

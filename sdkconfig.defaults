@@ -14,7 +14,7 @@ CONFIG_FREERTOS_HZ=1000
 # LVGL built-in Montserrat sizes. These cover every Latin glyph on screen: the
 # four headline counters (44), the header clock (28), and the small numerals in
 # the activity chart (14). Korean — including every note title that arrives over
-# the network — comes from the full 완성형 faces in components/vault_core/fonts/
+# the network — comes from the full 완성형 faces in components/news_core/fonts/
 # (see ui_fonts.h).
 CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
@@ -22,7 +22,7 @@ CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_44=y
 
-# The vault snapshot normally comes from a machine on the same LAN over plain
+# The news snapshot normally comes from a machine on the same LAN over plain
 # HTTP, so no certificate is involved at all. An https:// URL still works and
 # validates against IDF's default bundle; the fortune board this forked from
 # carried a custom bundle for a specific weather API, which has no successor
@@ -32,7 +32,7 @@ CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 
 # Task Watchdog: bump from the 5s default to 10s. Two things here legitimately
-# hold a core for seconds — an ECDSA cert verify on an https:// vault URL
+# hold a core for seconds — an ECDSA cert verify on an https:// news URL
 # (mbedtls_mpi_mul_mpi busy-polls the MPI peripheral with no interrupt path),
 # and a full 648x480 e-Paper refresh. Neither is a hung task (PANIC stays off),
 # so widen the window rather than mask it.

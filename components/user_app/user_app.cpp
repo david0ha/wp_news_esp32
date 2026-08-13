@@ -1,21 +1,21 @@
 /*
- * user_app.cpp — app orchestration for the Obsidian board.
+ * user_app.cpp — app orchestration for the WP News board.
  *
  *   AppInit:  route cJSON allocations to PSRAM.
- *   UiInit:   build the LVGL vault UI on a fresh screen.
- *   TaskInit: spawn the UI task and the vault poller.
+ *   UiInit:   build the LVGL news UI on a fresh screen.
+ *   TaskInit: spawn the UI task and the news poller.
  *
  * Wi-Fi bring-up, NVS and the post-connect clock sync are owned by the
  * `provisioning` component; the battery by `board_io`; the panel by `port_bsp`.
  * The portable core (the model, the parser, the whole UI) lives in
- * `vault_core` and is the same code the host tests and the desktop simulator
+ * `news_core` and is the same code the host tests and the desktop simulator
  * exercise.
  *
  * The structure is dictated by the display. A full refresh of this 648x480
  * panel takes seconds, flashes, and cannot be interleaved with another, so:
  *
  *   - Exactly one task (UiTask) ever touches LVGL or starts a refresh.
- *   - Everything else — buttons, the HTTP API, the vault poller — posts a
+ *   - Everything else — buttons, the HTTP API, the news poller — posts a
  *     command and returns.
  *   - Drawing and presenting are separate: widgets are updated, then the frame
  *     is rendered synchronously, then ONE refresh is issued for the whole
@@ -46,11 +46,11 @@
 #include "user_app_api.h"
 #include "lvgl_bsp.h"          /* Lvgl_lock / Lvgl_unlock / Lvgl_RenderNow */
 #include "epd_panel.h"         /* epd_refresh_* / epd_selftest            */
-#include "ui_vault.h"
+#include "ui_news.h"
 #include "ui_strings.h"
-#include "vault_model.h"
-#include "vault_mock.h"
-#include "vault_service.h"
+#include "news_model.h"
+#include "news_mock.h"
+#include "news_service.h"
 #include "http_port.h"
 #include "buttons.h"
 #include "board_io.h"
@@ -65,14 +65,14 @@ static prov_config_t s_cfg;
 
 /* --- cadences ------------------------------------------------------------ */
 
-#ifndef CONFIG_OBSIDIAN_POLL_SECONDS
-#define CONFIG_OBSIDIAN_POLL_SECONDS 300
+#ifndef CONFIG_WP_NEWS_POLL_SECONDS
+#define CONFIG_WP_NEWS_POLL_SECONDS 300
 #endif
-#ifndef CONFIG_OBSIDIAN_VAULT_URL
-#define CONFIG_OBSIDIAN_VAULT_URL ""
+#ifndef CONFIG_WP_NEWS_FEED_URL
+#define CONFIG_WP_NEWS_FEED_URL ""
 #endif
 
-#define POLL_SECONDS       CONFIG_OBSIDIAN_POLL_SECONDS
+#define POLL_SECONDS       CONFIG_WP_NEWS_POLL_SECONDS
 
 /* How often UiTask wakes to move the clock on. The header shows HH:MM, so a
  * minute is the useful resolution; whether that minute costs a panel refresh is
@@ -104,7 +104,7 @@ typedef enum {
     APP_CMD_REFRESH_NOW,     /* poll immediately                     */
     APP_CMD_SET_URL,         /* text = the new snapshot URL          */
     APP_CMD_DISPLAY_TEST,    /* run epd_selftest()                   */
-    APP_CMD_DATA,            /* VaultTask published a new snapshot   */
+    APP_CMD_DATA,            /* NewsTask published a new snapshot   */
 } app_cmd_kind_t;
 
 typedef struct {
@@ -124,11 +124,11 @@ static inline void state_unlock(void) { xSemaphoreGive(s_mtx); }
 
 /* --- state (guarded by s_mtx unless noted) -------------------------------- */
 
-static vault_t  s_data;                 /* what is on (or going to) the glass */
+static news_t  s_data;                 /* what is on (or going to) the glass */
 static uint32_t s_data_hash;
 static int      s_page;
 
-static vault_fetch_result_t s_last_result = VAULT_FETCH_NO_URL;
+static news_fetch_result_t s_last_result = NEWS_FETCH_NO_URL;
 static int64_t  s_last_ok_us;           /* 0 = never fetched successfully     */
 /* True until a fetch fails at the transport. Starts true because UserApp_TaskInit
  * only runs once Wi-Fi is up, and an unconfigured board that never fetches
@@ -142,7 +142,7 @@ static int      s_batt_mv;
 /* Only ever touched by UiTask. */
 static int s_ticks_since_clock_refresh;
 
-/* cJSON's parse tree for a vault snapshot is a few KB, but keeping it out of
+/* cJSON's parse tree for a news snapshot is a few KB, but keeping it out of
  * internal RAM leaves that for WiFi/TLS and the panel's DMA framebuffer. */
 static void *psram_malloc(size_t sz)
 {
@@ -158,7 +158,7 @@ void UserApp_AppInit(void)
 
 void UserApp_UiInit(void)
 {
-    /* Swap the provisioning status screen for the vault UI, freeing the old one
+    /* Swap the provisioning status screen for the news UI, freeing the old one
      * (and its widgets) instead of leaking it for the process lifetime. */
     lv_obj_t *prev = lv_screen_active();
     s_screen = lv_obj_create(NULL);
@@ -166,7 +166,7 @@ void UserApp_UiInit(void)
     if (prev && prev != s_screen) {
         lv_obj_delete(prev);
     }
-    ui_vault_create(s_screen);
+    ui_news_create(s_screen);
 }
 
 /* --- presenting (UiTask only) --------------------------------------------- */
@@ -186,7 +186,7 @@ static void present_full(void)
 static void present_header(void)
 {
     int x1, y1, x2, y2;
-    ui_vault_header_area(&x1, &y1, &x2, &y2);
+    ui_news_header_area(&x1, &y1, &x2, &y2);
     Lvgl_RenderNow();
     epd_refresh_partial_area(x1, y1, x2, y2);
 }
@@ -194,12 +194,12 @@ static void present_header(void)
 /* --- content updates (UiTask only) ---------------------------------------- */
 
 /* The snapshot is copied out from under the mutex so LVGL is never touched while
- * holding it. The copy is static rather than automatic because vault_t is 3.4 KB
+ * holding it. The copy is static rather than automatic because news_t is 3.4 KB
  * — 42% of UiTask's 8 KB stack — and this frame goes on to call into LVGL, whose
  * render (Lvgl_RenderNow -> lv_refr_now) runs on this same task. A static is safe
  * here precisely because of the rule the whole file is built on: UiTask is the
  * only caller. */
-static vault_t s_ui_copy;
+static news_t s_ui_copy;
 
 static void push_data_to_ui(void)
 {
@@ -220,13 +220,13 @@ static void push_data_to_ui(void)
         int64_t age_us = esp_timer_get_time() - s_last_ok_us;
         st.stale = age_us > (int64_t)POLL_SECONDS * STALE_AFTER_POLLS * 1000000;
     } else {
-        st.stale = s_cfg.vault_url[0] != '\0';
+        st.stale = s_cfg.news_url[0] != '\0';
     }
     state_unlock();
 
     if (Lvgl_lock(-1)) {
-        ui_vault_set_data(&s_ui_copy);
-        ui_vault_set_status(&st);
+        ui_news_set_data(&s_ui_copy);
+        ui_news_set_status(&st);
         Lvgl_unlock();
     }
 }
@@ -253,7 +253,7 @@ static void action_set_page(int page)
     state_unlock();
 
     if (Lvgl_lock(-1)) {
-        ui_vault_show_page((ui_page_t)page);
+        ui_news_show_page((ui_page_t)page);
         Lvgl_unlock();
     }
     present_full();   /* a page swap replaces every pixel in the content area */
@@ -262,25 +262,25 @@ static void action_set_page(int page)
 static void action_set_url(const char *url)
 {
     state_lock();
-    strlcpy(s_cfg.vault_url, url, sizeof(s_cfg.vault_url));
+    strlcpy(s_cfg.news_url, url, sizeof(s_cfg.news_url));
     /* Clearing the URL means "go back to the demo screen", and it has to happen
      * here rather than by waiting for a poll — with no URL there is no poll, so
      * the board would otherwise sit on the last real snapshot indefinitely and
      * then quietly badge it 오래됨, which is the opposite of what was asked. */
     bool to_demo = (url[0] == '\0');
     if (to_demo) {
-        vault_mock(&s_data);
-        s_data_hash  = vault_hash(&s_data);
+        news_mock(&s_data);
+        s_data_hash  = news_hash(&s_data);
         s_last_ok_us = 0;
-        s_last_result = VAULT_FETCH_NO_URL;
+        s_last_result = NEWS_FETCH_NO_URL;
         s_online     = true;
     }
     state_unlock();
 
     if (!prov_store_save(&s_cfg)) {
-        ESP_LOGW(TAG, "vault URL change: NVS save failed (will not survive reboot)");
+        ESP_LOGW(TAG, "news URL change: NVS save failed (will not survive reboot)");
     }
-    ESP_LOGI(TAG, "vault URL set to '%s'%s", url, to_demo ? " (demo snapshot)" : "");
+    ESP_LOGI(TAG, "news URL set to '%s'%s", url, to_demo ? " (demo snapshot)" : "");
 
     if (to_demo) {
         push_data_to_ui();
@@ -314,7 +314,7 @@ static void force_ap_mode(void)
     ESP_LOGW(TAG, "KEY2 long-press -> forcing Wi-Fi setup (AP) mode");
     prov_store_set_force_portal();
     if (Lvgl_lock(-1)) {
-        ui_vault_set_overlay(S_WIFI_TITLE, S_RESTARTING);
+        ui_news_set_overlay(S_WIFI_TITLE, S_RESTARTING);
         Lvgl_unlock();
     }
     present_full();
@@ -405,16 +405,16 @@ static void UiTask(void *arg)
      * shows "불러오는 중" for eight seconds reads as broken. */
     state_lock();
     if (!s_data.valid) {
-        vault_mock(&s_data);
-        s_data_hash = vault_hash(&s_data);
+        news_mock(&s_data);
+        s_data_hash = news_hash(&s_data);
     }
     state_unlock();
 
     read_battery();
     push_data_to_ui();
     if (Lvgl_lock(-1)) {
-        ui_vault_tick();
-        ui_vault_show_page(UI_PAGE_STATS);
+        ui_news_tick();
+        ui_news_show_page(UI_PAGE_STATS);
         Lvgl_unlock();
     }
     present_full();
@@ -438,7 +438,7 @@ static void UiTask(void *arg)
              * only every CLOCK_REFRESH_EVERY minutes. */
             read_battery();
             if (Lvgl_lock(-1)) {
-                ui_vault_tick();
+                ui_news_tick();
                 Lvgl_unlock();
             }
             if (++s_ticks_since_clock_refresh >= CLOCK_REFRESH_EVERY) {
@@ -451,7 +451,7 @@ static void UiTask(void *arg)
 }
 
 /*
- * VaultTask — polls the configured URL, and pokes UiTask only when the content
+ * NewsTask — polls the configured URL, and pokes UiTask only when the content
  * it got back differs from what is already on the glass. Never touches LVGL or
  * the panel itself, so a stalled HTTP request cannot hold up a refresh.
  */
@@ -467,11 +467,11 @@ static void notify_ui(app_cmd_kind_t kind)
 }
 
 /* Static for the same reason as s_ui_copy: 3.4 KB of a 16 KB stack that an
- * https:// URL also has to fit a synchronous TLS handshake into. VaultTask is the
+ * https:// URL also has to fit a synchronous TLS handshake into. NewsTask is the
  * only caller. */
-static vault_t s_fetched;
+static news_t s_fetched;
 
-static void VaultTask(void *arg)
+static void NewsTask(void *arg)
 {
     (void)arg;
     /* Let the WiFi/TLS stack settle before the first request. */
@@ -480,19 +480,19 @@ static void VaultTask(void *arg)
     for (;;) {
         char url[PROV_URL_MAX_LEN + 1];
         state_lock();
-        strlcpy(url, s_cfg.vault_url[0] ? s_cfg.vault_url : CONFIG_OBSIDIAN_VAULT_URL,
+        strlcpy(url, s_cfg.news_url[0] ? s_cfg.news_url : CONFIG_WP_NEWS_FEED_URL,
                 sizeof(url));
         state_unlock();
 
         if (url[0]) {
-            vault_fetch_result_t r = vault_service_fetch(url, &s_fetched);
+            news_fetch_result_t r = news_service_fetch(url, &s_fetched);
 
             state_lock();
             s_last_result = r;
             state_unlock();
 
-            if (r == VAULT_FETCH_OK) {
-                uint32_t h = vault_hash(&s_fetched);
+            if (r == NEWS_FETCH_OK) {
+                uint32_t h = news_hash(&s_fetched);
 
                 state_lock();
                 bool changed = (h != s_data_hash);
@@ -505,20 +505,20 @@ static void VaultTask(void *arg)
                 state_unlock();
 
                 if (changed) {
-                    ESP_LOGI(TAG, "vault: %d notes, %d links, %d agents — refreshing",
+                    ESP_LOGI(TAG, "news: %d notes, %d links, %d agents — refreshing",
                              s_fetched.stats.notes, s_fetched.stats.links,
                              s_fetched.agent_count);
                     notify_ui(APP_CMD_DATA);
                 } else {
                     /* The single most common outcome, and the one that must not
                      * cost a panel refresh. */
-                    ESP_LOGD(TAG, "vault: unchanged, panel untouched");
+                    ESP_LOGD(TAG, "news: unchanged, panel untouched");
                 }
             } else {
                 state_lock();
-                s_online = (r != VAULT_FETCH_TRANSPORT);
+                s_online = (r != NEWS_FETCH_TRANSPORT);
                 state_unlock();
-                ESP_LOGW(TAG, "vault fetch failed: %s", vault_fetch_result_name(r));
+                ESP_LOGW(TAG, "news fetch failed: %s", news_fetch_result_name(r));
             }
         }
 
@@ -559,11 +559,11 @@ void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_co
      * handled the instant it arrives. */
     xTaskCreatePinnedToCore(UiTask, "ui", 8 * 1024, NULL, 4, NULL, 1);
 
-    /* VaultTask: the JSON is small, but a TLS handshake and cert-bundle
+    /* NewsTask: the JSON is small, but a TLS handshake and cert-bundle
      * validation would run on THIS task's stack (esp_http_client is
      * synchronous) if the user points it at an https:// URL. 16KB is the size
      * that proved stable for the TLS tasks in the firmware this forked from. */
-    xTaskCreatePinnedToCore(VaultTask, "vault", 16 * 1024, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(NewsTask, "news", 16 * 1024, NULL, 2, NULL, 1);
 }
 
 /* ===========================================================================
@@ -603,11 +603,11 @@ void user_app_snapshot(device_state_t *out)
 
     state_lock();
     out->page = s_page;
-    strlcpy(out->page_title, ui_vault_page_title((ui_page_t)s_page), sizeof(out->page_title));
+    strlcpy(out->page_title, ui_news_page_title((ui_page_t)s_page), sizeof(out->page_title));
 
-    out->vault_valid    = s_data.valid;
+    out->news_valid    = s_data.valid;
     out->demo           = s_data.demo;
-    strlcpy(out->vault, s_data.vault, sizeof(out->vault));
+    strlcpy(out->news, s_data.news, sizeof(out->news));
     strlcpy(out->generated_at, s_data.generated_at, sizeof(out->generated_at));
     out->notes          = s_data.stats.notes;
     out->links          = s_data.stats.links;
@@ -616,18 +616,18 @@ void user_app_snapshot(device_state_t *out)
     out->added_today    = s_data.stats.added_today;
     out->added_7d       = s_data.stats.added_7d;
     out->agents_total   = s_data.agent_count;
-    out->agents_running = vault_running_agents(&s_data);
+    out->agents_running = news_running_agents(&s_data);
     out->recent_count   = s_data.recent_count;
     out->inbox_total    = s_data.inbox_total;
 
-    strlcpy(out->vault_url, s_cfg.vault_url, sizeof(out->vault_url));
-    strlcpy(out->last_result, vault_fetch_result_name(s_last_result), sizeof(out->last_result));
+    strlcpy(out->news_url, s_cfg.news_url, sizeof(out->news_url));
+    strlcpy(out->last_result, news_fetch_result_name(s_last_result), sizeof(out->last_result));
     if (s_last_ok_us != 0) {
         out->age_seconds = (int)((esp_timer_get_time() - s_last_ok_us) / 1000000);
         out->stale = out->age_seconds > POLL_SECONDS * STALE_AFTER_POLLS;
     } else {
         out->age_seconds = -1;      /* never succeeded — not "zero seconds ago" */
-        out->stale = s_cfg.vault_url[0] != '\0';
+        out->stale = s_cfg.news_url[0] != '\0';
     }
 
     out->battery_present = s_batt_present;
@@ -649,9 +649,9 @@ bool user_app_refresh_now(void)
     return post_cmd(APP_CMD_REFRESH_NOW, 0, NULL);
 }
 
-bool user_app_set_vault_url(const char *url)
+bool user_app_set_news_url(const char *url)
 {
-    if (!url || !prov_validate_vault_url(url)) {
+    if (!url || !prov_validate_news_url(url)) {
         return false;
     }
     return post_cmd(APP_CMD_SET_URL, 0, url);

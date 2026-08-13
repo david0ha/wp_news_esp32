@@ -1,7 +1,7 @@
 /*
- * LVGL desktop simulator for the Obsidian board (headless -> BMP).
+ * LVGL desktop simulator for the WP News board (headless -> BMP).
  *
- * This is not a preview. It renders the real ui_vault.c at the real 648x480,
+ * This is not a preview. It renders the real ui_news.c at the real 648x480,
  * binarizes with the device's exact rule (px < 0x7FFF ? black : white), writes
  * one bitmap per page, and then asserts things about the pixels — that every
  * string the UI will draw has a glyph, that every row of every list actually
@@ -14,19 +14,19 @@
  * positioned past its parent and LVGL clipped it away.
  *
  *   ./sim.sh                                              # built-in demo data
- *   VAULT_URL=http://localhost:8123/vault.json ./sim.sh   # the device's own path
+ *   NEWS_URL=http://localhost:8123/news.json ./sim.sh   # the device's own path
  */
 #include "lvgl.h"
 
-#include "ui_vault.h"
+#include "ui_news.h"
 #include "ui_internal.h"      /* the shared grid — see sim/CMakeLists.txt */
 #include "ui_fonts.h"
 #include "ui_graph.h"
 #include "ui_icons.h"
 #include "ui_strings.h"
-#include "vault_mock.h"
-#include "vault_model.h"
-#include "vault_service.h"
+#include "news_mock.h"
+#include "news_model.h"
+#include "news_service.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -231,7 +231,7 @@ static void check_fixed_strings(void)
         S_COMPOSED_CHARS,
         S_DATA_PUNCT,
         "0123456789",
-        "일월화수목금토",           /* ui_vault_tick's weekday table */
+        "일월화수목금토",           /* ui_news_tick's weekday table */
     };
     for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
         cover_both("fixed string", fixed[i]);
@@ -242,9 +242,9 @@ static void check_fixed_strings(void)
  * should never fail on Hangul — which is the point: if it ever does, the title
  * contains something outside 완성형 (old Hangul, a rare syllable, an emoji) and
  * that is a real decision to make, not a mystery box on the glass. */
-static void check_data_strings(const vault_t *v)
+static void check_data_strings(const news_t *v)
 {
-    cover_both("vault name", v->vault);
+    cover_both("news name", v->news);
     cover_both("generated_at", v->generated_at);
     for (int i = 0; i < v->tag_count; i++)    cover_both("tag", v->tags[i].name);
     for (int i = 0; i < v->agent_count; i++) {
@@ -262,7 +262,7 @@ static void check_data_strings(const vault_t *v)
 
 /* --- chrome --------------------------------------------------------------
  *
- * Mirrors ui_vault.c's header/footer grid. If those constants move, move these
+ * Mirrors ui_news.c's header/footer grid. If those constants move, move these
  * with them — that is the trade for asserting on pixels rather than on the
  * widget tree. */
 #define H_BADGE_X   250
@@ -277,18 +277,18 @@ static void check_data_strings(const vault_t *v)
 
 /* The header is seven fixed slots in 620 px with 4–8 px between them, and every
  * one of them holds text whose length depends on data. Nothing enforces the
- * arithmetic — the slots are constants in ui_vault.c — so the gaps are checked
+ * arithmetic — the slots are constants in ui_news.c — so the gaps are checked
  * directly: ink in a gutter means two slots have grown into each other, which on
  * a 1-bit panel looks like a rendering fault rather than a layout one.
  *
  * The core of each gap is sampled rather than its whole width, because a glyph's
  * anti-aliased edge can legitimately binarize into the first pixel outside a
- * slot. Mirrors the slot table in ui_vault.c. */
+ * slot. Mirrors the slot table in ui_news.c. */
 static void check_header_gaps(const char *page)
 {
     static const struct { int x0, x1; const char *what; } GAPS[] = {
-        { 119, 121, "brand / vault name" },
-        { 239, 243, "vault name / badge" },
+        { 119, 121, "brand / news name" },
+        { 239, 243, "news name / badge" },
         { 333, 335, "badge / date" },
         { 471, 477, "date / clock" },
         { 571, 577, "clock / wifi" },
@@ -346,7 +346,7 @@ static void check_chrome(const char *page, int page_index, bool expect_badge)
 #define CELL_W       (CW / 4)
 #define ROW_A_H      112
 #define ACT_BASE_Y   234
-#define ACT_SLOT_W   (CW / VAULT_DAILY_DAYS)
+#define ACT_SLOT_W   (CW / NEWS_DAILY_DAYS)
 #define ACT_BAR_W    (ACT_SLOT_W - 14)
 #define ROW_C_Y      248
 #define ROW_C_ROW_H  20
@@ -357,7 +357,7 @@ static void check_chrome(const char *page, int page_index, bool expect_badge)
 #define HEALTH_X     344
 #define HEALTH_LAB_W 130
 
-static void check_page_stats(const vault_t *v)
+static void check_page_stats(const news_t *v)
 {
     const int Y = UI_CONTENT_Y;
 
@@ -377,7 +377,7 @@ static void check_page_stats(const vault_t *v)
 
     /* Every day gets a column, including the zero day — a chart that divides by
      * the value rather than the peak renders that one as nothing at all. */
-    for (int i = 0; i < VAULT_DAILY_DAYS; i++) {
+    for (int i = 0; i < NEWS_DAILY_DAYS; i++) {
         int x = UI_PAD + i * ACT_SLOT_W + (ACT_SLOT_W - ACT_BAR_W) / 2;
         char what[48];
         snprintf(what, sizeof(what), "activity bar %d (value %d)", i, v->stats.daily[i]);
@@ -398,7 +398,7 @@ static void check_page_stats(const vault_t *v)
         want_ink(what, TAG_BAR_X + TAG_BAR_W + 6, y, UI_PAD + 304, y + ROW_C_ROW_H);
     }
 
-    /* A vault with fewer than six tags must leave the rest of the column empty,
+    /* A news with fewer than six tags must leave the rest of the column empty,
      * not showing the previous snapshot's. NO tags is the placeholder case, as
      * on the agents and notes pages: a heading standing over dead space reads
      * as a page that failed to render. */
@@ -406,7 +406,7 @@ static void check_page_stats(const vault_t *v)
         want_ink("tags empty placeholder", UI_PAD, Y + ROW_C_FIRST + 2 * ROW_C_ROW_H,
                  UI_PAD + 304, Y + ROW_C_FIRST + 3 * ROW_C_ROW_H);
     } else {
-        for (int i = v->tag_count; i < VAULT_TAGS_MAX; i++) {
+        for (int i = v->tag_count; i < NEWS_TAGS_MAX; i++) {
             int y = Y + ROW_C_FIRST + i * ROW_C_ROW_H;
             char what[48];
             snprintf(what, sizeof(what), "unused tag row %d", i);
@@ -431,13 +431,13 @@ static void check_page_stats(const vault_t *v)
 #define GR_CANVAS_W  (UI_W - 2 * UI_PAD)
 #define GR_CANVAS_H  (UI_CONTENT_H - GR_CANVAS_Y - 4)
 
-static void check_page_graph(const vault_t *v)
+static void check_page_graph(const news_t *v)
 {
     const int Y = UI_CONTENT_Y;
     want_ink("graph heading", UI_PAD, Y + 2, UI_PAD + 380, Y + 30);
 
-    graph_pos_t pos[VAULT_NODES_MAX];
-    int n = ui_graph_layout(v, GR_CANVAS_W, GR_CANVAS_H, pos, VAULT_NODES_MAX);
+    graph_pos_t pos[NEWS_NODES_MAX];
+    int n = ui_graph_layout(v, GR_CANVAS_W, GR_CANVAS_H, pos, NEWS_NODES_MAX);
     if (n != v->node_count) {
         FAILV("graph: laid out %d of %d nodes", n, v->node_count);
     }
@@ -490,7 +490,7 @@ static void check_page_graph(const vault_t *v)
 #define AG_BAR_W     68
 #define AG_NOTE_DY   30
 
-static void check_page_agents(const vault_t *v)
+static void check_page_agents(const news_t *v)
 {
     const int Y = UI_CONTENT_Y;
     want_ink("agents heading", UI_PAD, Y + 2, UI_PAD + 380, Y + 30);
@@ -498,7 +498,7 @@ static void check_page_agents(const vault_t *v)
 
     for (int i = 0; i < v->agent_count; i++) {
         int y = Y + AG_ROW_Y + i * AG_ROW_H;
-        const vault_agent_t *a = &v->agents[i];
+        const news_agent_t *a = &v->agents[i];
         char what[96];
 
         snprintf(what, sizeof(what), "agent %d bullet (%s)", i, a->name);
@@ -536,14 +536,14 @@ static void check_page_agents(const vault_t *v)
      * NO agents at all is a different case, exactly as it is on the notes page:
      * the page is given over to a centred placeholder, and demanding blankness
      * across the rows would be demanding the bug. Found by pointing the
-     * simulator at tools/vault_server.py, which serves no agents unless
+     * simulator at tools/news_server.py, which serves no agents unless
      * something is actually running them — the one input the built-in fixtures
      * never produced. */
     if (v->agent_count == 0) {
         want_ink("agents empty placeholder", UI_PAD, Y + 140, UI_W - UI_PAD, Y + 190);
         return;
     }
-    for (int i = v->agent_count; i < VAULT_AGENTS_MAX; i++) {
+    for (int i = v->agent_count; i < NEWS_AGENTS_MAX; i++) {
         int y = Y + AG_ROW_Y + i * AG_ROW_H;
         char what[48];
         snprintf(what, sizeof(what), "unused agent row %d", i);
@@ -563,7 +563,7 @@ static void check_page_agents(const vault_t *v)
 #define IB_TITLE_X   (IB_X + 12 + 10)
 #define IB_AGE_X     578
 
-static void check_page_notes(const vault_t *v)
+static void check_page_notes(const news_t *v)
 {
     const int Y = UI_CONTENT_Y;
     want_ink("recent heading", UI_PAD, Y + 2, UI_PAD + 200, Y + 30);
@@ -605,7 +605,7 @@ static void check_page_notes(const vault_t *v)
     if (v->recent_count == 0) {
         want_ink("recent empty placeholder", UI_PAD, Y + 140, NT_SPLIT_X - 4, Y + 180);
     } else {
-        for (int i = v->recent_count; i < VAULT_RECENT_MAX; i++) {
+        for (int i = v->recent_count; i < NEWS_RECENT_MAX; i++) {
             int y = Y + NT_ROW_Y + i * NT_ROW_H;
             char what[48];
             snprintf(what, sizeof(what), "unused recent row %d", i);
@@ -615,7 +615,7 @@ static void check_page_notes(const vault_t *v)
     if (v->inbox_count == 0) {
         want_ink("inbox empty placeholder", IB_X, Y + 140, UI_W - UI_PAD, Y + 180);
     } else {
-        for (int i = v->inbox_count; i < VAULT_INBOX_MAX; i++) {
+        for (int i = v->inbox_count; i < NEWS_INBOX_MAX; i++) {
             int y = Y + NT_ROW_Y + i * NT_ROW_H;
             char what[48];
             snprintf(what, sizeof(what), "unused inbox row %d", i);
@@ -628,18 +628,18 @@ static void check_page_notes(const vault_t *v)
  *
  * The demo snapshot fills every list to its cap, which exercises the widest the
  * pages can get but never the partial-fill paths: hiding the rows that have no
- * data, and the empty-list placeholders. A real vault is far more likely to look
+ * data, and the empty-list placeholders. A real news is far more likely to look
  * like this one — a couple of agents, a handful of notes, an empty inbox.
  *
  * The page checks are all data-driven, so they can be reused verbatim: they
  * assert ink for the rows that exist and blankness for the rows that do not. */
 static void check_sparse_state(const char *outdir)
 {
-    vault_t v;
+    news_t v;
     memset(&v, 0, sizeof(v));
     v.valid = true;
-    vault_str_copy(v.vault, sizeof(v.vault), "새 볼트");
-    vault_str_copy(v.generated_at, sizeof(v.generated_at), "09:12");
+    news_str_copy(v.news, sizeof(v.news), "새 볼트");
+    news_str_copy(v.generated_at, sizeof(v.generated_at), "09:12");
 
     v.stats.notes = 7;
     v.stats.links = 3;
@@ -651,33 +651,33 @@ static void check_sparse_state(const char *outdir)
     v.stats.daily[6] = 2;
 
     v.tag_count = 1;
-    vault_str_copy(v.tags[0].name, sizeof(v.tags[0].name), "메모");
+    news_str_copy(v.tags[0].name, sizeof(v.tags[0].name), "메모");
     v.tags[0].count = 4;
 
     v.agent_count = 2;
-    vault_str_copy(v.agents[0].name, sizeof(v.agents[0].name), "indexer");
+    news_str_copy(v.agents[0].name, sizeof(v.agents[0].name), "indexer");
     v.agents[0].state = AGENT_RUNNING;
-    vault_str_copy(v.agents[0].last_run, sizeof(v.agents[0].last_run), "09:10");
+    news_str_copy(v.agents[0].last_run, sizeof(v.agents[0].last_run), "09:10");
     v.agents[0].processed = 7;
     v.agents[0].progress = 30;
-    vault_str_copy(v.agents[0].note, sizeof(v.agents[0].note), "첫 인덱싱");
-    vault_str_copy(v.agents[1].name, sizeof(v.agents[1].name), "linker");
+    news_str_copy(v.agents[0].note, sizeof(v.agents[0].note), "첫 인덱싱");
+    news_str_copy(v.agents[1].name, sizeof(v.agents[1].name), "linker");
     v.agents[1].state = AGENT_IDLE;
-    vault_str_copy(v.agents[1].last_run, sizeof(v.agents[1].last_run), "—");
+    news_str_copy(v.agents[1].last_run, sizeof(v.agents[1].last_run), "—");
     v.agents[1].progress = -1;
 
     /* A single node: the graph's degenerate case, where there is a centre and
      * no ring at all. */
     v.node_count = 1;
-    vault_str_copy(v.nodes[0].title, sizeof(v.nodes[0].title), "시작");
+    news_str_copy(v.nodes[0].title, sizeof(v.nodes[0].title), "시작");
     v.nodes[0].deg = 1;
 
     v.recent_count = 2;
-    vault_str_copy(v.recent[0].time, sizeof(v.recent[0].time), "09:11");
-    vault_str_copy(v.recent[0].title, sizeof(v.recent[0].title), "첫 노트");
+    news_str_copy(v.recent[0].time, sizeof(v.recent[0].time), "09:11");
+    news_str_copy(v.recent[0].title, sizeof(v.recent[0].title), "첫 노트");
     v.recent[0].links = 1;
-    vault_str_copy(v.recent[1].time, sizeof(v.recent[1].time), "08:40");
-    vault_str_copy(v.recent[1].title, sizeof(v.recent[1].title), "환영합니다");
+    news_str_copy(v.recent[1].time, sizeof(v.recent[1].time), "08:40");
+    news_str_copy(v.recent[1].title, sizeof(v.recent[1].title), "환영합니다");
     v.recent[1].links = 0;
 
     /* Inbox deliberately empty, to exercise the placeholder. */
@@ -685,13 +685,13 @@ static void check_sparse_state(const char *outdir)
     v.inbox_total = 0;
 
     check_data_strings(&v);
-    ui_vault_set_data(&v);
+    ui_news_set_data(&v);
 
     static const char *names[UI_PAGE_COUNT] = {
         "6_sparse_stats", "7_sparse_graph", "8_sparse_agents", "9_sparse_notes"
     };
     for (int p = 0; p < UI_PAGE_COUNT; p++) {
-        ui_vault_show_page((ui_page_t)p);
+        ui_news_show_page((ui_page_t)p);
         run_refresh(8);
         shot(outdir, names[p]);
         check_chrome(names[p], p, false);
@@ -705,24 +705,24 @@ static void check_sparse_state(const char *outdir)
     }
 }
 
-/* --- brand-new-vault pass --------------------------------------------------
+/* --- brand-new-news pass --------------------------------------------------
  *
  * Notes, but nothing else: no tags, no agents, nothing in the inbox. This is
- * what a vault someone started last week looks like, and what
- * tools/vault_server.py serves from one — the demo and sparse fixtures both
+ * what a news someone started last week looks like, and what
+ * tools/news_server.py serves from one — the demo and sparse fixtures both
  * carry at least one tag and one agent, so the "list is completely empty"
  * placeholders on the stats and agents pages had no coverage at all until a
  * real scan produced them.
  *
  * Only those two pages are rendered: the notes page's empty columns are already
  * covered by the sparse pass, and the graph page by its single-node case. */
-static void check_new_vault_state(const char *outdir)
+static void check_new_news_state(const char *outdir)
 {
-    vault_t v;
+    news_t v;
     memset(&v, 0, sizeof(v));
     v.valid = true;
-    vault_str_copy(v.vault, sizeof(v.vault), "빈 볼트");
-    vault_str_copy(v.generated_at, sizeof(v.generated_at), "10:05");
+    news_str_copy(v.news, sizeof(v.news), "빈 볼트");
+    news_str_copy(v.generated_at, sizeof(v.generated_at), "10:05");
 
     v.stats.notes = 12;
     v.stats.links = 3;
@@ -733,27 +733,27 @@ static void check_new_vault_state(const char *outdir)
     v.stats.daily[6] = 12;
 
     v.node_count = 2;
-    vault_str_copy(v.nodes[0].title, sizeof(v.nodes[0].title), "시작");
+    news_str_copy(v.nodes[0].title, sizeof(v.nodes[0].title), "시작");
     v.nodes[0].deg = 1;
-    vault_str_copy(v.nodes[1].title, sizeof(v.nodes[1].title), "메모");
+    news_str_copy(v.nodes[1].title, sizeof(v.nodes[1].title), "메모");
     v.nodes[1].deg = 1;
     v.edge_count = 1;
     v.edges[0].a = 0;
     v.edges[0].b = 1;
 
     v.recent_count = 1;
-    vault_str_copy(v.recent[0].time, sizeof(v.recent[0].time), "10:04");
-    vault_str_copy(v.recent[0].title, sizeof(v.recent[0].title), "시작");
+    news_str_copy(v.recent[0].time, sizeof(v.recent[0].time), "10:04");
+    news_str_copy(v.recent[0].title, sizeof(v.recent[0].title), "시작");
 
     check_data_strings(&v);
-    ui_vault_set_data(&v);
+    ui_news_set_data(&v);
 
     static const struct { ui_page_t page; const char *name; } PAGES[] = {
         { UI_PAGE_STATS,  "10_new_stats"  },
         { UI_PAGE_AGENTS, "11_new_agents" },
     };
     for (size_t i = 0; i < sizeof(PAGES) / sizeof(PAGES[0]); i++) {
-        ui_vault_show_page(PAGES[i].page);
+        ui_news_show_page(PAGES[i].page);
         run_refresh(8);
         shot(outdir, PAGES[i].name);
         check_chrome(PAGES[i].name, (int)PAGES[i].page, false);
@@ -766,12 +766,12 @@ static void check_new_vault_state(const char *outdir)
 
 static void check_empty_state(void)
 {
-    /* A board whose first poll has not landed yet, or whose vault is brand new.
+    /* A board whose first poll has not landed yet, or whose news is brand new.
      * Every page must still render its chrome and say something, rather than
      * going blank — a blank e-Paper panel is indistinguishable from a dead one. */
-    ui_vault_set_data(NULL);
+    ui_news_set_data(NULL);
     for (int p = 0; p < UI_PAGE_COUNT; p++) {
-        ui_vault_show_page((ui_page_t)p);
+        ui_news_show_page((ui_page_t)p);
         run_refresh(6);
         double ink = ink_pct();
         if (ink < 0.5) {
@@ -796,26 +796,26 @@ int main(int argc, char **argv)
 
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_screen_load(scr);
-    ui_vault_create(scr);
+    ui_news_create(scr);
 
-    /* Content: the built-in demo snapshot, or — with VAULT_URL set — the real
+    /* Content: the built-in demo snapshot, or — with NEWS_URL set — the real
      * fetch+parse path the device runs, against the real server. Same code,
      * same bytes, same pixels. */
-    vault_t v;
-    const char *url = getenv("VAULT_URL");
+    news_t v;
+    const char *url = getenv("NEWS_URL");
     if (url && *url) {
-        vault_fetch_result_t r = vault_service_fetch(url, &v);
-        if (r == VAULT_FETCH_OK) {
+        news_fetch_result_t r = news_service_fetch(url, &v);
+        if (r == NEWS_FETCH_OK) {
             printf("fetched %s -> %d notes, %d agents, %d nodes\n",
                    url, v.stats.notes, v.agent_count, v.node_count);
         } else {
             printf("fetch of %s failed (%s) — falling back to the demo snapshot\n",
-                   url, vault_fetch_result_name(r));
-            vault_mock(&v);
+                   url, news_fetch_result_name(r));
+            news_mock(&v);
         }
     } else {
-        vault_mock(&v);
-        printf("using the built-in demo snapshot (set VAULT_URL=... for a live fetch)\n");
+        news_mock(&v);
+        printf("using the built-in demo snapshot (set NEWS_URL=... for a live fetch)\n");
     }
 
     printf("checking glyph coverage\n");
@@ -825,15 +825,15 @@ int main(int argc, char **argv)
     ui_status_t st = {
         .online = true, .stale = false, .battery_present = true, .battery_pct = 84,
     };
-    ui_vault_set_data(&v);
-    ui_vault_set_status(&st);
-    ui_vault_tick();
+    ui_news_set_data(&v);
+    ui_news_set_status(&st);
+    ui_news_tick();
 
     printf("rendering %s/\n", outdir);
 
     static const char *names[UI_PAGE_COUNT] = { "0_stats", "1_graph", "2_agents", "3_notes" };
     for (int p = 0; p < UI_PAGE_COUNT; p++) {
-        ui_vault_show_page((ui_page_t)p);
+        ui_news_show_page((ui_page_t)p);
         run_refresh(8);
         shot(outdir, names[p]);
         check_chrome(names[p], p, v.demo);
@@ -847,18 +847,18 @@ int main(int argc, char **argv)
     }
 
     /* The offline/stale header, which no normal render exercises. */
-    ui_vault_show_page(UI_PAGE_STATS);
+    ui_news_show_page(UI_PAGE_STATS);
     st.online = false;
     st.stale = true;
     st.battery_present = false;
-    ui_vault_set_status(&st);
+    ui_news_set_status(&st);
     run_refresh(6);
     shot(outdir, "4_offline");
     want_ink("offline badge", H_BADGE_X, 10, H_BADGE_X + 96, 36);
 
     /* The provisioning overlay. */
-    ui_vault_set_overlay(S_WIFI_TITLE,
-                         "1. Join Wi-Fi:\nObsidian Board-1A2B\n\n"
+    ui_news_set_overlay(S_WIFI_TITLE,
+                         "1. Join Wi-Fi:\nWP News-1A2B\n\n"
                          "2. Stay connected,\nthen open the page it offers");
     run_refresh(8);
     shot(outdir, "5_setup");
@@ -867,10 +867,10 @@ int main(int argc, char **argv)
     /* The overlay must be opaque: on e-Paper a "hidden" page is still
      * physically on the glass until something covers it. */
     want_blank("overlay covers the footer", UI_PAD, F_Y, UI_W - UI_PAD, UI_H);
-    ui_vault_set_overlay(NULL, NULL);
+    ui_news_set_overlay(NULL, NULL);
 
     check_sparse_state(outdir);
-    check_new_vault_state(outdir);
+    check_new_news_state(outdir);
     check_empty_state();
 
     printf("%s — %d layout/glyph problem(s)\n", g_fail ? "FAILED" : "ok", g_fail);

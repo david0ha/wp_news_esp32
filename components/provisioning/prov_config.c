@@ -22,7 +22,7 @@ prov_cred_result_t prov_validate_credentials(const char *ssid, const char *passw
     return PROV_CRED_OK;
 }
 
-bool prov_validate_vault_url(const char *url)
+bool prov_validate_news_url(const char *url)
 {
     if (url == NULL || url[0] == '\0') {
         return true;                      // empty == run on the demo snapshot
@@ -41,7 +41,7 @@ bool prov_validate_vault_url(const char *url)
     }
 
     // Require at least one character of host before the path. "http://" and
-    // "http:///vault.json" both parse as a URL and both fail at connect time
+    // "http:///news.json" both parse as a URL and both fail at connect time
     // with an error the user cannot act on.
     return rest[0] != '\0' && rest[0] != '/';
 }

@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-This repository is an **Obsidian vault dashboard**: an ESP32-S3 driving a 5.83" monochrome e-Paper
-panel that shows vault statistics, the link graph, agent status and the note queue. It polls one
+This repository is an **WP News news dashboard**: an ESP32-S3 driving a 5.83" monochrome e-Paper
+panel that shows news statistics, the link graph, agent status and the note queue. It polls one
 JSON URL on the local network and is set up over Wi-Fi from a captive portal.
 
 ## Quick start (do this first)
@@ -37,16 +37,16 @@ the next and catches a different class of mistake.
 ```bash
 # 1) pure logic — the wire format, the fetch layer, the graph layout,
 #    the demo snapshot, the API JSON
-cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
-/tmp/vt/test_vault_parse && /tmp/vt/test_vault_service && /tmp/vt/test_graph_layout \
-  && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
+cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
+/tmp/vt/test_news_parse && /tmp/vt/test_news_service && /tmp/vt/test_graph_layout \
+  && /tmp/vt/test_news_mock && /tmp/vt/test_api_json
 
-# 2) provisioning pure logic, and the vault scanner
+# 2) provisioning pure logic, and the news scanner
 sh components/provisioning/test/run.sh
-python3 tools/test_vault_server.py
+python3 tools/test_news_server.py
 
 # 3) the real UI at the real resolution -> PNG, plus layout/glyph assertions
-cd sim && ./sim.sh          # VAULT_URL=http://localhost:8123/vault.json ./sim.sh
+cd sim && ./sim.sh          # NEWS_URL=http://localhost:8123/news.json ./sim.sh
 
 # 4) firmware
 idf.py build
@@ -91,7 +91,7 @@ See [docs/pinout.md](docs/pinout.md).
 and presenting are separate everywhere:
 
 ```c
-...update widgets...      /* ui_vault_set_*(), cheap, no panel traffic */
+...update widgets...      /* ui_news_set_*(), cheap, no panel traffic */
 Lvgl_RenderNow();         /* synchronous render -> flush_cb -> framebuffer */
 epd_refresh_full();       /* or epd_refresh_partial_area(...) */
 ```
@@ -101,8 +101,8 @@ The LVGL flush callback **never** refreshes the panel. Exactly one task (`UiTask
 command. Full refresh for new data or a page change; a windowed partial only for the header clock,
 throttled to one every five minutes and promoted to a full refresh every sixth time.
 
-**2. A poll that changes nothing must not touch the panel.** `vault_hash()` fingerprints everything
-that reaches the glass and `VaultTask` compares before it notifies `UiTask`. On a device that polls
+**2. A poll that changes nothing must not touch the panel.** `news_hash()` fingerprints everything
+that reaches the glass and `NewsTask` compares before it notifies `UiTask`. On a device that polls
 every five minutes forever, this is the difference between a silent dashboard and one that flashes
 at nobody all day. Details in [docs/epaper-5in83.md](docs/epaper-5in83.md).
 
@@ -113,12 +113,12 @@ main/                     app_main: panel + LVGL bring-up, provisioning, task la
 components/
   port_bsp/               UC8179 driver (epd_panel.c) — the only file that talks to the panel
   app_bsp/                LVGL port (RGB565 draw buffers, binarized in the flush callback)
-  vault_core/             the portable core — compiles identically on device, sim and host tests
-    vault_model.c         the snapshot struct + UTF-8-safe copy + content fingerprint
-    vault_parse.c         wire JSON -> model, clamping every field
-    vault_mock.c          the built-in demo snapshot (shown when no URL is set)
-    vault_service.c       one fetch: http_get + parse
-    ui_vault.c            header, footer, overlay, page routing
+  news_core/             the portable core — compiles identically on device, sim and host tests
+    news_model.c         the snapshot struct + UTF-8-safe copy + content fingerprint
+    news_parse.c         wire JSON -> model, clamping every field
+    news_mock.c          the built-in demo snapshot (shown when no URL is set)
+    news_service.c       one fetch: http_get + parse
+    ui_news.c            header, footer, overlay, page routing
     ui_page_{stats,graph,agents,notes}.c    one file per page
     ui_graph.c            deterministic concentric-ring layout, integer trigonometry
     ui_common.c           the shared shapes; ui_internal.h holds the layout grid
@@ -127,34 +127,34 @@ components/
     fonts/                full 완성형 Noto Sans KR faces (OFL) — generated, do not hand-edit
     test/host/            unit tests for all of the above
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
-  device_api/             STA-mode HTTP/JSON control server + mDNS (obsidianboard.local)
+  device_api/             STA-mode HTTP/JSON control server + mDNS (wpnews.local)
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
 app/                      React Native companion app — setup + control over the LAN
 sim/                      desktop simulator — renders the real UI to 648x480 and asserts on it
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 tools/
-  vault_server.py         scans a REAL Obsidian vault and serves the contract from it
-  mock_vault_server.py    the same contract from a fixed payload — the reference producer
-  test_vault_server.py    the scanner's tests (synthetic vault in a temp dir)
-  gen_fonts.py            regenerates components/vault_core/fonts/
+  news_server.py         scans a REAL WP News news and serves the contract from it
+  mock_news_server.py    the same contract from a fixed payload — the reference producer
+  test_news_server.py    the scanner's tests (synthetic news in a temp dir)
+  gen_fonts.py            regenerates components/news_core/fonts/
   agent_status.py         one line for a script to report an agent to the board
   flash.sh                find the board and flash it
 ```
 
 ## Working rules
 
-- **Never hand-edit `components/vault_core/fonts/*.c`.** Run `python3 tools/gen_fonts.py --download`.
+- **Never hand-edit `components/news_core/fonts/*.c`.** Run `python3 tools/gen_fonts.py --download`.
   Both faces carry the whole 완성형 set (2350 syllables + ASCII + `S_DATA_PUNCT`) because half the
   strings on this board arrive over the network and cannot be subset. The 2350 are derived from
   Python's EUC-KR codec, not tabulated. **All fixed user-visible strings belong in `ui_strings.h`** —
   that is where the generator reads the punctuation from, and where the simulator's coverage check
   reads them from.
-- **`vault_mock.c` and `tools/mock_vault_server.py` must stay identical.** `test_vault_mock.c`
+- **`news_mock.c` and `tools/mock_news_server.py` must stay identical.** `test_news_mock.c`
   asserts it by parsing the server's committed fixture and comparing fingerprints. Change one and
   the test tells you which field diverged; then run
-  `python3 tools/mock_vault_server.py --write-fixture`.
-- **A rejected payload must leave the previous snapshot alone.** `vault_parse()` writes `*out` only
+  `python3 tools/mock_news_server.py --write-fixture`.
+- **A rejected payload must leave the previous snapshot alone.** `news_parse()` writes `*out` only
   on success. Blanking the panel is the one failure a user actually notices, and a stale dashboard
   badged 오래됨 beats an empty one.
 - **The graph layout must stay deterministic and libm-free.** `sin()` agrees between x86 and Xtensa
@@ -164,7 +164,7 @@ tools/
   auto-size the height and *wrap* instead of ellipsizing, and the second line lands on the row below.
 - **`sdkconfig` holds per-developer values and is gitignored — never commit it.** Wi-Fi passwords
   live in NVS via the portal, never in Kconfig.
-- The mDNS hostname is `obsidianboard` and the AP prefix `"Obsidian Board"` — deliberately **not**
+- The mDNS hostname is `wpnews` and the AP prefix `"WP News"` — deliberately **not**
   the `tickerboard` / `"Ticker Board"` of the project this forked from, whose shipped app resolves
   those names.
 - If anything about the hardware is uncertain, don't guess — check
@@ -173,7 +173,7 @@ tools/
 ## Documentation
 
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
-- [docs/vault-contract.md](docs/vault-contract.md) — the JSON the device polls, and how it fails
+- [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/pages.md](docs/pages.md) — the four pages, the layout grid, the font decision
 - [docs/epaper-5in83.md](docs/epaper-5in83.md) — the UC8179 driver, the refresh policy, the self-test
 - [docs/pinout.md](docs/pinout.md) — GPIO assignments

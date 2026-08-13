@@ -1,13 +1,13 @@
-// Writing a memo into the vault.
+// Writing a memo into the news.
 //
 // This is deliberately NOT in esp32.ts. `POST /capture` is not part of the device contract — the
 // firmware has never heard of it. It is served by whatever is producing the snapshot, and only if
-// that producer chose to offer it (`tools/vault_server.py --allow-capture`). Keeping it in its own
+// that producer chose to offer it (`tools/news_server.py --allow-capture`). Keeping it in its own
 // file keeps that boundary visible: a change here cannot be mistaken for a change to the board's
 // API, and a producer that does not implement it is a supported, ordinary case rather than a bug.
 //
 // The address is derived from the snapshot URL the BOARD reports, so the phone never has to be
-// told separately where the vault lives: whatever the board is polling is what gets written to.
+// told separately where the news lives: whatever the board is polling is what gets written to.
 
 import { normalizeBaseUrl } from './discovery'
 
@@ -45,7 +45,7 @@ const DEFAULT_TIMEOUT_MS = 8000
  * The capture endpoint for a given snapshot URL: same host, `/capture`.
  *
  * Returns null when there is no usable source — an unconfigured board, or a URL the app cannot
- * make sense of. The path of the snapshot URL is dropped deliberately: `/vault.json` is one
+ * make sense of. The path of the snapshot URL is dropped deliberately: `/news.json` is one
  * resource on that server and `/capture` is another.
  */
 export function captureUrlFor(sourceUrl: string | null | undefined): string | null {
@@ -74,10 +74,10 @@ export interface CaptureOptions {
 }
 
 /**
- * Write one memo. Resolves with the vault-relative path the producer created.
+ * Write one memo. Resolves with the news-relative path the producer created.
  *
  * Every failure is a typed code because they need four different sentences: "your board has no
- * vault URL", "the server is running but capture is off", "this server does not do capture at
+ * news URL", "the server is running but capture is off", "this server does not do capture at
  * all", and "the network". Collapsing them into one "couldn't save" would leave the user with
  * nothing to act on.
  */
@@ -123,7 +123,7 @@ export async function captureMemo(
   }
 
   // 404/405 is "this producer has no capture endpoint", which is the normal state of affairs for
-  // anything other than tools/vault_server.py and must not read as a failure of the app.
+  // anything other than tools/news_server.py and must not read as a failure of the app.
   if (res.status === 404 || res.status === 405) throw new CaptureError('unsupported', undefined, res.status)
 
   let code: CaptureErrorCode = 'http_error'
@@ -143,19 +143,19 @@ export function captureErrorMessage(e: unknown): string {
   const code = e instanceof CaptureError ? e.code : 'network_error'
   switch (code) {
     case 'no_source':
-      return 'The board has no vault URL yet — it’s showing demo data. Set one in Settings.'
+      return 'The board has no news URL yet — it’s showing demo data. Set one in Settings.'
     case 'disabled':
-      return 'Your vault server has capture switched off. Restart it with --allow-capture.'
+      return 'Your news server has capture switched off. Restart it with --allow-capture.'
     case 'unsupported':
-      return 'Whatever is serving your vault doesn’t accept memos. tools/vault_server.py does.'
+      return 'Whatever is serving your news doesn’t accept memos. tools/news_server.py does.'
     case 'empty':
       return 'Nothing to save.'
     case 'too_large':
       return 'That memo is too long to save.'
     case 'write_failed':
-      return 'The vault server couldn’t write the file. Check the disk it’s on.'
+      return 'The news server couldn’t write the file. Check the disk it’s on.'
     case 'network_error':
-      return 'Couldn’t reach the machine serving your vault. Is it awake and on this Wi-Fi?'
+      return 'Couldn’t reach the machine serving your news. Is it awake and on this Wi-Fi?'
     default:
       return 'Couldn’t save that memo. Please try again.'
   }

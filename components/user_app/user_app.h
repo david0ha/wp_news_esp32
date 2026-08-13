@@ -1,15 +1,15 @@
 #pragma once
 
-#include "prov_config.h"   /* prov_config_t — the provisioned WiFi + vault URL */
+#include "prov_config.h"   /* prov_config_t — the provisioned WiFi + news URL */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void UserApp_AppInit(void);   /* cJSON PSRAM hooks   */
-void UserApp_UiInit(void);    /* build the vault UI  */
+void UserApp_UiInit(void);    /* build the news UI  */
 
-/* Spawn the UI task and the vault poller.
+/* Spawn the UI task and the news poller.
  *
  * `btn_gpios` is the board's button pins in button_id_t order (KEY0, KEY1,
  * KEY2, BOOT); `btn_count` is how many are supplied. They are passed in rather

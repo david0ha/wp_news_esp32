@@ -19,7 +19,7 @@ import { useDevice } from '../lib/device'
 import { Esp32Error, type DeviceInfo, type DeviceState } from '../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../lib/discovery'
 import { clearDeviceBaseUrl, getDeviceBaseUrl, resetOnboarding } from '../lib/store'
-import { validateVaultUrl, vaultUrlErrorMessage } from '../lib/vaulturl'
+import { validateNewsUrl, newsUrlErrorMessage } from '../lib/newsurl'
 import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../lib/format'
 import { colors, layout, radius, space } from '../theme'
 
@@ -137,8 +137,8 @@ export default function Settings() {
             </Card>
           </Section>
 
-          {/* The vault snapshot URL — the one setting that decides what the board shows. */}
-          <Section title="Vault source">
+          {/* The news snapshot URL — the one setting that decides what the board shows. */}
+          <Section title="News source">
             <Text style={styles.help}>
               The address the board fetches its snapshot from. Clear it and save to put the board
               back on its built-in demo data.
@@ -153,7 +153,7 @@ export default function Settings() {
             {source && source.lastResult !== 'ok' ? (
               <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
             ) : null}
-            <VaultUrlEditor
+            <NewsUrlEditor
               // Remount when the board reports a different URL, so the field picks up the new
               // value instead of holding a draft the board has already moved past.
               key={source?.url ?? ''}
@@ -161,9 +161,9 @@ export default function Settings() {
               onSave={async (next) => {
                 if (!client) return 'Not connected to the board.'
                 try {
-                  await client.setVaultUrl(next)
+                  await client.setNewsUrl(next)
                 } catch (e) {
-                  if (e instanceof Esp32Error && e.code === 'vault_url_invalid') {
+                  if (e instanceof Esp32Error && e.code === 'news_url_invalid') {
                     return 'The board wouldn’t accept that address.'
                   }
                   return 'Couldn’t update. Please try again.'
@@ -241,7 +241,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  *
  * `onSave` returns null on success or a sentence to show on failure.
  */
-function VaultUrlEditor({
+function NewsUrlEditor({
   initial,
   onSave,
 }: {
@@ -253,8 +253,8 @@ function VaultUrlEditor({
   const [done, setDone] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
 
-  const result = validateVaultUrl(draft)
-  const localError = !result.ok ? vaultUrlErrorMessage(result) : null
+  const result = validateNewsUrl(draft)
+  const localError = !result.ok ? newsUrlErrorMessage(result) : null
   const dirty = draft.trim() !== initial.trim()
 
   const save = async () => {
@@ -278,7 +278,7 @@ function VaultUrlEditor({
             setDone(false)
             setFailure(null)
           }}
-          placeholder="http://mymac.local:8123/vault.json"
+          placeholder="http://mymac.local:8123/news.json"
           placeholderTextColor={colors.textFaint}
           autoCapitalize="none"
           autoCorrect={false}

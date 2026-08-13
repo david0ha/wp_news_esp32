@@ -54,8 +54,8 @@ describe('formatRatio', () => {
     expect(formatRatio(0, 100)).toBe('0.0%')
   })
 
-  it('refuses to divide by an empty vault', () => {
-    // "0.0%" would claim an empty vault has a good orphan rate. It has none.
+  it('refuses to divide by an empty news', () => {
+    // "0.0%" would claim an empty news has a good orphan rate. It has none.
     expect(formatRatio(0, 0)).toBe('—')
     expect(formatRatio(5, -1)).toBe('—')
   })

@@ -1,4 +1,4 @@
-// Client for the Obsidian Board's two HTTP/JSON APIs (firmware:
+// Client for the WP News's two HTTP/JSON APIs (firmware:
 // components/provisioning/prov_portal.c + components/device_api). See docs/app-control.md and
 // components/provisioning/README.md for the contract — this file is the TypeScript mirror of it,
 // and the only place in the app that knows a field name.
@@ -6,15 +6,15 @@
 // [1] Provisioning (SoftAP, http://192.168.4.1): join the board's setup AP first.
 //   GET  /api/info       -> { deviceId, model, apSsid }
 //   GET  /api/scan       -> { networks: [{ ssid, rssi, secure }] }
-//   POST /api/provision  (x-www-form-urlencoded: ssid, password, vault_url?) -> 202 | 4xx
+//   POST /api/provision  (x-www-form-urlencoded: ssid, password, news_url?) -> 202 | 4xx
 //   GET  /api/status     -> { state: idle|connecting|connected|failed, ssid?, reason? }
 //
-// [2] Control (STA, http://obsidianboard.local or the board's IP): same home Wi-Fi.
+// [2] Control (STA, http://wpnews.local or the board's IP): same home Wi-Fi.
 //   GET  /api/info          -> { deviceId, model, fw, ip }
 //   GET  /api/state         -> DeviceState snapshot (polled by the dashboard)
-//   POST /api/refresh       -> poll the vault source now
+//   POST /api/refresh       -> poll the news source now
 //   POST /api/page          { page: 0..3 }
-//   POST /api/vault         { url }      // '' switches the board to its built-in demo snapshot
+//   POST /api/news         { url }      // '' switches the board to its built-in demo snapshot
 //   POST /api/display/test  -> run the e-Paper self-test sweep
 //
 // Every function takes an injectable fetch/clock so it can be unit-tested without a board.
@@ -51,13 +51,13 @@ export interface ProvisionStatus {
 }
 
 /**
- * How the board's last poll of the vault URL went (`source.lastResult`). These are the firmware's
+ * How the board's last poll of the news URL went (`source.lastResult`). These are the firmware's
  * own strings — the three failures are separate codes because they send the user to three
  * different places: `transport` is DNS/connect/timeout (is the PC awake?), `http_status` means the
  * server answered but not with a 2xx (is the path right?), and `bad_payload` means it answered 2xx
- * with something that is not a vault snapshot (is that a captive portal?).
+ * with something that is not a news snapshot (is that a captive portal?).
  */
-export type VaultFetchResult =
+export type NewsFetchResult =
   | 'ok'
   | 'no_url'
   | 'transport'
@@ -68,11 +68,11 @@ export type VaultFetchResult =
 
 const FETCH_RESULTS: readonly string[] = ['ok', 'no_url', 'transport', 'http_status', 'bad_payload']
 
-/** The board's summary of the vault it is displaying (GET /api/state, `vault`). */
-export interface VaultSummary {
+/** The board's summary of the news it is displaying (GET /api/state, `news`). */
+export interface NewsSummary {
   /** A snapshot has been parsed at least once. False on a board that has never had a good poll. */
   valid: boolean
-  /** The board is showing its built-in demo snapshot (no vault URL configured). */
+  /** The board is showing its built-in demo snapshot (no news URL configured). */
   demo: boolean
   name: string
   /** Clock time the snapshot was generated, as the producer reported it (e.g. "21:04"). */
@@ -92,10 +92,10 @@ export interface VaultSummary {
 }
 
 /** Where the board is fetching from and how that is going (GET /api/state, `source`). */
-export interface VaultSource {
+export interface NewsSource {
   /** Configured snapshot URL. Empty string = unconfigured, running on the demo snapshot. */
   url: string
-  lastResult: VaultFetchResult
+  lastResult: NewsFetchResult
   pollSeconds: number
   /** Seconds since the last SUCCESSFUL poll; -1 when none has ever succeeded. */
   ageSeconds: number
@@ -132,8 +132,8 @@ export interface DeviceState {
   page: number
   /** The board's own title for that page, in its UI language (Korean). */
   pageTitle: string
-  vault: VaultSummary
-  source: VaultSource
+  news: NewsSummary
+  source: NewsSource
   battery: BatteryInfo
   panel: PanelInfo
 }
@@ -148,7 +148,7 @@ export type Esp32ErrorCode =
   | 'ssid_too_long'
   | 'pass_too_long'
   // Shared by /api/provision and the control writes
-  | 'vault_url_invalid'
+  | 'news_url_invalid'
   | 'too_large'
   | 'read_error'
   // POST /api/* (4xx body `error`)
@@ -199,7 +199,7 @@ export interface WaitForConnectedResult extends ProvisionStatus {
 }
 
 /** Mirrors the firmware's PROV_URL_MAX_LEN — the board rejects anything longer. */
-export const VAULT_URL_MAX_LEN = 128
+export const NEWS_URL_MAX_LEN = 128
 
 /** Page count on the panel; the firmware rejects anything outside 0..PAGE_COUNT-1. */
 export const PAGE_COUNT = 4
@@ -225,7 +225,7 @@ function asStr(v: unknown): string {
   return v == null ? '' : String(v)
 }
 
-function parseVault(raw: Record<string, unknown> | undefined): VaultSummary {
+function parseNews(raw: Record<string, unknown> | undefined): NewsSummary {
   const v = raw ?? {}
   return {
     valid: asBool(v.valid),
@@ -245,12 +245,12 @@ function parseVault(raw: Record<string, unknown> | undefined): VaultSummary {
   }
 }
 
-function parseSource(raw: Record<string, unknown> | undefined): VaultSource {
+function parseSource(raw: Record<string, unknown> | undefined): NewsSource {
   const s = raw ?? {}
   const result = asStr(s.lastResult)
   return {
     url: asStr(s.url),
-    lastResult: (FETCH_RESULTS.includes(result) ? result : 'unknown') as VaultFetchResult,
+    lastResult: (FETCH_RESULTS.includes(result) ? result : 'unknown') as NewsFetchResult,
     pollSeconds: asNum(s.pollSeconds),
     // -1 is "never synced", which is NOT "synced zero seconds ago". Defaulting a missing field to
     // 0 would draw a board that had just polled successfully when it never has.
@@ -357,18 +357,18 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
       .filter((n) => n.ssid.length > 0)
   }
 
-  // POST the home-Wi-Fi credentials and the vault URL as a url-encoded form, matching the
+  // POST the home-Wi-Fi credentials and the news URL as a url-encoded form, matching the
   // firmware's HTML /save path. Returns once the board has accepted them (202); the caller then
   // polls waitForConnected.
   //
-  // `vault_url` is always sent, empty string included. Provisioning REWRITES the whole stored
+  // `news_url` is always sent, empty string included. Provisioning REWRITES the whole stored
   // config (the firmware zeroes its struct and fills it from the form), so omitting the field
   // would still clear the URL — sending '' says that on purpose instead of relying on it.
-  async function provision(ssid: string, password: string, vaultUrl = ''): Promise<void> {
+  async function provision(ssid: string, password: string, newsUrl = ''): Promise<void> {
     const body =
       `ssid=${encodeURIComponent(ssid)}` +
       `&password=${encodeURIComponent(password)}` +
-      `&vault_url=${encodeURIComponent(vaultUrl)}`
+      `&news_url=${encodeURIComponent(newsUrl)}`
     const res = await request('/api/provision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -427,7 +427,7 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
       ip: asStr(j.ip),
       page: asNum(j.page),
       pageTitle: asStr(j.pageTitle),
-      vault: parseVault(j.vault as Record<string, unknown> | undefined),
+      news: parseNews(j.news as Record<string, unknown> | undefined),
       source: parseSource(j.source as Record<string, unknown> | undefined),
       battery: parseBattery(j.battery as Record<string, unknown> | undefined),
       panel: parsePanel(j.panel as Record<string, unknown> | undefined),
@@ -440,7 +440,7 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     return postJson('/api/page', { page }, 'page')
   }
 
-  // Poll the vault source now instead of waiting out the interval. The board only refreshes the
+  // Poll the news source now instead of waiting out the interval. The board only refreshes the
   // panel when what comes back differs from what is already on the glass, so this is safe to call
   // repeatedly — a no-change refresh costs nothing and flashes nothing.
   async function refresh(): Promise<void> {
@@ -449,8 +449,8 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
 
   // Point the board at a different snapshot URL (NVS-persisted, applied live, no reboot). An empty
   // string is valid and meaningful: it switches the board to its built-in demo snapshot.
-  async function setVaultUrl(url: string): Promise<void> {
-    return postJson('/api/vault', { url }, 'vault')
+  async function setNewsUrl(url: string): Promise<void> {
+    return postJson('/api/news', { url }, 'news')
   }
 
   // Run the e-Paper self-test sweep. Tens of seconds of full refreshes on the board; the request
@@ -471,7 +471,7 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     getState,
     setPage,
     refresh,
-    setVaultUrl,
+    setNewsUrl,
     displayTest,
   }
 }

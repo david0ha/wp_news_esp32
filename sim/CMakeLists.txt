@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(vault_sim C)
+project(news_sim C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -14,23 +14,23 @@ set(LV_CONF_BUILD_DISABLE_DEMOS 1 CACHE INTERNAL "")
 set(LV_CONF_BUILD_DISABLE_THORVG_INTERNAL 1 CACHE INTERNAL "")
 
 set(EX    ${CMAKE_CURRENT_SOURCE_DIR}/..)               # repo root = the IDF project
-set(CORE  ${EX}/components/vault_core)
+set(CORE  ${EX}/components/news_core)
 set(CJSON ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/cJSON)
 
 # Reuse the IDF project's LVGL source (fetched into managed_components/).
 add_subdirectory(${EX}/managed_components/lvgl__lvgl ${CMAKE_BINARY_DIR}/lvgl)
 
-# The vault core is compiled verbatim — same UI, same fonts, same logic as the
+# The news core is compiled verbatim — same UI, same fonts, same logic as the
 # firmware. Only the HTTP port is host-specific.
 add_executable(sim
     main_sim.c
     http_port_curl.c
-    ${CORE}/vault_model.c
-    ${CORE}/vault_parse.c
-    ${CORE}/vault_mock.c
-    ${CORE}/vault_service.c
+    ${CORE}/news_model.c
+    ${CORE}/news_parse.c
+    ${CORE}/news_mock.c
+    ${CORE}/news_service.c
     ${CORE}/ui_common.c
-    ${CORE}/ui_vault.c
+    ${CORE}/ui_news.c
     ${CORE}/ui_page_stats.c
     ${CORE}/ui_page_graph.c
     ${CORE}/ui_page_agents.c

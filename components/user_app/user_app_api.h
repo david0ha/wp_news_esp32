@@ -30,7 +30,7 @@
  * and "Ticker Board" SSID prefix are hardcoded in its shipped companion app, so
  * reusing them would make two different devices answer the same discovery
  * probe on the same LAN. */
-#define DEVICE_MODEL  "Obsidian Board"
+#define DEVICE_MODEL  "WP News"
 #define DEVICE_FW     "0.1.0"
 
 #ifdef __cplusplus
@@ -44,14 +44,14 @@ void user_app_snapshot(device_state_t *out);
 /* Switch page (0..UI_PAGE_COUNT-1). False if out of range or the queue is full. */
 bool user_app_set_page(int page);
 
-/* Poll the vault source now instead of waiting out the interval. The panel is
+/* Poll the news source now instead of waiting out the interval. The panel is
  * only refreshed if the fetched content differs from what is on the glass. */
 bool user_app_refresh_now(void);
 
 /* Point the device at a different snapshot URL. Validated, persisted to NVS and
  * applied live — no reboot. Empty switches to the built-in demo snapshot.
- * Returns false if the URL is not usable (see prov_validate_vault_url). */
-bool user_app_set_vault_url(const char *url);
+ * Returns false if the URL is not usable (see prov_validate_news_url). */
+bool user_app_set_news_url(const char *url);
 
 /* Run the e-Paper self-test pattern sweep. Blocks the UI task for tens of
  * seconds once it starts, so this only enqueues it. */

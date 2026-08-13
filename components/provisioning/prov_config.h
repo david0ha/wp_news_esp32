@@ -1,4 +1,4 @@
-// Pure (host-testable) configuration model for Wi-Fi + vault-source provisioning.
+// Pure (host-testable) configuration model for Wi-Fi + news-source provisioning.
 // This header MUST NOT depend on ESP-IDF so it can be unit-tested on the host.
 #pragma once
 
@@ -7,20 +7,20 @@
 
 #define PROV_SSID_MAX_LEN     32   // 802.11 SSID limit
 #define PROV_PASS_MAX_LEN     64   // WPA2 passphrase limit
-#define PROV_URL_MAX_LEN     128   // where the vault snapshot is fetched from
+#define PROV_URL_MAX_LEN     128   // where the news snapshot is fetched from
 
 typedef struct {
     char ssid[PROV_SSID_MAX_LEN + 1];
     char password[PROV_PASS_MAX_LEN + 1];
-    // The URL the device polls for its vault snapshot, e.g.
-    // "http://macbook.local:8123/vault.json". Plain HTTP is the normal case:
+    // The URL the device polls for its news snapshot, e.g.
+    // "http://macbook.local:8123/news.json". Plain HTTP is the normal case:
     // this is a link between two machines on the user's own LAN, and requiring
     // a certificate for it would mean requiring a certificate authority.
     //
     // Empty is a supported, complete configuration — the board then renders the
     // built-in demo snapshot with a DEMO badge, which is what makes it a
     // finished object with no PC running.
-    char vault_url[PROV_URL_MAX_LEN + 1];
+    char news_url[PROV_URL_MAX_LEN + 1];
 } prov_config_t;
 
 #ifdef __cplusplus
@@ -47,7 +47,7 @@ prov_cred_result_t prov_validate_credentials(const char *ssid, const char *passw
 // Deliberately permissive about the rest — a hostname, an IP, a port, a path, a query string
 // are all fine. The point is to catch the two mistakes people actually make, which are pasting
 // a bare hostname with no scheme and pasting a whole file:// path.
-bool prov_validate_vault_url(const char *url);
+bool prov_validate_news_url(const char *url);
 
 #ifdef __cplusplus
 }

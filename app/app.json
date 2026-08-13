@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "Obsidian Board",
-    "slug": "obsidian-board",
-    "scheme": "obsidianboard",
+    "name": "WP News",
+    "slug": "wp_news-board",
+    "scheme": "wpnews",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.obsidianboard.app",
+      "bundleIdentifier": "com.wpnews.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Obsidian Board connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
+        "NSLocalNetworkUsageDescription": "WP News connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
         "NSBonjourServices": ["_http._tcp"],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
@@ -19,7 +19,7 @@
     },
     "android": {
       "predictiveBackGestureEnabled": false,
-      "package": "com.obsidianboard.app",
+      "package": "com.wpnews.app",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"

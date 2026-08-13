@@ -3,7 +3,7 @@
 # on the pixels. Exits non-zero if any layout or glyph check fails.
 #
 # Usage:  ./sim.sh                                            # built-in demo data
-#         VAULT_URL=http://localhost:8123/vault.json ./sim.sh # the device's own fetch path
+#         NEWS_URL=http://localhost:8123/news.json ./sim.sh # the device's own fetch path
 set -e
 cd "$(dirname "$0")"
 
@@ -21,5 +21,5 @@ if command -v sips >/dev/null 2>&1; then
   done
 fi
 echo "screenshots in sim/shots/ — 4 pages, the offline header, the setup overlay,"
-echo "the same 4 pages from a nearly-empty vault, and the two pages that have"
+echo "the same 4 pages from a nearly-empty news, and the two pages that have"
 echo "empty-list placeholders from a brand-new one"

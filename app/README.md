@@ -1,13 +1,13 @@
-# Obsidian Board — companion app
+# WP News — companion app
 
-A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 Obsidian Board**
+A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 WP News**
 over your home Wi-Fi. No cloud, no accounts, no API keys — the app talks **directly** to the board
 over plain HTTP on the LAN.
 
 It does two things:
 
 1. **Onboarding** over the board's setup Wi-Fi (SoftAP): pick your home Wi-Fi, enter the password
-   and the vault snapshot URL, and the board reboots onto your network.
+   and the news snapshot URL, and the board reboots onto your network.
 2. **Live control** over the LAN: a dashboard that polls the board, shows what it is displaying and
    how its last poll went, switches the page on the panel, changes the snapshot URL, and runs the
    panel self-test.
@@ -18,7 +18,7 @@ knows a field name.
 
 ## What the dashboard shows
 
-Not the vault — the *board*. The full snapshot is on the URL the board polls, which the phone can
+Not the news — the *board*. The full snapshot is on the URL the board polls, which the phone can
 open too; what a companion app is for is the half-metre of air between the user and a device with
 no keyboard:
 
@@ -34,12 +34,12 @@ no keyboard:
 - **Panel** — the measured full/partial refresh times. The refresh policy for this panel is meant
   to be chosen from measurement, and this is how you read the measurements off a board on a shelf
   instead of holding a serial cable to it.
-- **Quick memo** — type something and it lands in the vault's inbox, so the queue on the panel is
+- **Quick memo** — type something and it lands in the news's inbox, so the queue on the panel is
   somewhere you can add to from the sofa. Saving also asks the board to poll, which is what makes
   the memo appear on the glass while you are still looking at it.
 
 The memo box is the one thing here that does **not** talk to the board. `POST /capture` is served
-by whatever is producing the snapshot — `tools/vault_server.py --allow-capture` does, most
+by whatever is producing the snapshot — `tools/news_server.py --allow-capture` does, most
 producers will not — so the app derives its address from the snapshot URL the board reports, and
 treats "this server doesn't do capture" as an ordinary answer with its own sentence. The boundary
 is why it lives in `src/lib/capture.ts` and not in `src/lib/esp32.ts`.
@@ -52,7 +52,7 @@ reasons:
 - It talks to the board over **plain HTTP** on the local network. iOS requires
   `NSAllowsLocalNetworking` + `NSLocalNetworkUsageDescription` and Android requires
   `usesCleartextTraffic` — these are baked into a native build, not available in Expo Go.
-- mDNS discovery of `obsidianboard.local` needs the iOS `NSBonjourServices` entitlement.
+- mDNS discovery of `wpnews.local` needs the iOS `NSBonjourServices` entitlement.
 
 So you run it with `npx expo run:ios` / `npx expo run:android` (a real device or simulator with a
 dev build), not by scanning a QR code into Expo Go.
@@ -83,15 +83,15 @@ the firmware would, including the three distinct failure codes — so the whole 
 is exercised, with only the panel missing:
 
 ```bash
-python3 ../tools/mock_vault_server.py --port 8123     # the vault contract, as a server
-curl -X POST http://localhost:8080/api/vault -d '{"url":"http://localhost:8123/vault.json"}'
+python3 ../tools/mock_news_server.py --port 8123     # the news contract, as a server
+curl -X POST http://localhost:8080/api/news -d '{"url":"http://localhost:8123/news.json"}'
 ```
 
-To exercise the memo box too, serve a real (or throwaway) vault with capture enabled instead:
+To exercise the memo box too, serve a real (or throwaway) news with capture enabled instead:
 
 ```bash
-python3 ../tools/vault_server.py ~/some/vault --port 8123 --allow-capture
-curl -X POST http://localhost:8080/api/vault -d '{"url":"http://localhost:8123/vault.json"}'
+python3 ../tools/news_server.py ~/some/news --port 8123 --allow-capture
+curl -X POST http://localhost:8080/api/news -d '{"url":"http://localhost:8123/news.json"}'
 ```
 
 Provisioning test knobs in the mock: enter password **`wrong`** to exercise the auth-failure path;
@@ -106,7 +106,7 @@ npx expo run:ios      # or: npx expo run:android
 Then follow the in-app onboarding:
 
 1. **Turn on** the board (USB-C). In your phone's Wi-Fi settings, join the network named
-   `Obsidian Board-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
+   `WP News-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
 2. **Pick your Wi-Fi** from the scanned list (or "Other…" for a hidden SSID).
 3. **Enter the snapshot URL** — or skip it, and the board runs on its built-in demo data. A URL you
    do type is validated against the firmware's own rule before anything is sent, because the
@@ -114,18 +114,18 @@ Then follow the in-app onboarding:
 4. **Enter the Wi-Fi password.** The app `POST`s to `/api/provision` and polls `/api/status` until
    the board confirms it joined.
 5. **Setup complete** — reconnect your phone to the same home Wi-Fi, then open the dashboard. The
-   board is reached at `http://obsidianboard.local` (mDNS) or its IP; you can override the address
+   board is reached at `http://wpnews.local` (mDNS) or its IP; you can override the address
    in **Settings** if mDNS isn't available on your network.
 
 ## Onboarding → control flow
 
 ```
 [AP setup]                                    [home LAN control]
-turn-on  ─ join "Obsidian Board-XXXX"         dashboard ─ GET /api/state (poll)
+turn-on  ─ join "WP News-XXXX"         dashboard ─ GET /api/state (poll)
 wifi-list ─ GET /api/scan                       │           POST /api/{page,refresh,display/test}
-vault    ─ (validate locally)                   └─ settings ─ GET /api/info + /api/state
-password ─ POST /api/provision (ssid, pass,                   POST /api/vault, change host,
-           vault_url) → poll GET /api/status                  re-onboard
+news    ─ (validate locally)                   └─ settings ─ GET /api/info + /api/state
+password ─ POST /api/provision (ssid, pass,                   POST /api/news, change host,
+           news_url) → poll GET /api/status                  re-onboard
 complete ─ save board base URL
 ```
 
@@ -143,7 +143,7 @@ complete ─ save board base URL
 
 The web export is also the cheapest way to actually *look* at the app without a native build: serve
 the bundle and the mock board behind one origin (a small proxy forwarding `/api/*` to the board and
-`/vault.json` + `/capture` to the vault server) and the whole dashboard runs in a browser. Doing it
+`/news.json` + `/capture` to the news server) and the whole dashboard runs in a browser. Doing it
 that way rather than adding CORS headers to the mock keeps a browser-only problem out of the repo —
 React Native has no CORS.
 
@@ -163,7 +163,7 @@ app/
    │  ├─ index.tsx         entry → onboarding or dashboard
    │  ├─ dashboard.tsx     live dashboard (polls getState)
    │  ├─ settings.tsx      board info, snapshot URL, host override, re-onboard
-   │  └─ onboarding/       turn-on → wifi-list → vault → password → complete
+   │  └─ onboarding/       turn-on → wifi-list → news → password → complete
    ├─ components/      Screen, Button, Card, Chip, SegmentedControl, StatTile, InfoRow, …
    ├─ lib/
    │  ├─ esp32.ts          the board client (both API surfaces) + types  ← core
@@ -171,8 +171,8 @@ app/
    │  ├─ discovery.ts      base-URL normalize/validate/resolve (pure)
    │  ├─ store.ts          AsyncStorage: board base URL + onboarding flag
    │  ├─ device.tsx        app-wide board connection context
-   │  ├─ vaulturl.ts       snapshot-URL validation mirroring the firmware
-   │  ├─ capture.ts        writing a memo — to the vault server, NOT the board
+   │  ├─ newsurl.ts       snapshot-URL validation mirroring the firmware
+   │  ├─ capture.ts        writing a memo — to the news server, NOT the board
    │  └─ format.ts         count / age / ms / fetch-result display helpers
    └─ onboarding/      flow.ts (step logic) + OnboardingContext
 ```
@@ -180,10 +180,10 @@ app/
 ## Local-only by design
 
 There is **no** Supabase / AWS / MQTT / cloud auth anywhere in this app. The only network calls it
-makes are direct HTTP requests to the board's IP / `obsidianboard.local`. Wi-Fi credentials and the
+makes are direct HTTP requests to the board's IP / `wpnews.local`. Wi-Fi credentials and the
 snapshot URL live on the board (NVS); the app persists only the board's base URL and an
 onboarding-complete flag in `AsyncStorage`.
 
-Those two AsyncStorage keys are namespaced `obsidianboard.*`. A phone that once ran the fortune
+Those two AsyncStorage keys are namespaced `wpnews.*`. A phone that once ran the fortune
 board's app keeps its `tickerboard.*` entries untouched — they point at different hardware on the
 same LAN.

@@ -9,16 +9,16 @@ the device's exact rule, writes a bitmap per page into `sim/shots/`, and **asser
 It exits non-zero when anything fails, so this is a test that happens to leave screenshots behind.
 
 ```bash
-VAULT_URL=http://localhost:8123/vault.json ./sim.sh   # against the reference server
+NEWS_URL=http://localhost:8123/news.json ./sim.sh   # against the reference server
 ```
 
-With `VAULT_URL` set it runs the device's own fetch-and-parse path — the same `vault_service_fetch`,
-the same `vault_parse`, the same bytes — so a change to the wire contract is caught here rather than
+With `NEWS_URL` set it runs the device's own fetch-and-parse path — the same `news_service_fetch`,
+the same `news_parse`, the same bytes — so a change to the wire contract is caught here rather than
 on the glass.
 
 ## What "the real UI" means
 
-`sim/CMakeLists.txt` compiles `components/vault_core/` directly: the same `ui_vault.c`, the same
+`sim/CMakeLists.txt` compiles `components/news_core/` directly: the same `ui_news.c`, the same
 four page files, the same `ui_graph.c`, the same generated fonts. The only file that differs between
 the simulator and the firmware is the HTTP port (`http_port_curl.c` instead of `http_port_esp.c`).
 
@@ -62,7 +62,7 @@ covers it, so the provisioning overlay is checked to actually cover the footer.
 **Sparse data.** Every page is rendered a second time from a deliberately small snapshot — two
 agents, two notes, one tag, an empty inbox, a single graph node. The demo snapshot fills every list
 to its cap, which is the widest the pages can get but never exercises hiding the rows that have no
-data. A real vault is far more likely to look like the sparse one. The same page checks run
+data. A real news is far more likely to look like the sparse one. The same page checks run
 unchanged, because they are data-driven: ink for the rows that exist, blankness for the rows that do
 not, and a placeholder for a list that is entirely empty.
 
@@ -82,7 +82,7 @@ sim/shots/2_agents.png    에이전트
 sim/shots/3_notes.png     최근 노트
 sim/shots/4_offline.png   the offline/stale header
 sim/shots/5_setup.png     the provisioning overlay
-sim/shots/6..9_sparse_*   the same four pages from a nearly-empty vault
+sim/shots/6..9_sparse_*   the same four pages from a nearly-empty news
 ```
 
 Each line of output carries an ink percentage. A page that renders nothing comes out near 0%; one
@@ -99,7 +99,7 @@ could have found:
 1. **A missing em dash.** A demo inbox title contained `—`, which was not in the generated font. On
    hardware that is a tofu box, visible only after a four-second refresh.
 2. **Labels wrapping instead of ellipsizing.** `ui_lab_w` set only the width, so LVGL auto-sized the
-   height and wrapped — putting a second line of the header's vault name on top of the page heading,
+   height and wrapped — putting a second line of the header's news name on top of the page heading,
    and a second line of a long note title on top of the next row.
 
 Both were one-line fixes. Both would have cost an hour each to find on the board.

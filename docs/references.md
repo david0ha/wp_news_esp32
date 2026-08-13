@@ -31,7 +31,7 @@ is the most expensive kind of wrong.
 
 - **Noto Sans KR**, Regular and Medium, SIL Open Font License 1.1 —
   https://github.com/notofonts/noto-cjk (`Sans/SubsetOTF/KR/`). License text bundled at
-  `components/vault_core/fonts/OFL.txt`.
+  `components/news_core/fonts/OFL.txt`.
 - **KS X 1001 완성형** — the 2350 syllables are derived at generation time from Python's `euc-kr`
   codec (lead `0xB0..0xC8` × trail `0xA1..0xFE`), so there is no table in this repo to fall out of
   date. See `tools/gen_fonts.py`.

@@ -29,10 +29,10 @@ function fakeFetch(reply: Reply) {
 
 describe('captureUrlFor', () => {
   it('keeps the host and replaces the path', () => {
-    // /vault.json is one resource on that server and /capture is another.
-    expect(captureUrlFor('http://mac.local:8123/vault.json')).toBe('http://mac.local:8123/capture')
+    // /news.json is one resource on that server and /capture is another.
+    expect(captureUrlFor('http://mac.local:8123/news.json')).toBe('http://mac.local:8123/capture')
     expect(captureUrlFor('http://192.168.0.9:8000/a/b/c.json')).toBe('http://192.168.0.9:8000/capture')
-    expect(captureUrlFor('https://vault.example.com/snapshot')).toBe('https://vault.example.com/capture')
+    expect(captureUrlFor('https://news.example.com/snapshot')).toBe('https://news.example.com/capture')
   })
 
   it('returns null when there is no usable source', () => {
@@ -54,7 +54,7 @@ describe('memoByteLength', () => {
 })
 
 describe('captureMemo', () => {
-  const SRC = 'http://mac.local:8123/vault.json'
+  const SRC = 'http://mac.local:8123/news.json'
 
   it('POSTs the memo as JSON and returns the path the server created', async () => {
     const { fetchImpl, calls } = fakeFetch({ status: 201, body: { ok: true, path: 'Inbox/x.md' } })
@@ -89,7 +89,7 @@ describe('captureMemo', () => {
     expect(memoByteLength('가'.repeat(3000))).toBeGreaterThan(CAPTURE_MAX_BYTES)
   })
 
-  it('reports a board with no vault URL separately', async () => {
+  it('reports a board with no news URL separately', async () => {
     const { fetchImpl, calls } = fakeFetch({ status: 201, body: {} })
     await expect(captureMemo('', 'x', { fetchImpl })).rejects.toMatchObject({ code: 'no_source' })
     expect(calls.length).toBe(0)

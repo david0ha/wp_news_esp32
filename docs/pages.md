@@ -12,7 +12,7 @@ reflow means the whole panel changed and has to be fully refreshed.
 ```
  14        122          244        336            478      578  606
 ┌──────────────────────────────────────────────────────────────────┐
-│ OBSIDIAN  second-brain  [DEMO]  2026-08-10 (월)  11:23   ((•   ▉ │ 44
+│ WP NEWS  second-brain  [DEMO]  2026-08-10 (월)  11:23   ((•   ▉ │ 44
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │                        content, 648 × 398                        │
@@ -23,12 +23,12 @@ reflow means the whole panel changed and has to be fully refreshed.
 ```
 
 Fixed slots, not a flex row, for two reasons. The clock is the only thing that gets a targeted
-partial refresh, and a targeted refresh needs a rectangle that does not move when the vault name
+partial refresh, and a targeted refresh needs a rectangle that does not move when the news name
 gets longer. And every slot here has a neighbour it must not touch — which a layout engine would
 let it do silently.
 
-The vault name gets its own slot rather than being concatenated onto the brand: a combined
-`OBSIDIAN · <name>` label ellipsizes the brand away first, which reads as a device that has
+The news name gets its own slot rather than being concatenated onto the brand: a combined
+`WP NEWS · <name>` label ellipsizes the brand away first, which reads as a device that has
 forgotten what it is.
 
 **One badge slot, ranked.** `DEMO` (no URL configured) beats `오프라인` (Wi-Fi down or the last
@@ -65,7 +65,7 @@ identical. The demo snapshot contains a zero day precisely so the simulator asse
 
 ## 1 · 링크 그래프
 
-The vault's highest-degree notes and the links between them. Deliberately **not** a force-directed
+The news's highest-degree notes and the links between them. Deliberately **not** a force-directed
 layout — see `ui_graph.h` for the argument, but briefly: physics is iterative (this runs on the task
 that owns a panel), seeded (the simulator and the device would draw different pictures from
 identical data, which makes the simulator useless as a test), and unbounded (a node ends up
@@ -77,7 +77,7 @@ degree order. Integer arithmetic throughout, including a 91-entry sine table rat
 is exactly enough to move a node one pixel and fail a screenshot test for a reason that has nothing
 to do with the layout.
 
-Node radius scales with link degree, against the local range rather than an absolute one, so a vault
+Node radius scales with link degree, against the local range rather than an absolute one, so a news
 of uniformly-linked notes still shows some variation instead of fourteen identical dots.
 
 Draw order is the only subtle thing: **edges, then a white disc per node, then the node's outline.**
@@ -105,7 +105,7 @@ drawn**. An empty bar there would read as "stuck at 0%", which is a different an
 thing than "not applicable".
 
 The state word is Korean on the panel and English on the wire, which is why
-`vault_agent_state_name()` (for `/api/state`) and the page's own `state_label()` are separate
+`news_agent_state_name()` (for `/api/state`) and the page's own `state_label()` are separate
 functions. One is an identifier; the other is prose.
 
 ## 3 · 최근 노트
@@ -122,7 +122,7 @@ See [fonts](#fonts-and-why-both-faces-are-full) below.
 The inbox is also the one list that can be *added to* rather than only watched, from the companion
 app's memo box or a `curl`. That write never touches the board — it goes to the machine serving the
 snapshot, which creates the note, and the board sees it on its next poll like any other change. See
-[vault-contract.md](vault-contract.md#capture).
+[news-contract.md](news-contract.md#capture).
 
 ## Fonts, and why both faces are full
 

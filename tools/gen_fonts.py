@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regenerate the Korean fonts in components/vault_core/fonts/.
+Regenerate the Korean fonts in components/news_core/fonts/.
 
 Why this is different from a subset generator
 ---------------------------------------------
@@ -42,7 +42,7 @@ import tempfile
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORE = os.path.join(ROOT, "components", "vault_core")
+CORE = os.path.join(ROOT, "components", "news_core")
 FONTDIR = os.path.join(CORE, "fonts")
 STRINGS_H = os.path.join(CORE, "include", "ui_strings.h")
 

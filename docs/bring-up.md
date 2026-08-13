@@ -98,7 +98,7 @@ First boot has nothing stored:
 
 ```
 I provisioning: no stored network — starting setup portal
-I provisioning: setup portal ready — join Wi-Fi 'Obsidian Board-XXXX' and open http://192.168.4.1
+I provisioning: setup portal ready — join Wi-Fi 'WP News-XXXX' and open http://192.168.4.1
 ```
 
 The panel should now show the setup overlay with that same SSID on it. **That is the first
@@ -120,14 +120,14 @@ It reboots. On the second boot: `stored network 'X' — attempting to connect`.
 ```
 I net_time: time synced
 I device_api: control server up on port 80
-I device_api: mDNS advertising http://obsidianboard.local
+I device_api: mDNS advertising http://wpnews.local
 ```
 
 `sntp sync timeout` costs only the header clock (it stays `--:--`); snapshot staleness is measured
 monotonically and is unaffected. From here the board is reachable:
 
 ```bash
-curl -s http://obsidianboard.local/api/info
+curl -s http://wpnews.local/api/info
 ```
 
 If mDNS does not resolve — some routers and most corporate networks block it — use the IP from the
@@ -136,7 +136,7 @@ If mDNS does not resolve — some routers and most corporate networks block it �
 ## 3. Run the self-test
 
 ```bash
-curl -X POST http://obsidianboard.local/api/display/test
+curl -X POST http://wpnews.local/api/display/test
 ```
 
 Six patterns, tens of seconds, each failing differently on purpose — what each one proves is in
@@ -149,7 +149,7 @@ corner the origin is, because every other pattern is symmetric enough to look ri
 These are the measurements the firmware was deliberately built not to guess at.
 
 ```bash
-curl -s http://obsidianboard.local/api/state | jq '.panel, .battery'
+curl -s http://wpnews.local/api/state | jq '.panel, .battery'
 ```
 
 | number | where it goes |
@@ -167,16 +167,16 @@ Also watch the panel through a clock tick and a page change before deciding the 
 Whether a partial refresh is *silent* is not in any number the API reports, and it is half the
 decision.
 
-## 5. Point it at a real vault
+## 5. Point it at a real news
 
 ```bash
-python3 tools/vault_server.py ~/Documents/MyVault      # on the machine holding the vault
-curl -X POST http://obsidianboard.local/api/vault -d '{"url":"http://mymac.local:8123/vault.json"}'
+python3 tools/news_server.py ~/Documents/MyNews      # on the machine holding the news
+curl -X POST http://wpnews.local/api/news -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
 The `DEMO` badge should disappear on the next poll. If it does not, `GET /api/state` reports
 `source.lastResult`, and the three failure codes each send you somewhere different —
-[vault-contract.md](vault-contract.md) has them.
+[news-contract.md](news-contract.md) has them.
 
 ## Buttons
 

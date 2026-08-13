@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mock Obsidian Board — exercises BOTH firmware HTTP APIs without hardware, so the full app flow
+// Mock WP News — exercises BOTH firmware HTTP APIs without hardware, so the full app flow
 // (onboarding + the live dashboard) runs in a simulator/emulator.
 //
 // Implements the contract in docs/app-control.md:
@@ -7,20 +7,20 @@
 //   Provisioning (firmware: components/provisioning/prov_portal.c)
 //     GET  /api/info        -> { deviceId, model, apSsid }            (AP-mode identity)
 //     GET  /api/scan        -> { networks: [{ ssid, rssi, secure }] }
-//     POST /api/provision   (x-www-form-urlencoded: ssid, password, vault_url?) -> 202 | 4xx
+//     POST /api/provision   (x-www-form-urlencoded: ssid, password, news_url?) -> 202 | 4xx
 //     GET  /api/status      -> { state, ssid?, reason? }
 //
 //   Control (firmware: components/device_api)
 //     GET  /api/info          -> { deviceId, model, fw, ip }          (STA-mode identity)
 //     GET  /api/state         -> the live snapshot
-//     POST /api/refresh       -> poll the vault source now
+//     POST /api/refresh       -> poll the news source now
 //     POST /api/page          { page: 0..3 }
-//     POST /api/vault         { url }
+//     POST /api/news         { url }
 //     POST /api/display/test  -> "run" the panel sweep
 //
-// It is not a stub: when a vault URL is set, this really fetches it and summarises it exactly as
+// It is not a stub: when a news URL is set, this really fetches it and summarises it exactly as
 // the firmware's device_api_json.c would, including the three distinct failure codes. So pointing
-// it at `python3 tools/mock_vault_server.py` exercises the whole chain the real board walks —
+// it at `python3 tools/mock_news_server.py` exercises the whole chain the real board walks —
 // producer, transport, parse, summary — with only the panel missing.
 //
 // Usage:
@@ -47,13 +47,13 @@ const URL_MAX_LEN = 128
 const PAGE_COUNT = 4
 const POLL_SECONDS = 300
 
-// The firmware's page titles (components/vault_core/include/ui_strings.h). The app shows this
+// The firmware's page titles (components/news_core/include/ui_strings.h). The app shows this
 // string as the ground truth for what is on the glass, so the mock has to serve the real ones.
 const PAGE_TITLES = ['볼트 통계', '링크 그래프', '에이전트', '최근 노트']
 
 // ---- Provisioning state ----
 const prov = { state: 'idle', ssid: undefined, reason: undefined }
-const INFO_AP = { deviceId: '9F3A', model: 'Obsidian Board', apSsid: 'Obsidian Board-9F3A' }
+const INFO_AP = { deviceId: '9F3A', model: 'WP News', apSsid: 'WP News-9F3A' }
 const NETWORKS = [
   { ssid: 'Home 5G', rssi: -48, secure: true },
   { ssid: 'Home 2.4G', rssi: -60, secure: true },
@@ -62,7 +62,7 @@ const NETWORKS = [
 ]
 
 // ---- The built-in demo snapshot ----
-// Mirrors components/vault_core/vault_mock.c, which the board renders when no URL is configured.
+// Mirrors components/news_core/news_mock.c, which the board renders when no URL is configured.
 // Only the fields /api/state summarises are kept — this mock has no panel to draw the rest on.
 const DEMO = {
   valid: true,
@@ -84,8 +84,8 @@ const DEMO = {
 // ---- Board state ----
 const board = {
   page: 0,
-  vaultUrl: '',
-  vault: { ...DEMO },
+  newsUrl: '',
+  news: { ...DEMO },
   lastResult: 'no_url',
   // Epoch ms of the last SUCCESSFUL poll. null means none has ever succeeded, which /api/state
   // reports as ageSeconds -1 — a different fact from "0 seconds ago".
@@ -97,8 +97,8 @@ const board = {
   partialRefreshMs: 0,
 }
 
-// Mirrors prov_validate_vault_url() (components/provisioning/prov_config.c).
-function validVaultUrl(url) {
+// Mirrors prov_validate_news_url() (components/provisioning/prov_config.c).
+function validNewsUrl(url) {
   if (url === undefined || url === null || url === '') return true
   if (Buffer.byteLength(url, 'utf8') > URL_MAX_LEN) return false
   let rest
@@ -109,8 +109,8 @@ function validVaultUrl(url) {
 }
 
 // Summarise a parsed snapshot the way device_api_json.c does. Returns null if the payload is not
-// a vault snapshot — the same judgement vault_parse.c makes (an object with no vault content in
-// it is a rejection, not an empty vault).
+// a news snapshot — the same judgement news_parse.c makes (an object with no news content in
+// it is a rejection, not an empty news).
 function summarise(json) {
   if (json === null || typeof json !== 'object' || Array.isArray(json)) return null
   const stats = json.stats ?? {}
@@ -125,7 +125,7 @@ function summarise(json) {
   return {
     valid: true,
     demo: false,
-    name: String(json.vault ?? ''),
+    name: String(json.news ?? ''),
     generatedAt: String(json.generated_at ?? ''),
     notes,
     links: num(stats.links),
@@ -149,15 +149,15 @@ function num(v) {
 // DNS/connect/timeout, `http_status` for a non-2xx, `bad_payload` for a 2xx that is not a
 // snapshot. A failure leaves the previous snapshot in place — blanking the board is the one
 // failure a user actually notices.
-async function pollVault() {
-  if (!board.vaultUrl) {
-    board.vault = { ...DEMO }
+async function pollNews() {
+  if (!board.newsUrl) {
+    board.news = { ...DEMO }
     board.lastResult = 'no_url'
     return
   }
   let res
   try {
-    res = await fetch(board.vaultUrl, { signal: AbortSignal.timeout(8000) })
+    res = await fetch(board.newsUrl, { signal: AbortSignal.timeout(8000) })
   } catch (e) {
     board.lastResult = 'transport'
     console.log(`   !! transport: ${e.message}`)
@@ -179,13 +179,13 @@ async function pollVault() {
   const summary = summarise(json)
   if (!summary) {
     board.lastResult = 'bad_payload'
-    console.log('   !! bad_payload: JSON, but not a vault snapshot')
+    console.log('   !! bad_payload: JSON, but not a news snapshot')
     return
   }
-  board.vault = summary
+  board.news = summary
   board.lastResult = 'ok'
   board.lastOkAt = Date.now()
-  console.log(`   -> polled ${board.vaultUrl}: ${summary.notes} notes, ${summary.agents} agents`)
+  console.log(`   -> polled ${board.newsUrl}: ${summary.notes} notes, ${summary.agents} agents`)
 }
 
 // Pretend to refresh the panel, recording a timing in the range the real panel lands in. The
@@ -204,14 +204,14 @@ function fakeRefresh(kind) {
 function state() {
   return {
     deviceId: '9F3A',
-    model: 'Obsidian Board',
+    model: 'WP News',
     fw: '0.1.0',
     ip: `127.0.0.1:${PORT}`,
     page: board.page,
     pageTitle: PAGE_TITLES[board.page] ?? '',
-    vault: { ...board.vault },
+    news: { ...board.news },
     source: {
-      url: board.vaultUrl,
+      url: board.newsUrl,
       lastResult: board.lastResult,
       pollSeconds: POLL_SECONDS,
       ageSeconds: board.lastOkAt === null ? -1 : Math.round((Date.now() - board.lastOkAt) / 1000),
@@ -275,21 +275,21 @@ const server = http.createServer(async (req, res) => {
 
   if (method === 'POST' && url === '/api/provision') {
     const form = parseForm(await readBody(req))
-    const { ssid = '', password = '', vault_url: vaultUrl = '' } = form
+    const { ssid = '', password = '', news_url: newsUrl = '' } = form
     if (ssid.length === 0) return sendJson(res, 400, { ok: false, error: 'ssid_empty' })
     if (ssid.length > SSID_MAX_LEN) return sendJson(res, 400, { ok: false, error: 'ssid_too_long' })
     if (password.length > PASS_MAX_LEN) return sendJson(res, 400, { ok: false, error: 'pass_too_long' })
-    if (!validVaultUrl(vaultUrl)) return sendJson(res, 400, { ok: false, error: 'vault_url_invalid' })
+    if (!validNewsUrl(newsUrl)) return sendJson(res, 400, { ok: false, error: 'news_url_invalid' })
 
     prov.state = 'connecting'
     prov.ssid = ssid
     prov.reason = undefined
     console.log(
-      `   -> connecting to "${ssid}" (password ${password ? 'set' : 'empty'}, vault_url "${vaultUrl}")`,
+      `   -> connecting to "${ssid}" (password ${password ? 'set' : 'empty'}, news_url "${newsUrl}")`,
     )
 
     // Provisioning REWRITES the whole config on the real board, so an absent field clears the URL.
-    board.vaultUrl = vaultUrl
+    board.newsUrl = newsUrl
 
     setTimeout(async () => {
       if (password === 'wrong') {
@@ -300,7 +300,7 @@ const server = http.createServer(async (req, res) => {
       }
       prov.state = 'connected'
       console.log('   -> connect test OK')
-      await pollVault()
+      await pollNews()
       fakeRefresh('full')
     }, CONNECT_MS)
 
@@ -313,11 +313,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === 'POST' && url === '/api/refresh') {
-    const before = JSON.stringify(board.vault)
-    await pollVault()
+    const before = JSON.stringify(board.news)
+    await pollNews()
     // The board only touches the panel when the snapshot actually changed — that is the whole
     // point of the content hash, so the mock honours it rather than counting a refresh every time.
-    if (JSON.stringify(board.vault) !== before) fakeRefresh('full')
+    if (JSON.stringify(board.news) !== before) fakeRefresh('full')
     return sendJson(res, 200, { ok: true })
   }
 
@@ -337,7 +337,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true })
   }
 
-  if (method === 'POST' && url === '/api/vault') {
+  if (method === 'POST' && url === '/api/news') {
     let body
     try {
       body = JSON.parse(await readBody(req))
@@ -345,10 +345,10 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 400, { ok: false, error: 'bad_json' })
     }
     if (typeof body?.url !== 'string') return sendJson(res, 400, { ok: false, error: 'bad_json' })
-    if (!validVaultUrl(body.url)) return sendJson(res, 400, { ok: false, error: 'vault_url_invalid' })
-    board.vaultUrl = body.url
+    if (!validNewsUrl(body.url)) return sendJson(res, 400, { ok: false, error: 'news_url_invalid' })
+    board.newsUrl = body.url
     if (!body.url) board.lastOkAt = null // back to the demo snapshot; nothing has been fetched
-    await pollVault()
+    await pollNews()
     fakeRefresh('full')
     return sendJson(res, 200, { ok: true })
   }
@@ -364,12 +364,12 @@ const server = http.createServer(async (req, res) => {
 
 // Poll on the board's own schedule too, so a dashboard left open sees the age tick and reset.
 setInterval(() => {
-  if (board.vaultUrl) pollVault()
+  if (board.newsUrl) pollNews()
 }, POLL_SECONDS * 1000)
 
 server.listen(PORT, () => {
-  console.log(`mock Obsidian Board listening on http://localhost:${PORT}`)
+  console.log(`mock WP News listening on http://localhost:${PORT}`)
   console.log(`  EXPO_PUBLIC_ESP32_BASE_URL=http://localhost:${PORT} npx expo start`)
-  console.log('  no vault URL set yet — serving the built-in demo snapshot')
-  console.log('  set one with:  curl -X POST http://localhost:%d/api/vault -d \'{"url":"..."}\'', PORT)
+  console.log('  no news URL set yet — serving the built-in demo snapshot')
+  console.log('  set one with:  curl -X POST http://localhost:%d/api/news -d \'{"url":"..."}\'', PORT)
 })

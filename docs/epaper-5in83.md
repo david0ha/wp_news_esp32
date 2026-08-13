@@ -70,14 +70,14 @@ surface it loudly instead.
 This is the constraint the whole application is arranged around.
 
 ```c
-...update widgets...      /* ui_vault_set_*(), cheap, no panel traffic */
+...update widgets...      /* ui_news_set_*(), cheap, no panel traffic */
 Lvgl_RenderNow();         /* synchronous render -> flush_cb -> framebuffer */
 epd_refresh_full();       /* or epd_refresh_partial_area(...) */
 ```
 
 The LVGL flush callback **never** refreshes the panel. Exactly one task (`UiTask` in
 `components/user_app/user_app.cpp`) touches LVGL or starts a refresh; everything else — buttons, the
-HTTP API, the vault poller — posts a command and returns.
+HTTP API, the news poller — posts a command and returns.
 
 ### Full refresh
 
@@ -95,11 +95,11 @@ boundary — the controller addresses source lines in groups of eight, and a win
 comes out shifted rather than clipped — so the refreshed area may be up to 7 px wider on each side
 than asked for. Harmless, since the framebuffer there is already correct.
 
-Only one thing uses it: the header strip, via `ui_vault_header_area()`. Everything else on this
+Only one thing uses it: the header strip, via `ui_news_header_area()`. Everything else on this
 panel changes the whole content area.
 
 The window is the **whole** header, not just the clock's slot, and that is a correctness point
-rather than a convenience. Three things up there move without new vault data — the clock, the
+rather than a convenience. Three things up there move without new news data — the clock, the
 battery level, and the badge — and the badge is the important one: a board whose source has gone
 away goes stale purely by the passage of time, so if the tick only refreshed the clock's rectangle
 the 오래됨 badge would never appear at all. Nothing else in that state triggers a refresh. The cost
@@ -129,8 +129,8 @@ Fixed regardless of what the numbers say:
   `CLOCK_REFRESH_EVERY` (5) minutes rather than every minute.
 
 And the rule that matters more than any of it: **a poll that returns unchanged content does not
-touch the panel at all.** `vault_hash()` fingerprints everything that reaches the glass, and
-`VaultTask` compares before it notifies. On a device that mostly sits still, this is the difference
+touch the panel at all.** `news_hash()` fingerprints everything that reaches the glass, and
+`NewsTask` compares before it notifies. On a device that mostly sits still, this is the difference
 between a silent dashboard and one that flashes at nobody every five minutes forever.
 
 ### When the numbers arrive
@@ -138,7 +138,7 @@ between a silent dashboard and one that flashes at nobody every five minutes for
 The two constants below are placed to be *decided*, not guessed at twice. Read the measurement:
 
 ```bash
-curl -s http://obsidianboard.local/api/state | jq .panel
+curl -s http://wpnews.local/api/state | jq .panel
 # {"partialChain": 3, "fullRefreshMs": ..., "partialRefreshMs": ...}
 ```
 
@@ -153,7 +153,7 @@ then watch the panel through a clock tick and a page change, and apply whichever
 | full refresh is over ~6 s | nothing to change — but it is why a page change is optimistic in the app and why `POST /api/page` returns before the panel has caught up | — |
 
 If the clock tick stops earning its refresh, deleting it is a real option: the header would then
-move only when the vault does, which on a dashboard is defensible and costs nothing. What is not
+move only when the news does, which on a dashboard is defensible and costs nothing. What is not
 an option is leaving the number at 5 because that is what the 2.13" board's arithmetic implied.
 
 ## Memory

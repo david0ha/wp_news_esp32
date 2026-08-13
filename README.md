@@ -1,8 +1,8 @@
-# Obsidian Board
+# WP News
 
-An always-on e-Paper dashboard for an Obsidian vault and the agents working on it. A 5.83"
+An always-on e-Paper dashboard for an WP News news and the agents working on it. A 5.83"
 monochrome panel on a Seeed EE04 carrier and a XIAO ESP32-S3 Plus, polling one URL on your LAN and
-drawing four pages: vault statistics, the link graph, agent status, and the note queue.
+drawing four pages: news statistics, the link graph, agent status, and the note queue.
 
 ![the stats page](docs/images/0_stats.png)
 
@@ -17,7 +17,7 @@ placeholder.
 </tr>
 <tr>
 <td><img src="docs/images/3_notes.png" alt="recent notes and inbox"></td>
-<td><img src="docs/images/0_stats.png" alt="vault statistics"></td>
+<td><img src="docs/images/0_stats.png" alt="news statistics"></td>
 </tr>
 </table>
 
@@ -34,49 +34,49 @@ idf.py build
 ./tools/flash.sh                    # finds the port, flashes, monitors
 ```
 
-Then join the `Obsidian Board-XXXX` Wi-Fi network the board raises, and give it your Wi-Fi
+Then join the `WP News-XXXX` Wi-Fi network the board raises, and give it your Wi-Fi
 credentials and — optionally — a snapshot URL.
 
 Doing this for the **first** time on a given board, follow [docs/bring-up.md](docs/bring-up.md)
 instead: the three things most likely to be wrong on a first power-on all look like a blank screen,
 and the boot log is the only place they are told apart.
 
-To feed it your actual vault, run the scanner on the machine that holds it:
+To feed it your actual news, run the scanner on the machine that holds it:
 
 ```bash
-python3 tools/vault_server.py ~/Documents/MyVault   # http://<you>:8123/vault.json
+python3 tools/news_server.py ~/Documents/MyNews   # http://<you>:8123/news.json
 ```
 
-It is read-only: it opens `.md` files and writes nothing. To try the plumbing without a vault,
-`python3 tools/mock_vault_server.py` serves the same contract from a fixed payload.
+It is read-only: it opens `.md` files and writes nothing. To try the plumbing without a news,
+`python3 tools/mock_news_server.py` serves the same contract from a fixed payload.
 
 Then point the board at it, from the portal or over the network:
 
 ```bash
-curl -X POST http://obsidianboard.local/api/vault \
-     -d '{"url":"http://mymac.local:8123/vault.json"}'
+curl -X POST http://wpnews.local/api/news \
+     -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
-Anything that serves that JSON works — a plugin inside Obsidian, a cron job, a shell script. The
-device cannot tell the difference. The format is [documented and tested](docs/vault-contract.md).
+Anything that serves that JSON works — a plugin inside WP News, a cron job, a shell script. The
+device cannot tell the difference. The format is [documented and tested](docs/news-contract.md).
 
 ### Making it two-way
 
 Two optional pieces turn the dashboard from something you watch into something you use:
 
 ```bash
-# a memo goes into the vault's inbox, and onto the panel on the next poll
-python3 tools/vault_server.py ~/Documents/MyVault --allow-capture
+# a memo goes into the news's inbox, and onto the panel on the next poll
+python3 tools/news_server.py ~/Documents/MyNews --allow-capture
 curl -X POST http://localhost:8123/capture -d 'ring the dentist'
 
 # a script reports what it is doing, and the agents page stops being empty
 python3 tools/agent_status.py --file ~/agents.json set indexer running --progress 40
-python3 tools/vault_server.py ~/Documents/MyVault --agents ~/agents.json
+python3 tools/news_server.py ~/Documents/MyNews --agents ~/agents.json
 ```
 
 Capture is off unless asked for: it is an unauthenticated LAN service that creates files in your
 notes. Neither piece is part of the device contract — the firmware has never heard of either. See
-[docs/vault-contract.md](docs/vault-contract.md#capture).
+[docs/news-contract.md](docs/news-contract.md#capture).
 
 ## Verify before claiming anything works
 
@@ -86,13 +86,13 @@ class of mistake.
 ```bash
 # 1) pure logic — the wire format, the fetch layer, the graph layout,
 #    the demo snapshot, the API JSON
-cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
-/tmp/vt/test_vault_parse && /tmp/vt/test_vault_service && /tmp/vt/test_graph_layout \
-  && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
+cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
+/tmp/vt/test_news_parse && /tmp/vt/test_news_service && /tmp/vt/test_graph_layout \
+  && /tmp/vt/test_news_mock && /tmp/vt/test_api_json
 
-# 2) provisioning pure logic, and the vault scanner
+# 2) provisioning pure logic, and the news scanner
 sh components/provisioning/test/run.sh
-python3 tools/test_vault_server.py
+python3 tools/test_news_server.py
 
 # 3) the real UI at the real resolution -> PNG, plus layout and glyph assertions
 cd sim && ./sim.sh
@@ -125,7 +125,7 @@ Serial/JTAG. See [docs/pinout.md](docs/pinout.md).
 | | |
 |---|---|
 | KEY0 | next page |
-| KEY1 | poll the vault source now |
+| KEY1 | poll the news source now |
 | KEY2 | tap → page 1 · **hold 5 s → reboot into Wi-Fi setup** |
 | BOOT | previous page |
 
@@ -135,7 +135,7 @@ Serial/JTAG. See [docs/pinout.md](docs/pinout.md).
 So drawing and presenting are separate everywhere:
 
 ```c
-...update widgets...      /* ui_vault_set_*(), cheap, no panel traffic */
+...update widgets...      /* ui_news_set_*(), cheap, no panel traffic */
 Lvgl_RenderNow();         /* synchronous render -> flush_cb -> framebuffer */
 epd_refresh_full();       /* or epd_refresh_partial_area(...) */
 ```
@@ -153,25 +153,25 @@ main/                   app_main: panel + LVGL bring-up, provisioning, task laun
 components/
   port_bsp/             UC8179 driver (epd_panel.c) — the only file that talks to the panel
   app_bsp/              LVGL port (RGB565 draw buffers, binarized in the flush callback)
-  vault_core/           the portable core — compiles identically on device, sim and host tests
-    vault_model.c       the snapshot struct, a UTF-8-safe copy, a content fingerprint
-    vault_parse.c       the wire contract, clamping every field
-    vault_mock.c        the built-in demo snapshot
-    vault_service.c     one fetch: http_get + parse
-    ui_vault.c          header, footer, overlay, page routing
+  news_core/           the portable core — compiles identically on device, sim and host tests
+    news_model.c       the snapshot struct, a UTF-8-safe copy, a content fingerprint
+    news_parse.c       the wire contract, clamping every field
+    news_mock.c        the built-in demo snapshot
+    news_service.c     one fetch: http_get + parse
+    ui_news.c          header, footer, overlay, page routing
     ui_page_*.c         the four pages, one file each
     ui_graph.c          deterministic concentric-ring link layout (no physics, no libm)
     fonts/              full 완성형 Noto Sans KR faces (OFL) — generated, do not hand-edit
     test/host/          unit tests for all of the above
   provisioning/         SoftAP + captive portal + NVS + SNTP onboarding
-  device_api/           STA-mode HTTP/JSON control server + mDNS (obsidianboard.local)
+  device_api/           STA-mode HTTP/JSON control server + mDNS (wpnews.local)
   board_io/             battery ADC
   buttons/              KEY0/1/2 + BOOT edge events
 sim/                    desktop simulator — renders the real UI to 648×480 and asserts on it
 tools/
-  vault_server.py       scans a REAL Obsidian vault and serves the contract from it
-  mock_vault_server.py  the same contract from a fixed payload — the reference producer
-  gen_fonts.py          regenerates components/vault_core/fonts/
+  news_server.py       scans a REAL WP News news and serves the contract from it
+  mock_news_server.py  the same contract from a fixed payload — the reference producer
+  gen_fonts.py          regenerates components/news_core/fonts/
   agent_status.py       one line for a script to report an agent to the board
   flash.sh              find the board and flash it
 app/                    React Native companion app — setup + control over the LAN
@@ -181,7 +181,7 @@ third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)
 ## Documentation
 
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: reading the boot log, and the numbers to record
-- [docs/vault-contract.md](docs/vault-contract.md) — the JSON the device polls, and how it fails
+- [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/pages.md](docs/pages.md) — the four pages, the layout grid, and the font decision
 - [docs/epaper-5in83.md](docs/epaper-5in83.md) — the UC8179 driver, the refresh policy, the self-test
 - [docs/pinout.md](docs/pinout.md) — GPIO assignments and the three traps
@@ -204,4 +204,4 @@ devices answering one discovery probe on the same LAN is a fault nobody can diag
 ## License
 
 MIT — see [LICENSE](LICENSE). The bundled Noto Sans KR faces are SIL OFL 1.1
-(`components/vault_core/fonts/OFL.txt`).
+(`components/news_core/fonts/OFL.txt`).

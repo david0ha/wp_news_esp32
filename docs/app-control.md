@@ -1,7 +1,7 @@
 # The device HTTP API
 
 A JSON control server on port 80, up once Wi-Fi is connected, advertised over mDNS as
-**`obsidianboard.local`**.
+**`wpnews.local`**.
 
 Local-network only: no auth, no TLS, no cloud. That is a scope decision, not an oversight — the
 device holds no credentials worth stealing, and the only actions are "show a different page" and
@@ -17,13 +17,13 @@ device holds no credentials worth stealing, and the only actions are "show a dif
 |---|---|---|---|
 | GET | `/api/info` | — | discovery probe |
 | GET | `/api/state` | — | the full snapshot |
-| POST | `/api/refresh` | — | poll the vault source now |
+| POST | `/api/refresh` | — | poll the news source now |
 | POST | `/api/page` | `{"page":0..3}` | switch page (full refresh) |
-| POST | `/api/vault` | `{"url":"http://..."}` | change the snapshot URL (persisted, live) |
+| POST | `/api/news` | `{"url":"http://..."}` | change the snapshot URL (persisted, live) |
 | POST | `/api/display/test` | — | run the e-Paper self-test sweep |
 
 Writes reply `{"ok":true}` or `{"ok":false,"error":"<code>"}` with a 400. Error codes:
-`bad_json`, `too_large`, `read_error`, `page_range`, `vault_url_invalid`, `busy`.
+`bad_json`, `too_large`, `read_error`, `page_range`, `news_url_invalid`, `busy`.
 
 Every write posts a command onto the app's queue and returns immediately; the UI task applies it
 through the same code path as a button press. Nothing here touches LVGL or the panel directly —
@@ -33,7 +33,7 @@ and cannot be interleaved with another.
 ## `GET /api/info`
 
 ```json
-{"deviceId":"1A2B","model":"Obsidian Board","fw":"0.1.0","ip":"192.168.0.42"}
+{"deviceId":"1A2B","model":"WP News","fw":"0.1.0","ip":"192.168.0.42"}
 ```
 
 Four fields, fixed shape: a discovery probe fetches this from every candidate host on the LAN and
@@ -43,10 +43,10 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
 
 ```json
 {
-  "deviceId": "1A2B", "model": "Obsidian Board", "fw": "0.1.0", "ip": "192.168.0.42",
+  "deviceId": "1A2B", "model": "WP News", "fw": "0.1.0", "ip": "192.168.0.42",
   "page": 2, "pageTitle": "에이전트",
 
-  "vault": {
+  "news": {
     "valid": true, "demo": false,
     "name": "second-brain", "generatedAt": "21:04",
     "notes": 1428, "links": 3910, "orphans": 37, "tags": 212,
@@ -56,7 +56,7 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
   },
 
   "source": {
-    "url": "http://mac.local:8123/vault.json",
+    "url": "http://mac.local:8123/news.json",
     "lastResult": "ok",
     "pollSeconds": 300,
     "ageSeconds": 42,
@@ -69,14 +69,14 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
 }
 ```
 
-This is a **summary**, not the vault snapshot. A client does not need the graph edges or eight note
+This is a **summary**, not the news snapshot. A client does not need the graph edges or eight note
 titles — it needs to know the board is alive, what it is showing, and whether the last poll worked.
 The full snapshot is available from the same URL the board polls, which the client can reach too.
 
 `source.lastResult` is one of `ok`, `no_url`, `transport`, `http_status`, `bad_payload` — the same
 strings the serial log uses. `transport` means DNS/connect/TLS/timeout; `http_status` means the
 server answered but not with a 2xx; `bad_payload` means it answered 2xx with something that is not a
-vault snapshot. Those three point at three different mistakes, which is why they are not one code.
+news snapshot. Those three point at three different mistakes, which is why they are not one code.
 
 `source.ageSeconds` is `-1` when no fetch has ever succeeded — which is different from "zero seconds
 ago", and a client that treats it as a number will otherwise draw a board that just synced.
@@ -88,24 +88,24 @@ Serving them means reading them off a phone instead of holding a serial cable to
 ## Examples
 
 ```bash
-curl http://obsidianboard.local/api/state | jq
+curl http://wpnews.local/api/state | jq
 
-curl -X POST http://obsidianboard.local/api/page -d '{"page":1}'
-curl -X POST http://obsidianboard.local/api/refresh
-curl -X POST http://obsidianboard.local/api/vault \
-     -d '{"url":"http://mymac.local:8123/vault.json"}'
+curl -X POST http://wpnews.local/api/page -d '{"page":1}'
+curl -X POST http://wpnews.local/api/refresh
+curl -X POST http://wpnews.local/api/news \
+     -d '{"url":"http://mymac.local:8123/news.json"}'
 
 # back to the built-in demo screen
-curl -X POST http://obsidianboard.local/api/vault -d '{"url":""}'
+curl -X POST http://wpnews.local/api/news -d '{"url":""}'
 
 # how long a refresh actually takes on this board
-curl -s http://obsidianboard.local/api/state | jq .panel
+curl -s http://wpnews.local/api/state | jq .panel
 ```
 
 ## Provisioning API
 
 Separate, and only up in AP mode — see [`components/provisioning/README.md`](../components/provisioning/README.md).
-The captive portal collects the Wi-Fi credentials and the vault URL, saves them to NVS, and reboots.
+The captive portal collects the Wi-Fi credentials and the news URL, saves them to NVS, and reboots.
 
 ## The companion app
 

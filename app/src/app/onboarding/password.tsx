@@ -17,7 +17,7 @@ import { BackButton } from '../../components/BackButton'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES } from '../../onboarding/flow'
 import { esp32, Esp32Error } from '../../lib/esp32'
-import { validateVaultUrl, vaultUrlErrorMessage } from '../../lib/vaulturl'
+import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
 import { colors, layout, radius } from '../../theme'
 
 // Map a provisioning failure to a short, user-facing reason.
@@ -31,7 +31,7 @@ function failureMessage(e: unknown): string {
       case 'ssid_empty':
       case 'ssid_too_long':
         return 'Please check the Wi-Fi name and try again.'
-      case 'vault_url_invalid':
+      case 'news_url_invalid':
         return 'The board rejected the snapshot URL. Go back and check it.'
       case 'too_large':
         return 'That was too much for the board to accept. Shorten the snapshot URL and try again.'
@@ -44,7 +44,7 @@ function failureMessage(e: unknown): string {
 
 export default function Password() {
   const router = useRouter()
-  const { selectedNetwork, setSelectedNetwork, selectedSecured, password, setPassword, vaultUrl, setDeviceInfo } =
+  const { selectedNetwork, setSelectedNetwork, selectedSecured, password, setPassword, newsUrl, setDeviceInfo } =
     useOnboarding()
   // "Other…" leaves selectedNetwork null; the user types the SSID here.
   const isManualSsid = selectedNetwork === null
@@ -71,9 +71,9 @@ export default function Password() {
 
     // Re-validate the snapshot URL here, not only on the step that collected it. This is the last
     // point before a ~45s join, and the board's own rejection would land on the far side of it.
-    const vu = validateVaultUrl(vaultUrl)
+    const vu = validateNewsUrl(newsUrl)
     if (!vu.ok) {
-      setError(vaultUrlErrorMessage(vu))
+      setError(newsUrlErrorMessage(vu))
       return
     }
 
@@ -174,8 +174,8 @@ export default function Password() {
           {/* What the board will do once it is on the network — shown here because this screen is
               the last chance to go back and change it. */}
           <Text style={styles.hint}>
-            {vaultUrl.trim()
-              ? `Once connected, the board will fetch ${vaultUrl.trim()}.`
+            {newsUrl.trim()
+              ? `Once connected, the board will fetch ${newsUrl.trim()}.`
               : 'No snapshot URL set — the board will show its built-in demo data. You can add an address later from Settings.'}
           </Text>
 

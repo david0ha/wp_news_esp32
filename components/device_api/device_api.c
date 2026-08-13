@@ -18,7 +18,7 @@ static const char *TAG = "device_api";
 /* Sized in device_api_json.h, where the host tests can assert the worst case
  * actually fits. */
 #define STATE_BUF_SZ DEVICE_API_STATE_BUF_SZ
-/* Control bodies are tiny ({"page":1}); the vault URL is the largest. */
+/* Control bodies are tiny ({"page":1}); the news URL is the largest. */
 #define POST_BUF_SZ  320
 
 // ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ static esp_err_t api_state_get(httpd_req_t *req)
 // POST handlers — drive the app via the user_app_api bridge
 // ---------------------------------------------------------------------------
 
-// POST /api/refresh — no body. Poll the vault source now instead of waiting out
+// POST /api/refresh — no body. Poll the news source now instead of waiting out
 // the interval. The panel is only refreshed if what comes back differs from what
 // is already on the glass, so this is safe to call repeatedly.
 static esp_err_t api_refresh_post(httpd_req_t *req)
@@ -171,9 +171,9 @@ static esp_err_t api_page_post(httpd_req_t *req)
     return rc;
 }
 
-// POST /api/vault { url } — point the device at a different snapshot URL. Persisted to NVS and
+// POST /api/news { url } — point the device at a different snapshot URL. Persisted to NVS and
 // applied live; an empty string switches to the built-in demo snapshot.
-static esp_err_t api_vault_post(httpd_req_t *req)
+static esp_err_t api_news_post(httpd_req_t *req)
 {
     esp_err_t sent;
     cJSON *root = parse_body(req, &sent);
@@ -183,11 +183,11 @@ static esp_err_t api_vault_post(httpd_req_t *req)
     esp_err_t rc;
     if (!cJSON_IsString(url) || url->valuestring == NULL) {
         rc = send_err(req, "bad_json");
-    } else if (!user_app_set_vault_url(url->valuestring)) {
+    } else if (!user_app_set_news_url(url->valuestring)) {
         // One code for both "not a usable URL" and "queue full": the first is by
         // far the likelier, and the app cannot do anything different about the
         // second anyway.
-        rc = send_err(req, "vault_url_invalid");
+        rc = send_err(req, "news_url_invalid");
     } else {
         rc = send_ok(req);
     }
@@ -225,7 +225,7 @@ static void start_http(void)
         {.uri = "/api/state",        .method = HTTP_GET,  .handler = api_state_get},
         {.uri = "/api/refresh",      .method = HTTP_POST, .handler = api_refresh_post},
         {.uri = "/api/page",         .method = HTTP_POST, .handler = api_page_post},
-        {.uri = "/api/vault",        .method = HTTP_POST, .handler = api_vault_post},
+        {.uri = "/api/news",        .method = HTTP_POST, .handler = api_news_post},
         {.uri = "/api/display/test", .method = HTTP_POST, .handler = api_display_test_post},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
@@ -245,10 +245,10 @@ static void start_mdns(void)
     // forked from, whose shipped app resolves tickerboard.local. Two devices
     // answering the same discovery probe on one LAN is a support ticket nobody
     // can debug from the outside.
-    mdns_hostname_set("obsidianboard");
+    mdns_hostname_set("wpnews");
     mdns_instance_name_set(DEVICE_MODEL);
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-    ESP_LOGI(TAG, "mDNS advertising http://obsidianboard.local");
+    ESP_LOGI(TAG, "mDNS advertising http://wpnews.local");
 }
 
 void device_api_start(void)

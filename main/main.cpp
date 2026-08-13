@@ -8,7 +8,7 @@
 
 #include "epd_panel.h"
 #include "lvgl_bsp.h"
-#include "ui_vault.h"      /* the setup overlay doubles as the status screen */
+#include "ui_news.h"      /* the setup overlay doubles as the status screen */
 #include "ui_strings.h"
 #include "user_app.h"
 #include "user_config.h"
@@ -42,12 +42,12 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 	lv_disp_flush_ready(drv);
 }
 
-// --- Provisioning status, shown on the vault UI's overlay ------------------
+// --- Provisioning status, shown on the news UI's overlay ------------------
 
 static void SetStatus(const char *title, const char *body)
 {
 	if (Lvgl_lock(-1)) {
-		ui_vault_set_overlay(title, body);
+		ui_news_set_overlay(title, body);
 		Lvgl_unlock();
 	}
 	Lvgl_RenderNow();
@@ -88,7 +88,7 @@ extern "C" void app_main(void)
 	// two pins the previous carrier routed to an I2C header are a user button
 	// and the battery divider's enable here — so the clock is SNTP alone, and
 	// this is the only thing that turns it into local time.
-	setenv("TZ", CONFIG_OBSIDIAN_TIMEZONE, 1);
+	setenv("TZ", CONFIG_WP_NEWS_TIMEZONE, 1);
 	tzset();
 
 	board_io_init(BATT_ADC_PIN, BATT_ENABLE_PIN);
@@ -114,18 +114,18 @@ extern "C" void app_main(void)
 	}
 
 	prov_options_t opts;
-	provisioning_default_options(&opts);   // AP prefix "Obsidian Board", 15s timeout
+	provisioning_default_options(&opts);   // AP prefix "WP News", 15s timeout
 	opts.event_cb = OnProvisioningEvent;
 
 	prov_config_t cfg;
 	bool connected = provisioning_run(&opts, &cfg);  // blocks (and reboots) until configured
 
 	if (connected) {
-		ESP_LOGI(TAG, "online — vault URL '%s'",
-		         cfg.vault_url[0] ? cfg.vault_url : "(none: demo snapshot)");
+		ESP_LOGI(TAG, "online — news URL '%s'",
+		         cfg.news_url[0] ? cfg.news_url : "(none: demo snapshot)");
 		net_time_sync(10000);   // the header clock has no other source
 		if (Lvgl_lock(-1)) {
-			ui_vault_set_overlay(NULL, NULL);   // dismiss the setup overlay
+			ui_news_set_overlay(NULL, NULL);   // dismiss the setup overlay
 			Lvgl_unlock();
 		}
 		// The pinout lives here and nowhere else; user_app takes the buttons
@@ -136,7 +136,7 @@ extern "C" void app_main(void)
 		UserApp_TaskInit(&cfg, btn_gpios, (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
-		// "obsidianboard.local"), reading and driving the app through the
+		// "wpnews.local"), reading and driving the app through the
 		// user_app_api bridge.
 		device_api_start();
 	}

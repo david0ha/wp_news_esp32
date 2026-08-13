@@ -151,7 +151,7 @@ export default function Dashboard() {
     )
   }
 
-  const { vault, source, battery, panel } = state
+  const { news, source, battery, panel } = state
   const shownPage = pendingPage ?? state.page
 
   return (
@@ -172,7 +172,7 @@ export default function Dashboard() {
             icon="cloud-download"
             tone={fetchResultTone(source.lastResult)}
           />
-          {vault.demo ? <Chip label="demo data" icon="flask" tone="warn" /> : null}
+          {news.demo ? <Chip label="demo data" icon="flask" tone="warn" /> : null}
           {source.stale ? <Chip label="stale" icon="time" tone="warn" /> : null}
           {battery.present ? (
             <Chip
@@ -183,14 +183,14 @@ export default function Dashboard() {
           ) : null}
         </View>
 
-        {/* The vault, as the board understands it. */}
+        {/* The news, as the board understands it. */}
         <Card style={styles.hero}>
           <Text style={styles.heroName} numberOfLines={1}>
-            {vault.name || 'No vault'}
+            {news.name || 'No news'}
           </Text>
           <Text style={styles.heroMeta}>
-            {vault.valid
-              ? `snapshot ${vault.generatedAt || '—'} · ${formatAge(source.ageSeconds)}`
+            {news.valid
+              ? `snapshot ${news.generatedAt || '—'} · ${formatAge(source.ageSeconds)}`
               : 'no snapshot yet'}
           </Text>
         </Card>
@@ -198,21 +198,21 @@ export default function Dashboard() {
         <View style={styles.tiles}>
           <StatTile
             label="Notes"
-            value={formatCount(vault.notes)}
-            footnote={`${formatDelta(vault.addedToday)} today · ${formatDelta(vault.added7d)} this week`}
+            value={formatCount(news.notes)}
+            footnote={`${formatDelta(news.addedToday)} today · ${formatDelta(news.added7d)} this week`}
           />
           <StatTile
             label="Links"
-            value={formatCount(vault.links)}
-            footnote={`${formatDensity(vault.links, vault.notes)} per note`}
+            value={formatCount(news.links)}
+            footnote={`${formatDensity(news.links, news.notes)} per note`}
           />
           <StatTile
             label="Orphans"
-            value={formatCount(vault.orphans)}
-            footnote={`${formatRatio(vault.orphans, vault.notes)} of the vault`}
-            tone={vault.orphans > 0 ? 'warn' : 'neutral'}
+            value={formatCount(news.orphans)}
+            footnote={`${formatRatio(news.orphans, news.notes)} of the news`}
+            tone={news.orphans > 0 ? 'warn' : 'neutral'}
           />
-          <StatTile label="Tags" value={formatCount(vault.tags)} />
+          <StatTile label="Tags" value={formatCount(news.tags)} />
         </View>
 
         {/* Capture. Only offered when the board has a snapshot URL, because that URL is the
@@ -232,11 +232,11 @@ export default function Dashboard() {
           <Card style={styles.rows}>
             <InfoRow
               label="Agents running"
-              value={`${vault.agentsRunning} of ${vault.agents}`}
-              tone={vault.agentsRunning > 0 ? 'up' : 'dim'}
+              value={`${news.agentsRunning} of ${news.agents}`}
+              tone={news.agentsRunning > 0 ? 'up' : 'dim'}
             />
-            <InfoRow label="Recent notes" value={formatCount(vault.recent)} />
-            <InfoRow label="Inbox" value={formatCount(vault.inbox)} last />
+            <InfoRow label="Recent notes" value={formatCount(news.recent)} />
+            <InfoRow label="Inbox" value={formatCount(news.inbox)} last />
           </Card>
         </Section>
 
@@ -318,7 +318,7 @@ function humanError(e: Esp32Error): string {
       return 'Couldn’t reach the board. Check it’s powered on and on the same Wi-Fi.'
     case 'page_range':
       return 'That page doesn’t exist on the board.'
-    case 'vault_url_invalid':
+    case 'news_url_invalid':
       return 'The board wouldn’t accept that address.'
     case 'busy':
       return 'The board is busy redrawing. Try again in a moment.'
@@ -331,7 +331,7 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
   return (
     <View style={styles.header}>
       <View style={styles.headerText}>
-        <Text style={styles.headerTitle}>Obsidian Board</Text>
+        <Text style={styles.headerTitle}>WP News</Text>
         <Text style={styles.headerSub} numberOfLines={1}>
           {baseUrl ?? ''}
         </Text>
@@ -344,7 +344,7 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
 }
 
 /**
- * Type a memo, write it into the vault.
+ * Type a memo, write it into the news.
  *
  * The write goes to the machine serving the snapshot, not to the board — see src/lib/capture.ts.
  * Most producers will not accept it, so "this server doesn't do capture" is an ordinary answer

@@ -1,10 +1,10 @@
 // Pure display formatters for the dashboard. Kept tiny and testable so the same number is
 // rendered the same way everywhere and nothing throws on the board's loosely-typed JSON.
 
-import type { VaultFetchResult } from './esp32'
+import type { NewsFetchResult } from './esp32'
 
 /**
- * Page index → the app's label, matching the firmware's page order (ui_vault.c).
+ * Page index → the app's label, matching the firmware's page order (ui_news.c).
  *
  * The board also reports its own `pageTitle`, in Korean, which is what is actually on the glass.
  * These are the app's English equivalents for the page switcher: a control the user presses should
@@ -31,14 +31,14 @@ export function formatDelta(value: number): string {
 
 /**
  * One decimal of percent, e.g. "2.6%". `total` of zero yields '—' rather than NaN or a division
- * by zero — an empty vault has no orphan *rate*, and "0.0%" would claim it has a good one.
+ * by zero — an empty news has no orphan *rate*, and "0.0%" would claim it has a good one.
  */
 export function formatRatio(part: number, total: number): string {
   if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return '—'
   return `${((part / total) * 100).toFixed(1)}%`
 }
 
-/** Links per note to one decimal — the vault's connectedness. '—' on an empty vault. */
+/** Links per note to one decimal — the news's connectedness. '—' on an empty news. */
 export function formatDensity(links: number, notes: number): string {
   if (!Number.isFinite(links) || !Number.isFinite(notes) || notes <= 0) return '—'
   return (links / notes).toFixed(1)
@@ -78,25 +78,25 @@ export function formatMs(ms: number): string {
 }
 
 /** A sentence for each `source.lastResult`, saying what to go and check. */
-export function fetchResultMessage(result: VaultFetchResult): string {
+export function fetchResultMessage(result: NewsFetchResult): string {
   switch (result) {
     case 'ok':
       return 'Last poll succeeded.'
     case 'no_url':
-      return 'No vault URL set — the board is showing its demo snapshot.'
+      return 'No news URL set — the board is showing its demo snapshot.'
     case 'transport':
       return 'Couldn’t reach that address. Is the machine serving it awake and on this network?'
     case 'http_status':
       return 'The server answered, but with an error. Check the path in the address.'
     case 'bad_payload':
-      return 'The server answered with something that isn’t a vault snapshot.'
+      return 'The server answered with something that isn’t a news snapshot.'
     default:
       return 'The board reported a result this app doesn’t recognise.'
   }
 }
 
-/** Short status word for the chip beside the vault name. */
-export function fetchResultLabel(result: VaultFetchResult): string {
+/** Short status word for the chip beside the news name. */
+export function fetchResultLabel(result: NewsFetchResult): string {
   switch (result) {
     case 'ok':
       return 'synced'
@@ -119,7 +119,7 @@ export type Tone = 'up' | 'down' | 'warn' | 'neutral'
  * Chip colour for a fetch result. `no_url` is deliberately neutral, not a warning: a board with no
  * URL is a complete, working product showing its demo snapshot, not a broken one.
  */
-export function fetchResultTone(result: VaultFetchResult): Tone {
+export function fetchResultTone(result: NewsFetchResult): Tone {
   switch (result) {
     case 'ok':
       return 'up'

@@ -2,7 +2,7 @@
 """
 Report an agent's status to the board, in one line.
 
-`vault_server.py --agents FILE` serves whatever is in that file and invents
+`news_server.py --agents FILE` serves whatever is in that file and invents
 nothing, which is right — but it leaves the board's agent page empty until
 something writes it. This is that something: a tiny CLI any script, cron job or
 hook can call.
@@ -24,7 +24,7 @@ read a half-written one no matter how often this is called.
 
 Which file
 ----------
-`--file`, else $OBSIDIAN_BOARD_AGENTS, else ./agents.json. Point vault_server.py
+`--file`, else $WP_NEWS_BOARD_AGENTS, else ./agents.json. Point news_server.py
 at the same path.
 
 The board draws the first six agents in the file, in order, and this preserves
@@ -38,11 +38,11 @@ import os
 import sys
 
 STATES = ("running", "idle", "error", "done")
-BOARD_SHOWS = 6          # VAULT_AGENTS_MAX
+BOARD_SHOWS = 6          # NEWS_AGENTS_MAX
 NAME_MAX = 64
 NOTE_MAX = 64
 
-DEFAULT_FILE = os.environ.get("OBSIDIAN_BOARD_AGENTS", "agents.json")
+DEFAULT_FILE = os.environ.get("WP_NEWS_BOARD_AGENTS", "agents.json")
 
 
 def load(path):

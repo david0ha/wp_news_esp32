@@ -48,14 +48,14 @@ TEST(url_decode_rejects_embedded_nul)
 
 TEST(form_get_field_extracts_and_decodes)
 {
-    const char *body = "ssid=My+Net&password=p%40ss&vault_url=http%3A%2F%2Fmac.local%3A8123%2Fvault.json";
+    const char *body = "ssid=My+Net&password=p%40ss&news_url=http%3A%2F%2Fmac.local%3A8123%2Fnews.json";
     char out[64];
     CHECK(prov_form_get_field(body, "ssid", out, sizeof(out)) == true);
     CHECK_STR(out, "My Net");
     CHECK(prov_form_get_field(body, "password", out, sizeof(out)) == true);
     CHECK_STR(out, "p@ss");
-    CHECK(prov_form_get_field(body, "vault_url", out, sizeof(out)) == true);
-    CHECK_STR(out, "http://mac.local:8123/vault.json");
+    CHECK(prov_form_get_field(body, "news_url", out, sizeof(out)) == true);
+    CHECK_STR(out, "http://mac.local:8123/news.json");
 }
 
 TEST(form_get_field_missing_returns_false)

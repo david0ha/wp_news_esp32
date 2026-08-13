@@ -45,7 +45,7 @@ Three traps, all fatal to the display if ignored:
 | Button | GPIO | `user_config.h` | Action |
 |---|---|---|---|
 | KEY0 | 2 | `BTN_KEY0_PIN` | next page |
-| KEY1 | 3 | `BTN_KEY1_PIN` | poll the vault source now |
+| KEY1 | 3 | `BTN_KEY1_PIN` | poll the news source now |
 | KEY2 | 5 | `BTN_KEY2_PIN` | tap → page 1; **held 5 s → reboot into Wi-Fi setup** |
 | BOOT | 0 | `BTN_BOOT_PIN` | previous page |
 
@@ -76,7 +76,7 @@ The JST 2.0 battery input also passes a hardware slide switch; it must be ON for
 The EE05 this project forked from routed GPIO5/GPIO6 to an I2C side header. On the **EE04 those
 same two pins are KEY2 and the battery divider's enable**, and the board has no RTC of its own. The
 I2C bus and the PCF85063A driver are therefore gone entirely, and the clock comes from SNTP alone —
-which is also why `CONFIG_OBSIDIAN_TIMEZONE` is the only thing standing between UTC and what the
+which is also why `CONFIG_WP_NEWS_TIMEZONE` is the only thing standing between UTC and what the
 header shows.
 
 ## Unused
