@@ -16,3 +16,9 @@ void Lvgl_unlock(void);
 // itself). Call this after changing widgets and before asking the e-Paper
 // panel to refresh, so the framebuffer is guaranteed complete.
 void Lvgl_RenderNow(void);
+
+// Mark the whole screen dirty. Needed only after something has written to the
+// panel framebuffer without going through LVGL — the display self-test — since
+// partial rendering otherwise redraws just the widgets it knows changed and
+// leaves the rest of the test pattern on the glass.
+void Lvgl_InvalidateAll(void);

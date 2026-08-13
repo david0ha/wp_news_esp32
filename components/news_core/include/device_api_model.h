@@ -69,10 +69,9 @@ typedef struct {
     int  battery_mv;
 
     /* --- e-Paper ---
-     * The refresh timings are here because the panel's refresh policy is meant
-     * to be set from measurement on real hardware, and reading them off a phone
-     * beats holding a serial cable to a board on a shelf. */
-    int  partial_chain;
-    int  full_refresh_ms;
-    int  partial_refresh_ms;
+     * Spectra 6 has one kind of refresh and it is slow, so there is one number.
+     * It is here because the polling policy is meant to be set from measurement
+     * on real hardware, and reading it off a phone beats holding a serial cable
+     * to a board on a shelf. */
+    int  refresh_ms;
 } device_state_t;

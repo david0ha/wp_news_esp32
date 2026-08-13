@@ -56,6 +56,11 @@ add_host_test(test_api_json test_api_json.c ${CORE}/device_api_json.c ${CJSON}/c
 # geometry, and it is the only part of port_bsp that can be tested on a host.
 add_host_test(test_epd6_transpose test_epd6_transpose.c ${PORT}/epd6_transpose.c)
 
+# The six-colour quantizer. Compiled from the same source the firmware and the
+# simulator use, so "black text does not dither" is asserted about the actual
+# decision, not a description of it.
+add_host_test(test_palette test_palette.c ${CORE}/wp_palette.c)
+
 enable_testing()
 add_test(NAME news_parse  COMMAND test_news_parse)
 add_test(NAME graph_layout COMMAND test_graph_layout)
@@ -63,3 +68,4 @@ add_test(NAME news_mock   COMMAND test_news_mock)
 add_test(NAME news_service COMMAND test_news_service)
 add_test(NAME api_json      COMMAND test_api_json)
 add_test(NAME epd6_transpose COMMAND test_epd6_transpose)
+add_test(NAME palette        COMMAND test_palette)

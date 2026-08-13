@@ -47,9 +47,7 @@ static void fill(device_state_t *st)
     st->battery_pct = 84;
     st->battery_mv = 4012;
 
-    st->partial_chain = 3;
-    st->full_refresh_ms = 4120;
-    st->partial_refresh_ms = 780;
+    st->refresh_ms = 24800;
 }
 
 static cJSON *obj(cJSON *root, const char *key)
@@ -166,12 +164,10 @@ static void test_state_shape(void)
     check_int(b, "percent", 84);
     check_int(b, "millivolts", 4012);
 
-    /* The panel timings are the whole reason the refresh policy can be decided
-     * from measurement rather than guessed, so they are part of the contract. */
+    /* The refresh timing is the whole reason the polling policy can be decided
+     * from measurement rather than guessed, so it is part of the contract. */
     cJSON *p = obj(r, "panel");
-    check_int(p, "partialChain", 3);
-    check_int(p, "fullRefreshMs", 4120);
-    check_int(p, "partialRefreshMs", 780);
+    check_int(p, "refreshMs", 24800);
 
     cJSON_Delete(r);
 }
@@ -282,7 +278,7 @@ static void test_worst_case_fits_the_servers_buffer(void)
     st.agents_total = st.agents_running = st.recent_count = st.inbox_total = 999999999;
     st.poll_seconds = st.age_seconds = 999999999;
     st.battery_pct = st.battery_mv = 999999999;
-    st.partial_chain = st.full_refresh_ms = st.partial_refresh_ms = 999999999;
+    st.refresh_ms = 999999999;
 
     char buf[DEVICE_API_STATE_BUF_SZ];
     int n = device_api_json_state(&st, buf, sizeof(buf));

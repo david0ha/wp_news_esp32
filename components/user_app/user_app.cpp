@@ -45,7 +45,7 @@
 #include "user_app.h"
 #include "user_app_api.h"
 #include "lvgl_bsp.h"          /* Lvgl_lock / Lvgl_unlock / Lvgl_RenderNow */
-#include "epd_panel.h"         /* epd_refresh_* / epd_selftest            */
+#include "epd6_panel.h"        /* epd6_refresh / epd6_selftest            */
 #include "ui_news.h"
 #include "ui_strings.h"
 #include "news_model.h"
@@ -74,18 +74,18 @@ static prov_config_t s_cfg;
 
 #define POLL_SECONDS       CONFIG_WP_NEWS_POLL_SECONDS
 
-/* How often UiTask wakes to move the clock on. The header shows HH:MM, so a
- * minute is the useful resolution; whether that minute costs a panel refresh is
- * decided by CLOCK_REFRESH_EVERY below. */
+/* How often UiTask wakes to move the clock on IN THE FRAMEBUFFER. It does not
+ * reach the glass on its own.
+ *
+ * The 5.83" board pushed the header out every five minutes with a windowed
+ * partial refresh, which was silent and cost a fraction of a second. Spectra 6
+ * has no partial waveform at all: the only update it can do is a full one that
+ * flashes the whole page for half a minute. Spending that on a clock would mean
+ * a hundred and twenty flashes a day at nobody.
+ *
+ * So the clock rides along with the next refresh that has a reason of its own.
+ * A front page carries a date, not a ticking clock — see docs/pages.md. */
 #define TICK_SECONDS       60
-
-/* Only every Nth clock tick is actually pushed to the glass. On the 2.13" board
- * this code came from, a partial refresh was 0.3s and silent, so the clock
- * moved every minute. Here a partial covers ten times the area; until the
- * measured timings say otherwise (they are logged, and served at /api/state),
- * five minutes of clock resolution is worth more than twelve times the panel
- * activity. */
-#define CLOCK_REFRESH_EVERY  5
 
 /* A snapshot older than this many poll intervals gets the "오래됨" badge. Two
  * rather than one: a single missed poll is a laptop closing its lid, not a
@@ -103,7 +103,7 @@ typedef enum {
     APP_CMD_SET_PAGE,        /* ival = ui_page_t                     */
     APP_CMD_REFRESH_NOW,     /* poll immediately                     */
     APP_CMD_SET_URL,         /* text = the new snapshot URL          */
-    APP_CMD_DISPLAY_TEST,    /* run epd_selftest()                   */
+    APP_CMD_DISPLAY_TEST,    /* run epd6_selftest()                  */
     APP_CMD_DATA,            /* NewsTask published a new snapshot   */
 } app_cmd_kind_t;
 
@@ -140,7 +140,6 @@ static int      s_batt_pct;
 static int      s_batt_mv;
 
 /* Only ever touched by UiTask. */
-static int s_ticks_since_clock_refresh;
 
 /* cJSON's parse tree for a news snapshot is a few KB, but keeping it out of
  * internal RAM leaves that for WiFi/TLS and the panel's DMA framebuffer. */
@@ -173,22 +172,13 @@ void UserApp_UiInit(void)
 
 /* Render whatever the setters changed, then push one refresh for the lot.
  *
- * `full` is not a hint: it is the difference between a multi-second flashing
- * update that clears ghosting and a shorter silent one that adds to it. Use
- * full whenever the content area changed; the windowed partial is for the
- * header strip and nothing else. */
+ * There is only one kind of refresh on this panel and it costs twenty to thirty
+ * seconds of flashing, so every call here is a decision someone has to have
+ * made deliberately. Nothing in this file calls it on a timer. */
 static void present_full(void)
 {
     Lvgl_RenderNow();
-    epd_refresh_full();
-}
-
-static void present_header(void)
-{
-    int x1, y1, x2, y2;
-    ui_news_header_area(&x1, &y1, &x2, &y2);
-    Lvgl_RenderNow();
-    epd_refresh_partial_area(x1, y1, x2, y2);
+    epd6_refresh();
 }
 
 /* --- content updates (UiTask only) ---------------------------------------- */
@@ -294,16 +284,12 @@ static void action_set_url(const char *url)
 static void action_display_test(void)
 {
     ESP_LOGI(TAG, "e-Paper self-test starting");
-    epd_selftest();
+    epd6_selftest();
     /* The self-test drew straight into the framebuffer behind LVGL's back, so
      * force a full redraw rather than leaving the panel white. */
-    if (Lvgl_lock(-1)) {
-        lv_obj_invalidate(lv_screen_active());
-        Lvgl_unlock();
-    }
+    Lvgl_InvalidateAll();
     present_full();
-    ESP_LOGI(TAG, "e-Paper self-test done (full %dms, partial %dms)",
-             epd_last_full_ms(), epd_last_partial_ms());
+    ESP_LOGI(TAG, "e-Paper self-test done (refresh %d ms)", epd6_last_refresh_ms());
 }
 
 /* KEY2 held FORCE_AP_HOLD_MS: set the one-shot force-portal flag, show a
@@ -334,7 +320,6 @@ static void handle_cmd(const app_cmd_t *c)
     case APP_CMD_DATA:
         push_data_to_ui();
         present_full();
-        s_ticks_since_clock_refresh = 0;   /* the clock just went out too */
         break;
     }
 }
@@ -434,17 +419,13 @@ static void UiTask(void *arg)
                 handle_cmd(&cmd);
             }
         } else {
-            /* Idle tick: move the clock on, and spend a partial refresh on it
-             * only every CLOCK_REFRESH_EVERY minutes. */
+            /* Idle tick: move the clock and the battery reading on in the
+             * framebuffer. Deliberately no refresh — see TICK_SECONDS. The next
+             * poll that actually changes the page carries these out with it. */
             read_battery();
             if (Lvgl_lock(-1)) {
                 ui_news_tick();
                 Lvgl_unlock();
-            }
-            if (++s_ticks_since_clock_refresh >= CLOCK_REFRESH_EVERY) {
-                s_ticks_since_clock_refresh = 0;
-                push_data_to_ui();          /* the staleness badge may have changed */
-                present_header();
             }
         }
     }
@@ -594,9 +575,7 @@ void user_app_snapshot(device_state_t *out)
     strlcpy(out->model, DEVICE_MODEL, sizeof(out->model));
     strlcpy(out->fw, DEVICE_FW, sizeof(out->fw));
     out->poll_seconds       = POLL_SECONDS;
-    out->partial_chain      = epd_partial_chain();
-    out->full_refresh_ms    = epd_last_full_ms();
-    out->partial_refresh_ms = epd_last_partial_ms();
+    out->refresh_ms         = epd6_last_refresh_ms();
     if (!s_mtx) {
         return;                     /* TaskInit has not run yet */
     }

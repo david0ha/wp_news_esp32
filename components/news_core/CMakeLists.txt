@@ -9,6 +9,7 @@ set(CJSON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/cJSON)
 
 idf_component_register(
     SRCS
+        "wp_palette.c"
         "news_model.c"
         "news_parse.c"
         "news_mock.c"
@@ -28,6 +29,10 @@ idf_component_register(
         "${CJSON_DIR}/cJSON.c"
     INCLUDE_DIRS "include" "${CJSON_DIR}"
     REQUIRES
+        # wp_palette.h includes epd6_transpose.h for the colour codes and the
+        # framebuffer layout — both are panel *format*, not panel traffic, and
+        # the simulator compiles the same pair.
+        port_bsp
         lvgl__lvgl
         esp_http_client
         esp-tls

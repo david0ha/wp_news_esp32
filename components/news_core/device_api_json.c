@@ -180,12 +180,11 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put_int_field(&s, "millivolts", st->battery_mv, false);
     put(&s, "}");
 
-    /* The panel block is not decoration: the refresh policy for this 648x480
-     * UC8179 is meant to be chosen from measured timings, and these are them. */
+    /* The panel block is not decoration: how often this board is worth polling
+     * follows from how long a refresh actually takes, and this is that number
+     * measured on the panel rather than assumed from its size. */
     put(&s, ",\"panel\":{");
-    put_int_field(&s, "partialChain", st->partial_chain, true);
-    put_int_field(&s, "fullRefreshMs", st->full_refresh_ms, false);
-    put_int_field(&s, "partialRefreshMs", st->partial_refresh_ms, false);
+    put_int_field(&s, "refreshMs", st->refresh_ms, true);
     put(&s, "}");
 
     put(&s, "}");

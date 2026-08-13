@@ -70,6 +70,41 @@ enum {
     EPD6_PLANE_SLAVE  = 1,   /* buffer rows 600..1199 */
 };
 
+/*
+ * The six colours, as the controller wants them on the wire. They live in this
+ * header rather than epd6_panel.h because they are part of the framebuffer
+ * FORMAT — the quantizer, the simulator and the host tests all need them, and
+ * none of those can include an ESP-IDF header.
+ *
+ * Do not take these from esphome-bigink's `Spectra6Color` enum or its
+ * HARDWARE.md table: within that one repository the enum, the table, the
+ * explanatory comment and the executing code all disagree with each other.
+ * These come from Seeed's own sources instead — TFT_eSPI.h:317-323 defines the
+ * palette their driver is fed,
+ *
+ *     TFT_BLACK 0x0F  TFT_WHITE 0x00  TFT_BLUE 0x0D
+ *     TFT_YELLOW 0x0B TFT_GREEN 0x02  TFT_RED  0x06
+ *
+ * and T133A01_Defines.h:231-239's COLOR_GET() maps each of those to what
+ * follows. (This agrees with bigink's color_to_spectra6_(), the one part of
+ * that file that was right, and with its `memset(buffer, 0x11)` meaning white.)
+ *
+ * Getting them backwards costs nothing at build time and produces a panel in
+ * photographic negative after a thirty-second refresh.
+ */
+typedef enum {
+    EPD6_BLACK  = 0x00,
+    EPD6_WHITE  = 0x01,
+    EPD6_YELLOW = 0x02,
+    EPD6_RED    = 0x03,
+    EPD6_BLUE   = 0x05,
+    EPD6_GREEN  = 0x06,
+} epd6_color_t;
+
+/* 0x04 and 0x07..0x0F are not colours this panel makes. Nothing may reach the
+ * framebuffer that is not one of the six above. */
+#define EPD6_COLOR_COUNT 6
+
 /* --- framebuffer accessors ------------------------------------------------
  * `code` is a Spectra 6 hardware colour code (see epd6_color_t). Callers are
  * responsible for bounds; the panel layer clips before it gets here. */
