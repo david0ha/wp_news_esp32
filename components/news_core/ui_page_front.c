@@ -33,9 +33,10 @@
  * lead's chart stands in the left leg of the well and the story sets beside it
  * for the well's full depth, no secondary story means the portfolio rail takes
  * the whole of band 6 instead of half of it, and no stories at all means the
- * lead well becomes the index ribbon at the size a headline is set in and the
- * sheet is a markets page — which on a quiet day is a legitimate front page and
- * not an error state.
+ * board writes the lead itself — a kicker, a headline and a deck about the
+ * session, over the index ribbon set at the size a headline is set in. A quiet
+ * day is a legitimate front page and not an error state, but it is only a front
+ * PAGE if something on it is written rather than tabulated; see set_summary().
  *
  * ## Colour
  *
@@ -671,7 +672,8 @@ static void end_mark(lv_obj_t *m, const char *txt, const lv_font_t *f,
 /* The lead well with no lead in it: the same five indices as band 4, one to a
  * row and set at the size the rest of the page gives a headline. A day with no
  * stories is a quiet day, not a broken feed, and a markets page is what a paper
- * prints on one. */
+ * prints on one — under the summary set_summary() writes, which is what keeps
+ * it a front page rather than a table with a nameplate over it. */
 static void build_panel(void)
 {
     const int mark_box = lv_font_get_line_height(UI_F_HEADLINE);
@@ -1120,7 +1122,12 @@ static int rail_layout(int x, int w)
     const int name_x  = x + UI_TICKER_SYM_W + UI_TICKER_FIELD_GAP;
     const int last_x  = name_x + name_w + UI_TICKER_FIELD_GAP;
     const int chg_x   = last_x + UI_TICKER_LAST_W + UI_TICKER_FIELD_GAP;
-    const int spark_x = chg_x + UI_TICKER_CHG_W + UI_TICKER_FIELD_GAP;
+    /* A full gutter before the shape, not a field gap. Eight pixels put the
+     * polyline's first sample against the last digit of the percentage, and a
+     * near-flat series drawn there does not read as a session — it reads as a
+     * rule underlining the figure it is touching. Twenty-four is the width this
+     * page separates two different kinds of thing with everywhere else. */
+    const int spark_x = chg_x + UI_TICKER_CHG_W + UI_GUTTER;
     const int spark_w = x + w - spark_x;
     const int spark   = spark_w >= UI_RAIL_SPARK_MIN ? spark_w : 0;
 

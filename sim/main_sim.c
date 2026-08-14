@@ -328,6 +328,13 @@ static void check_fixed_strings(void)
         S_KEY_PAGE, S_KEY_REFRESH, S_KEY_WIFI,
         S_PAGE_FRONT, S_PAGE_MARKETS,
         S_MARKET_WRAP, S_PORTFOLIO, S_DAYS_RANGE,
+        /* The market summary's copy, which is the only prose on the sheet the
+         * BOARD wrote. It is composed at runtime out of these and an index
+         * name, so the format strings are checked here and the names arrive
+         * through check_data_strings() — between them that is every glyph the
+         * finished sentence can contain. */
+        S_SUMMARY_KICKER, S_SUMMARY_UP, S_SUMMARY_DOWN, S_SUMMARY_MIXED,
+        S_SUMMARY_FLAT, S_SUMMARY_DECK, S_SUMMARY_DECK_ONE,
         S_COL_SYMBOL, S_COL_NAME, S_COL_LAST, S_COL_CHG,
         S_IN_BRIEF, S_FOLIO_A1, S_FOLIO_A2, S_UPDATED, S_NEXT,
         S_WIFI_TITLE, S_RESTARTING,
