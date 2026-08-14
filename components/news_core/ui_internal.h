@@ -438,15 +438,24 @@ extern "C" {
  * become a better field for being given width it has no text to put in it.
  *
  * So the name is capped at the quotation table's own NAME width and the
- * leftover goes to a shape instead — the same session sparkline the table below
- * prints, at the same 16 px, on the row's own centre line. Below
- * UI_RAIL_SPARK_MIN there is nothing a series can say, and the width goes back
- * to the name; at the rail's own 558 that is always the case, so a narrow rail
- * is untouched. The two constants are the table's, deliberately: a shape in the
- * rail drawn at a different size from the shape in the table twelve pixels
- * below it reads as two different measurements of the same thing. */
+ * leftover goes to a shape instead — the same session series the table below
+ * prints, in the outermost column, which is where the table prints it too.
+ * Below UI_RAIL_SPARK_MIN there is nothing a series can say and the width goes
+ * back to the name; at the rail's own 558 that is always the case, so a narrow
+ * rail is untouched to the pixel.
+ *
+ * THE HEIGHT IS THE ROW'S AND NOT THE TABLE'S 16, and that is a correction
+ * rather than an inconsistency. This shape is 538 px wide where the table's is
+ * 150, so at a shared height it drew the same twelve samples at a thirtieth of
+ * the slope — six near-horizontal lines running from a percentage to the right
+ * margin, which read as leader rules underlining the row rather than as the
+ * shape of a session. A sparkline's amplitude is its box's height; a very wide
+ * box has to take every pixel of row it can get. Nineteen in a pitch of
+ * twenty-five leaves three above and three below, and the rail rules no lines
+ * between its rows for it to touch. */
 #define UI_RAIL_SPARK_W       UI_TICKER_SPARK_W         /*  150 */
-#define UI_RAIL_SPARK_H       UI_TICKER_SPARK_H         /*   16 */
+#define UI_RAIL_SPARK_DY      3
+#define UI_RAIL_SPARK_H       (UI_RAIL_ROW_H - 2 * UI_RAIL_SPARK_DY)   /* 19 */
 #define UI_RAIL_SPARK_MIN     UI_RAIL_SPARK_W
 
 /* --- band 7: the watchlist and the briefs ---------------------------------

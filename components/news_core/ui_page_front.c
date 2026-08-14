@@ -734,52 +734,74 @@ static int32_t bp_abs(int32_t bp)
     return bp < 0 ? -bp : bp;
 }
 
-static void set_summary(const news_t *v)
+/* Which index led, which trailed, and which moved furthest either way. Three
+ * arg-maxes over at most five, in one pass, because every sentence below is
+ * built out of some pair of them. */
+typedef struct { int best, worst, wide, up, down; } session_t;
+
+static session_t session_of(const news_t *v)
 {
-    int up = 0, down = 0, best = 0, worst = 0, wide = 0;
+    session_t s = { 0, 0, 0, 0, 0 };
 
     for (int i = 0; i < v->index_count; i++) {
         const int32_t bp = v->indices[i].chg_bp;
 
-        if (bp > 0)      up++;
-        else if (bp < 0) down++;
+        if (bp > 0)      s.up++;
+        else if (bp < 0) s.down++;
 
-        if (bp > v->indices[best].chg_bp)  best  = i;
-        if (bp < v->indices[worst].chg_bp) worst = i;
-        if (bp_abs(bp) > bp_abs(v->indices[wide].chg_bp)) wide = i;
+        if (bp > v->indices[s.best].chg_bp)  s.best  = i;
+        if (bp < v->indices[s.worst].chg_bp) s.worst = i;
+        if (bp_abs(bp) > bp_abs(v->indices[s.wide].chg_bp)) s.wide = i;
     }
+    return s;
+}
 
-    /* Four shapes of session and one sentence each. "Broad" is the right word
-     * at any count the ribbon can hold, which is what lets the same line serve
-     * a morning with five indices and one with two; the mixed case names the
-     * WIDEST move rather than the best or the worst, because on a split day
-     * the largest number is the one the page is about. */
-    char head[NEWS_HEADLINE_MAX];
-    if (up > 0 && down == 0)
-        snprintf(head, sizeof head, S_SUMMARY_UP, quote_name(&v->indices[best]));
-    else if (down > 0 && up == 0)
-        snprintf(head, sizeof head, S_SUMMARY_DOWN, quote_name(&v->indices[worst]));
-    else if (up == 0 && down == 0)
-        snprintf(head, sizeof head, "%s", S_SUMMARY_FLAT);
+/* Four shapes of session and one sentence each. "Broad" is the right word at
+ * any count the ribbon can hold, which is what lets the same line serve a
+ * morning with five indices and one with two; the mixed case names the WIDEST
+ * move rather than the best or the worst, because on a split day the largest
+ * number is the one the page is about. */
+static void summary_head(const news_t *v, char *out, size_t n)
+{
+    const session_t s = session_of(v);
+
+    if (s.up > 0 && s.down == 0)
+        snprintf(out, n, S_SUMMARY_UP, quote_name(&v->indices[s.best]));
+    else if (s.down > 0 && s.up == 0)
+        snprintf(out, n, S_SUMMARY_DOWN, quote_name(&v->indices[s.worst]));
+    else if (s.up == 0 && s.down == 0)
+        snprintf(out, n, "%s", S_SUMMARY_FLAT);
     else
-        snprintf(head, sizeof head, S_SUMMARY_MIXED, quote_name(&v->indices[wide]));
+        snprintf(out, n, S_SUMMARY_MIXED, quote_name(&v->indices[s.wide]));
+}
 
-    /* The deck says the one thing the panel below makes the reader scan five
-     * rows for: the two ends of the day. Stated as a range rather than as a
-     * ranking, so that it stays true when every index fell — "ran from" is
-     * about order and "led" would not be. */
+/* The deck says the one thing the panel below makes the reader scan five rows
+ * for: the two ends of the day. Stated as a range rather than as a ranking, so
+ * that it stays true when every index fell — "ran from" is about order, and
+ * "led" would be about merit. */
+static void summary_deck(const news_t *v, char *out, size_t n)
+{
+    const session_t s = session_of(v);
     char hi[16], lo[16];
-    ui_pct(hi, sizeof hi, v->indices[best].chg_bp);
-    ui_pct(lo, sizeof lo, v->indices[worst].chg_bp);
+
+    ui_pct(hi, sizeof hi, v->indices[s.best].chg_bp);
+    ui_pct(lo, sizeof lo, v->indices[s.worst].chg_bp);
 
     if (v->index_count > 1) {
-        snprintf(s_deck_sum, sizeof s_deck_sum, S_SUMMARY_DECK,
-                 quote_name(&v->indices[best]),  hi,
-                 quote_name(&v->indices[worst]), lo);
+        snprintf(out, n, S_SUMMARY_DECK,
+                 quote_name(&v->indices[s.best]),  hi,
+                 quote_name(&v->indices[s.worst]), lo);
     } else {
-        snprintf(s_deck_sum, sizeof s_deck_sum, S_SUMMARY_DECK_ONE,
-                 quote_name(&v->indices[best]), hi);
+        snprintf(out, n, S_SUMMARY_DECK_ONE, quote_name(&v->indices[s.best]), hi);
     }
+}
+
+static void set_summary(const news_t *v)
+{
+    char head[NEWS_HEADLINE_MAX];
+
+    summary_head(v, head, sizeof head);
+    summary_deck(v, s_deck_sum, sizeof s_deck_sum);
 
     ui_set(s_lead_kicker, S_SUMMARY_KICKER);
     set_head(s_lead_head, UI_LEAD_W, UI_LEAD_HEAD_H, UI_F_LEAD,
@@ -1090,7 +1112,6 @@ static int rail_layout(int x, int w)
 {
     const int mark_box = lv_font_get_line_height(UI_F_LABEL);
     const int inset    = row_inset(UI_RAIL_ROW_H, UI_F_LABEL);
-    const int spark_dy = inset + (mark_box - UI_RAIL_SPARK_H) / 2;
 
     const int room   = w - UI_TICKER_SYM_W - UI_TICKER_LAST_W - UI_TICKER_CHG_W
                      - 3 * UI_TICKER_FIELD_GAP;
@@ -1120,7 +1141,7 @@ static int rail_layout(int x, int w)
         lv_obj_set_pos(h->last, last_x, y);
         lv_obj_set_pos(h->mark, chg_x, y);
         lv_obj_set_pos(h->chg, chg_x + mark_box, y);
-        lv_obj_set_pos(h->spark, spark_x, row + spark_dy);
+        lv_obj_set_pos(h->spark, spark_x, row + UI_RAIL_SPARK_DY);
         lv_obj_set_width(h->spark, spark > 0 ? spark : UI_RAIL_SPARK_W);
         if (spark == 0) ui_show(h->spark, false);
     }
@@ -1317,7 +1338,8 @@ static void set_ticker(const news_t *v)
  *
  * Returns how many rows ended up with something in them, which is what decides
  * whether the column exists at all. */
-static int set_briefs(const news_t *v, const news_story_t *st[], int briefs)
+static int set_briefs(const news_t *v, const news_story_t *st[], int briefs,
+                      bool summary)
 {
     /* Primed with every quotation THIS SHEET HAS ALREADY PRINTED, and not just
      * with the ones this column has used, which is the whole of the fix. The
@@ -1372,6 +1394,23 @@ static int set_briefs(const news_t *v, const news_story_t *st[], int briefs)
                 snprintf(line, sizeof line, "%s at %s, %s on the session",
                          quote_name(q), money, pct);
                 kick = q->symbol;
+                text = line;
+            } else if (rows == 0 && !summary && v->index_count > 0) {
+                /* The last resort, and the reason there is one: a payload whose
+                 * every quotation is already printed above leaves this column
+                 * with nothing at all, and the bottom-right corner of a framed
+                 * sheet is the one dead zone a viewer cannot miss. That is a
+                 * thin morning rather than a fault, but the market still did
+                 * something, and the session line is the one thing the sheet
+                 * has to say that is not a figure already on it.
+                 *
+                 * Only when band 5 did NOT take it. On a day with no stories
+                 * the summary is the lead, and printing it again down here
+                 * would be exactly the duplication the rest of this function
+                 * exists to stop — the same sentence twice on one page is worse
+                 * than the same price twice. */
+                summary_head(v, line, sizeof line);
+                kick = S_SUMMARY_KICKER;
                 text = line;
             }
         }
@@ -1569,7 +1608,7 @@ void ui_page_front_update(const news_t *v)
     set_ticker(v);
 
     const int briefs = n > 2 ? n - 2 : 0;
-    const int filled = set_briefs(v, st, briefs);
+    const int filled = set_briefs(v, st, briefs, summary);
 
     ui_show(s_brief_head, filled > 0);
     ui_show(s_brief_hair, filled > 0);
