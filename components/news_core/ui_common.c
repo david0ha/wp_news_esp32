@@ -419,10 +419,10 @@ void ui_money(char *out, size_t n, int32_t cents)
  * gets instead is the ink — ui_chg_colour() takes the market colour away at
  * zero, and the mark beside it is a bar rather than a triangle — so the row
  * says "flat" twice without the column losing its left edge. */
-/* A percentage carries its sign, the plus included: a column where only the
- * losses are signed reads as a column of typos. Zero carries NEITHER — a
- * session that did not move has not earned a plus, and "+0.00%" printed beside
- * the flat mark is one row making two different claims about the same day. */
+/* A second comment stood here arguing the opposite — that zero should carry no
+ * sign at all — and it is deleted rather than left as an alternative view. The
+ * decision above has been made, reverted and made again more than once, and a
+ * file that documents both answers is how it gets reverted a third time. */
 void ui_pct(char *out, size_t n, int32_t bp)
 {
     if (!out || n == 0) return;
