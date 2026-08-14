@@ -35,7 +35,12 @@ static size_t on_data(void *ptr, size_t size, size_t nmemb, void *userp) {
 }
 
 char *http_get(const char *url, int *out_status) {
+    return (char *)http_get_bin(url, NULL, out_status);
+}
+
+void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
     if (out_status) *out_status = 0;
+    if (out_len) *out_len = 0;
 
     CURL *c = curl_easy_init();
     if (!c) return NULL;
@@ -57,5 +62,6 @@ char *http_get(const char *url, int *out_status) {
 
     if (out_status) *out_status = (int)code;
     if (rc != CURLE_OK) { free(m.buf); return NULL; }
+    if (out_len) *out_len = m.len;
     return m.buf;   /* may be NULL for an empty 200; caller treats as failure */
 }

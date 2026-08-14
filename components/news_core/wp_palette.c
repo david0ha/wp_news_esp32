@@ -38,6 +38,22 @@ const uint8_t wp_palette_rgb[WP_PALETTE_N][3] = {
  * These are eyeballed from Spectra 6 product photography, not measured. If
  * someone colorimeters a panel, this is the table to correct; nothing else
  * depends on the values.
+ *
+ * KNOWN DISAGREEMENT, unresolved. tools/make_tile.py carries a second table for
+ * the same six inks, transcribed from paperlesspaper/epdoptimize, which reports
+ * measuring a panel:
+ *
+ *     black #1F2226   white #B9C7C9   red #62201E
+ *     yellow #C1BB1E  blue  #233F8E   green #35563A
+ *
+ * It disagrees with this one most in the white — a cool grey against the warm
+ * paper below — and that is exactly the direction an eyeballed table errs, since
+ * product photography is lit and colour-graded to sell a panel. The two tables
+ * are kept apart rather than unified because they are used for different things
+ * and neither is trustworthy enough to overwrite the other: this one only tints
+ * a preview, while make_tile.py's feeds the error term of a real halftone. The
+ * honest fix is one colorimeter reading, after which BOTH should be replaced by
+ * it and this comment deleted.
  */
 const uint8_t wp_palette_ink[WP_PALETTE_N][3] = {
     {  38,  38,  40 },   /* black  — never fully black */

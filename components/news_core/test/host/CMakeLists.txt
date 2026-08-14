@@ -26,18 +26,20 @@ function(add_host_test name)
     endif()
 endfunction()
 
+enable_testing()
+
 # The wire format. Everything the network can do wrong lands here.
 add_host_test(test_news_parse test_news_parse.c
               ${CORE}/news_parse.c ${CORE}/news_model.c ${CJSON}/cJSON.c)
+add_test(NAME news_parse COMMAND test_news_parse)
 
-# Where the link-graph nodes go. Pure integer geometry, no LVGL.
-add_host_test(test_graph_layout test_graph_layout.c
-              ${CORE}/ui_graph.c ${CORE}/news_model.c)
-
-# The built-in demo snapshot, tied to the reference producer's committed output.
+# The built-in demo front page, tied to the reference producer's committed
+# output. Three hand-written descriptions of one page — the C, the Python and
+# the fixture — and this is what keeps them from drifting.
 add_host_test(test_news_mock test_news_mock.c
               ${CORE}/news_mock.c ${CORE}/news_parse.c ${CORE}/news_model.c
               ${CJSON}/cJSON.c)
+add_test(NAME news_mock COMMAND test_news_mock)
 
 # The fetch layer, with the test itself standing in for the HTTP port. Covers
 # which failures are distinguished from each other and — the product
@@ -45,27 +47,36 @@ add_host_test(test_news_mock test_news_mock.c
 add_host_test(test_news_service test_news_service.c
               ${CORE}/news_service.c ${CORE}/news_parse.c ${CORE}/news_model.c
               ${CJSON}/cJSON.c)
+add_test(NAME news_service COMMAND test_news_service)
 
 # The companion-app JSON. cJSON is linked only to validate the output — the
 # serializer itself writes bytes directly.
 add_host_test(test_api_json test_api_json.c ${CORE}/device_api_json.c ${CJSON}/cJSON.c)
+add_test(NAME api_json COMMAND test_api_json)
 
 # The framebuffer -> dual-controller repack. Held against a transcription of the
 # reference loop, because a wrong transpose produces confetti on the glass and
 # nothing at all in the log. Deliberately outside news_core: it is panel
 # geometry, and it is the only part of port_bsp that can be tested on a host.
 add_host_test(test_epd6_transpose test_epd6_transpose.c ${PORT}/epd6_transpose.c)
+add_test(NAME epd6_transpose COMMAND test_epd6_transpose)
 
 # The six-colour quantizer. Compiled from the same source the firmware and the
 # simulator use, so "black text does not dither" is asserted about the actual
 # decision, not a description of it.
 add_host_test(test_palette test_palette.c ${CORE}/wp_palette.c)
+add_test(NAME palette COMMAND test_palette)
 
-enable_testing()
-add_test(NAME news_parse  COMMAND test_news_parse)
-add_test(NAME graph_layout COMMAND test_graph_layout)
-add_test(NAME news_mock   COMMAND test_news_mock)
-add_test(NAME news_service COMMAND test_news_service)
-add_test(NAME api_json      COMMAND test_api_json)
-add_test(NAME epd6_transpose COMMAND test_epd6_transpose)
-add_test(NAME palette        COMMAND test_palette)
+# Copyfitting (spec §5) and integer chart scaling (spec §7) are pure and belong
+# here, but they land with the layout work rather than with the data model.
+# Guarded on existence so this build is green before those files are written and
+# picks them up the moment they are, without a second edit to this file.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_fit.c AND EXISTS ${CORE}/ui_fit.c)
+    add_host_test(test_fit test_fit.c ${CORE}/ui_fit.c)
+    add_test(NAME fit COMMAND test_fit)
+endif()
+
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_scale.c AND EXISTS ${CORE}/ui_chart.c)
+    add_host_test(test_chart_scale test_chart_scale.c ${CORE}/ui_chart.c)
+    add_test(NAME chart_scale COMMAND test_chart_scale)
+endif()

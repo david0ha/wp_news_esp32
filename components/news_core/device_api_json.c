@@ -40,10 +40,10 @@ static void put_int(sink_t *s, int v)
 
 /* Append `in` escaped as the body of a JSON string (no surrounding quotes).
  *
- * UTF-8 passes through byte for byte: news names and note titles are Korean,
- * and JSON strings are defined over Unicode, so escaping them to \u would be
- * legal but pointless. Only the seven mandatory escapes and the C0 controls are
- * rewritten. */
+ * UTF-8 passes through byte for byte: a headline off a wire copy desk carries
+ * em dashes and accented names, and JSON strings are defined over Unicode, so
+ * escaping them to \u would be legal but pointless. Only the seven mandatory
+ * escapes and the C0 controls are rewritten. */
 static void put_escaped(sink_t *s, const char *in)
 {
     if (!s->ok) {
@@ -152,18 +152,34 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put(&s, ",\"news\":{");
     put_bool_field(&s, "valid", st->news_valid, true);
     put_bool_field(&s, "demo", st->demo, false);
-    put_str_field(&s, "name", st->news, false);
+    put_str_field(&s, "edition", st->edition, false);
     put_str_field(&s, "generatedAt", st->generated_at, false);
-    put_int_field(&s, "notes", st->notes, false);
-    put_int_field(&s, "links", st->links, false);
-    put_int_field(&s, "orphans", st->orphans, false);
-    put_int_field(&s, "tags", st->tags, false);
-    put_int_field(&s, "addedToday", st->added_today, false);
-    put_int_field(&s, "added7d", st->added_7d, false);
-    put_int_field(&s, "agents", st->agents_total, false);
-    put_int_field(&s, "agentsRunning", st->agents_running, false);
-    put_int_field(&s, "recent", st->recent_count, false);
-    put_int_field(&s, "inbox", st->inbox_total, false);
+    put_int_field(&s, "stories", st->story_count, false);
+    put_int_field(&s, "tickers", st->ticker_count, false);
+
+    /* The lead identifies the page better than any count does: it is what the
+     * board is actually showing, and it is how the app can tell "polled fine,
+     * same page as an hour ago" from "polled fine, new front page". */
+    put(&s, ",\"lead\":{");
+    put_str_field(&s, "symbol", st->lead_symbol, true);
+    put_str_field(&s, "headline", st->lead_headline, false);
+    put(&s, "}");
+
+    /* Cents and basis points, not formatted strings — the app owns the decimal
+     * separator and the sign colour, and the two would drift if the firmware
+     * decided them here as well. */
+    put(&s, ",\"indices\":[");
+    int n = st->index_count;
+    if (n < 0) n = 0;
+    if (n > DEV_INDEX_MAX) n = DEV_INDEX_MAX;
+    for (int i = 0; i < n; i++) {
+        put(&s, i ? ",{" : "{");
+        put_str_field(&s, "symbol", st->indices[i].symbol, true);
+        put_int_field(&s, "lastCents", st->indices[i].last_c, false);
+        put_int_field(&s, "changeBp", st->indices[i].chg_bp, false);
+        put(&s, "}");
+    }
+    put(&s, "]");
     put(&s, "}");
 
     put(&s, ",\"source\":{");

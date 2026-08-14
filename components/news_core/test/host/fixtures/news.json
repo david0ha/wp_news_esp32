@@ -1,356 +1,656 @@
 {
-  "schema": 1,
-  "news": "second-brain",
-  "generated_at": "21:04",
-  "stats": {
-    "notes": 1428,
-    "links": 3910,
-    "orphans": 37,
-    "tags": 212,
-    "added_today": 6,
-    "added_7d": 41,
-    "daily": [
-      3,
-      9,
-      12,
-      4,
-      0,
-      7,
-      6
-    ]
-  },
-  "tags": [
+  "schema": 2,
+  "edition": "PERSONAL PORTFOLIO EDITION",
+  "dateline": "FRIDAY, AUGUST 14, 2026",
+  "session": "U.S. MARKETS CLOSED — AUG 13",
+  "as_of": "AS OF 05:12 KST",
+  "generated_at": "2026-08-14T05:12:00Z",
+  "indices": [
     {
-      "name": "프로젝트",
-      "count": 186
-    },
-    {
-      "name": "데일리",
-      "count": 141
-    },
-    {
-      "name": "영역",
-      "count": 88
-    },
-    {
-      "name": "자료",
-      "count": 63
-    },
-    {
-      "name": "아카이브",
-      "count": 41
-    },
-    {
-      "name": "회의",
-      "count": 29
-    }
-  ],
-  "agents": [
-    {
-      "name": "indexer",
-      "state": "running",
-      "last_run": "20:55",
-      "processed": 1428,
-      "queued": 3,
-      "progress": 78,
-      "note": "새 노트 6건 임베딩 중"
-    },
-    {
-      "name": "linker",
-      "state": "running",
-      "last_run": "20:52",
-      "processed": 910,
-      "queued": 0,
-      "progress": 41,
-      "note": "백링크 후보 생성 중"
-    },
-    {
-      "name": "summarizer",
-      "state": "idle",
-      "last_run": "18:30",
-      "processed": 412,
-      "queued": 0,
-      "progress": -1,
-      "note": ""
-    },
-    {
-      "name": "archiver",
-      "state": "error",
-      "last_run": "17:02",
-      "processed": 0,
-      "queued": 12,
-      "progress": -1,
-      "note": "볼트 잠금이 해제되지 않음"
-    },
-    {
-      "name": "tagger",
-      "state": "done",
-      "last_run": "16:10",
-      "processed": 1428,
-      "queued": 0,
-      "progress": 100,
-      "note": ""
-    }
-  ],
-  "graph": {
-    "nodes": [
-      {
-        "id": 0,
-        "title": "MOC/연구",
-        "deg": 24
-      },
-      {
-        "id": 1,
-        "title": "데일리/2026",
-        "deg": 19
-      },
-      {
-        "id": 2,
-        "title": "프로젝트/보드",
-        "deg": 17
-      },
-      {
-        "id": 3,
-        "title": "아이디어",
-        "deg": 14
-      },
-      {
-        "id": 4,
-        "title": "논문",
-        "deg": 12
-      },
-      {
-        "id": 5,
-        "title": "ESP32",
-        "deg": 11
-      },
-      {
-        "id": 6,
-        "title": "회의록",
-        "deg": 9
-      },
-      {
-        "id": 7,
-        "title": "e-Paper",
-        "deg": 8
-      },
-      {
-        "id": 8,
-        "title": "WP News",
-        "deg": 7
-      },
-      {
-        "id": 9,
-        "title": "에이전트",
-        "deg": 6
-      },
-      {
-        "id": 10,
-        "title": "독서",
-        "deg": 5
-      },
-      {
-        "id": 11,
-        "title": "루틴",
-        "deg": 4
-      },
-      {
-        "id": 12,
-        "title": "레시피",
-        "deg": 3
-      },
-      {
-        "id": 13,
-        "title": "여행",
-        "deg": 2
-      }
-    ],
-    "edges": [
-      [
-        0,
-        1
-      ],
-      [
-        0,
-        2
-      ],
-      [
-        0,
-        3
-      ],
-      [
-        0,
-        4
-      ],
-      [
-        0,
-        5
-      ],
-      [
-        0,
-        6
-      ],
-      [
-        0,
-        8
-      ],
-      [
-        1,
-        2
-      ],
-      [
-        1,
-        6
-      ],
-      [
-        1,
-        11
-      ],
-      [
-        1,
-        12
-      ],
-      [
-        2,
-        5
-      ],
-      [
-        2,
-        7
-      ],
-      [
-        2,
-        9
-      ],
-      [
-        2,
-        3
-      ],
-      [
-        3,
-        4
-      ],
-      [
-        3,
-        9
-      ],
-      [
-        3,
-        10
-      ],
-      [
-        4,
-        8
-      ],
-      [
-        4,
-        10
-      ],
-      [
-        5,
-        7
-      ],
-      [
-        5,
-        9
-      ],
-      [
-        6,
-        11
-      ],
-      [
-        7,
-        8
-      ],
-      [
-        9,
-        10
-      ],
-      [
-        11,
-        13
-      ],
-      [
-        12,
-        13
+      "symbol": "SPX",
+      "name": "S&P 500",
+      "last": 6412.83,
+      "change_pct": 0.62,
+      "spark": [
+        402,
+        418,
+        396,
+        430,
+        455,
+        441,
+        468,
+        502,
+        488,
+        521,
+        546,
+        574
       ]
-    ]
-  },
-  "recent": [
-    {
-      "time": "21:02",
-      "title": "주간 회고 2026-W32",
-      "links": 12
     },
     {
-      "time": "20:41",
-      "title": "UC8179 드라이버 정리",
-      "links": 4
+      "symbol": "NDX",
+      "name": "NASDAQ 100",
+      "last": 23841.55,
+      "change_pct": -0.18,
+      "spark": [
+        612,
+        640,
+        628,
+        597,
+        574,
+        588,
+        561,
+        540,
+        552,
+        519,
+        534,
+        508
+      ]
     },
     {
-      "time": "19:58",
-      "title": "옵시디언 보드 설계",
-      "links": 18
+      "symbol": "DJI",
+      "name": "DOW 30",
+      "last": 47215.6,
+      "change_pct": 0.34,
+      "spark": [
+        318,
+        305,
+        331,
+        349,
+        336,
+        362,
+        380,
+        371,
+        398,
+        415,
+        402,
+        428
+      ]
     },
     {
-      "time": "18:12",
-      "title": "e-Paper 부분 갱신 실험",
-      "links": 6
+      "symbol": "RUT",
+      "name": "RUSSELL 2000",
+      "last": 2544.19,
+      "change_pct": 0.91,
+      "spark": [
+        206,
+        232,
+        221,
+        258,
+        284,
+        271,
+        310,
+        342,
+        329,
+        368,
+        401,
+        436
+      ]
     },
     {
-      "time": "16:44",
-      "title": "에이전트 오케스트레이션 노트",
-      "links": 9
-    },
-    {
-      "time": "15:20",
-      "title": "읽기: 세컨드 브레인",
-      "links": 3
-    },
-    {
-      "time": "13:05",
-      "title": "ESP32-S3 PSRAM 메모",
-      "links": 7
-    },
-    {
-      "time": "11:31",
-      "title": "데일리/2026-08-10",
-      "links": 21
+      "symbol": "VIX",
+      "name": "VIX",
+      "last": 14.62,
+      "change_pct": -3.1,
+      "spark": [
+        744,
+        712,
+        758,
+        690,
+        651,
+        668,
+        612,
+        574,
+        590,
+        533,
+        501,
+        462
+      ]
     }
   ],
-  "inbox": [
+  "stories": [
     {
-      "title": "todo: 스펙 정리하기",
-      "age_days": 3
+      "rank": 0,
+      "kicker": "SEMICONDUCTORS",
+      "headline": "Nvidia’s blowout quarter resets the whole AI trade",
+      "deck": "Guidance beat the entire sell-side range, and for the first time the supply story arrives with numbers attached.",
+      "byline": "By CLAUDE · MARKET DESK",
+      "body": "SANTA CLARA — Nvidia closed the book on a quarter Wall Street had spent three months arguing about, reporting data-center revenue above every published estimate and guiding the October quarter higher still. The stock fell 1.8 percent anyway. That is the trade in miniature: the numbers are no longer the question, and the argument has moved on to who pays for the next build-out and over how many years it is written down. Hyperscaler capital budgets, revised upward twice already this year, now imply a level of accelerator demand the company itself has stopped calling a backlog and started calling a schedule. Supply is the constraint that remains. Advanced packaging is booked into next spring, memory partners are quoting lead times in quarters rather than weeks, and the analysts who spent the spring modelling a glut are quietly rebuilding their spreadsheets.",
+      "symbol": "NVDA",
+      "last": 183.22,
+      "change_pct": -1.84,
+      "chart": {
+        "kind": "candle",
+        "span": "1M",
+        "bars": [
+          [
+            168.4,
+            170.95,
+            167.8,
+            170.12
+          ],
+          [
+            170.3,
+            172.6,
+            169.55,
+            172.05
+          ],
+          [
+            171.9,
+            173.1,
+            169.2,
+            169.88
+          ],
+          [
+            170.05,
+            174.4,
+            169.9,
+            174.02
+          ],
+          [
+            174.2,
+            176.85,
+            173.6,
+            176.31
+          ],
+          [
+            176.1,
+            177.2,
+            173.95,
+            174.47
+          ],
+          [
+            174.8,
+            179.3,
+            174.1,
+            179.05
+          ],
+          [
+            179.4,
+            181.75,
+            178.6,
+            181.22
+          ],
+          [
+            181.0,
+            182.4,
+            178.05,
+            178.63
+          ],
+          [
+            178.9,
+            180.55,
+            177.3,
+            180.14
+          ],
+          [
+            180.4,
+            184.9,
+            180.1,
+            184.55
+          ],
+          [
+            184.7,
+            187.2,
+            183.9,
+            186.78
+          ],
+          [
+            186.5,
+            188.4,
+            184.75,
+            185.1
+          ],
+          [
+            185.3,
+            189.95,
+            185.0,
+            189.4
+          ],
+          [
+            189.6,
+            192.3,
+            188.85,
+            191.86
+          ],
+          [
+            191.5,
+            192.85,
+            187.4,
+            188.02
+          ],
+          [
+            188.2,
+            190.1,
+            186.55,
+            186.94
+          ],
+          [
+            187.1,
+            188.6,
+            184.2,
+            184.75
+          ],
+          [
+            184.9,
+            187.75,
+            184.3,
+            187.31
+          ],
+          [
+            187.0,
+            188.9,
+            185.6,
+            186.65
+          ],
+          [
+            186.4,
+            187.2,
+            182.05,
+            182.9
+          ],
+          [
+            183.1,
+            185.4,
+            181.55,
+            183.22
+          ]
+        ]
+      },
+      "photo": {
+        "id": "nvda_hq",
+        "w": 1140,
+        "h": 360,
+        "caption": "The financial district at the close, where the argument over who pays is now had.",
+        "credit": "DEMO IMAGE"
+      }
     },
     {
-      "title": "회의록 미정리 (8/7 스탠드업)",
-      "age_days": 2
+      "rank": 1,
+      "kicker": "ENERGY",
+      "headline": "Crude slips under $60 as OPEC+ opens the taps",
+      "deck": "Eight members restore 137,000 barrels a day in October.",
+      "byline": "By CLAUDE · ENERGY DESK",
+      "body": "VIENNA — Eight OPEC+ members will restore a further 137,000 barrels a day from October, a decision the futures curve had already written in. Brent settled below $60 for the third straight session and the front-month spread flipped into contango, which is the market saying it expects the barrels to arrive. U.S. producers have answered by doing nothing: rig counts in the Permian are flat for the eighth week, and the majors are still guiding to buybacks rather than to volume.",
+      "symbol": "XOM",
+      "last": 118.73,
+      "change_pct": -0.42,
+      "chart": {
+        "kind": "line",
+        "span": "5D",
+        "bars": [
+          119.85,
+          120.12,
+          119.64,
+          119.2,
+          118.95,
+          119.4,
+          119.72,
+          120.05,
+          119.88,
+          119.31,
+          118.9,
+          118.55,
+          118.2,
+          118.64,
+          119.02,
+          119.35,
+          119.1,
+          118.72,
+          118.4,
+          118.15,
+          117.92,
+          118.3,
+          118.66,
+          118.95,
+          119.18,
+          118.84,
+          118.5,
+          118.22,
+          118.45,
+          118.73
+        ]
+      }
     },
     {
-      "title": "읽기: e-Paper LUT 논문",
-      "age_days": 5
+      "rank": 2,
+      "kicker": "RATES",
+      "headline": "Two-year yield sinks after a soft claims print",
+      "deck": "The front end prices two cuts. The long end disagrees.",
+      "byline": "By CLAUDE · RATES DESK",
+      "body": "WASHINGTON — Initial claims came in at 241,000 against an expected 225,000, and the two-year yield gave up eleven basis points inside an hour. Fed funds futures now price two cuts before Christmas where yesterday they priced one and a half. The long end declined to agree: the ten-year fell four basis points, steepening the curve to its widest since March and leaving the inflation breakevens almost exactly where they started the week."
     },
     {
-      "title": "링크 끊김 확인 — 논문 폴더",
-      "age_days": 1
-    },
-    {
-      "title": "태그 정리: 영역 vs 자료",
-      "age_days": 9
-    },
-    {
-      "title": "웹클리핑 정리",
-      "age_days": 12
-    },
-    {
-      "title": "todo: 폰트 서브셋 재생성",
-      "age_days": 1
-    },
-    {
-      "title": "아이디어 덤프 분류",
-      "age_days": 4
+      "rank": 3,
+      "kicker": "RETAIL",
+      "headline": "Costco holds the line where the mall does not",
+      "deck": "Comparables rose 6.1 percent; renewals did not move.",
+      "byline": "By CLAUDE · RETAIL DESK",
+      "body": "ISSAQUAH — Costco reported August comparable sales up 6.1 percent excluding fuel, with traffic rather than ticket doing the work, and the executive membership renewal rate unchanged at 92.9 percent. That last number is the one the company is really reporting: the merchandise margin is thin by design and the fees are the profit, so a renewal rate that does not move through a soft quarter is the whole thesis holding.",
+      "symbol": "COST",
+      "last": 984.3,
+      "change_pct": -0.11
     }
   ],
-  "inbox_total": 11
+  "tickers": [
+    {
+      "symbol": "NVDA",
+      "name": "Nvidia",
+      "last": 183.22,
+      "change_pct": -1.84,
+      "spark": [
+        688,
+        712,
+        700,
+        741,
+        726,
+        690,
+        664,
+        638,
+        651,
+        610,
+        592,
+        566
+      ]
+    },
+    {
+      "symbol": "AAPL",
+      "name": "Apple",
+      "last": 231.4,
+      "change_pct": 0.31,
+      "spark": [
+        430,
+        442,
+        421,
+        455,
+        468,
+        451,
+        476,
+        490,
+        472,
+        501,
+        488,
+        512
+      ]
+    },
+    {
+      "symbol": "MSFT",
+      "name": "Microsoft",
+      "last": 512.66,
+      "change_pct": 0.44,
+      "spark": [
+        512,
+        528,
+        505,
+        540,
+        556,
+        533,
+        561,
+        578,
+        560,
+        592,
+        605,
+        624
+      ]
+    },
+    {
+      "symbol": "GOOGL",
+      "name": "Alphabet",
+      "last": 214.08,
+      "change_pct": -0.27,
+      "spark": [
+        560,
+        574,
+        552,
+        588,
+        566,
+        541,
+        528,
+        549,
+        520,
+        505,
+        517,
+        494
+      ]
+    },
+    {
+      "symbol": "AMZN",
+      "name": "Amazon",
+      "last": 238.91,
+      "change_pct": 1.12,
+      "spark": [
+        340,
+        366,
+        352,
+        391,
+        418,
+        402,
+        440,
+        468,
+        455,
+        492,
+        520,
+        548
+      ]
+    },
+    {
+      "symbol": "META",
+      "name": "Meta Platforms",
+      "last": 742.35,
+      "change_pct": -0.63,
+      "spark": [
+        620,
+        648,
+        632,
+        660,
+        641,
+        612,
+        590,
+        605,
+        574,
+        552,
+        566,
+        530
+      ]
+    },
+    {
+      "symbol": "TSLA",
+      "name": "Tesla",
+      "last": 341.77,
+      "change_pct": 2.18,
+      "spark": [
+        280,
+        312,
+        296,
+        348,
+        380,
+        362,
+        410,
+        452,
+        436,
+        488,
+        526,
+        570
+      ]
+    },
+    {
+      "symbol": "AVGO",
+      "name": "Broadcom",
+      "last": 297.44,
+      "change_pct": -2.05,
+      "spark": [
+        700,
+        728,
+        715,
+        744,
+        720,
+        688,
+        660,
+        672,
+        640,
+        612,
+        624,
+        580
+      ]
+    },
+    {
+      "symbol": "AMD",
+      "name": "Advanced Micro",
+      "last": 174.62,
+      "change_pct": -1.31,
+      "spark": [
+        648,
+        662,
+        640,
+        675,
+        652,
+        628,
+        606,
+        620,
+        588,
+        570,
+        582,
+        548
+      ]
+    },
+    {
+      "symbol": "MU",
+      "name": "Micron",
+      "last": 128.05,
+      "change_pct": 3.42,
+      "spark": [
+        240,
+        268,
+        255,
+        300,
+        336,
+        320,
+        372,
+        412,
+        398,
+        452,
+        496,
+        540
+      ]
+    },
+    {
+      "symbol": "TSM",
+      "name": "Taiwan Semi",
+      "last": 241.19,
+      "change_pct": -0.88,
+      "spark": [
+        590,
+        612,
+        600,
+        628,
+        610,
+        585,
+        562,
+        576,
+        548,
+        530,
+        542,
+        512
+      ]
+    },
+    {
+      "symbol": "JPM",
+      "name": "JPMorgan",
+      "last": 302.55,
+      "change_pct": 0.19,
+      "spark": [
+        452,
+        466,
+        448,
+        478,
+        490,
+        472,
+        496,
+        508,
+        492,
+        516,
+        504,
+        528
+      ]
+    },
+    {
+      "symbol": "XOM",
+      "name": "Exxon Mobil",
+      "last": 118.73,
+      "change_pct": -0.42,
+      "spark": [
+        540,
+        556,
+        538,
+        566,
+        548,
+        524,
+        508,
+        520,
+        496,
+        480,
+        492,
+        468
+      ]
+    },
+    {
+      "symbol": "LLY",
+      "name": "Eli Lilly",
+      "last": 902.14,
+      "change_pct": 0.76,
+      "spark": [
+        388,
+        404,
+        386,
+        420,
+        438,
+        421,
+        448,
+        466,
+        450,
+        480,
+        496,
+        518
+      ]
+    },
+    {
+      "symbol": "COST",
+      "name": "Costco",
+      "last": 984.3,
+      "change_pct": -0.11,
+      "spark": [
+        500,
+        514,
+        498,
+        524,
+        510,
+        492,
+        480,
+        492,
+        472,
+        462,
+        474,
+        456
+      ]
+    },
+    {
+      "symbol": "V",
+      "name": "Visa",
+      "last": 358.62,
+      "change_pct": 0.24,
+      "spark": [
+        468,
+        480,
+        462,
+        492,
+        505,
+        488,
+        512,
+        524,
+        508,
+        532,
+        520,
+        544
+      ]
+    }
+  ]
 }

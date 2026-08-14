@@ -11,8 +11,9 @@
  * `news_core` and is the same code the host tests and the desktop simulator
  * exercise.
  *
- * The structure is dictated by the display. A full refresh of this 648x480
- * panel takes seconds, flashes, and cannot be interleaved with another, so:
+ * The structure is dictated by the display. A full refresh of this 1200x1600
+ * panel takes twenty to thirty seconds, flashes the whole sheet, and cannot be
+ * interleaved with another, so:
  *
  *   - Exactly one task (UiTask) ever touches LVGL or starts a refresh.
  *   - Everything else — buttons, the HTTP API, the news poller — posts a
@@ -23,8 +24,8 @@
  *
  * And one rule this board adds on top: a poll that returns the same content
  * does not touch the panel at all. Every five minutes, forever, on a device
- * that mostly sits still, that is the difference between a silent dashboard and
- * one that flashes at nobody all day.
+ * that mostly sits still, that is the difference between a front page hanging
+ * quietly in its frame and one that flashes at nobody all day.
  */
 #include <stdio.h>
 #include <string.h>
@@ -48,6 +49,7 @@
 #include "epd6_panel.h"        /* epd6_refresh / epd6_selftest            */
 #include "ui_news.h"
 #include "ui_strings.h"
+#include "ui_tile.h"           /* the lead's photograph, fetched on this task */
 #include "news_model.h"
 #include "news_mock.h"
 #include "news_service.h"
@@ -141,6 +143,24 @@ static int      s_batt_mv;
 
 /* Only ever touched by UiTask. */
 
+/* Which story leads the page. `rank` is the server's editorial judgement and
+ * not an index: a payload numbered 10, 20, 30 says exactly what one numbered
+ * 0, 1, 2 says, so the lead is the lowest rank rather than stories[0]. The page
+ * needs the whole ordering and sorts; the log line and the companion app need
+ * only its head, so this scans — over at most six elements, and a stable scan
+ * and a stable sort agree on which one comes first. NULL on an empty snapshot,
+ * which is what a board shows before its first poll. */
+static const news_story_t *lead_story(const news_t *v)
+{
+    const news_story_t *lead = NULL;
+    for (int i = 0; i < v->story_count; i++) {
+        if (!lead || v->stories[i].rank < lead->rank) {
+            lead = &v->stories[i];
+        }
+    }
+    return lead;
+}
+
 /* cJSON's parse tree for a news snapshot is a few KB, but keeping it out of
  * internal RAM leaves that for WiFi/TLS and the panel's DMA framebuffer. */
 static void *psram_malloc(size_t sz)
@@ -184,8 +204,9 @@ static void present_full(void)
 /* --- content updates (UiTask only) ---------------------------------------- */
 
 /* The snapshot is copied out from under the mutex so LVGL is never touched while
- * holding it. The copy is static rather than automatic because news_t is 3.4 KB
- * — 42% of UiTask's 8 KB stack — and this frame goes on to call into LVGL, whose
+ * holding it. The copy is static rather than automatic because news_t is 18 KB
+ * — twice the whole of UiTask's 8 KB stack, so an automatic would not overflow
+ * it, it would never fit on it — and this frame goes on to call into LVGL, whose
  * render (Lvgl_RenderNow -> lv_refr_now) runs on this same task. A static is safe
  * here precisely because of the rule the whole file is built on: UiTask is the
  * only caller. */
@@ -300,7 +321,7 @@ static void force_ap_mode(void)
     ESP_LOGW(TAG, "KEY2 long-press -> forcing Wi-Fi setup (AP) mode");
     prov_store_set_force_portal();
     if (Lvgl_lock(-1)) {
-        ui_news_set_overlay(S_WIFI_TITLE, S_RESTARTING);
+        ui_news_set_overlay(S_WIFI_TITLE, NULL, S_RESTARTING);
         Lvgl_unlock();
     }
     present_full();
@@ -363,7 +384,7 @@ static void handle_press(button_id_t id)
             force_ap_mode();               /* reboots — does not return */
         }
         ESP_LOGI(TAG, "KEY2 -> page 1");
-        action_set_page(UI_PAGE_STATS);
+        action_set_page(UI_PAGE_FRONT);
         break;
     case BUTTON_BOOT:
         ESP_LOGI(TAG, "BOOT -> previous page");
@@ -399,7 +420,7 @@ static void UiTask(void *arg)
     push_data_to_ui();
     if (Lvgl_lock(-1)) {
         ui_news_tick();
-        ui_news_show_page(UI_PAGE_STATS);
+        ui_news_show_page(UI_PAGE_FRONT);
         Lvgl_unlock();
     }
     present_full();
@@ -447,7 +468,7 @@ static void notify_ui(app_cmd_kind_t kind)
     xQueueSend(s_cmd_queue, &c, 0);
 }
 
-/* Static for the same reason as s_ui_copy: 3.4 KB of a 16 KB stack that an
+/* Static for the same reason as s_ui_copy: 18 KB against a 16 KB stack that an
  * https:// URL also has to fit a synchronous TLS handshake into. NewsTask is the
  * only caller. */
 static news_t s_fetched;
@@ -466,6 +487,13 @@ static void NewsTask(void *arg)
         state_unlock();
 
         if (url[0]) {
+            /* The lead's photograph is fetched from beside the snapshot, and
+             * this is the task that owns the wire. Saying so every poll is also
+             * what gives a tile that could not be fetched last time its next
+             * chance — the alternative is UiTask discovering the miss mid-render
+             * and doing a blocking GET of its own between two panel refreshes. */
+            ui_tile_set_base(url);
+
             news_fetch_result_t r = news_service_fetch(url, &s_fetched);
 
             state_lock();
@@ -486,9 +514,17 @@ static void NewsTask(void *arg)
                 state_unlock();
 
                 if (changed) {
-                    ESP_LOGI(TAG, "news: %d notes, %d links, %d agents — refreshing",
-                             s_fetched.stats.notes, s_fetched.stats.links,
-                             s_fetched.agent_count);
+                    const news_story_t *lead = lead_story(&s_fetched);
+                    /* Before UiTask is told, not after: the picture is part of
+                     * the page and a tile that lands during the render is a
+                     * page that refreshes twice for one snapshot. A miss is
+                     * silent on purpose — the lead reflows to its chart. */
+                    if (lead && lead->photo.id[0]) {
+                        ui_tile_get(lead->photo.id, lead->photo.w, lead->photo.h);
+                    }
+                    ESP_LOGI(TAG, "news: %d stories, %d tickers, lead %s — refreshing",
+                             s_fetched.story_count, s_fetched.ticker_count,
+                             (lead && lead->symbol[0]) ? lead->symbol : "(none)");
                     notify_ui(APP_CMD_DATA);
                 } else {
                     /* The single most common outcome, and the one that must not
@@ -554,6 +590,15 @@ void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_co
  * safe no-ops until UserApp_TaskInit has created the queues.
  * =========================================================================== */
 
+/* user_app_snapshot copies the index ribbon straight across, indexing
+ * out->indices[] with news_t's own count. The two capacities are declared in
+ * different headers on purpose — one is portable to a phone, the other to the
+ * panel — and device_api_model.h states their equality only in a comment. This
+ * is where that comment is made to hold, because the alternative to a build
+ * failure is a stack write past the end of the caller's struct. */
+static_assert(DEV_INDEX_MAX == NEWS_INDEX_MAX,
+              "the companion API's index array must hold the whole ribbon");
+
 static bool post_cmd(app_cmd_kind_t kind, int ival, const char *text)
 {
     if (!s_cmd_queue) {
@@ -584,20 +629,32 @@ void user_app_snapshot(device_state_t *out)
     out->page = s_page;
     strlcpy(out->page_title, ui_news_page_title((ui_page_t)s_page), sizeof(out->page_title));
 
-    out->news_valid    = s_data.valid;
-    out->demo           = s_data.demo;
-    strlcpy(out->news, s_data.news, sizeof(out->news));
+    out->news_valid   = s_data.valid;
+    out->demo         = s_data.demo;
+    out->story_count  = s_data.story_count;
+    out->ticker_count = s_data.ticker_count;
+    strlcpy(out->edition, s_data.edition, sizeof(out->edition));
     strlcpy(out->generated_at, s_data.generated_at, sizeof(out->generated_at));
-    out->notes          = s_data.stats.notes;
-    out->links          = s_data.stats.links;
-    out->orphans        = s_data.stats.orphans;
-    out->tags           = s_data.stats.tags;
-    out->added_today    = s_data.stats.added_today;
-    out->added_7d       = s_data.stats.added_7d;
-    out->agents_total   = s_data.agent_count;
-    out->agents_running = news_running_agents(&s_data);
-    out->recent_count   = s_data.recent_count;
-    out->inbox_total    = s_data.inbox_total;
+
+    /* The phone gets a list row, not the front page: one symbol and a headline
+     * cut to fit it. news_str_copy rather than strlcpy because that cut lands
+     * mid-word by definition and headlines arrive from a copy desk that emits em
+     * dashes and curly quotes — strlcpy would happily halve one, and half a
+     * codepoint is not a short headline, it is a JSON string the app's parser
+     * rejects. */
+    const news_story_t *lead = lead_story(&s_data);
+    if (lead) {
+        news_str_copy(out->lead_symbol, sizeof(out->lead_symbol), lead->symbol);
+        news_str_copy(out->lead_headline, sizeof(out->lead_headline), lead->headline);
+    }
+
+    out->index_count = s_data.index_count;
+    for (int i = 0; i < out->index_count; i++) {
+        news_str_copy(out->indices[i].symbol, sizeof(out->indices[i].symbol),
+                      s_data.indices[i].symbol);
+        out->indices[i].last_c = s_data.indices[i].last_c;
+        out->indices[i].chg_bp = s_data.indices[i].chg_bp;
+    }
 
     strlcpy(out->news_url, s_cfg.news_url, sizeof(out->news_url));
     strlcpy(out->last_result, news_fetch_result_name(s_last_result), sizeof(out->last_result));

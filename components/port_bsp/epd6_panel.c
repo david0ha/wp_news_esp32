@@ -1,5 +1,5 @@
 /*
- * epd6_panel.c — Seeed 13.3" Spectra 6, two UC8179 controllers, 1600x1200x4bpp.
+ * epd6_panel.c — Seeed 13.3" Spectra 6, two UC8179 controllers, 1200x1600x4bpp.
  *
  * Command sequences transcribed from Seeed's own driver for this exact panel,
  * Seeed-Studio/Seeed_GFX TFT_Drivers/T133A01_Defines.h — EPD_INIT() (L174-220),
@@ -12,13 +12,16 @@
  * is 1200 pixels wide by 800 rows — 600 bytes per row at 4bpp, 480,000 bytes.
  * Two of them stacked make the panel's native portrait 1200 x 1600.
  *
- * Seeed's own push splits a portrait buffer left/right with no transpose. This
- * port keeps a LANDSCAPE 1600 x 1200 framebuffer instead, because the UI is a
- * newspaper front page, and pays for it by rotating during the pack. The two
- * arrangements are the same bytes: one controller row of 1200 px is exactly two
- * adjacent framebuffer columns of 600 px, and 800 controller rows consume all
- * 1600 columns. That identity is what makes the transpose in epd6_transpose.c
- * correct, and it is checked byte-for-byte by test_epd6_transpose.
+ * The framebuffer is that native portrait, and each controller takes half of
+ * every framebuffer row — the master the left 600 px, the slave the right. One
+ * controller row of 1200 px is two of those halves from two adjacent rows, and
+ * 800 controller rows consume all 1600. That identity is what makes the pack in
+ * epd6_transpose.c a plain copy; the derivation showing it sends the same bytes
+ * the earlier landscape port did is in epd6_transpose.h, and test_epd6_transpose
+ * checks it byte-for-byte against a reference written from that derivation.
+ *
+ * Nothing below changed when the orientation did. TRES, the register tables and
+ * the command sequences describe the wire, and the wire never saw the rotation.
  *
  * TRANSPORT
  * ---------
@@ -557,9 +560,13 @@ static const epd6_color_t BARS[EPD6_COLOR_COUNT] = {
     EPD6_BLACK, EPD6_WHITE, EPD6_RED, EPD6_YELLOW, EPD6_GREEN, EPD6_BLUE,
 };
 
-/* Six vertical bars. Proves the colour codes, and — because the bars run the
- * full height — that both controllers received their half: a dead slave shows
- * as the bottom 600 rows blank while the top 600 are right. */
+/* Six vertical bars, 200 px each. Proves the colour codes, and — because the
+ * plane split is down the middle of the page — proves both controllers received
+ * their half without any ambiguity about which: black, white and red are the
+ * master's, yellow, green and blue the slave's. A dead slave is the right half
+ * of the page blank — and that reading holds even if the row order turns out to
+ * be reversed, since a reversal trades top for bottom and leaves left and right
+ * where they are. The frame pattern below is what settles that separately. */
 static void pattern_bars(void)
 {
     for (int x = 0; x < EPD6_W; x++) {
@@ -568,11 +575,12 @@ static void pattern_bars(void)
             epd6_set_pixel((uint16_t)x, (uint16_t)y, c);
         }
     }
-    /* A black notch in the top-left bar only. If the rotation is wrong the bars
-     * still look like bars; the notch is what moves. */
+    /* A notch near the top of the leftmost bar, white because that bar is black.
+     * The bars themselves are unchanged by a vertical flip; the notch is the one
+     * thing in this pattern that moves. */
     for (int y = 40; y < 120; y++) {
-        for (int x = 40; x < 200; x++) {
-            epd6_set_pixel((uint16_t)x, (uint16_t)y, EPD6_BLACK);
+        for (int x = 40; x < 160; x++) {
+            epd6_set_pixel((uint16_t)x, (uint16_t)y, EPD6_WHITE);
         }
     }
 }
@@ -589,23 +597,40 @@ static void pattern_checker(void)
     }
 }
 
-/* Border, both diagonals, and a solid block in the top-left quadrant. Proves
- * the last row and column are reachable and gives an unambiguous origin, which
- * the symmetric patterns cannot. Each element gets its own colour so a
- * mis-wired chip select shows up as a colour, not just a gap. */
+/*
+ * Border, both diagonals, and a solid green block in the TOP-LEFT corner. Proves
+ * the last row and column are reachable, and settles the one question the whole
+ * stack has no other answer to: whether the page came out upside down.
+ *
+ * Nothing between the framebuffer and the glass has a handedness except the
+ * order the output rows go out in, and a reversal there is a vertical flip. The
+ * bars survive one, the checkerboard survives one, and a border survives one.
+ * This block does not: green in the top-left is right, green in the bottom-left
+ * means reverse the row order in epd6_pack_block. The diagonals carry the same
+ * answer redundantly — red runs top-left to bottom-right — because the answer
+ * decides whether to change a line of code, and one indicator that could be
+ * misread is not enough to change code on.
+ *
+ * Each element gets its own colour so a mis-wired chip select shows up as a
+ * colour, not just a gap.
+ */
 static void pattern_frame(void)
 {
     epd6_clear(EPD6_WHITE);
     for (int x = 0; x < EPD6_W; x++) {
         epd6_set_pixel((uint16_t)x, 0, EPD6_BLACK);
         epd6_set_pixel((uint16_t)x, EPD6_H - 1, EPD6_BLACK);
-        int y = (x * (EPD6_H - 1)) / (EPD6_W - 1);
-        epd6_set_pixel((uint16_t)x, (uint16_t)y, EPD6_RED);
-        epd6_set_pixel((uint16_t)x, (uint16_t)(EPD6_H - 1 - y), EPD6_BLUE);
     }
     for (int y = 0; y < EPD6_H; y++) {
         epd6_set_pixel(0, (uint16_t)y, EPD6_BLACK);
         epd6_set_pixel(EPD6_W - 1, (uint16_t)y, EPD6_BLACK);
+
+        /* Step the long axis. The panel is taller than it is wide, so walking x
+         * and deriving y would advance y by more than one per pixel and draw
+         * both diagonals dashed. */
+        int x = (y * (EPD6_W - 1)) / (EPD6_H - 1);
+        epd6_set_pixel((uint16_t)x, (uint16_t)y, EPD6_RED);
+        epd6_set_pixel((uint16_t)(EPD6_W - 1 - x), (uint16_t)y, EPD6_BLUE);
     }
     for (int y = 40; y < 140; y++) {
         for (int x = 40; x < 240; x++) {
@@ -622,7 +647,8 @@ void epd6_selftest(void)
     }
 
     ESP_LOGI(TAG, "selftest: six colour bars (black white red yellow green blue,"
-                  " left to right; notch in the top-left)");
+                  " left to right; the last three are the slave's half, and the"
+                  " notch is white near the top of the black bar)");
     pattern_bars();
     epd6_refresh();
 
@@ -630,7 +656,9 @@ void epd6_selftest(void)
     pattern_checker();
     epd6_refresh();
 
-    ESP_LOGI(TAG, "selftest: frame, diagonals (red down, blue up), green origin block");
+    ESP_LOGI(TAG, "selftest: frame, diagonals (red top-left to bottom-right, blue"
+                  " the other way), green block in the TOP-LEFT — if it comes out"
+                  " bottom-left the output row order is reversed");
     pattern_frame();
     epd6_refresh();
 

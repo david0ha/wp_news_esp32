@@ -22,6 +22,17 @@
 static const char *TAG = "main";
 
 /*
+ * The panel's size is written down twice: user_config.h states it for the LVGL
+ * bring-up call below, epd6_transpose.h for the framebuffer and the pack. Two
+ * numbers for one panel is one too many, and if they drift apart the symptom is
+ * not a crash but a page with a strip of it never written — LVGL simply stops
+ * rendering where it was told the glass ended, and the pixels beyond keep
+ * whatever the last refresh left there.
+ */
+static_assert(EPD_WIDTH == EPD6_W && EPD_HEIGHT == EPD6_H,
+              "user_config.h's panel geometry must match epd6_transpose.h's");
+
+/*
  * LVGL renders RGB565 into a strip buffer; this callback quantizes it into the
  * panel's six inks. Keeping LVGL on RGB565 rather than an indexed format buys
  * every widget, font and anti-aliased shape working exactly as it does in the
@@ -49,10 +60,10 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 
 // --- Provisioning status, shown on the news UI's overlay ------------------
 
-static void SetStatus(const char *title, const char *body)
+static void SetStatus(const char *title, const char *ssid, const char *body)
 {
 	if (Lvgl_lock(-1)) {
-		ui_news_set_overlay(title, body);
+		ui_news_set_overlay(title, ssid, body);
 		Lvgl_unlock();
 	}
 	Lvgl_RenderNow();
@@ -66,21 +77,23 @@ static void OnProvisioningEvent(prov_event_t event, const char *info, void *user
 	switch (event) {
 	case PROV_EVENT_STA_CONNECTING:
 		snprintf(body, sizeof(body), "Connecting to\n%s", info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		SetStatus(S_WIFI_TITLE, NULL, body);
 		break;
 	case PROV_EVENT_STA_CONNECTED:
 		snprintf(body, sizeof(body), "Connected\n%s", info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		SetStatus(S_WIFI_TITLE, NULL, body);
 		break;
 	case PROV_EVENT_PORTAL_STARTED:
+		// The network's name is passed on its own: the setup sheet sets it at
+		// the size of a lead headline, which is the whole point of the state.
 		snprintf(body, sizeof(body),
-		         "1. Join Wi-Fi:\n%s\n\n2. Stay connected,\nthen open the page it offers",
-		         info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		         "1. Join the network above, from a phone or a laptop.\n\n"
+		         "2. Stay connected, and open the page it offers.");
+		SetStatus(S_WIFI_TITLE, info ? info : "", body);
 		break;
 	case PROV_EVENT_CONFIG_SAVED:
 		snprintf(body, sizeof(body), "Saved \"%s\"\n%s", info ? info : "", S_RESTARTING);
-		SetStatus(S_WIFI_TITLE, body);
+		SetStatus(S_WIFI_TITLE, NULL, body);
 		break;
 	}
 }
@@ -89,17 +102,19 @@ extern "C" void app_main(void)
 {
 	UserApp_AppInit();
 
-	// Local timezone for the header clock. There is no RTC on the EE04 — the
-	// two pins the previous carrier routed to an I2C header are a user button
-	// and the battery divider's enable here — so the clock is SNTP alone, and
-	// this is the only thing that turns it into local time.
+	// Local timezone for the dateline and the folio's updated/next pair. There
+	// is no RTC on the EE04 — the two pins the previous carrier routed to an
+	// I2C header are a user button and the battery divider's enable here — so
+	// the clock is SNTP alone, and this is the only thing that turns it into
+	// local time.
 	setenv("TZ", CONFIG_WP_NEWS_TIMEZONE, 1);
 	tzset();
 
 	board_io_init(BATT_ADC_PIN, BATT_ENABLE_PIN);
 
-	// Two chip selects, because the panel is two UC8179s: GPIO44 drives the top
-	// 600 rows and GPIO41 the bottom 600. A blank lower half is that pin.
+	// Two chip selects, because the panel is two UC8179s: GPIO44 drives the left
+	// 600 columns of the portrait page and GPIO41 the right 600. A blank
+	// right-hand half of the sheet is that pin.
 	const epd6_pins_t pins = {
 		.sck       = EPD_SCK_PIN,
 		.mosi      = EPD_MOSI_PIN,
@@ -131,9 +146,9 @@ extern "C" void app_main(void)
 	if (connected) {
 		ESP_LOGI(TAG, "online — news URL '%s'",
 		         cfg.news_url[0] ? cfg.news_url : "(none: demo snapshot)");
-		net_time_sync(10000);   // the header clock has no other source
+		net_time_sync(10000);   // the dateline has no other source
 		if (Lvgl_lock(-1)) {
-			ui_news_set_overlay(NULL, NULL);   // dismiss the setup overlay
+			ui_news_set_overlay(NULL, NULL, NULL);   // dismiss the setup overlay
 			Lvgl_unlock();
 		}
 		// The pinout lives here and nowhere else; user_app takes the buttons

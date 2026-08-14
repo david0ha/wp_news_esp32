@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.wpnews.serve — hold the edition directory open on the LAN, always.
+
+  Separate from com.wpnews.edition on purpose. Filing is an event that happens twice a day and can
+  fail; serving is a condition that must hold continuously, because the board polls every five
+  minutes and does not care that nothing new has been filed since dawn. Putting both in one job
+  means a failed filing takes the served page down with it, which turns a stale paper — the failure
+  the firmware is designed to survive and badge — into no paper at all.
+
+  Install:
+      cp tools/edition/com.wpnews.serve.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.wpnews.serve.plist
+
+  Then point the board at it, once:
+      curl -X POST http://wpnews.local/api/news -d '{"url":"http://<this mac>.local:8123/news.json"}'
+
+  This serves a directory read-only over plain HTTP on a home network, with no authentication. That
+  is the same posture as the rest of this project's LAN services and the same one the firmware
+  expects; it is not suitable for a network you do not control.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wpnews.serve</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ggrrm/Documents/wp_news_esp32/tools/edition/file-edition.sh</string>
+        <string>--serve-only</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/ggrrm</string>
+        <key>EDITION_DIR</key>
+        <string>/Users/ggrrm/.wpnews/edition</string>
+        <key>WPNEWS_PORT</key>
+        <string>8123</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ggrrm/.wpnews/edition/log/serve.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ggrrm/.wpnews/edition/log/serve.err</string>
+</dict>
+</plist>

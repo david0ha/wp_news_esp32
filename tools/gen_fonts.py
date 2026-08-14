@@ -177,8 +177,64 @@ def symbol_sets():
 
 # --- conversion ------------------------------------------------------------
 
+def lining_figures(font):
+    """Point U+0030..0039 at the glyphs OpenType `lnum` would substitute in.
+
+    Playfair Display's DEFAULT figures are old-style, and lv_font_conv has no
+    feature support at all — it reads the cmap and nothing else — so the faces
+    this generator produced set text figures wherever a number appeared. In the
+    headline "Crude slips under $60" the 6 stood at ascender height and the 0
+    sat at x-height, which at 56 px reads as "$6o"; in the index ribbon and on
+    A2 a column of five levels had no common cap line, no common baseline, and a
+    decimal point floating below the optical centre of half its digits. A
+    newspaper's tables and its display figures are lining, always, and the
+    quotation tables on the same sheet were already setting lining figures in
+    the label face — so the page carried two contradictory figure styles for the
+    same kind of data.
+
+    A feature cannot be "enabled" in the generated output, so it is FROZEN here:
+    the substitution the feature would have made is applied to the cmap, and
+    lv_font_conv is handed a font whose digits are the lining ones. Nothing else
+    in the font is touched, so the line height, the ascender and the descender —
+    all of which ui_internal.h and ui_page_markets.c transcribe — are unchanged
+    by construction.
+
+    A family whose figures are already lining has no `lnum`, or maps each digit
+    to itself, and this is then a no-op. Returns how many digits it moved, so
+    the operator can see which faces it actually changed.
+    """
+    gsub = font.get("GSUB")
+    if gsub is None:
+        return 0
+
+    table = gsub.table
+    lookups = []
+    for rec in table.FeatureList.FeatureRecord:
+        if rec.FeatureTag == "lnum":
+            lookups.extend(rec.Feature.LookupListIndex)
+
+    sub = {}
+    for i in sorted(set(lookups)):
+        lookup = table.LookupList.Lookup[i]
+        if lookup.LookupType != 1:      # single substitution is all a figure set is
+            continue
+        for st in lookup.SubTable:
+            sub.update(st.mapping)
+    if not sub:
+        return 0
+
+    moved = 0
+    for cm in font["cmap"].tables:
+        for cp in range(0x30, 0x3A):
+            g = cm.cmap.get(cp)
+            if g in sub and sub[g] != g:
+                cm.cmap[cp] = sub[g]
+                moved += 1
+    return moved
+
+
 def instance(src_ttf, location, out_ttf):
-    """Pin a variable font to one point on its axes."""
+    """Pin a variable font to one point on its axes, with lining figures."""
     from fontTools import ttLib
     from fontTools.varLib import instancer
 
@@ -189,6 +245,10 @@ def instance(src_ttf, location, out_ttf):
                      f"but the face table asks for {location}")
         instancer.instantiateVariableFont(font, location, inplace=True,
                                           updateFontNames=True)
+    moved = lining_figures(font)
+    if moved:
+        print(f"    lnum frozen: {moved // max(1, len(font['cmap'].tables))} "
+              f"digit(s) remapped to the lining set")
     font.save(out_ttf)
     return out_ttf
 
@@ -258,7 +318,19 @@ def main():
                          "instead (files named as on Google Fonts)")
     ap.add_argument("--dry-run", action="store_true",
                     help="report the glyph sets and the face table, then stop")
+    ap.add_argument("--only",
+                    help="regenerate only these faces (comma-separated). The "
+                         "upstream families move under us, so a change that "
+                         "concerns two faces should not rewrite seven.")
     args = ap.parse_args()
+
+    faces = FACES
+    if args.only:
+        want = {n.strip() for n in args.only.split(",")}
+        faces = [f for f in FACES if f[0] in want]
+        unknown = want - {f[0] for f in faces}
+        if unknown:
+            sys.exit("no such face: " + ", ".join(sorted(unknown)))
 
     sets = symbol_sets()
 
@@ -289,7 +361,10 @@ def main():
     os.makedirs(FONTDIR, exist_ok=True)
 
     originals = {}
+    needed = {f[1] for f in faces}
     for fam, (font_url, ofl_url) in FAMILIES.items():
+        if fam not in needed:
+            continue
         base = urllib.parse.unquote(os.path.basename(font_url))
         if args.font_dir:
             originals[fam] = os.path.join(args.font_dir, base)
@@ -308,7 +383,7 @@ def main():
                 urllib.request.urlretrieve(ofl_url, ofl)
 
     total = 0
-    for name, fam, size, loc, kind in FACES:
+    for name, fam, size, loc, kind in faces:
         static = instance(originals[fam], loc,
                           os.path.join(tmp, f"{name}.ttf"))
         # What goes into the generated file's provenance comment in place of
@@ -327,7 +402,7 @@ def main():
         total += os.path.getsize(path)
         print(f"    -> {os.path.getsize(path) // 1024} KiB of C source")
 
-    print(f"generated {len(FACES)} faces, {total // 1024} KiB of C source")
+    print(f"generated {len(faces)} faces, {total // 1024} KiB of C source")
 
 
 if __name__ == "__main__":

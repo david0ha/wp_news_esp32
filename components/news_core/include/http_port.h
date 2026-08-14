@@ -27,6 +27,20 @@ void http_port_init(void);
 
 char *http_get(const char *url, int *out_status);
 
+/*
+ * The same GET, for a body that is not text.
+ *
+ * A photo tile is 4 bpp pixel data and 0x00 is two black pixels, so the body
+ * contains NUL bytes by construction and http_get()'s NUL-terminated string
+ * would stop the picture at the first pair of them. This reports the LENGTH
+ * instead; nothing else differs — same transport, same size cap, same status,
+ * caller frees. The buffer is still NUL-terminated one byte past *out_len, so
+ * http_get() is this function with the length thrown away.
+ *
+ * *out_len may be NULL. It is 0 whenever the return is NULL.
+ */
+void *http_get_bin(const char *url, size_t *out_len, int *out_status);
+
 #ifdef __cplusplus
 }
 #endif

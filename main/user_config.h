@@ -11,7 +11,7 @@
  * and the EE05 — Seeed's own library has one branch for all three
  * (Seeed_GFX/User_Setups/EPaper_Board_Pins_Setups.h). What the 13.3" adds is a
  * SECOND CHIP SELECT: the panel is two UC8179 controllers, and the one for the
- * bottom half hangs off GPIO41.
+ * right half of the portrait page hangs off GPIO41.
  *
  *   Net         XIAO pad  GPIO
  *   SPI0_SCL    D8        7
@@ -27,9 +27,9 @@
  *
  * GPIO41 appears in no Seeed document this project could find. It comes from
  * acegallagher/esphome-bigink (bigink.yaml:278), which is the only published
- * source that drives this panel without Seeed's cloud tooling. If the bottom
- * half of the screen stays blank while the top half is correct, this pin is the
- * first thing to check.
+ * source that drives this panel without Seeed's cloud tooling. If the right half
+ * of the page stays blank while the left half is correct, this pin is the first
+ * thing to check.
  *
  * Because GPIO43/44 are the default UART0 pins, the console runs on
  * USB Serial/JTAG (sdkconfig: ESP_CONSOLE_USB_SERIAL_JTAG) — a UART0 console
@@ -44,17 +44,17 @@
  *   - therefore no free I2C, and no RTC on the board at all. The clock is SNTP.
  * ------------------------------------------------------------------------- */
 
-/* Panel geometry. The panel is natively portrait 1200x1600; this firmware works
- * in landscape and rotates while packing — see epd6_transpose.h, which is where
+/* Panel geometry. Portrait, which is the panel's own orientation and the front
+ * page's, so nothing rotates anywhere — see epd6_transpose.h, which is where
  * EPD6_W/EPD6_H actually live. These two names exist for the LVGL bring-up call
  * in main.cpp and must agree with them. */
-#define EPD_WIDTH      1600
-#define EPD_HEIGHT     1200
+#define EPD_WIDTH      1200
+#define EPD_HEIGHT     1600
 
 #define EPD_SCK_PIN        GPIO_NUM_7
 #define EPD_MOSI_PIN       GPIO_NUM_9
-#define EPD_CS_PIN         GPIO_NUM_44   /* UC8179 #1 — top 600 rows    */
-#define EPD_CS_SLAVE_PIN   GPIO_NUM_41   /* UC8179 #2 — bottom 600 rows */
+#define EPD_CS_PIN         GPIO_NUM_44   /* UC8179 #1 — left  600 columns */
+#define EPD_CS_SLAVE_PIN   GPIO_NUM_41   /* UC8179 #2 — right 600 columns */
 #define EPD_DC_PIN         GPIO_NUM_10
 #define EPD_RST_PIN        GPIO_NUM_38
 #define EPD_BUSY_PIN       GPIO_NUM_4

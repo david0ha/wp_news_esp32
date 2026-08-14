@@ -1,19 +1,20 @@
 /*
- * Host unit tests tying the built-in demo snapshot to the wire contract.
+ * Host unit tests tying the built-in demo front page to the wire contract.
  *
- * news_mock.c is what an unconfigured board shows; tools/mock_news_server.py
- * is the reference producer, and fixtures/news.json is its committed output.
- * Those are two hand-written descriptions of the same data, in two languages,
- * and they will drift the first time somebody edits one of them.
+ * news_mock.c is what an unconfigured board shows; tools/mock_news_server.py is
+ * the reference producer, and fixtures/news.json is its committed output. Those
+ * are two hand-written descriptions of the same page, in two languages, and
+ * they will drift the first time somebody edits one of them.
  *
  * So the main test here is: parse the fixture, and assert it fingerprints
- * identically to the C snapshot. If someone adds an agent to the demo screen
- * and forgets the server (or vice versa), this fails with the reason attached
- * rather than showing up as a screenshot that no longer matches the docs.
+ * identically to the C snapshot. If someone adds a ticker to the demo page and
+ * forgets the server (or vice versa), this fails with the field named rather
+ * than showing up as a screenshot that no longer matches the docs.
  *
- * The rest of the file checks that the demo snapshot is internally legal — it
- * is, after all, the one snapshot that never goes through the parser's
- * clamping, so nothing else would catch an out-of-range value in it.
+ * The rest of the file checks that the demo page is internally legal and
+ * complete — it is, after all, the one snapshot that never goes through the
+ * parser's clamping, so nothing else would catch a Korean glyph or an empty
+ * band in it.
  */
 #include "th.h"
 
@@ -21,169 +22,270 @@
 #include "news_model.h"
 #include "news_parse.h"
 
+/* ~18 KB apiece; file-static so no frame ever carries two. */
+static news_t g_mock, g_wire;
+
+static void cmp_quote(const char *what, int i,
+                      const news_quote_t *m, const news_quote_t *w)
+{
+    if (memcmp(m, w, sizeof(*m)) == 0) { g_total++; return; }
+    printf("  in %s[%d]:\n", what, i);
+    CHECK_STR(m->symbol, w->symbol);
+    CHECK_STR(m->name, w->name);
+    CHECK_INT(m->last_c, w->last_c);
+    CHECK_INT(m->chg_bp, w->chg_bp);
+    CHECK_INT(m->spark_n, w->spark_n);
+    for (int k = 0; k < m->spark_n && k < w->spark_n; k++) {
+        CHECK_INT(m->spark[k], w->spark[k]);
+    }
+}
+
+static void cmp_story(int i, const news_story_t *m, const news_story_t *w)
+{
+    if (memcmp(m, w, sizeof(*m)) == 0) { g_total++; return; }
+    printf("  in stories[%d]:\n", i);
+    CHECK_INT(m->rank, w->rank);
+    CHECK_STR(m->kicker, w->kicker);
+    CHECK_STR(m->headline, w->headline);
+    CHECK_STR(m->deck, w->deck);
+    CHECK_STR(m->byline, w->byline);
+    CHECK_STR(m->body, w->body);
+    CHECK_STR(m->symbol, w->symbol);
+    CHECK_INT(m->last_c, w->last_c);
+    CHECK_INT(m->chg_bp, w->chg_bp);
+
+    CHECK_INT(m->chart.kind, w->chart.kind);
+    CHECK_STR(m->chart.span, w->chart.span);
+    CHECK_INT(m->chart.n, w->chart.n);
+    for (int k = 0; k < m->chart.n && k < w->chart.n; k++) {
+        CHECK_INT(m->chart.o[k], w->chart.o[k]);
+        CHECK_INT(m->chart.h[k], w->chart.h[k]);
+        CHECK_INT(m->chart.l[k], w->chart.l[k]);
+        CHECK_INT(m->chart.c[k], w->chart.c[k]);
+    }
+
+    CHECK_STR(m->photo.id, w->photo.id);
+    CHECK_INT(m->photo.w, w->photo.w);
+    CHECK_INT(m->photo.h, w->photo.h);
+    CHECK_STR(m->photo.caption, w->photo.caption);
+    CHECK_STR(m->photo.credit, w->photo.credit);
+}
+
 static void test_mock_matches_the_wire_fixture(void)
 {
     size_t len = 0;
     char *json = th_slurp(FIXDIR "/news.json", &len);
-
-    news_t wire;
-    CHECK(news_parse(json, len, &wire) == true);
+    CHECK(news_parse(json, len, &g_wire) == true);
     free(json);
 
-    news_t mock;
-    news_mock(&mock);
+    news_mock(&g_mock);
 
-    /* The one field that legitimately differs: `demo` is how the header knows
-     * to show the DEMO badge, and a snapshot that arrived over the network is
-     * by definition not the demo. Normalise it and everything else must match
-     * exactly. */
-    CHECK(mock.demo == true);
-    CHECK(wire.demo == false);
-    mock.demo = false;
+    /* The one field that legitimately differs: `demo` is how the folio knows to
+     * show the DEMO badge, and a page that arrived over the network is by
+     * definition not the demo. Normalise it and everything else must match. */
+    CHECK(g_mock.demo == true);
+    CHECK(g_wire.demo == false);
+    g_mock.demo = false;
 
-    if (news_hash(&mock) != news_hash(&wire)) {
-        g_total++; g_fail++;
-        printf("  FAIL news_mock.c and tools/mock_news_server.py have diverged\n");
-        /* Narrow it down for whoever has to fix it, rather than leaving them
-         * to diff two files by eye. */
-        CHECK_STR(mock.news, wire.news);
-        CHECK_STR(mock.generated_at, wire.generated_at);
-        CHECK_INT(mock.stats.notes, wire.stats.notes);
-        CHECK_INT(mock.stats.links, wire.stats.links);
-        CHECK_INT(mock.stats.orphans, wire.stats.orphans);
-        CHECK_INT(mock.stats.tags, wire.stats.tags);
-        CHECK_INT(mock.stats.added_today, wire.stats.added_today);
-        CHECK_INT(mock.stats.added_7d, wire.stats.added_7d);
-        for (int i = 0; i < NEWS_DAILY_DAYS; i++) {
-            CHECK_INT(mock.stats.daily[i], wire.stats.daily[i]);
-        }
-        CHECK_INT(mock.tag_count, wire.tag_count);
-        for (int i = 0; i < mock.tag_count && i < wire.tag_count; i++) {
-            CHECK_STR(mock.tags[i].name, wire.tags[i].name);
-            CHECK_INT(mock.tags[i].count, wire.tags[i].count);
-        }
-        CHECK_INT(mock.agent_count, wire.agent_count);
-        for (int i = 0; i < mock.agent_count && i < wire.agent_count; i++) {
-            CHECK_STR(mock.agents[i].name, wire.agents[i].name);
-            CHECK_INT(mock.agents[i].state, wire.agents[i].state);
-            CHECK_STR(mock.agents[i].last_run, wire.agents[i].last_run);
-            CHECK_INT(mock.agents[i].processed, wire.agents[i].processed);
-            CHECK_INT(mock.agents[i].queued, wire.agents[i].queued);
-            CHECK_INT(mock.agents[i].progress, wire.agents[i].progress);
-            CHECK_STR(mock.agents[i].note, wire.agents[i].note);
-        }
-        CHECK_INT(mock.node_count, wire.node_count);
-        for (int i = 0; i < mock.node_count && i < wire.node_count; i++) {
-            CHECK_STR(mock.nodes[i].title, wire.nodes[i].title);
-            CHECK_INT(mock.nodes[i].deg, wire.nodes[i].deg);
-        }
-        CHECK_INT(mock.edge_count, wire.edge_count);
-        for (int i = 0; i < mock.edge_count && i < wire.edge_count; i++) {
-            CHECK_INT(mock.edges[i].a, wire.edges[i].a);
-            CHECK_INT(mock.edges[i].b, wire.edges[i].b);
-        }
-        CHECK_INT(mock.recent_count, wire.recent_count);
-        for (int i = 0; i < mock.recent_count && i < wire.recent_count; i++) {
-            CHECK_STR(mock.recent[i].title, wire.recent[i].title);
-            CHECK_STR(mock.recent[i].time, wire.recent[i].time);
-            CHECK_INT(mock.recent[i].links, wire.recent[i].links);
-        }
-        CHECK_INT(mock.inbox_count, wire.inbox_count);
-        CHECK_INT(mock.inbox_total, wire.inbox_total);
-        for (int i = 0; i < mock.inbox_count && i < wire.inbox_count; i++) {
-            CHECK_STR(mock.inbox[i].title, wire.inbox[i].title);
-            CHECK_INT(mock.inbox[i].age_days, wire.inbox[i].age_days);
-        }
-    } else {
+    if (news_hash(&g_mock) == news_hash(&g_wire)) {
         g_total++;
+        return;
+    }
+
+    g_total++; g_fail++;
+    printf("  FAIL news_mock.c and tools/mock_news_server.py have diverged\n");
+    /* Narrow it down for whoever has to fix it, rather than leaving them to
+     * diff a C file against a Python one by eye. */
+    CHECK_STR(g_mock.edition, g_wire.edition);
+    CHECK_STR(g_mock.dateline, g_wire.dateline);
+    CHECK_STR(g_mock.session, g_wire.session);
+    CHECK_STR(g_mock.as_of, g_wire.as_of);
+    CHECK_STR(g_mock.generated_at, g_wire.generated_at);
+
+    CHECK_INT(g_mock.index_count, g_wire.index_count);
+    for (int i = 0; i < g_mock.index_count && i < g_wire.index_count; i++) {
+        cmp_quote("indices", i, &g_mock.indices[i], &g_wire.indices[i]);
+    }
+    CHECK_INT(g_mock.ticker_count, g_wire.ticker_count);
+    for (int i = 0; i < g_mock.ticker_count && i < g_wire.ticker_count; i++) {
+        cmp_quote("tickers", i, &g_mock.tickers[i], &g_wire.tickers[i]);
+    }
+    CHECK_INT(g_mock.story_count, g_wire.story_count);
+    for (int i = 0; i < g_mock.story_count && i < g_wire.story_count; i++) {
+        cmp_story(i, &g_mock.stories[i], &g_wire.stories[i]);
     }
 }
 
 static void test_mock_is_internally_legal(void)
 {
-    news_t v;
-    news_mock(&v);
+    news_mock(&g_mock);
 
-    CHECK(v.valid == true);
-    CHECK(v.tag_count    >= 0 && v.tag_count    <= NEWS_TAGS_MAX);
-    CHECK(v.agent_count  >= 0 && v.agent_count  <= NEWS_AGENTS_MAX);
-    CHECK(v.node_count   >= 0 && v.node_count   <= NEWS_NODES_MAX);
-    CHECK(v.edge_count   >= 0 && v.edge_count   <= NEWS_EDGES_MAX);
-    CHECK(v.recent_count >= 0 && v.recent_count <= NEWS_RECENT_MAX);
-    CHECK(v.inbox_count  >= 0 && v.inbox_count  <= NEWS_INBOX_MAX);
+    CHECK(g_mock.valid == true);
+    CHECK(g_mock.index_count  >= 0 && g_mock.index_count  <= NEWS_INDEX_MAX);
+    CHECK(g_mock.story_count  >= 0 && g_mock.story_count  <= NEWS_STORIES_MAX);
+    CHECK(g_mock.ticker_count >= 0 && g_mock.ticker_count <= NEWS_TICKERS_MAX);
 
-    /* An edge into a node that does not exist would index past the position
-     * array in the page's draw callback. */
-    for (int i = 0; i < v.edge_count; i++) {
-        CHECK(v.edges[i].a < v.node_count);
-        CHECK(v.edges[i].b < v.node_count);
-        CHECK(v.edges[i].a != v.edges[i].b);
+    for (int i = 0; i < g_mock.story_count; i++) {
+        const news_story_t *s = &g_mock.stories[i];
+        CHECK(s->headline[0] != '\0');      /* a kicker over an empty column */
+        CHECK(s->rank == i);                /* the tier is the index */
+        CHECK(s->chart.n >= 0 && s->chart.n <= NEWS_BARS_MAX);
+        /* The model's single test for "is there a chart" has to hold in the one
+         * snapshot the parser never clamped. */
+        CHECK((s->chart.kind == CHART_NONE) == (s->chart.n == 0));
+        /* Same for the photo: an id without dimensions is a GET that cannot be
+         * made, and a caption under a slot that stayed empty. */
+        CHECK((s->photo.id[0] == '\0') == (s->photo.w == 0 && s->photo.h == 0));
     }
 
-    /* ui_graph places by index, so the demo must already be in the order the
-     * parser would have produced. */
-    for (int i = 1; i < v.node_count; i++) {
-        CHECK(v.nodes[i].deg <= v.nodes[i - 1].deg);
-    }
-
-    for (int i = 0; i < v.agent_count; i++) {
-        CHECK(v.agents[i].progress >= -1 && v.agents[i].progress <= 100);
-        CHECK(v.agents[i].state < AGENT_STATE_COUNT);
-        CHECK(v.agents[i].name[0] != '\0');
-    }
-
-    /* The header shows inbox_total, the list shows inbox_count. Claiming fewer
-     * than are on screen would be visibly wrong. */
-    CHECK(v.inbox_total >= v.inbox_count);
-}
-
-static void test_mock_exercises_every_agent_state(void)
-{
-    /* The demo screen is the picture in the README and the thing the simulator
-     * renders by default. If it only ever showed RUNNING agents, the idle,
-     * error and done rows would go out untested and unseen. */
-    news_t v;
-    news_mock(&v);
-
-    bool seen[AGENT_STATE_COUNT] = { false };
-    for (int i = 0; i < v.agent_count; i++) seen[v.agents[i].state] = true;
-    for (int s = 0; s < AGENT_STATE_COUNT; s++) {
-        if (!seen[s]) {
-            g_total++; g_fail++;
-            printf("  FAIL demo snapshot has no agent in state %s\n",
-                   news_agent_state_name((agent_state_t)s));
-        } else {
-            g_total++;
+    for (int i = 0; i < g_mock.ticker_count; i++) {
+        CHECK(g_mock.tickers[i].symbol[0] != '\0');
+        CHECK(g_mock.tickers[i].spark_n >= 0);
+        CHECK(g_mock.tickers[i].spark_n <= NEWS_SPARK_MAX);
+        for (int k = 0; k < g_mock.tickers[i].spark_n; k++) {
+            CHECK(g_mock.tickers[i].spark[k] >= 0);
+            CHECK(g_mock.tickers[i].spark[k] <= 1000);
         }
     }
 }
 
-static void test_mock_is_the_layouts_worst_case(void)
+/* --- English only --------------------------------------------------------- */
+
+/* Decode one UTF-8 sequence. Returns the codepoint and advances *i; a malformed
+ * byte returns 0xFFFD, which fails the check below like any other unprintable. */
+static unsigned decode(const char *s, size_t *i)
 {
-    /* Real data is easy. The demo is deliberately the widest thing the pages
-     * will be asked to draw, because it is what the simulator asserts against.
-     * These are the properties that make it so. */
-    news_t v;
-    news_mock(&v);
-
-    CHECK_INT(v.node_count, NEWS_NODES_MAX);      /* the fullest graph */
-    CHECK_INT(v.recent_count, NEWS_RECENT_MAX);   /* every note row    */
-    CHECK_INT(v.inbox_count, NEWS_INBOX_MAX);     /* every inbox row   */
-    CHECK(v.inbox_total > v.inbox_count);          /* an overflowing queue */
-    CHECK(v.stats.notes >= 1000);                  /* a grouped 4-digit counter */
-
-    bool has_zero_day = false;
-    for (int i = 0; i < NEWS_DAILY_DAYS; i++) {
-        if (v.stats.daily[i] == 0) has_zero_day = true;
+    unsigned char c = (unsigned char)s[*i];
+    unsigned cp;
+    size_t n;
+    if (c < 0x80)             { cp = c;        n = 1; }
+    else if ((c & 0xE0) == 0xC0) { cp = c & 0x1Fu; n = 2; }
+    else if ((c & 0xF0) == 0xE0) { cp = c & 0x0Fu; n = 3; }
+    else if ((c & 0xF8) == 0xF0) { cp = c & 0x07u; n = 4; }
+    else { (*i)++; return 0xFFFD; }
+    for (size_t k = 1; k < n; k++) {
+        unsigned char t = (unsigned char)s[*i + k];
+        if ((t & 0xC0) != 0x80) { (*i)++; return 0xFFFD; }
+        cp = (cp << 6) | (t & 0x3Fu);
     }
-    CHECK(has_zero_day);                           /* the divide-by-value trap */
+    *i += n;
+    return cp;
+}
+
+/* The bundled faces carry ASCII, Latin-1 and the typography in S_DATA_PUNCT.
+ * Nothing else has a glyph, and a codepoint without a glyph is a tofu box on
+ * the largest type on the page. This is the model-layer canary for it — the
+ * simulator's coverage check is the real one, but it needs a laptop with LVGL
+ * and this needs neither. */
+static void check_english(const char *where, const char *s)
+{
+    for (size_t i = 0; s[i] != '\0'; ) {
+        size_t at = i;
+        unsigned cp = decode(s, &i);
+        bool ok = (cp >= 0x20 && cp < 0x0250) ||        /* ASCII + Latin-1 + Latin Ext */
+                  (cp >= 0x2010 && cp <= 0x2122);       /* dashes, quotes, ‰ × ° № ™ */
+        g_total++;
+        if (!ok) {
+            g_fail++;
+            printf("  FAIL %s: U+%04X at byte %zu has no glyph in the bundled fonts\n",
+                   where, cp, at);
+            return;                                     /* one report per string */
+        }
+    }
+}
+
+static void test_mock_is_english_only(void)
+{
+    news_mock(&g_mock);
+
+    check_english("edition", g_mock.edition);
+    check_english("dateline", g_mock.dateline);
+    check_english("session", g_mock.session);
+    check_english("as_of", g_mock.as_of);
+    check_english("generated_at", g_mock.generated_at);
+
+    for (int i = 0; i < g_mock.index_count; i++) {
+        check_english("index symbol", g_mock.indices[i].symbol);
+        check_english("index name", g_mock.indices[i].name);
+    }
+    for (int i = 0; i < g_mock.ticker_count; i++) {
+        check_english("ticker symbol", g_mock.tickers[i].symbol);
+        check_english("ticker name", g_mock.tickers[i].name);
+    }
+    for (int i = 0; i < g_mock.story_count; i++) {
+        const news_story_t *s = &g_mock.stories[i];
+        check_english("kicker", s->kicker);
+        check_english("headline", s->headline);
+        check_english("deck", s->deck);
+        check_english("byline", s->byline);
+        check_english("body", s->body);
+        check_english("chart span", s->chart.span);
+        check_english("caption", s->photo.caption);
+        check_english("credit", s->photo.credit);
+    }
+}
+
+static void test_mock_is_a_complete_front_page(void)
+{
+    /* Real data is easy. The demo is what the README shows and what the
+     * simulator asserts against, so it has to fill every band the layout can
+     * draw and exercise every branch the layout can take. */
+    news_mock(&g_mock);
+
+    CHECK_INT(g_mock.index_count, NEWS_INDEX_MAX);      /* all five ribbon cells */
+    CHECK_INT(g_mock.ticker_count, NEWS_TICKERS_MAX);   /* both blocks of eight  */
+    CHECK_INT(g_mock.story_count, 4);                   /* a lead and band 6     */
+
+    /* The lead's body has to overflow one column, or the two-column copyfit is
+     * never exercised by the page everybody looks at first. */
+    CHECK(strlen(g_mock.stories[0].body) >= 700);
+    CHECK(strlen(g_mock.stories[0].body) < NEWS_BODY_MAX);
+    CHECK(g_mock.stories[0].deck[0] != '\0');
+    CHECK(g_mock.stories[0].kicker[0] != '\0');
+    CHECK(g_mock.stories[0].byline[0] != '\0');
+
+    /* Photo AND chart on the lead: the case the layout has to resolve rather
+     * than the case it can assume away. */
+    CHECK_INT(g_mock.stories[0].chart.kind, CHART_CANDLE);
+    CHECK(g_mock.stories[0].photo.id[0] != '\0');
+    CHECK(g_mock.stories[0].photo.caption[0] != '\0');
+
+    /* Exactly one secondary carries a chart, and it is a line — band 6 is
+     * specified as "0-1 of the three carry one". */
+    int line_charts = 0, symbol_less = 0;
+    for (int i = 1; i < g_mock.story_count; i++) {
+        if (g_mock.stories[i].chart.kind == CHART_LINE) line_charts++;
+        if (g_mock.stories[i].symbol[0] == '\0') symbol_less++;
+    }
+    CHECK_INT(line_charts, 1);
+    /* A macro story quotes nothing, and the row must not assume otherwise. */
+    CHECK(symbol_less >= 1);
+
+    /* Both colours have to appear, or the one place colour is allowed goes out
+     * of the README untested. */
+    int up = 0, down = 0;
+    for (int i = 0; i < g_mock.ticker_count; i++) {
+        if (g_mock.tickers[i].chg_bp > 0) up++;
+        if (g_mock.tickers[i].chg_bp < 0) down++;
+    }
+    CHECK(up > 0);
+    CHECK(down > 0);
+    for (int i = 0; i < g_mock.index_count; i++) {
+        CHECK(g_mock.indices[i].spark_n > 0);
+    }
+
+    /* The chart's last close is the price printed beside it. A reader catches
+     * that disagreement before any other. */
+    CHECK_INT(g_mock.stories[0].chart.c[g_mock.stories[0].chart.n - 1],
+              g_mock.stories[0].last_c);
+    CHECK_INT(g_mock.stories[0].last_c, g_mock.tickers[0].last_c);
 }
 
 int main(void)
 {
     test_mock_matches_the_wire_fixture();
     test_mock_is_internally_legal();
-    test_mock_exercises_every_agent_state();
-    test_mock_is_the_layouts_worst_case();
+    test_mock_is_english_only();
+    test_mock_is_a_complete_front_page();
     TH_REPORT("news_mock");
 }

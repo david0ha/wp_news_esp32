@@ -15,15 +15,16 @@ static SemaphoreHandle_t lvgl_mux = NULL;
  *
  * The 5.83" board this forked from rendered the whole screen into two RGB565
  * buffers and handed the flush callback one finished frame. That does not
- * survive the move to 1600x1200: a full-screen RGB565 buffer is 3.84 MB, two of
+ * survive the move to 1200x1600: a full-screen RGB565 buffer is 3.84 MB, two of
  * them 7.68 MB, and the panel's own 4bpp framebuffer already wants 960 KB of
  * the 8 MB fitted. It does not fit, and no amount of care makes it fit.
  *
- * So LVGL renders in horizontal strips instead. One 1600x120 buffer is 384 KB
- * and the screen arrives as ten of them. A second buffer would buy nothing: the
- * flush callback here is a synchronous CPU quantize into the panel framebuffer
- * and returns having already finished, so there is never a transfer in flight
- * for the second buffer to overlap with.
+ * So LVGL renders in horizontal strips instead. One 1200x120 buffer is 288 KB
+ * and the screen arrives as fourteen of them, the last one 40 rows deep — the
+ * strip height is a memory budget, not a tiling. A second buffer would buy
+ * nothing: the flush callback here is a synchronous CPU quantize into the panel
+ * framebuffer and returns having already finished, so there is never a transfer
+ * in flight for the second buffer to overlap with.
  *
  * Partial rendering also means LVGL only redraws what changed. That is exactly
  * right for e-Paper — the panel framebuffer persists between refreshes, so an

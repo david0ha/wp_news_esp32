@@ -1,10 +1,13 @@
 /*
- * epd6_panel.h — Seeed 13.3" Spectra 6 e-Paper port (1600x1200, six colours).
+ * epd6_panel.h — Seeed 13.3" Spectra 6 e-Paper port (1200x1600, six colours).
  *
  * The panel is two UC8179 controllers behind one SPI bus and two chip selects,
- * on a Seeed XIAO ePaper carrier. Its native orientation is portrait
- * 1200 x 1600; this port presents it as landscape 1600 x 1200 and does the
- * rotation while packing (see epd6_transpose.h).
+ * on a Seeed XIAO ePaper carrier. The framebuffer is the panel's own portrait
+ * 1200 x 1600, which is also the front page's orientation. An earlier revision
+ * presented the panel as landscape and rotated while packing; going portrait
+ * REMOVED that rotation rather than replacing it, so the pack is now a memcpy
+ * and the transpose exists only as the derivation in epd6_transpose.h that
+ * proves the wire bytes did not change.
  *
  * WHAT IS DIFFERENT FROM THE 5.83" MONOCHROME PORT THIS REPLACES
  * --------------------------------------------------------------
@@ -45,7 +48,7 @@
  * Deviations are marked "NOTE:".
  *
  * The pin map — in particular that the second chip select is GPIO41, which no
- * Seeed document states — and the top/bottom framebuffer split come from
+ * Seeed document states — and the two-controller framebuffer split come from
  * acegallagher/esphome-bigink (bigink.yaml:275-288, docs/HARDWARE.md). That
  * repository carries no LICENSE file, so what is taken from it is hardware
  * fact, not code. Its register values differ from Seeed's in four places; see
@@ -70,8 +73,8 @@ extern "C" {
 typedef struct {
     int sck;
     int mosi;
-    int cs_master;          /* UC8179 #1 — framebuffer rows    0..599  */
-    int cs_slave;           /* UC8179 #2 — framebuffer rows  600..1199 */
+    int cs_master;          /* UC8179 #1 — framebuffer columns   0..599  */
+    int cs_slave;           /* UC8179 #2 — framebuffer columns 600..1199 */
     int dc;
     int rst;                /* wired to both controllers */
     int busy;               /* wired to both; active LOW, idle HIGH    */
@@ -111,12 +114,12 @@ int epd6_last_refresh_ms(void);
  * end of every refresh, so this is only for an explicit shutdown path. */
 void epd6_sleep(void);
 
-/* Cycle a set of test patterns, each with its own refresh: six colour bars,
- * white, black, a 1px checkerboard, and a border-plus-diagonals frame with an
- * unambiguous origin block. Verifies wiring, both chip selects, the colour
- * codes and the rotation.
+/* Cycle a set of test patterns, each with its own refresh: six colour bars, a
+ * 1px checkerboard, a border-plus-diagonals frame with a top-left origin block,
+ * and white to finish on. Verifies wiring, both chip selects, the colour codes,
+ * and — the origin block's job alone — that the page is not upside down.
  *
- * Six refreshes at ~25 s each — this blocks for two to three MINUTES. Call it
+ * Four refreshes at ~25 s each — this blocks for a minute and a half. Call it
  * from a task, never from an HTTP handler. */
 void epd6_selftest(void);
 

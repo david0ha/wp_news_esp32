@@ -61,7 +61,7 @@ stays honest. On USB that is the right trade; on battery it is not, and a future
 battery life should look at light sleep between polls before anything else.
 
 The panel itself is not the problem: `epd_sleep()` gets the controller to about 1 µA, and the
-refresh policy already keeps refreshes rare (see [epaper-5in83.md](epaper-5in83.md)).
+refresh policy already keeps refreshes rare (see [epaper-13in3.md](epaper-13in3.md)).
 
 ## Firmware footprint
 
