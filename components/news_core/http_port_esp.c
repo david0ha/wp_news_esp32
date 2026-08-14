@@ -82,7 +82,12 @@ static void host_of(const char *url, char *out, size_t n) {
 }
 
 char *http_get(const char *url, int *out_status) {
+    return (char *)http_get_bin(url, NULL, out_status);
+}
+
+void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
     if (out_status) *out_status = 0;
+    if (out_len) *out_len = 0;
 
     acc_t a = {0};
     char host[sizeof(t_host)];
@@ -148,5 +153,6 @@ char *http_get(const char *url, int *out_status) {
     /* Success: remember the host so same-host follow-ups skip the handshake. */
     strncpy(t_host, host, sizeof(t_host) - 1);
     t_host[sizeof(t_host) - 1] = '\0';
+    if (out_len) *out_len = a.len;
     return a.buf;   /* caller frees */
 }

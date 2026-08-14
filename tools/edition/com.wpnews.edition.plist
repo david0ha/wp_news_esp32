@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.wpnews.edition — file a front page twice a day, and serve it in between.
+
+  Two editions, chosen against the New York session rather than against the clock:
+
+    06:00 KST   the morning paper. The US close is 05:00 KST (06:00 in winter), so this is the
+                first moment a complete day exists to report on.
+    22:00 KST   the evening paper, half an hour before the US open, so the board shows what is
+                about to happen rather than what already did.
+
+  Twice, not more. A refresh on this panel takes twenty-five to thirty seconds and flashes the whole
+  sheet; a board that does that six times a day is a board people stop looking at. The device also
+  fingerprints every snapshot and skips the refresh entirely when nothing it draws has changed, so
+  filing more often costs nothing but rarely buys anything either.
+
+  Install:
+      cp tools/edition/com.wpnews.edition.plist ~/Library/LaunchAgents/
+      launchctl load  ~/Library/LaunchAgents/com.wpnews.edition.plist
+      launchctl start com.wpnews.edition            # file one now, to check it works
+
+  The paths below are absolute because launchd does not run a login shell — it has no PATH worth
+  the name, no nvm, no pyenv, and no idea where `claude` lives. Every one of those is a real way
+  this fails silently at 6am, which is why PATH is spelled out rather than inherited.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wpnews.edition</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ggrrm/Documents/wp_news_esp32/tools/edition/file-edition.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/ggrrm/.local/bin</string>
+        <key>HOME</key>
+        <string>/Users/ggrrm</string>
+        <key>EDITION_DIR</key>
+        <string>/Users/ggrrm/.wpnews/edition</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <!-- launchd already fires a missed StartCalendarInterval as soon as the machine wakes, which is
+         what saves a board that would otherwise show yesterday's paper because a lid was shut.
+         RunAtLoad is separate and off: loading the agent should not spend an API call. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ggrrm/.wpnews/edition/log/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ggrrm/.wpnews/edition/log/launchd.err</string>
+</dict>
+</plist>

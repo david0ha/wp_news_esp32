@@ -19,23 +19,26 @@ static void fill(device_state_t *st)
     snprintf(st->fw, sizeof(st->fw), "0.1.0");
     snprintf(st->device_id, sizeof(st->device_id), "1A2B");
     snprintf(st->ip, sizeof(st->ip), "192.168.0.42");
-    st->page = 2;
-    snprintf(st->page_title, sizeof(st->page_title), "에이전트");
+    st->page = 1;
+    snprintf(st->page_title, sizeof(st->page_title), "MARKETS");
 
     st->news_valid = true;
     st->demo = false;
-    snprintf(st->news, sizeof(st->news), "second-brain");
-    snprintf(st->generated_at, sizeof(st->generated_at), "21:04");
-    st->notes = 1428;
-    st->links = 3910;
-    st->orphans = 37;
-    st->tags = 212;
-    st->added_today = 6;
-    st->added_7d = 41;
-    st->agents_total = 5;
-    st->agents_running = 2;
-    st->recent_count = 8;
-    st->inbox_total = 11;
+    snprintf(st->edition, sizeof(st->edition), "PERSONAL PORTFOLIO");
+    snprintf(st->generated_at, sizeof(st->generated_at), "2026-08-14T05:12:00Z");
+    st->story_count = 4;
+    st->ticker_count = 16;
+    snprintf(st->lead_symbol, sizeof(st->lead_symbol), "NVDA");
+    snprintf(st->lead_headline, sizeof(st->lead_headline),
+             "Nvidia's blowout quarter resets the whole AI trade");
+
+    st->index_count = 2;
+    snprintf(st->indices[0].symbol, sizeof(st->indices[0].symbol), "SPX");
+    st->indices[0].last_c = 641283;
+    st->indices[0].chg_bp = 62;
+    snprintf(st->indices[1].symbol, sizeof(st->indices[1].symbol), "VIX");
+    st->indices[1].last_c = 1462;
+    st->indices[1].chg_bp = -310;
 
     snprintf(st->news_url, sizeof(st->news_url), "http://mac.local:8123/news.json");
     snprintf(st->last_result, sizeof(st->last_result), "ok");
@@ -133,24 +136,38 @@ static void test_state_shape(void)
     check_str(r, "model", "WP News");
     check_str(r, "fw", "0.1.0");
     check_str(r, "ip", "192.168.0.42");
-    check_int(r, "page", 2);
-    check_str(r, "pageTitle", "에이전트");
+    check_int(r, "page", 1);
+    check_str(r, "pageTitle", "MARKETS");
 
     cJSON *v = obj(r, "news");
     check_bool(v, "valid", true);
     check_bool(v, "demo", false);
-    check_str(v, "name", "second-brain");
-    check_str(v, "generatedAt", "21:04");
-    check_int(v, "notes", 1428);
-    check_int(v, "links", 3910);
-    check_int(v, "orphans", 37);
-    check_int(v, "tags", 212);
-    check_int(v, "addedToday", 6);
-    check_int(v, "added7d", 41);
-    check_int(v, "agents", 5);
-    check_int(v, "agentsRunning", 2);
-    check_int(v, "recent", 8);
-    check_int(v, "inbox", 11);
+    check_str(v, "edition", "PERSONAL PORTFOLIO");
+    check_str(v, "generatedAt", "2026-08-14T05:12:00Z");
+    check_int(v, "stories", 4);
+    check_int(v, "tickers", 16);
+
+    /* The lead is what the phone shows as "the board is currently reporting".
+     * It is the only piece of the page that travels. */
+    cJSON *lead = obj(v, "lead");
+    check_str(lead, "symbol", "NVDA");
+    check_str(lead, "headline", "Nvidia's blowout quarter resets the whole AI trade");
+
+    /* Cents and basis points, not formatted strings: the app owns the decimal
+     * separator and the sign colour, and the two would drift if the firmware
+     * decided them here as well. */
+    cJSON *idx = v ? cJSON_GetObjectItem(v, "indices") : NULL;
+    g_total++;
+    if (!cJSON_IsArray(idx) || cJSON_GetArraySize(idx) != 2) {
+        g_fail++;
+        printf("  FAIL \"indices\" is not an array of 2\n");
+    } else {
+        check_str(cJSON_GetArrayItem(idx, 0), "symbol", "SPX");
+        check_int(cJSON_GetArrayItem(idx, 0), "lastCents", 641283);
+        check_int(cJSON_GetArrayItem(idx, 0), "changeBp", 62);
+        check_str(cJSON_GetArrayItem(idx, 1), "symbol", "VIX");
+        check_int(cJSON_GetArrayItem(idx, 1), "changeBp", -310);
+    }
 
     cJSON *s = obj(r, "source");
     check_str(s, "url", "http://mac.local:8123/news.json");
@@ -172,44 +189,80 @@ static void test_state_shape(void)
     cJSON_Delete(r);
 }
 
-static void test_korean_passes_through_as_utf8(void)
+static void test_index_count_is_clamped_to_the_array(void)
 {
-    /* News names and note titles are Korean. JSON strings are defined over
-     * Unicode, so escaping them to \u would be legal and pointless — but the
-     * escaper must not mangle them either. */
+    /* user_app copies this out of news_t under a lock. A count that outran the
+     * array — or a negative one from an uninitialised read — would serialise
+     * whatever follows the struct straight onto the network. */
     device_state_t st;
     fill(&st);
-    snprintf(st.news, sizeof(st.news), "두번째 뇌");
-    snprintf(st.page_title, sizeof(st.page_title), "최근 노트");
+    st.index_count = 99;
 
     char buf[2048];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
-    CHECK(strstr(buf, "두번째 뇌") != NULL);
+    cJSON *r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (r) {
+        cJSON *idx = cJSON_GetObjectItem(obj(r, "news"), "indices");
+        CHECK(cJSON_IsArray(idx));
+        CHECK_INT(cJSON_GetArraySize(idx), DEV_INDEX_MAX);
+        cJSON_Delete(r);
+    }
+
+    fill(&st);
+    st.index_count = -3;
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (r) {
+        cJSON *idx = cJSON_GetObjectItem(obj(r, "news"), "indices");
+        CHECK(cJSON_IsArray(idx));
+        CHECK_INT(cJSON_GetArraySize(idx), 0);
+        cJSON_Delete(r);
+    }
+}
+
+static void test_utf8_passes_through(void)
+{
+    /* Headlines come off a wire copy desk: em dashes, curly quotes and accented
+     * names are the normal case, not the exotic one. JSON strings are defined
+     * over Unicode, so escaping them to \u would be legal and pointless — but
+     * the escaper must not mangle them either. */
+    device_state_t st;
+    fill(&st);
+    snprintf(st.lead_headline, sizeof(st.lead_headline),
+             "Société Générale — Zürich desk’s call");
+    snprintf(st.edition, sizeof(st.edition), "MIDDAY EDITION №2");
+
+    char buf[2048];
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    CHECK(strstr(buf, "Société Générale") != NULL);
 
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        check_str(r, "pageTitle", "최근 노트");
-        check_str(obj(r, "news"), "name", "두번째 뇌");
+        cJSON *v = obj(r, "news");
+        check_str(v, "edition", "MIDDAY EDITION №2");
+        check_str(obj(v, "lead"), "headline", "Société Générale — Zürich desk’s call");
         cJSON_Delete(r);
     }
 }
 
 static void test_control_characters_are_escaped(void)
 {
-    /* A note title with a newline in it is not exotic — WP News will happily
-     * let you make one, and an unescaped 0x0A is invalid JSON that would break
-     * the app's parser rather than just looking odd. */
+    /* A headline with a newline in it is not exotic — a producer's own JSON
+     * will carry one sooner or later, and an unescaped 0x0A is invalid JSON
+     * that would break the app's parser rather than just looking odd. */
     device_state_t st;
     fill(&st);
-    snprintf(st.news, sizeof(st.news), "a\"b\\c\nd\te");
+    snprintf(st.edition, sizeof(st.edition), "a\"b\\c\nd\te");
 
     char buf[2048];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        check_str(obj(r, "news"), "name", "a\"b\\c\nd\te");
+        check_str(obj(r, "news"), "edition", "a\"b\\c\nd\te");
         cJSON_Delete(r);
     }
 }
@@ -242,7 +295,8 @@ static void test_worst_case_fits_the_servers_buffer(void)
      * worst case does not fit, the serializer returns -1 and an EMPTY body —
      * so the symptom is "the app shows nothing", with no error anywhere to
      * suggest a length problem. Every string is therefore filled to its
-     * declared maximum here, in the widest bytes it can hold. */
+     * declared maximum here, in the widest bytes it can hold, which is also
+     * what fixes the field capacities in device_api_model.h. */
     device_state_t st;
     memset(&st, 0, sizeof(st));
 
@@ -259,23 +313,34 @@ static void test_worst_case_fits_the_servers_buffer(void)
     FILL_ASCII(news_url);
     FILL_ASCII(last_result);
 
-    /* Korean is 3 bytes a syllable, and each of those bytes passes through the
-     * escaper untouched — so a Korean field is the same length on the wire as
-     * an ASCII one. A field full of quotes is NOT: each becomes two bytes. */
-    for (size_t i = 0; i + 1 < sizeof(st.news); i++) st.news[i] = '"';
-    st.news[sizeof(st.news) - 1] = '\0';
-    for (size_t i = 0; i + 1 < sizeof(st.page_title); i++) st.page_title[i] = '\\';
-    st.page_title[sizeof(st.page_title) - 1] = '\0';
-    for (size_t i = 0; i + 1 < sizeof(st.generated_at); i++) st.generated_at[i] = '\n';
-    st.generated_at[sizeof(st.generated_at) - 1] = '\0';
+    /* A multi-byte codepoint passes through the escaper untouched, so a Latin-1
+     * field is the same length on the wire as an ASCII one. A field full of
+     * quotes is NOT: each becomes two bytes. */
+    #define FILL_WIDEST(field, ch) do { \
+        for (size_t i = 0; i + 1 < sizeof(st.field); i++) st.field[i] = (ch); \
+        st.field[sizeof(st.field) - 1] = '\0'; \
+    } while (0)
+
+    FILL_WIDEST(edition, '"');
+    FILL_WIDEST(page_title, '\\');
+    FILL_WIDEST(generated_at, '\n');
+    FILL_WIDEST(lead_symbol, '"');
+    FILL_WIDEST(lead_headline, '"');
+    st.index_count = DEV_INDEX_MAX;
+    for (int i = 0; i < DEV_INDEX_MAX; i++) {
+        for (size_t k = 0; k + 1 < sizeof(st.indices[i].symbol); k++) {
+            st.indices[i].symbol[k] = '"';
+        }
+        st.indices[i].last_c = 999999999;
+        st.indices[i].chg_bp = -999999999;
+    }
 
     #undef FILL_ASCII
+    #undef FILL_WIDEST
 
     st.page = 3;
     st.news_valid = true;
-    st.notes = st.links = 999999999;
-    st.orphans = st.tags = st.added_today = st.added_7d = 999999999;
-    st.agents_total = st.agents_running = st.recent_count = st.inbox_total = 999999999;
+    st.story_count = st.ticker_count = 999999999;
     st.poll_seconds = st.age_seconds = 999999999;
     st.battery_pct = st.battery_mv = 999999999;
     st.refresh_ms = 999999999;
@@ -285,7 +350,7 @@ static void test_worst_case_fits_the_servers_buffer(void)
     if (n < 0) {
         g_total++; g_fail++;
         printf("  FAIL worst-case state does not fit DEVICE_API_STATE_BUF_SZ (%d) — "
-               "raise it\n", DEVICE_API_STATE_BUF_SZ);
+               "shorten a field in device_api_model.h\n", DEVICE_API_STATE_BUF_SZ);
     } else {
         g_total++;
         printf("  worst-case state document: %d of %d bytes\n", n, DEVICE_API_STATE_BUF_SZ);
@@ -311,7 +376,8 @@ static void test_null_state_is_rejected(void)
 static void test_zeroed_state_still_parses(void)
 {
     /* This is what /api/state returns before the first poll — every string
-     * empty, every number zero. It must still be a valid document. */
+     * empty, every number zero. It must still be a valid document, with an
+     * empty indices array rather than a missing key. */
     device_state_t st;
     memset(&st, 0, sizeof(st));
 
@@ -320,7 +386,9 @@ static void test_zeroed_state_still_parses(void)
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        check_bool(obj(r, "news"), "valid", false);
+        cJSON *v = obj(r, "news");
+        check_bool(v, "valid", false);
+        CHECK(cJSON_IsArray(cJSON_GetObjectItem(v, "indices")));
         check_str(r, "deviceId", "");
         cJSON_Delete(r);
     }
@@ -330,7 +398,8 @@ int main(void)
 {
     test_info();
     test_state_shape();
-    test_korean_passes_through_as_utf8();
+    test_index_count_is_clamped_to_the_array();
+    test_utf8_passes_through();
     test_control_characters_are_escaped();
     test_worst_case_fits_the_servers_buffer();
     test_overflow_yields_an_empty_string_not_half_a_document();

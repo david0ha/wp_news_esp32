@@ -114,7 +114,7 @@ the UC8179 — do not go looking for one. It uses `esp_lcd`'s SPI panel IO for t
 own 38,880-byte framebuffer and refresh policy.
 
 Full rationale, the command sequence's provenance, and the refresh rules are in
-[epaper-5in83.md](epaper-5in83.md). Read that before touching the driver, and note the one thing
+[epaper-13in3.md](epaper-13in3.md). Read that before touching the driver, and note the one thing
 most likely to waste your afternoon: **BUSY is active LOW on this controller**, the inverse of the
 SSD1680 this code started as, and getting it backwards fails silently rather than loudly.
 

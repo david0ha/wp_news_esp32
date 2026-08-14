@@ -153,7 +153,7 @@ static esp_err_t api_refresh_post(httpd_req_t *req)
     return user_app_refresh_now() ? send_ok(req) : send_err(req, "busy");
 }
 
-// POST /api/page { page: 0..3 }
+// POST /api/page { page: 0..1 }   A1 = the front page, A2 = markets
 static esp_err_t api_page_post(httpd_req_t *req)
 {
     esp_err_t sent;

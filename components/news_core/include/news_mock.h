@@ -1,9 +1,9 @@
 /*
- * news_mock.h — the built-in demo snapshot.
+ * news_mock.h — the built-in demo front page.
  *
- * Used when no news_url has been provisioned, so the board is complete with no
- * PC involved, and by the simulator as its default content. Sets `demo` so the
- * header can say so.
+ * Used when no news_url has been provisioned, so the board is a complete object
+ * with no agent running, and by the simulator as its default content. Sets
+ * `demo` so the folio can say so.
  */
 #pragma once
 

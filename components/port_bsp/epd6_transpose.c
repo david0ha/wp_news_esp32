@@ -1,52 +1,44 @@
 /*
  * epd6_transpose.c — framebuffer → controller repacking. See epd6_transpose.h
- * for the layout this implements and where it comes from.
+ * for the layout this implements, and for the substitution that collapsed it to
+ * this.
  *
- * The obvious implementation walks the output: for each of 1600 output rows,
- * for each of 300 bytes, fetch two pixels. Both fetches sit in the same
- * framebuffer column, so consecutive reads are 800 bytes apart — a cache miss
- * every time, 960,000 times, against PSRAM.
+ * There is no transpose left. The landscape version walked the framebuffer in
+ * row PAIRS rather than the obvious output-order loop, because output-order
+ * reads sat 800 bytes apart and would have taken a PSRAM cache miss 960,000
+ * times per refresh. Portrait makes each output row a contiguous 300-byte half
+ * of one framebuffer row, which is the access pattern memcpy is already the
+ * best available implementation of.
  *
- * This one walks the *input* instead. The outer loop takes one pair of
- * framebuffer rows; the inner loop sweeps the block's columns within those two
- * rows, which is two contiguous runs of n_rows/2 bytes. Each iteration produces
- * exactly one finished output byte, so there is no read-modify-write on `dst`
- * either.
- *
- * Output is identical for any block size — that is what the host test pins
- * down, against a transcription of the reference loop.
+ * The file keeps its name: the header it belongs to is where this port's
+ * geometry is written down, and it is what the host test compiles against.
  */
+#include <string.h>
+
 #include "epd6_transpose.h"
 
 void epd6_pack_block(const uint8_t *fb, int plane, int out_row0, int n_rows,
                      uint8_t *dst)
 {
-    if (n_rows <= 0) {
+    /* Clamp rather than trust the caller. epd6_panel.c's push_plane already
+     * bounds every call, so this never fires in the firmware — but the landscape
+     * version failed an out-of-range block by computing a negative x and reading
+     * somewhere harmless, and the collapse to memcpy turns the same mistake into
+     * a straight linear overrun past the end of a 960,000-byte buffer. Two
+     * comparisons against that is a trade worth making. */
+    if (n_rows <= 0 || out_row0 < 0 || out_row0 >= EPD6_OUT_ROWS) {
         return;
     }
+    if (out_row0 + n_rows > EPD6_OUT_ROWS) {
+        n_rows = EPD6_OUT_ROWS - out_row0;
+    }
 
-    const int base = (plane == EPD6_PLANE_SLAVE) ? EPD6_PLANE_ROWS : 0;
+    /* The slave's half starts halfway along every framebuffer row. */
+    const size_t left = (plane == EPD6_PLANE_SLAVE) ? EPD6_OUT_STRIDE : 0;
 
-    for (int b = 0; b < EPD6_OUT_STRIDE; b++) {
-        /* The two framebuffer rows that share this output byte: the even one
-         * lands in the high nibble, the odd one in the low nibble. */
-        const uint8_t *row_hi = fb + (size_t)(base + 2 * b)     * EPD6_FB_STRIDE;
-        const uint8_t *row_lo = fb + (size_t)(base + 2 * b + 1) * EPD6_FB_STRIDE;
-
-        uint8_t *out = dst + b;
-
-        for (int r = 0; r < n_rows; r++) {
-            /* Output rows run the panel's scan direction, which is the reverse
-             * of the framebuffer's columns. */
-            const int x = EPD6_W - 1 - (out_row0 + r);
-
-            const uint8_t hb = row_hi[x >> 1];
-            const uint8_t lb = row_lo[x >> 1];
-            const uint8_t hi = (uint8_t)((x & 1) ? (hb & 0x0F) : (hb >> 4));
-            const uint8_t lo = (uint8_t)((x & 1) ? (lb & 0x0F) : (lb >> 4));
-
-            *out = (uint8_t)((hi << 4) | lo);
-            out += EPD6_OUT_STRIDE;
-        }
+    for (int r = 0; r < n_rows; r++) {
+        memcpy(dst + (size_t)r * EPD6_OUT_STRIDE,
+               fb + (size_t)(out_row0 + r) * EPD6_FB_STRIDE + left,
+               EPD6_OUT_STRIDE);
     }
 }

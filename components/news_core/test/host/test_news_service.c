@@ -44,15 +44,19 @@ char *http_get(const char *url, int *out_status)
     return p;
 }
 
+/* news_t is ~18 KB, so the destination is file-static rather than a local in
+ * every helper: a test that puts four of them on one frame is a test that will
+ * one day be run somewhere smaller than a host. */
+static news_t g_v;
+
 static void expect(const char *label, const char *body, int status,
                    news_fetch_result_t want)
 {
     g_body = body;
     g_status = status;
 
-    news_t v;
-    memset(&v, 0, sizeof(v));
-    news_fetch_result_t got = news_service_fetch("http://host/news.json", &v);
+    memset(&g_v, 0, sizeof(g_v));
+    news_fetch_result_t got = news_service_fetch("http://host/news.json", &g_v);
     g_total++;
     if (got != want) {
         g_fail++;
@@ -72,12 +76,13 @@ static void test_success(void)
     /* And it must actually be parsed, not merely accepted. */
     g_body = json;
     g_status = 200;
-    news_t v;
-    memset(&v, 0, sizeof(v));
-    CHECK(news_service_fetch("http://host/news.json", &v) == NEWS_FETCH_OK);
-    CHECK_INT(v.stats.notes, 1428);
-    CHECK(v.valid == true);
-    CHECK(v.demo == false);
+    memset(&g_v, 0, sizeof(g_v));
+    CHECK(news_service_fetch("http://host/news.json", &g_v) == NEWS_FETCH_OK);
+    CHECK_INT(g_v.story_count, 4);
+    CHECK_INT(g_v.ticker_count, 16);
+    CHECK_STR(g_v.stories[0].symbol, "NVDA");
+    CHECK(g_v.valid == true);
+    CHECK(g_v.demo == false);
 
     free(json);
 }
@@ -85,15 +90,14 @@ static void test_success(void)
 static void test_no_url_is_not_a_failure(void)
 {
     /* An unconfigured board is a supported, complete state — it shows the demo
-     * snapshot. The transport must not even be reached. */
-    news_t v;
-    memset(&v, 0, sizeof(v));
+     * front page. The transport must not even be reached. */
+    memset(&g_v, 0, sizeof(g_v));
     g_calls = 0;
     g_body = "{}";
     g_status = 200;
 
-    CHECK(news_service_fetch("", &v) == NEWS_FETCH_NO_URL);
-    CHECK(news_service_fetch(NULL, &v) == NEWS_FETCH_NO_URL);
+    CHECK(news_service_fetch("", &g_v) == NEWS_FETCH_NO_URL);
+    CHECK(news_service_fetch(NULL, &g_v) == NEWS_FETCH_NO_URL);
     CHECK_INT(g_calls, 0);
 
     /* A NULL destination is a programming error, not a fetch. */
@@ -108,11 +112,11 @@ static void test_the_three_failures_are_distinguished(void)
      * "your JSON is wrong" send them to different places. */
     expect("transport", NULL, 0, NEWS_FETCH_TRANSPORT);
     expect("404", "<html>Not Found</html>", 404, NEWS_FETCH_HTTP_STATUS);
-    expect("500", "{\"stats\":{\"notes\":5}}", 500, NEWS_FETCH_HTTP_STATUS);
+    expect("500", "{\"tickers\":[{\"symbol\":\"AAPL\"}]}", 500, NEWS_FETCH_HTTP_STATUS);
     expect("302", "", 302, NEWS_FETCH_HTTP_STATUS);
     expect("captive portal", "<html>Sign in</html>", 200, NEWS_FETCH_BAD_PAYLOAD);
     expect("empty object", "{}", 200, NEWS_FETCH_BAD_PAYLOAD);
-    expect("truncated", "{\"stats\":{\"notes\":14", 200, NEWS_FETCH_BAD_PAYLOAD);
+    expect("truncated", "{\"tickers\":[{\"symbol\":\"AA", 200, NEWS_FETCH_BAD_PAYLOAD);
 }
 
 static void test_status_is_checked_before_the_body(void)
@@ -142,31 +146,30 @@ static void test_the_whole_2xx_range_is_accepted(void)
 static void test_a_failure_leaves_the_destination_untouched(void)
 {
     /* The product requirement behind every failure path: a bad poll keeps the
-     * previous dashboard on the glass. "Returns non-OK" does not guarantee it;
+     * previous front page on the glass. "Returns non-OK" does not guarantee it;
      * writing *out before validating would. */
     size_t len = 0;
     char *json = th_slurp(FIXDIR "/news.json", &len);
 
-    news_t v;
-    memset(&v, 0, sizeof(v));
+    memset(&g_v, 0, sizeof(g_v));
     g_body = json;
     g_status = 200;
-    CHECK(news_service_fetch("http://host/x", &v) == NEWS_FETCH_OK);
-    uint32_t before = news_hash(&v);
+    CHECK(news_service_fetch("http://host/x", &g_v) == NEWS_FETCH_OK);
+    uint32_t before = news_hash(&g_v);
     free(json);
 
     const struct { const char *body; int status; } bad[] = {
-        { NULL,                   0   },
-        { "<html>404</html>",     404 },
-        { "{}",                   200 },
-        { "not json at all",      200 },
-        { "{\"stats\":{\"notes\"", 200 },
+        { NULL,                        0   },
+        { "<html>404</html>",          404 },
+        { "{}",                        200 },
+        { "not json at all",           200 },
+        { "{\"tickers\":[{\"symbol\"", 200 },
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         g_body = bad[i].body;
         g_status = bad[i].status;
-        CHECK(news_service_fetch("http://host/x", &v) != NEWS_FETCH_OK);
-        CHECK_INT(news_hash(&v), before);
+        CHECK(news_service_fetch("http://host/x", &g_v) != NEWS_FETCH_OK);
+        CHECK_INT(news_hash(&g_v), before);
     }
 }
 
