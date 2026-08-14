@@ -134,6 +134,14 @@
  * character is appended to a string ui_fit_text has already decided fits. */
 #define FP_CAP_ELLIPSIS 16
 
+/* Where the lead's legs stand, which is the only thing the photograph changes
+ * about them. Two macros rather than the ternary written out at each of the
+ * three places that needs it — the layout, the copyfit and the end mark — all
+ * of which have to agree to the pixel or the story's closing square lands in
+ * the middle of its own last paragraph. */
+#define FP_LEG_Y(photo) ((photo) ? UI_LEAD_UNDER_Y : UI_LEAD_SPLIT_Y)
+#define FP_LEG_H(photo) ((photo) ? UI_LEAD_UNDER_H : UI_LEAD_BODY_H)
+
 /* Copy buffers, sized in BYTES against slots measured in CHARACTERS. The lead
  * takes 636 characters across its two legs under a photograph and 2,400 with a
  * chart in one of them instead, but a copy desk emits em dashes and accented
@@ -567,14 +575,17 @@ static void build_lead(void)
                        UI_LEAD_CAP_Y, UI_LEAD_CRED_MAX_W,
                        LV_TEXT_ALIGN_RIGHT, "");
 
+    /* The last leg is the narrow one: it is the leg the story ends in, and
+     * UI_LEAD_LEG_W is what the end mark's column costs it. */
     for (int i = 0; i < UI_LEAD_COLS; i++) {
         s_lead_body[i] = column(UI_LEAD_COL_X(i), UI_LEAD_SPLIT_Y,
-                                UI_LEAD_COL_W, UI_LEAD_BODY_H, UI_F_BODY_LG);
+                                i == UI_LEAD_COLS - 1 ? UI_LEAD_LEG_W
+                                                      : UI_LEAD_COL_W,
+                                UI_LEAD_BODY_H, UI_F_BODY_LG);
     }
 
-    /* The square that closes the story. Placed by lead_layout() rather than
-     * here, because it sits at the foot of the LAST leg and the legs move
-     * between the well's two shapes. */
+    /* The square that closes the story. Placed by set_lead_body(), which is
+     * where the copy that decides which line is the last one is settled. */
     s_lead_end = ui_fill(s_page, UI_LEAD_COL_X(UI_LEAD_COLS - 1), UI_LEAD_SPLIT_Y,
                          UI_END_SIDE, UI_END_SIDE);
 
@@ -608,41 +619,53 @@ static void edge_box(int x, int y, int w, int h)
     lv_obj_set_height(s_lead_edge[3], h);
 }
 
-/* How much of a leg is not the leg: one label_14 line at the foot of the LAST
- * one, kept back for the end-of-story square. It is measured off the face
- * rather than written down so that a regenerated label_14 moves the reserve and
- * the mark together. */
-static int end_reserve(void)
-{
-    return lv_font_get_line_height(UI_F_LABEL);
-}
-
-/* The well's two shapes, in the only four objects that move between them: the
- * legs, the rule between them and the end mark start under the photograph when
- * there is one and at the split when there is not. Positioned rather than built
- * twice — a second pair of body labels would be a second pair to blank, and the
- * failure that hides in that is the pair nobody blanked.
- *
- * Only the LAST leg is shortened. The first one runs to the foot of the well as
- * it always did: a story reads down column one and continues at the top of
- * column two, so column one has no end to mark and giving it a reserve would
- * cost a line of copy to close nothing. */
+/* The well's two shapes, in the only three objects that move between them: the
+ * legs and the rule between them start under the photograph when there is one
+ * and at the split when there is not. Positioned rather than built twice — a
+ * second pair of body labels would be a second pair to blank, and the failure
+ * that hides in that is the pair nobody blanked. */
 static void lead_layout(bool photo)
 {
-    const int y    = photo ? UI_LEAD_UNDER_Y : UI_LEAD_SPLIT_Y;
-    const int h    = photo ? UI_LEAD_UNDER_H : UI_LEAD_BODY_H;
-    const int keep = end_reserve();
+    const int y = FP_LEG_Y(photo);
+    const int h = FP_LEG_H(photo);
 
     for (int i = 0; i < UI_LEAD_COLS; i++) {
         lv_obj_set_pos(s_lead_body[i], UI_LEAD_COL_X(i), y);
-        ui_lab_wrap(s_lead_body[i], i == UI_LEAD_COLS - 1 ? h - keep : h);
+        ui_lab_wrap(s_lead_body[i], h);
     }
     lv_obj_set_pos(s_lead_vrule, UI_LEAD_VRULE_X, y);
     lv_obj_set_height(s_lead_vrule, h);
+}
 
-    lv_obj_set_pos(s_lead_end,
-                   UI_LEAD_COL_X(UI_LEAD_COLS - 1) + UI_LEAD_COL_W - UI_END_SIDE,
-                   y + h - keep + (keep - UI_END_SIDE) / 2);
+/* The end-of-story square, on the last line a box actually set.
+ *
+ * One measurement and no second opinion about the copy: the text is the string
+ * that has already been fitted, `w` is the measure it was fitted to — the one
+ * with UI_END_MEASURE's column taken out — and the height it sets at, divided
+ * by the face's, is which line the mark belongs on. LVGL rounds an ellipsis
+ * down to a whole line, so clamping to the lines the box can show is exact
+ * rather than approximate.
+ *
+ * `right` is the edge the mark hangs from, and it is the FULL measure's rather
+ * than the text's: the square lines up with the rules, the photograph and the
+ * headline above it, in the column no line of the copy can reach. */
+static void end_mark(lv_obj_t *m, const char *txt, const lv_font_t *f,
+                     int right, int y, int w, int h)
+{
+    const int lh = lv_font_get_line_height(f);
+    if (!txt || !txt[0] || lh <= 0 || h < lh) { ui_show(m, false); return; }
+
+    lv_point_t sz;
+    lv_text_get_size(&sz, txt, f, 0, 0, (int32_t)w, LV_TEXT_FLAG_NONE);
+
+    const int max = h / lh;
+    int lines = (int)((sz.y + lh - 1) / lh);
+    if (lines < 1)   lines = 1;
+    if (lines > max) lines = max;
+
+    lv_obj_set_pos(m, right - UI_END_SIDE,
+                   y + (lines - 1) * lh + (lh - UI_END_SIDE) / 2);
+    ui_show(m, true);
 }
 
 /* The lead well with no lead in it: the same five indices as band 4, one to a
@@ -844,18 +867,15 @@ static int split_h(const char *body, int w, int h, const lv_font_t *f)
     return first * lh;
 }
 
-/* The last leg is copyfitted into a box one line shorter than it has, and that
- * line is where the end mark goes. It is done HERE, in the caller, rather than
- * inside ui_fit_text: that function's contract is "fit this text in this box",
- * and one that quietly held a line back for something it cannot see would
- * surprise every other caller of it. What is left over is dropped, which is the
- * whole of the policy — this paper has two pages and the second one is a
- * quotation table, so there is nowhere for a story to be continued to and a
- * jump line would be a lie set in italic.
+/* Each leg is copyfitted to its OWN measure, and the last one's is narrower by
+ * the column the end mark stands in. Whatever does not fit is dropped, which is
+ * the whole of the policy: this paper has two pages, the second is a quotation
+ * table, so there is nowhere for a story to be continued to and a "Continued on
+ * A2" would be a lie set in italic. The square is what says so.
  *
- * The mark is shown only when the leg it closes has type in it. A square alone
- * at the foot of an empty column is not an end mark, it is a speck. */
-static void set_lead_body(const char *body, bool two_col, int h)
+ * It is shown only when the leg it closes has type in it. A square alone at the
+ * foot of an empty column is not an end mark, it is a speck. */
+static void set_lead_body(const char *body, bool two_col, int y, int h)
 {
     size_t used = 0;
 
@@ -867,11 +887,13 @@ static void set_lead_body(const char *body, bool two_col, int h)
     }
     ui_show(s_lead_body[0], two_col);
 
-    ui_fit_text(UI_F_BODY_LG, UI_LEAD_COL_W, h - end_reserve(), 0,
+    ui_fit_text(UI_F_BODY_LG, UI_LEAD_LEG_W, h, 0,
                 body + used, s_copy_lead[1], sizeof s_copy_lead[1]);
     ui_set(s_lead_body[1], s_copy_lead[1]);
     ui_show(s_lead_body[1], true);
-    ui_show(s_lead_end, s_copy_lead[1][0] != '\0');
+
+    end_mark(s_lead_end, s_copy_lead[1], UI_F_BODY_LG, UI_CONTENT_R,
+             y, UI_LEAD_LEG_W, h);
 }
 
 /* The whole of the layout decision, and it is one question asked once: did the
@@ -950,7 +972,7 @@ static void set_lead(const news_story_t *st)
     ui_show(s_lead_cap, photo);
     ui_show(s_lead_cred, cw > 0);
 
-    set_lead_body(st->body, !chart, photo ? UI_LEAD_UNDER_H : UI_LEAD_BODY_H);
+    set_lead_body(st->body, !chart, FP_LEG_Y(photo), FP_LEG_H(photo));
 }
 
 /* --- band 6: one story, and the portfolio ---------------------------------
@@ -998,32 +1020,14 @@ static void set_second(const news_story_t *st)
              st->headline, s_head_sec, sizeof s_head_sec);
     ui_set(s_sec.deck, st->deck);
 
-    /* The end mark goes on the deck's LAST line, which is where a printed one
-     * goes — not on a line of its own under it, because band 6 has no line to
-     * spare (see UI_SECOND_DECK_W). Which line that is takes one measurement:
-     * the deck's height at its own measure, divided by the face's, clamped to
-     * the lines the box can show. LVGL's ellipsis rounds down to a whole line,
-     * so the clamp is exact rather than approximate.
-     *
-     * A story with no deck gets no mark. Its last element is then the headline,
-     * and a headline is not a thing an end mark closes — that item is a brief,
-     * and briefs do not carry one. */
-    const int lh  = lv_font_get_line_height(UI_F_DECK);
-    const int max = lh > 0 ? UI_SECOND_DECK_H / lh : 1;
-
-    lv_point_t sz;
-    lv_text_get_size(&sz, st->deck, UI_F_DECK, 0, 0, UI_SECOND_DECK_W,
-                     LV_TEXT_FLAG_NONE);
-
-    int lines = lh > 0 ? (int)((sz.y + lh - 1) / lh) : 1;
-    if (lines < 1)   lines = 1;
-    if (lines > max) lines = max;
-
-    lv_obj_set_pos(s_sec_end, UI_SECOND_X + UI_SECOND_W - UI_END_SIDE,
-                   UI_SECOND_DECK_Y + (lines - 1) * lh + (lh - UI_END_SIDE) / 2);
-
     show_story(true);
-    ui_show(s_sec_end, st->deck[0] != '\0');
+
+    /* The deck is this story's last element — there is no body under it — so
+     * the deck is what the mark closes. A story with no deck gets none: its
+     * last element is then the headline, and a headline is not a thing an end
+     * mark closes. That item is a brief, and briefs do not carry one. */
+    end_mark(s_sec_end, st->deck, UI_F_DECK, UI_SECOND_X + UI_SECOND_W,
+             UI_SECOND_DECK_Y, UI_SECOND_DECK_W, UI_SECOND_DECK_H);
 }
 
 static void build_rail(void)

@@ -304,21 +304,37 @@ extern "C" {
 #define UI_LEAD_CAP_GAP       UI_TICKER_FIELD_GAP       /*    8 */
 
 /* --- the end-of-story mark -------------------------------------------------
- * A small filled square at the foot of the last leg of a story, flush right of
- * its measure. Every broadsheet closes a story with one, and this sheet needed
- * it more than most: a leg copyfitted to its box stops on whatever word the
- * pixel ran out on, so without a mark the reader cannot tell a story that ended
- * from one that was cut — and on a two-page paper whose second page is a
- * quotation table, there is nowhere for a cut story to be continued TO. The
- * bytes past the cut are dropped, and the square is the page saying so.
+ * A small filled square on the last line of a story, flush right of its
+ * measure. Every broadsheet closes a story with one, and this sheet needs it
+ * more than most: a leg copyfitted to its box stops on whatever word the pixel
+ * ran out on, so without a mark the reader cannot tell a story that ended from
+ * one that was cut — and on a two-page paper whose second page is a quotation
+ * table there is nowhere for a cut story to be continued TO. The bytes past the
+ * cut are dropped, and the square is the page saying so.
  *
- * Nine pixels: about half the label_14 line it sits on, which is the
- * proportion a printed end mark has against the type it closes. The room for it
- * is bought in LAYOUT rather than taken from the copy at draw time — the leg is
- * copyfitted to a box one label_14 line shorter and the square is drawn in the
- * line that was kept back — so nothing measures text twice and ui_fit_text's
- * contract stays "fit this text in this box". */
+ * Nine pixels: about half the line it sits on, which is the proportion a
+ * printed end mark has against the type it closes.
+ *
+ * THE ROOM IS TAKEN OFF THE MEASURE AND NOT OFF THE DEPTH, and the difference
+ * is a line of copy per story. Reserving a LINE at the foot of the box — set
+ * the text into a box one line shorter, put the square in the line kept back —
+ * is the obvious shape and it was rendered before this was written: on the demo
+ * front page it cost the lead exactly the line that ended "...started calling a
+ * schedule.", so the paragraph then stopped on an indefinite article with a
+ * square after it announcing that it had finished. A mark that says "this story
+ * ended" bought by deleting the sentence that ended it is the wrong trade at
+ * any price.
+ *
+ * Off the MEASURE it costs about a character and a half a line, and it buys the
+ * one property that makes the placement safe: no line of the box can ever enter
+ * the column the square stands in, so the square goes on the LAST line — where
+ * a printed end mark goes — with no possibility of it landing on type, and
+ * without anything having to measure where that line's words actually stopped.
+ * The copy is still copyfitted by ui_fit_text against the narrower measure, so
+ * that function's contract is untouched: it is still being asked to fit this
+ * text in this box, and the box is simply the one the mark is not in. */
 #define UI_END_SIDE            9
+#define UI_END_MEASURE(w)     ((w) - UI_END_SIDE - UI_TICKER_FIELD_GAP)
 
 /* The story's own legs, and they are the same two columns in both of the well's
  * shapes — only their depth changes, because only the top of the well does.
@@ -339,6 +355,15 @@ extern "C" {
 #define UI_LEAD_COLS          2
 #define UI_LEAD_COL_W         UI_MEASURE_LG_W           /*  558, 53 chars */
 #define UI_LEAD_COL_X(i)      UI_COLX(3 * (i))          /*   30, 612 */
+
+/* The LAST leg sets to a measure 17 px shorter, which is where the story's end
+ * mark stands. Only the last one: the first leg has no end to mark — the story
+ * runs out of it and into the second — so a column taken off it would buy
+ * nothing and cost the same character and a half a line. Two ragged-right legs
+ * differing by 17 px of measure is not a difference anybody can see; a first
+ * leg with a square at the foot of it, in the middle of a sentence that
+ * continues at the top of the next column, is. */
+#define UI_LEAD_LEG_W         UI_END_MEASURE(UI_LEAD_COL_W)     /*  541 */
 
 #define UI_LEAD_BODY_H        (UI_LEAD_Y + UI_LEAD_H - UI_LEAD_SPLIT_Y)   /* 524 */
 #define UI_LEAD_UNDER_Y       (UI_LEAD_Y + 650)                           /* 968 */
@@ -381,21 +406,12 @@ extern "C" {
 #define UI_SECOND_DECK_H      54
 
 /* The deck is the secondary's LAST element — there is no body under it — so it
- * is the deck that carries the story's end mark, and the seventeen pixels the
- * square and its gap need are taken out of the deck's MEASURE rather than out
- * of the band's depth. There is nothing in the band's depth to take: 18 + 82 +
- * 54 is 154 of the 176, and the 22 that are left are the air between the
- * headline and the deck, which is where a broadsheet spends it and not
- * somewhere a square can be put instead.
- *
- * Off the measure it costs nothing anybody sees. Every line of the deck wraps
- * inside 541 instead of 558, the square sits in the column that leaves, and
- * because the reservation is on EVERY line the mark can be placed on the last
- * one — where a printed end mark goes — with no possibility of it landing on
- * type. The lead's legs reserve a LINE instead, for the opposite reason: a
- * body leg's last line routinely runs the full measure, and paying 17 px on
- * each of six lines to close one of them is the wrong trade. */
-#define UI_SECOND_DECK_W      (UI_SECOND_W - UI_END_SIDE - UI_TICKER_FIELD_GAP)
+ * is the deck that carries the story's end mark, on the same reserved column
+ * the lead's last leg uses. There was in any case nothing in this band's depth
+ * to take a line from: 18 + 82 + 54 is 154 of the 176, and the 22 that are left
+ * are the air between the headline and the deck, which is where a broadsheet
+ * spends it and not somewhere a square can be put instead. */
+#define UI_SECOND_DECK_W      UI_END_MEASURE(UI_SECOND_W)       /*  541 */
 
 /* The rail: its heading, a hairline, and six holdings at the 25 px pitch the
  * quotation table below it uses. Six rather than eight because six is what
