@@ -45,8 +45,13 @@ static_assert(EPD_WIDTH == EPD6_W && EPD_HEIGHT == EPD6_H,
  * It does NOT refresh the panel. On this panel that is a THIRTY-SECOND flashing
  * operation and belongs to whoever knows what changed — see user_app.cpp.
  */
+static int64_t s_flush_us;      /* quantizing time since the last bottom strip */
+static int64_t s_flush_px;      /* and how many pixels it covered */
+
 static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t *color_map)
 {
+	const int64_t t0 = esp_timer_get_time();
+
 	uint16_t *buffer = (uint16_t *)color_map;
 	for (int y = area->y1; y <= area->y2; y++) {
 		for (int x = area->x1; x <= area->x2; x++) {
@@ -55,6 +60,36 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 			buffer++;
 		}
 	}
+
+	s_flush_us += esp_timer_get_time() - t0;
+	s_flush_px += (int64_t)(area->x2 - area->x1 + 1) * (area->y2 - area->y1 + 1);
+
+	/*
+	 * Let the idle task run before the next strip.
+	 *
+	 * LVGL renders and flushes the WHOLE sheet inside one lv_timer_handler()
+	 * call, and on 1200x1600 that is 1.92 million trips through
+	 * wp_quantize565() — six palette distances and a Bayer offset each. It
+	 * does not yield, it is pinned to core 0, and it outruns the ten-second
+	 * task watchdog, which then reports IDLE0 rather than the code that
+	 * starved it. The strip boundary is the natural place to breathe: LVGL
+	 * allows a blocking flush callback, and fourteen ticks a frame is nothing
+	 * against a refresh of twenty to thirty seconds.
+	 *
+	 * NOTE: this feeds the watchdog, it does not make the render fast. The
+	 * log line below is what says whether it needs to be.
+	 */
+	vTaskDelay(1);
+
+	/* The bottom strip ends a full-sheet pass, so report what it cost. */
+	if (area->y2 >= EPD6_H - 1 && s_flush_px > 0) {
+		ESP_LOGI(TAG, "flush %lld ms for %lld px (%lld ns/px)",
+		         (long long)(s_flush_us / 1000), (long long)s_flush_px,
+		         (long long)(s_flush_us * 1000 / s_flush_px));
+		s_flush_us = 0;
+		s_flush_px = 0;
+	}
+
 	lv_disp_flush_ready(drv);
 }
 
