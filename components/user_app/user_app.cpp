@@ -186,6 +186,30 @@ void UserApp_UiInit(void)
         lv_obj_delete(prev);
     }
     ui_news_create(s_screen);
+
+    /* What the page actually cost, on the board, once.
+     *
+     * The simulator holds an LVGL budget (check_lvgl_budget) and its own comment
+     * says the number it measures is a HOST figure and an over-estimate — this
+     * binary is 64-bit and every pointer inside an lv_obj_t is twice the width
+     * it is here. It then points at "lv_mem_monitor()'s max_used on the board"
+     * as where the real figure comes from, and nothing on the board printed it.
+     * The only LVGL memory line the firmware had was the one in lvgl_mem_psram's
+     * oom(), which by construction only ever appears when it is already too
+     * late.
+     *
+     * So it is printed here, at the one moment it means something: every widget
+     * both pages will ever own has just been created, and nothing is created in
+     * an update after this. docs/bring-up.md asks for this number to be
+     * recorded; this is the line to read it off. */
+    {
+        lv_mem_monitor_t m;
+        lv_mem_monitor(&m);
+        ESP_LOGI(TAG, "LVGL widgets built: %u B held, %u B peak, %u B free in "
+                      "the pool",
+                 (unsigned)(m.total_size - m.free_size),
+                 (unsigned)m.max_used, (unsigned)m.free_size);
+    }
 }
 
 /* --- presenting (UiTask only) --------------------------------------------- */
@@ -204,12 +228,12 @@ static void present_full(void)
 /* --- content updates (UiTask only) ---------------------------------------- */
 
 /* The snapshot is copied out from under the mutex so LVGL is never touched while
- * holding it. The copy is static rather than automatic because news_t is 18 KB
- * — twice the whole of UiTask's 8 KB stack, so an automatic would not overflow
- * it, it would never fit on it — and this frame goes on to call into LVGL, whose
- * render (Lvgl_RenderNow -> lv_refr_now) runs on this same task. A static is safe
- * here precisely because of the rule the whole file is built on: UiTask is the
- * only caller. */
+ * holding it. The copy is static rather than automatic because news_t is 24 KB
+ * — three times the whole of UiTask's 8 KB stack, so an automatic would not
+ * overflow it, it would never fit on it — and this frame goes on to call into
+ * LVGL, whose render (Lvgl_RenderNow -> lv_refr_now) runs on this same task. A
+ * static is safe here precisely because of the rule the whole file is built on:
+ * UiTask is the only caller. */
 static news_t s_ui_copy;
 
 static void push_data_to_ui(void)
@@ -468,7 +492,7 @@ static void notify_ui(app_cmd_kind_t kind)
     xQueueSend(s_cmd_queue, &c, 0);
 }
 
-/* Static for the same reason as s_ui_copy: 18 KB against a 16 KB stack that an
+/* Static for the same reason as s_ui_copy: 24 KB against a 16 KB stack that an
  * https:// URL also has to fit a synchronous TLS handshake into. NewsTask is the
  * only caller. */
 static news_t s_fetched;
@@ -515,16 +539,31 @@ static void NewsTask(void *arg)
 
                 if (changed) {
                     const news_story_t *lead = lead_story(&s_fetched);
-                    /* Before UiTask is told, not after: the picture is part of
-                     * the page and a tile that lands during the render is a
-                     * page that refreshes twice for one snapshot. A miss is
-                     * silent on purpose — the lead reflows to its chart. */
-                    if (lead && lead->photo.id[0]) {
-                        ui_tile_get(lead->photo.id, lead->photo.w, lead->photo.h);
+                    /* Every picture, before UiTask is told rather than after.
+                     * The pictures are part of the page and a tile that lands
+                     * during the render is a page that refreshes twice for one
+                     * snapshot — fifty seconds of flashing for one edition. A
+                     * miss is silent on purpose: the module reflows without it.
+                     *
+                     * All of them, not just the lead's. The composed front page
+                     * carries a photograph across the top and two more in the
+                     * box at its foot, and fetching the two thumbs lazily at
+                     * render time is the same double refresh with extra steps.
+                     * The cache holds them all at once (ui_tile.h, UI_TILE_SLOTS). */
+                    for (int i = 0; i < s_fetched.story_count; i++) {
+                        const news_photo_t *p = &s_fetched.stories[i].photo;
+                        if (p->id[0]) ui_tile_get(p->id, p->w, p->h);
                     }
-                    ESP_LOGI(TAG, "news: %d stories, %d tickers, lead %s — refreshing",
-                             s_fetched.story_count, s_fetched.ticker_count,
-                             (lead && lead->symbol[0]) ? lead->symbol : "(none)");
+                    for (int i = 0; i < s_fetched.thumb_count; i++) {
+                        const news_photo_t *p = &s_fetched.thumbs[i];
+                        if (p->id[0]) ui_tile_get(p->id, p->w, p->h);
+                    }
+                    ESP_LOGI(TAG,
+                             "news: %s — %d stories, %d figures, %d briefs, lead \"%s\" — refreshing",
+                             s_fetched.subject.symbol[0] ? s_fetched.subject.symbol : "(no symbol)",
+                             s_fetched.story_count, s_fetched.figure_count,
+                             s_fetched.brief_count,
+                             (lead && lead->headline[0]) ? lead->headline : "(none)");
                     notify_ui(APP_CMD_DATA);
                 } else {
                     /* The single most common outcome, and the one that must not
@@ -590,14 +629,21 @@ void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_co
  * safe no-ops until UserApp_TaskInit has created the queues.
  * =========================================================================== */
 
-/* user_app_snapshot copies the index ribbon straight across, indexing
- * out->indices[] with news_t's own count. The two capacities are declared in
- * different headers on purpose — one is portable to a phone, the other to the
- * panel — and device_api_model.h states their equality only in a comment. This
- * is where that comment is made to hold, because the alternative to a build
- * failure is a stack write past the end of the caller's struct. */
+/* user_app_snapshot copies the tape and the headlines straight across, indexing
+ * out->indices[] and out->stories[] with news_t's own counts. The capacities are
+ * declared in different headers on purpose — one is portable to a phone, the
+ * other to the panel — and device_api_model.h states their equality only in a
+ * comment. This is where those comments are made to hold, because the
+ * alternative to a build failure is a write past the end of the caller's struct
+ * with a count the network chose the size of.
+ *
+ * There is deliberately no DEV_FIGURE_MAX to assert against: the dossier does
+ * not travel to the app, only `figure_count` does. If you are here because you
+ * added the figures back, add the assert with them. */
 static_assert(DEV_INDEX_MAX == NEWS_INDEX_MAX,
-              "the companion API's index array must hold the whole ribbon");
+              "the companion API's index array must hold the whole tape");
+static_assert(DEV_STORY_MAX == NEWS_STORIES_MAX,
+              "the companion API's story array must hold every headline the sheet set");
 
 static bool post_cmd(app_cmd_kind_t kind, int ival, const char *text)
 {
@@ -629,24 +675,58 @@ void user_app_snapshot(device_state_t *out)
     out->page = s_page;
     strlcpy(out->page_title, ui_news_page_title((ui_page_t)s_page), sizeof(out->page_title));
 
-    out->news_valid   = s_data.valid;
-    out->demo         = s_data.demo;
-    out->story_count  = s_data.story_count;
-    out->ticker_count = s_data.ticker_count;
+    out->news_valid = s_data.valid;
+    out->demo       = s_data.demo;
     strlcpy(out->edition, s_data.edition, sizeof(out->edition));
     strlcpy(out->generated_at, s_data.generated_at, sizeof(out->generated_at));
 
-    /* The phone gets a list row, not the front page: one symbol and a headline
-     * cut to fit it. news_str_copy rather than strlcpy because that cut lands
-     * mid-word by definition and headlines arrive from a copy desk that emits em
-     * dashes and curly quotes — strlcpy would happily halve one, and half a
-     * codepoint is not a short headline, it is a JSON string the app's parser
-     * rejects. */
-    const news_story_t *lead = lead_story(&s_data);
-    if (lead) {
-        news_str_copy(out->lead_symbol, sizeof(out->lead_symbol), lead->symbol);
-        news_str_copy(out->lead_headline, sizeof(out->lead_headline), lead->headline);
+    /* The company the edition is about. Cents and basis points cross as they
+     * are: the app owns its own decimal separator and its own sign colour, and
+     * deciding either of them here as well is how the phone and the panel come
+     * to disagree about a price they were both given the same integer for. */
+    news_str_copy(out->subject.symbol,   sizeof(out->subject.symbol),   s_data.subject.symbol);
+    news_str_copy(out->subject.name,     sizeof(out->subject.name),     s_data.subject.name);
+    news_str_copy(out->subject.exchange, sizeof(out->subject.exchange), s_data.subject.exchange);
+    news_str_copy(out->subject.sector,   sizeof(out->subject.sector),   s_data.subject.sector);
+    out->subject.last_c       = s_data.subject.last_c;
+    out->subject.chg_bp       = s_data.subject.chg_bp;
+    out->subject.prev_close_c = s_data.subject.prev_close_c;
+    out->subject.open_c       = s_data.subject.open_c;
+    out->subject.high_c       = s_data.subject.high_c;
+    out->subject.low_c        = s_data.subject.low_c;
+    out->subject.wk52_hi_c    = s_data.subject.wk52_hi_c;
+    out->subject.wk52_lo_c    = s_data.subject.wk52_lo_c;
+
+    /* The headlines, in the device's own order — the parser sorted them, so
+     * stories[0] is what leads the sheet, and a phone list that re-sorts by
+     * `rank` lands on the same order the reader is looking at.
+     *
+     * news_str_copy rather than strlcpy because the cut to DEV_HEADLINE_MAXLEN
+     * lands mid-word by definition and headlines arrive from a copy desk that
+     * emits em dashes and curly quotes — strlcpy would happily halve one, and
+     * half a codepoint is not a short headline, it is a JSON string the app's
+     * parser rejects. */
+    out->story_count = s_data.story_count;
+    for (int i = 0; i < out->story_count; i++) {
+        out->stories[i].rank = s_data.stories[i].rank;
+        news_str_copy(out->stories[i].headline, sizeof(out->stories[i].headline),
+                      s_data.stories[i].headline);
     }
+
+    /* The rest of the edition as counts alone. What the app needs is whether the
+     * board RECEIVED them — the difference between a producer that filed a thin
+     * day and a parser that dropped something — and these are the counts after
+     * parsing, so they are also how a producer finds out its forty figures
+     * became twenty-eight. The figures themselves do not travel; the dossier is
+     * what the paper is for, and a reader who wants it is standing in front of
+     * it. If one is ever needed on a phone it gets its own endpoint rather than
+     * sixteen kilobytes of .bss for the life of the board. */
+    out->figure_count = s_data.figure_count;
+    out->brief_count  = s_data.brief_count;
+    out->peer_count   = s_data.peer_count;
+    out->table_count  = s_data.table_count;
+    out->chart_count  = s_data.chart_count;
+    out->thumb_count  = s_data.thumb_count;
 
     out->index_count = s_data.index_count;
     for (int i = 0; i < out->index_count; i++) {

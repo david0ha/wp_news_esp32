@@ -72,7 +72,6 @@
  * which is the most explicit statement a page can make that it is a screen.
  * The key legend below survives for the setup sheet, which IS about the
  * device and is the one place it belongs. */
-#define S_IMPRINT          "WP NEWS · WPNEWS.LOCAL"
 
 #define S_KEY_PAGE         "KEY0 A1/A2"
 #define S_KEY_REFRESH      "KEY1 Refresh"
@@ -88,74 +87,50 @@
 #define S_PAGE_FRONT       "FRONT PAGE"
 #define S_PAGE_MARKETS     "MARKETS"
 
-/* --- band 3: the dateline row --------------------------------------------- */
-
-#define S_MARKET_WRAP      "MARKET WRAP"
-
-/* --- band 5: the lead's rail ---------------------------------------------- */
-
-#define S_PORTFOLIO        "THE PORTFOLIO"
-#define S_DAYS_RANGE       "DAY'S RANGE"
-
-/* --- band 5 with no lead in it: the market summary -------------------------
+/* --- the modules' standing heads ------------------------------------------
  *
- * A day that brings figures and no stories is a real day, and the sheet used to
- * print it as five big numbers under a masthead: no kicker, no headline, no
- * deck, no prose anywhere on the page. That is a dashboard wearing a
- * newspaper's hat, and it is the one composition on this board that gives the
- * whole conceit away — a paper with nothing to report still writes a lead about
- * the market, because the market is what happened.
- *
- * So the board writes one. These are the only sentences on the sheet the DEVICE
- * is the author of, which is why they are so tightly constrained: every one of
- * them is a statement about the figures printed directly underneath it, and
- * none of them is an opinion, a forecast or a reason. The %s are index names
- * and formatted percentages, and the arithmetic that chooses between the four
- * headlines is a count of which way the indices went — see set_summary() in
- * ui_page_front.c. There is no byline, because there is no writer.
- *
- * The apostrophe is U+2019 rather than the ASCII one: this is prose set at
- * 56 px, the faces all carry it, and headlines that arrive over the wire are
- * converted to it by news_str_copy_prose() — a fixed headline set with the
- * typewriter apostrophe beside them would be the one that looks wrong. */
-#define S_SUMMARY_KICKER   "THE SESSION"
-#define S_SUMMARY_UP       "A broad advance, with %s in front"
-#define S_SUMMARY_DOWN     "A broad decline, with %s worst hit"
-#define S_SUMMARY_MIXED    "A mixed close, with %s the day\xE2\x80\x99s widest move"
-#define S_SUMMARY_FLAT     "A session that went nowhere"
-#define S_SUMMARY_DECK     "The day ran from %s at %s to %s at %s."
-#define S_SUMMARY_DECK_ONE "%s is the only index in this edition, at %s."
-
-/* --- band 7: the ticker table --------------------------------------------
- *
- * Four column heads over a 561 px block, and they are this short on purpose:
- * "CHANGE" and "SYMBOL" set at label_14 are nearly the same width, which makes
- * the two right-hand columns read as one. CHG is the abbreviation every printed
- * quotation table uses, for the same reason.
+ * Every one of these stands over a module the compositor may put anywhere on
+ * either sheet, so none of them names a band or a position. A head that said
+ * "BELOW THE FOLD" would be a promise about a make-up the day may not have.
  */
+
+/* The industry table, on both pages. "THE INDUSTRY" rather than "PEERS": the
+ * second is a screen's word for a list and the first is what a business section
+ * calls the same six companies. */
+#define S_PEERS            "THE INDUSTRY"
+
+/* The pictures at the foot of the front page. INSIDE is what a broadsheet puts
+ * over the two small photographs that point at the rest of the paper. */
+#define S_INSIDE           "INSIDE"
+
+/* The dated one-liners: what else happened to this company this week. */
+#define S_IN_BRIEF         "IN BRIEF"
+
+/* The industry table's field heads. They are this short on purpose: "CHANGE"
+ * and "SYMBOL" set at label_14 are nearly the same width, which makes the two
+ * columns read as one. CHG is the abbreviation every printed quotation table
+ * uses, for the same reason. */
 #define S_COL_SYMBOL       "SYMBOL"
 #define S_COL_NAME         "NAME"
+#define S_COL_PE           "P/E"
+#define S_COL_CAP          "MKT CAP"
 #define S_COL_LAST         "LAST"
 #define S_COL_CHG          "CHG"
 
-/* --- A2 ------------------------------------------------------------------- */
+/* A cell the producer had no figure for. An em dash and not a blank: a blank
+ * cell in a ruled table reads as a value that failed to print, and every
+ * financial statement ever set has used this character to say "none". */
+#define S_EMPTY_CELL       "\xE2\x80\x94"
 
-/* The stories that did not make the front page, one line each. */
-#define S_IN_BRIEF         "IN BRIEF"
-
-/* --- band 8: the folio ----------------------------------------------------
+/* --- the folio ------------------------------------------------------------
  *
- * Source on the left, the page's folio in the centre, and when the page was
- * made against when it will be made again on the right. The last pair is the
- * only place the board admits to being a device: a printed paper does not tell
- * you when the next edition lands, and a dashboard that polls has to, because
- * "this is five minutes old and that is fine" is otherwise indistinguishable
- * from "this is five hours old and nobody noticed".
+ * The imprint on the left, the page's own mark in the centre, the company the
+ * edition is about on the right. There is no clock: the tape already says when
+ * the numbers are from, which is the honest statement, and a second time at the
+ * foot saying when the sheet last repainted is a machine's concern printed on a
+ * reader's page. On a panel that takes twenty-five seconds to repaint it reads
+ * as a demand to keep it fed. A newspaper carries a date, not a clock.
  */
-#define S_FOLIO_A1         "A1"
-#define S_FOLIO_A2         "A2"
-#define S_UPDATED          "UPDATED"
-#define S_NEXT             "NEXT"
 
 /* --- dates ----------------------------------------------------------------
  *
@@ -168,10 +143,9 @@
  * whatever the C locale is — "Thu" on the device, something else on a
  * simulator run by a developer with LANG set, and a different string width
  * either way. A layout that depends on the host's locale is a layout that
- * cannot be asserted on. */
-#define S_WEEKDAYS_ABBR { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" }
-
-/* The dateline a paper actually prints, for the same board with no payload.
+ * cannot be asserted on.
+ *
+ * The dateline a paper actually prints, for the same board with no payload.
  * The fallback used to be "2026-08-15 (Sat)" — a machine date, in the one slot
  * every other sheet fills with FRIDAY, AUGUST 14, 2026, so the one page a new
  * owner is most likely to be looking at was also the one page that admitted to
@@ -223,8 +197,8 @@
                            "which is where the companion app finds it, and where " \
                            "the address it polls can be changed. If that address " \
                            "ever stops answering, the board keeps the last sheet " \
-                           "it printed and says so in the strip above the " \
-                           "masthead rather than blanking the glass."
+                           "it printed and says so in the ruled line under the " \
+                           "nameplate rather than blanking the glass."
 #define S_SETUP_TROUBLE_H  "IF IT DOES NOT APPEAR"
 #define S_SETUP_TROUBLE    "Some phones hide a network that offers no internet " \
                            "of its own. If this one does not show up, wait ten " \

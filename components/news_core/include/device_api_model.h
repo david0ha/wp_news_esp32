@@ -6,13 +6,38 @@
  * so the serializer compiles in the host tests and the desktop simulator.
  * user_app fills it under its state lock; device_api_json.c serializes it.
  *
- * This is a SUMMARY, not the front page. The phone does not need four bodies of
- * copy and twenty-two candles — it needs to know the board is alive, what is on
- * the glass, and whether the last poll worked. The full snapshot is available
- * from the same URL the board polls, which the phone can reach too.
+ * THIS IS CONTROL STATE, NOT A COPY OF THE PAGE
+ * ---------------------------------------------
+ * The companion app's job is setup and control over the LAN: provisioning,
+ * which sheet is showing, the battery, the link, and pointing the board at a
+ * URL. So this struct answers "is the board alive, what is it printing, and did
+ * the last poll work" — and stops there. The edition itself is available from
+ * the same URL the board polls, which the phone can reach too.
+ *
+ * ONE COMPANY, NOT A WATCHLIST
+ * ----------------------------
+ * The edition is about a single listed company, so the summary is too. The
+ * `lead` object of the previous shape — one symbol and one headline — is gone,
+ * because every story on the sheet now names the same symbol and repeating it
+ * per headline says nothing. What replaces it is `subject`, which is the whole
+ * of what the page is about, plus the headlines the board actually set.
+ *
+ * WHERE THE DOSSIER IS NOT
+ * ------------------------
+ * There is no `dev_figure_t` here, and its absence is a decision rather than an
+ * oversight. Carrying all twenty-eight figures — a group, a label and a
+ * preformatted value each — put the worst-case state document at 15,092 bytes
+ * and cost 16 KB of .bss for the life of the board, because device_api.c
+ * serialises into a file static. The dossier is what the PAPER is for; a reader
+ * who wants the figures is standing in front of them. What survives is
+ * `figure_count`, so the app can say "28 figures" without carrying them.
+ *
+ * If a later version does want the dossier on the phone, it gets an endpoint of
+ * its own that builds the response on demand. It does not come back into the
+ * state document, which every dashboard poll pays for.
  *
  * The string capacities are not arbitrary: a worst-case document — every field
- * full of characters the escaper doubles — has to fit DEVICE_API_STATE_BUF_SZ,
+ * full of characters the escaper expands — has to fit DEVICE_API_STATE_BUF_SZ,
  * because the overflow path returns -1 and an EMPTY body, so the symptom of
  * being one byte over is "the app shows nothing" with no error anywhere.
  * test_api_json.c asserts it and prints the margin.
@@ -20,7 +45,9 @@
  * Every numeric field is an integer. Prices are cents and changes are basis
  * points, exactly as in news_t — so the class of bug where "%.2f" of a huge
  * magnitude truncates on the decimal point and emits JSON that strict parsers
- * reject is designed out rather than guarded.
+ * reject is designed out rather than guarded. That leaves nothing here that
+ * needed the producer's house style, which is the other half of why the dossier
+ * does not travel: its values are text precisely because they are for printing.
  */
 #pragma once
 
@@ -33,16 +60,56 @@
 #define DEV_IP_MAXLEN        16
 #define DEV_PAGE_MAXLEN      32
 #define DEV_EDITION_MAXLEN   32
-#define DEV_SYMBOL_MAXLEN     8
-#define DEV_HEADLINE_MAXLEN  72   /* the lead, truncated for a phone list row */
 #define DEV_TIME_MAXLEN      24
 #define DEV_URL_MAXLEN      129   /* == PROV_URL_MAX_LEN + 1 */
 #define DEV_RESULT_MAXLEN    16
-#define DEV_INDEX_MAX         5   /* == NEWS_INDEX_MAX, the ribbon's cells */
 
-/* One ribbon cell. The name is not repeated here — the symbol identifies it and
- * the app already has a label for each — which is what buys the room for the
- * lead's headline inside the same buffer. */
+/* The subject's own fields, at news_subject_t's own widths. Truncating a
+ * company name for the phone would put a different name on the phone than on
+ * the paper, which is the one thing a summary must not do. */
+#define DEV_SYMBOL_MAXLEN     8   /* == NEWS_SYMBOL_MAX          */
+#define DEV_NAME_MAXLEN      40   /* == news_subject_t::name     */
+#define DEV_EXCHANGE_MAXLEN  12   /* == news_subject_t::exchange */
+#define DEV_SECTOR_MAXLEN    32   /* == news_subject_t::sector   */
+
+/* A headline IS cut for the phone: 72 characters is a list row, and the model's
+ * own budget stops a lead headline at 72 anyway (docs/news-contract.md §the
+ * length budget), so a headline written to the budget arrives whole. */
+#define DEV_HEADLINE_MAXLEN  72
+
+#define DEV_STORY_MAX         5   /* == NEWS_STORIES_MAX, the headlines    */
+#define DEV_INDEX_MAX         5   /* == NEWS_INDEX_MAX, the tape's cells   */
+
+/* The company the edition is about, and its session.
+ *
+ * Cents and basis points rather than the strings the panel prints, because the
+ * app owns its own decimal separator and its own sign colour and the two would
+ * drift if the firmware decided them here as well. A zero 52-week bound means
+ * unknown, exactly as it does in news_subject_t — the page draws it as absent
+ * rather than as a price of nothing, and so should the app. */
+typedef struct {
+    char symbol[DEV_SYMBOL_MAXLEN];
+    char name[DEV_NAME_MAXLEN];
+    char exchange[DEV_EXCHANGE_MAXLEN];
+    char sector[DEV_SECTOR_MAXLEN];
+    int  last_c;
+    int  chg_bp;
+    int  prev_close_c;
+    int  open_c, high_c, low_c;
+    int  wk52_hi_c, wk52_lo_c;
+} dev_subject_t;
+
+/* One headline the board set. `rank` is the server's editorial number, carried
+ * through unchanged so a phone list sorts the way the page did — the device's
+ * own ordering is by position and the number is what produced it. No symbol:
+ * every story on the sheet is about `subject`. */
+typedef struct {
+    int  rank;
+    char headline[DEV_HEADLINE_MAXLEN];
+} dev_story_t;
+
+/* One tape cell. The name is not repeated here — the symbol identifies it and
+ * the app already has a label for each. */
 typedef struct {
     char symbol[DEV_SYMBOL_MAXLEN];
     int  last_c;                        /* cents        */
@@ -58,17 +125,29 @@ typedef struct {
     int  page;                          /* ui_page_t */
     char page_title[DEV_PAGE_MAXLEN];   /* the same name the folio shows */
 
-    /* --- the front page on the glass --- */
+    /* --- the edition on the glass --- */
     bool news_valid;
     bool demo;                          /* rendered from the built-in sample */
     char edition[DEV_EDITION_MAXLEN];
     char generated_at[DEV_TIME_MAXLEN];
-    int  story_count;
-    int  ticker_count;
-    char lead_symbol[DEV_SYMBOL_MAXLEN];
-    char lead_headline[DEV_HEADLINE_MAXLEN];
-    dev_index_t indices[DEV_INDEX_MAX];
-    int  index_count;
+
+    dev_subject_t subject;
+
+    dev_story_t stories[DEV_STORY_MAX];  int story_count;
+    dev_index_t indices[DEV_INDEX_MAX];  int index_count;
+
+    /* The rest of the edition travels as counts alone. A figure, a brief, a peer
+     * row and a table cell are all things the reader has in front of them; what
+     * the app needs is whether the board received them, which is the difference
+     * between "the producer filed a thin day" and "the parser dropped
+     * something". These are the counts AFTER parsing, so they are also how a
+     * producer finds out that its forty figures became twenty-eight. */
+    int figure_count;
+    int brief_count;
+    int peer_count;
+    int table_count;
+    int chart_count;
+    int thumb_count;
 
     /* --- how it got there --- */
     char news_url[DEV_URL_MAXLEN];

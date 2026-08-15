@@ -156,7 +156,48 @@ one flat ink. The defaults are 60 and 0.72, and a tile that comes out looking li
 wants that knob, not a different palette.
 
 The halftone remains the right treatment for a document scan, a chart, or a portrait whose colour
-carries nothing — which is what `--halftone` is for.
+carries nothing — which is what `--halftone` is for. It is also what the front page uses for
+photographs, because black ink on white paper is what a broadsheet does.
+
+## The demo edition's pictures, and the rule they look like they break
+
+`tools/demo_photos.py` synthesises the three pictures the built-in demo edition names, and
+`sim/tiles/*.bin` is its committed output. Something has to be able to produce them or the one page
+an unconfigured board prints is the one page whose photographs cannot be regenerated — and a real
+wire photograph cannot go in a repository, because it is somebody's copyright.
+
+That looks like it violates the rule above, and it is worth being precise about why it does not.
+**"Never judge a dither on synthetic input" is about judging the PANEL, not about what may be
+drawn.** The finding was that flat synthetic colour makes six-ink error diffusion look like
+confetti, so a decision about the palette taken on that evidence is a decision about the input's
+flatness. The demo pictures are not being used to make that decision — it has been made, from
+photographs — and they are screened with `--halftone`, which is the treatment that finding chose.
+
+What they still have to be is not flat, and that is the whole design of the file. A halftone trades
+spatial resolution for tonal resolution and has nothing to trade with in a surface that is
+featureless: fill a wall with 50% grey and the screen returns a regular dot pattern that reads as a
+moiré artefact. So each plate is real 3D geometry through a real pinhole camera — world to camera,
+perspective divide, raster, depth buffer — shaded by surface normal rather than by depth, with
+fractal noise at five octaves on every material, atmospheric haze toward the far plane, and grain
+last at a size just above the screen's own cell.
+
+Two earlier versions placed geometry with curves fitted by eye and came back as a drift of grey
+rectangles. The failure was not that the curves were wrong; it was that no two edges agreed on where
+the camera was, and a frame in which nothing agrees about the camera does not read as a place no
+matter how good its noise is.
+
+The generator is **deterministic** — seeded generators only, no system entropy — because the tiles
+are committed and `test_news_mock` pins the fixture that names them. A rebuild that re-randomised
+them would make every build a diff.
+
+```bash
+python3 -m venv /tmp/tileenv && /tmp/tileenv/bin/pip install Pillow numpy
+/tmp/tileenv/bin/python tools/demo_photos.py --preview   # and what the panel prints
+```
+
+It reports the mean and the fraction of each frame between 0.25 and 0.75. A photograph that
+halftones well is one that is mostly mid-grey; under about half is a frame that will come back as
+two flat inks and a gradient.
 
 ## Why LVGL with an RGB565 buffer
 
@@ -205,8 +246,19 @@ Two LVGL traps worth naming:
 - **No background fills, no tinted panels.** White paper, black type, edge to edge. The one exception
   is white punched deliberately under something already drawn — `ui_lab_opaque()` puts a label's box
   in paper so a chart's value label does not have its own polyline running through it.
-- **Colour is data.** Green and red on percentage changes and their marks, and nowhere else. Blue and
-  yellow never reach the glass from the UI at all; the simulator fails the build if they do.
+- **Colour is data**, and it means exactly two things. *Direction* — green and red on percentage
+  changes and their marks, through `ui_chg_colour()`. *Identity* — which series a bar or a segment
+  belongs to inside a graphic carrying more than one, through `ui_series_t`. Type, rules and axes
+  are black. Blue and yellow are legal only inside a graphic, and **yellow only enclosed by a black
+  keyline**: at 1.16:1 against the paper it is the same value as the paper, so an unkeylined yellow
+  bar reads as the outline of a bar. The simulator fails the build on a yellow pixel that can reach
+  paper without crossing black, and on blue or yellow anywhere outside a graphic.
+  The governing fact is not any single ink's contrast — it is that **the inks are two bands with
+  nothing between them**: black, red, blue and green all between 0.016 and 0.077 relative luminance,
+  the 1-in-3 screen, yellow and paper between 0.374 and 0.554. Every within-band pair is under 2:1
+  and every cross-band pair over 3.3:1. A chart therefore gets one clean cut of value and no more,
+  and a third distinguishable series must be bought in hue or in texture. Run
+  `python3 tools/contrast.py` for the table; do not transcribe it.
 - Ellipsize, never wrap, outside the provisioning overlay and body copy. An ellipsis is an honest
   "there was more"; a wrap is a collision. Body copy is copyfitted before it is set, so it wraps and
   cannot overflow.

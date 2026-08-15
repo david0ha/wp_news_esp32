@@ -12,6 +12,24 @@
  * scrolling), and repeating them four hundred times is how a page ends up with a
  * rounded corner or a grey border that dithers into a dashed line. One helper
  * per shape, used everywhere, means the panel's constraints are enforced once.
+ *
+ * WHAT IS NO LONGER HERE
+ * ----------------------
+ * The eight fixed vertical bands are gone. They were a table of y values —
+ * "band 5 lead package, y 318, h 782" — and every page was a transcription of
+ * it, which is why every edition came out the same shape no matter what
+ * arrived. A broadsheet answers a different day with a different make-up, so
+ * the well below the furniture is now handed to ui_compose.h, and the only
+ * fixed geometry left in this file is the furniture itself: the masthead, the
+ * dateline and the tape. Those do not move, because on a real front page they
+ * never do. The folio that used to close the list is gone — a sheet that is the
+ * only sheet does not need to say which page it is — and the well runs to the
+ * bottom margin in its place.
+ *
+ * The simulator's assertions moved with them. It used to check that the lead
+ * rule landed on row 1108; it now checks that the day's modules tile the well
+ * exactly, which is a stronger claim and one that holds for every payload
+ * rather than for the three the test happens to build.
  */
 #pragma once
 
@@ -19,7 +37,10 @@
 #include <stddef.h>
 
 #include "lvgl.h"
+#include "ui_chart.h"       /* ui_series_t — the pure half; see the colour note */
+#include "ui_compose.h"
 #include "ui_fonts.h"
+#include "ui_news.h"
 #include "ui_strings.h"
 #include "news_model.h"
 #include "wp_palette.h"
@@ -51,6 +72,12 @@ extern "C" {
  * no rounding for the grid to accumulate: a column measured from the left edge
  * and the same column measured from the right land on one pixel.
  *
+ * Six is not arbitrary. It is what nearly every well-designed broadsheet uses,
+ * and it is the number that makes the composition rules below work out: a page
+ * of six divides into a one-column standing rail and a five-column body, and
+ * five divides into 2+3, 3+2, 2+1+2 and 5 — which are exactly the band shapes a
+ * front page wants.
+ *
  * BOTH NUMBERS ARE EVEN, AND THAT IS A REQUIREMENT RATHER THAN A PREFERENCE. A
  * photo tile packs two pixels per byte, so a slot of odd width — or one starting
  * at an odd x — cannot be blitted as a per-row memcpy and needs a nibble-
@@ -73,13 +100,43 @@ extern "C" {
 #define UI_COL(n)       ((n) * (UI_COL_W + UI_GUTTER) - UI_GUTTER)
 #define UI_COLX(i)      (UI_CONTENT_X + (i) * (UI_COL_W + UI_GUTTER))
 
-/* The measure. A text column is TWO grid columns: 364 px, which at
- * ui_font_body_16's measured 8.51 px average advance is 42 characters. The lead
- * sets in body_20, whose 10.44 px wants THREE columns — 558 px, 53 characters —
- * because the same width for both faces is the wrong answer: body_20 at 364 sets
- * 34 characters, which is a caption measure, not a reading measure.
+/* The measure, and the arithmetic that makes it a rule rather than a taste.
  *
- * One grid column, 170 px, is never body text; it is the folio and table cells. */
+ * Over English prose ui_font_body_16 averages 8.02 px per character and
+ * ui_font_body_20 averages 9.80. Divide the column spans by them and the whole
+ * composition system falls out:
+ *
+ *          px    body_16    body_20
+ *   1 col 170    21 ch      17 ch     never prose
+ *   2 col 364    45 ch      37 ch     the standard leg
+ *   3 col 558    69 ch      56 ch     the wide leg, and body_16's optimum
+ *   4 col 752    93 ch      76 ch     body_20 only
+ *
+ * DO NOT TRANSCRIBE THOSE FIGURES ANYWHERE ELSE. `sim --measure` prints this
+ * table for all seven faces from the committed font tables, and that command is
+ * the authority; this copy exists so the reasoning below can be read without
+ * running anything. Three different numbers for body_16 were in circulation at
+ * once — 8.51 here, something else in docs/pages.md, a third in
+ * docs/news-contract.md — because each was typed rather than generated. A face
+ * regenerated at a different optical size moves every one of them.
+ *
+ * Typography's working range is 45 to 75 characters and its optimum is 66, and
+ * newspapers legitimately set at the narrow end of it. What the table settles is
+ * the bottom: a single 170 px column is twenty-one characters, about three words
+ * a line, and no amount of copyfitting rescues that. So a module that sets prose
+ * needs TWO columns — which is what ui_mod_t::min_cols carries — and one column
+ * is for figures.
+ *
+ * Two columns lands on 45 exactly, which is the bottom of the working range. So
+ * min_cols is a THRESHOLD and not a preference: the narrowest leg this paper
+ * sets is the narrowest leg typography allows, and there is nothing below it to
+ * fall back to.
+ *
+ * That constraint turns out to be the design. The Wall Street Journal's standing
+ * rail is one column of prose; ours cannot be, so it is one column of NUMBERS
+ * instead, and the company's valuation, profitability, balance sheet and
+ * consensus go exactly where What's News goes. The vertical spine a front page
+ * needs and the dossier this edition owes its reader are the same object. */
 #define UI_MEASURE_W    UI_COL(2)                       /* 364, body_16 */
 #define UI_MEASURE_LG_W UI_COL(3)                       /* 558, body_20 */
 
@@ -91,499 +148,315 @@ extern "C" {
 #define UI_RULE_HEAVY      3
 
 /* A vrule sits in the middle of a gutter, biased left by the truncation: 11 px
- * of paper, the rule, then 12. The offset is a #define because two bands draw
- * one and each would otherwise open-code the same halving. */
+ * of paper, the rule, then 12. The offset is a #define because every band
+ * boundary draws one and each would otherwise open-code the same halving. */
 #define UI_GUTTER_RULE_DX ((UI_GUTTER - UI_RULE_HAIR) / 2)      /* 11 */
 
-/* --- the vertical bands ---------------------------------------------------
- * Fixed y-bands, transcribed from the table in
- * docs/specs/2026-08-14-front-page-design.md §3. The tier engine chooses WHAT
- * fills a band; the band never moves. A band that would overflow is copyfitted;
- * a page with too little content promotes stories up a tier so the band still
- * fills.
+/* --- the furniture --------------------------------------------------------
+ * The three fixed strips: the masthead, the dateline under it, and the tape
+ * under that. Everything below the tape is the WELL, and the well is composed.
  *
- *   band / rule            y      h    ends   gap to next
- *   1 kicker strip        30     18      48     8
- *     hairline            56      1      57     7
- *   2 masthead            64    112     176    10
- *     heavy rule         186      3     189     4
- *   3 dateline row       193     20     213     6
- *     hairline           219      1     220     6
- *   4 index ribbon       226     82     308     2
- *     heavy rule         310      3     313     5
- *   5 lead package       318    782    1100     8
- *     rule              1108      2    1110     6
- *   6 secondary row     1116    176    1292     6
- *     rule              1298      2    1300     6
- *   7 ticker table      1306    232    1538     6
- *     hairline          1544      1    1545     6
- *   8 folio             1551     18    1569     -
+ *   strip / rule            y      h    ends   gap
+ *   (air over the flag)    30      10      40     -
+ *   masthead               40    112     152     6
+ *     heavy rule          158      3     161     4
+ *   dateline              165     20     185     6
+ *     hairline            191      1     192     6
+ *   tape                  198     20     218     6
+ *     heavy rule          224      3     227     5
+ *   THE WELL              232   1338    1570     -
  *
- * Running total: 1438 px of band + 13 px of rule = 1451 px of ink, plus 88 px
- * of gaps = 1539, laid from y=30 to y=1569. One pixel of slack against the
- * 1570 bottom margin, and 1451 against the 1540 of content height.
+ * THE TEN PIXELS ABOVE THE NAMEPLATE ARE DELIBERATE. Every other strip on this
+ * sheet begins where the one above it ended, and the masthead used to begin on
+ * the margin itself — the blackletter's cap line sitting exactly on the 30 px
+ * rule, with nothing over it. No broadsheet does that: a nameplate has air above
+ * it, and without any the flag reads as having been cropped by the frame rather
+ * than printed on the sheet. Ten pixels is what it costs the well, which still
+ * clears the 1,250 the assertion below insists on by a wide margin.
  *
- * Bands 5 and 6 last moved when the lead photograph went to the full measure:
- * a picture 1140 wide can only sit ABOVE its story, not beside it, so the well
- * took 194 px off the secondary row to pay for it. What band 6 lost is a whole
- * story — it holds one now, and no body under it — which is the trade the owner
- * made knowingly and is why the numbers here are not the ones in the spec's
- * §3 table. */
-#define UI_KICKER_Y            30
-#define UI_KICKER_H            18
-#define UI_KICKER_RULE_Y       56
-#define UI_KICKER_RULE_W       UI_RULE_HAIR
-
-#define UI_MAST_Y              64
-#define UI_MAST_H             112
-#define UI_MAST_RULE_Y        186
-#define UI_MAST_RULE_W         UI_RULE_HEAVY
-
-#define UI_DATELINE_Y         193
-#define UI_DATELINE_H          20
-#define UI_DATELINE_RULE_Y    219
-#define UI_DATELINE_RULE_W     UI_RULE_HAIR
-
-#define UI_RIBBON_Y           226
-/* 82, not 78. The band's three rows are the faces' measured line heights laid
- * end to end, and the change row grew from label_14's 18 to body_16's 22 — the
- * one figure the ribbon exists to print was set two sizes below the level it
- * modifies, so from across the room the band read as five big numbers and five
- * specks. The band is what has to grow with it: the rows now end at 308 and the
- * heavy rule is still at 310. Two pixels of clearance rather than six, which is
- * the whole of what this costs. */
-#define UI_RIBBON_H            82
-#define UI_RIBBON_RULE_Y      310
-#define UI_RIBBON_RULE_W       UI_RULE_HEAVY
-
-#define UI_LEAD_Y             318
-#define UI_LEAD_H             782
-#define UI_LEAD_RULE_Y       1108
-#define UI_LEAD_RULE_W         UI_RULE_MID
-
-#define UI_SECOND_Y          1116
-#define UI_SECOND_H           176
-#define UI_SECOND_RULE_Y     1298
-#define UI_SECOND_RULE_W       UI_RULE_MID
-
-#define UI_TICKER_Y          1306
-#define UI_TICKER_H           232
-#define UI_TICKER_RULE_Y     1544
-#define UI_TICKER_RULE_W       UI_RULE_HAIR
-
-#define UI_FOLIO_Y           1551
-#define UI_FOLIO_H             18
-
-/* One story is not a thin front page, it is a broken one, so the lead swallows
- * the secondary row rather than leaving 176 px of paper blank: 782 + 8 gap + 2
- * rule + 6 gap + 176 = 974, ending where band 6 ended. The rule at
- * UI_LEAD_RULE_Y is inside that span and is not drawn in this case. */
-#define UI_LEAD_H_SOLO        974
-
-/* Every rule on the page, in one list, so the simulator's "the rules land on
- * exactly these rows, full width, unbroken" check iterates the same constants
- * the page draws from instead of a transcription of them. X(name, y, weight). */
-#define UI_RULE_TABLE(X)                                        \
-    X("kicker",   UI_KICKER_RULE_Y,   UI_KICKER_RULE_W)         \
-    X("masthead", UI_MAST_RULE_Y,     UI_MAST_RULE_W)           \
-    X("dateline", UI_DATELINE_RULE_Y, UI_DATELINE_RULE_W)       \
-    X("ribbon",   UI_RIBBON_RULE_Y,   UI_RIBBON_RULE_W)         \
-    X("lead",     UI_LEAD_RULE_Y,     UI_LEAD_RULE_W)           \
-    X("secondary", UI_SECOND_RULE_Y,  UI_SECOND_RULE_W)         \
-    X("ticker",   UI_TICKER_RULE_Y,   UI_TICKER_RULE_W)
-
-/* The same for the bands, for the "every band contains ink" check — a band that
- * rendered nothing is a failure, not an empty state. X(name, y, h), with band 5
- * at its normal height; the solo promotion is a separate case the test states
- * for itself. */
-#define UI_BAND_TABLE(X)                            \
-    X("kicker",    UI_KICKER_Y,   UI_KICKER_H)      \
-    X("masthead",  UI_MAST_Y,     UI_MAST_H)        \
-    X("dateline",  UI_DATELINE_Y, UI_DATELINE_H)    \
-    X("ribbon",    UI_RIBBON_Y,   UI_RIBBON_H)      \
-    X("lead",      UI_LEAD_Y,     UI_LEAD_H)        \
-    X("secondary", UI_SECOND_Y,   UI_SECOND_H)      \
-    X("ticker",    UI_TICKER_Y,   UI_TICKER_H)      \
-    X("folio",     UI_FOLIO_Y,    UI_FOLIO_H)
-
-/* --- band 4: the index ribbon --------------------------------------------
- * Equal cells that abut exactly across the measure, with the 1 px vrule drawn ON
- * each internal boundary rather than in a gap of its own. Content is inset by
- * UI_RIBBON_PAD, so the rule never touches a figure.
+ * WHAT CAME OFF, AND WHY
+ * ----------------------
+ * There used to be a strip ABOVE the masthead carrying an edition slug, a state
+ * badge and the date. No broadsheet has one — the New York Times and the Wall
+ * Street Journal both start at the nameplate and put the date in a ruled line
+ * directly beneath it — and it cost 34 px of a page whose owner wanted the space
+ * spent on the company. The date moved down into the dateline row where it
+ * belongs and the strip is gone.
  *
- * The divisor is the number of indices that ARRIVED, not the five the band can
- * hold. A ribbon of five fixed cells fills only as many as the payload sent, and
- * two indices then sit in two cells of 228 with 684 px of paper around them —
- * under a masthead centred on the sheet, which is what makes it read as a ribbon
- * that lost three quotations rather than as a morning with two. Dividing instead
- * means the band fills at every count, and 1140 is the width that lets it:
- * 1140, 570, 380, 285 and 228 are all exact, so the cells always abut and the
- * last one always ends on the right margin with no remainder to place.
+ * The tape lost 62 px in the same edit. It used to be an 82 px band setting five
+ * index levels at 36 px, which is the single loudest thing a page can do and the
+ * reason the sheet read as a quote screen rather than as a newspaper. The Wall
+ * Street Journal prints the same information as ONE LINE of small caps under
+ * its nameplate — `Last week: DJIA 39138.86 up 31.47 0.08% | NASDAQ ...` — set
+ * smaller than its body text, because on a front page the tape is furniture and
+ * not the story. This is that line.
  *
- * Cell origins are not required to be even here, and at four cells three of them
- * are not. The evenness rule below is about photo tiles, which are blitted two
- * pixels to a byte; the ribbon sets type and rules, and neither cares.
+ * Together they gave the well 96 px, and the well is where the edition is.
  *
- * The three rows stack on the faces' MEASURED line heights with no padding
- * between them — 18 for the name, 41 for the value, 18 for the change, ending at
- * 304 against the heavy rule at 310. Six pixels of clearance is deliberate and
- * is all there is: adding air here pushes the change figure into the rule. */
-#define UI_RIBBON_CELLS          5
-#define UI_RIBBON_PAD           12
-#define UI_RIBBON_CELL_W(n)     (UI_CONTENT_W / (n))
-#define UI_RIBBON_CELL_X(n, i)  (UI_CONTENT_X + (i) * UI_RIBBON_CELL_W(n))
-#define UI_RIBBON_VRULE_X(n, i) (UI_RIBBON_CELL_X((n), (i) + 1) - UI_RULE_HAIR)
-
-#define UI_RIBBON_NAME_Y      (UI_RIBBON_Y)             /*  226, label_14   */
-#define UI_RIBBON_VALUE_Y     (UI_RIBBON_Y + 19)        /*  245, display_36 */
-#define UI_RIBBON_CHG_Y       (UI_RIBBON_Y + 60)        /*  286, body_16    */
-
-/* The change row's line height, and it is here rather than in ui_news.c because
- * the assertion below is the thing that stops it being raised into the heavy
- * rule. It was label_14's 18 and is body_20's 22: the one figure a market
- * ribbon exists to print — which way, and how far — was set two sizes below the
- * level it modifies, at 11 px of digit under a 36 px figure, so from the
- * distance this panel is read the band said five big numbers and five specks.
- * 286 + 22 = 308, six short of the rule, which is what the assertion holds. */
-#define UI_RIBBON_CHG_LH        22
-
-/* --- band 5: the lead well -------------------------------------------------
- * The headline runs the full measure and so does the photograph: 1140 x 360
- * across the top of the well, with the story set in two columns of 558
- * underneath it. A picture in three columns with its story beside it is a
- * feature well; a picture across the whole measure with the type under it is
- * a front page, and it is the treatment the owner chose knowing the price —
- * six lines to a leg instead of fourteen, and one secondary story off the
- * sheet. Setting the headline across all six and then breaking the body into a
- * narrower measure is what a broadsheet does, and it is why the page reads as a
- * front page rather than as a column of boxes.
+ * THE FOLIO CAME OFF TOO, and it is the one strip whose removal needs an
+ * argument, because every newspaper has one. A folio answers "which page of
+ * what am I holding, and where do I turn next" — and this paper is a single
+ * sheet in a frame on a wall. There is no next page to turn to, nothing to
+ * collate it with, and no second copy to tell it apart from. `A1` under a sheet
+ * that is the only sheet is furniture answering a question nobody asked, and
+ * the masthead, the sector and the symbol are all already on the dateline row.
+ * So the thirty pixels went to the well, where the edition is.
  *
- * The deck is held to four columns rather than six deliberately: a deck at 100
- * characters a line is not a deck, it is a paragraph pretending to be one.
+ * Nor did the folio carry a clock, and neither does anything else. The `as_of`
+ * line is on the tape and says when the numbers are from, which is the honest
+ * statement; a second timestamp saying when the sheet last repainted is a
+ * machine's concern printed on a reader's page, and on a panel that takes
+ * twenty-five seconds to repaint it reads as a demand to keep it fed. A
+ * newspaper carries a date, not a clock. */
+#define UI_MAST_Y             40
+#define UI_MAST_H            112
+#define UI_MAST_RULE_Y       158
+#define UI_MAST_RULE_W       UI_RULE_HEAVY
+
+/* The nameplate is set to fit, not to a size: UnifrakturMaguntia at 112 px sets
+ * "The Washington Post" at about 1130 px, and the simulator fails the build if a
+ * masthead passes 1140. */
+#define UI_MAST_MAX_W        UI_CONTENT_W
+
+#define UI_DATELINE_Y        165
+#define UI_DATELINE_H         20
+#define UI_DATELINE_RULE_Y   191
+#define UI_DATELINE_RULE_W   UI_RULE_HAIR
+
+#define UI_TAPE_Y            198
+#define UI_TAPE_H             20
+#define UI_TAPE_RULE_Y       224
+#define UI_TAPE_RULE_W       UI_RULE_HEAVY
+
+/* The tape's cells are laid left to right with a fixed separator between them
+ * and whatever room the strings need, rather than on an equal division: an index
+ * whose name is "PHLX SEMIS" and one called "VIX" do not want the same slot, and
+ * a ragged right edge on one line of furniture is what a real tape looks like.
+ * The session and the as-of line bracket it. */
+#define UI_TAPE_SEP_W         18
+#define UI_TAPE_TRACK          2
+
+#define UI_WELL_X       UI_CONTENT_X                    /*   30 */
+#define UI_WELL_Y            232
+#define UI_WELL_W       UI_CONTENT_W                    /* 1140 */
+#define UI_WELL_H           1338
+#define UI_WELL_B       (UI_WELL_Y + UI_WELL_H)         /* 1570, exclusive */
+
+/* The room a band boundary needs: the rule itself plus the paper either side.
+ * ui_compose() reserves this between bands and never after the last one, so a
+ * page's modules and its boundaries add up to the well exactly. */
+#define UI_BAND_GAP           14
+#define UI_BAND_RULE_DY        6    /* the rule's y within the gap             */
+#define UI_BAND_RULE_W  UI_RULE_MID
+
+/* --- inside a module ------------------------------------------------------
+ * The rows a module stacks its own furniture on. These are offsets and heights,
+ * never absolute y values: a module is placed by the compositor and lays itself
+ * out from wherever it landed.
  *
- * The photo tile is a fixed 1140 x 360 because that is the size the server
- * dithered it to. The device never resizes, tone-maps or dithers a photo, and a
- * tile whose byte count disagrees with this slot is not fetched at all — which
- * is the case the second shape below exists for. */
-#define UI_LEAD_X             UI_CONTENT_X              /*   30 */
-#define UI_LEAD_W             UI_CONTENT_W              /* 1140 */
+ * Every one of them is a MEASURED line height plus its leading, not a round
+ * number. A slot sized to a round number either clips a descender or leaves a
+ * gap that reads as a mistake in a stack of five. */
+#define UI_MOD_KICKER_H       18    /* label_14, tracked caps                  */
+#define UI_MOD_KICKER_GAP      6
+#define UI_MOD_HEAD_LH_0      62    /* display_56                              */
+#define UI_MOD_HEAD_LH_1      42    /* display_36                              */
+#define UI_MOD_HEAD_LH_2      28    /* deck_24                                 */
+#define UI_MOD_HEAD_LH_3      22    /* body_20                                 */
+#define UI_MOD_HEAD_GAP       10
+#define UI_MOD_DECK_LH        28    /* deck_24 italic                          */
+#define UI_MOD_DECK_GAP        8
+#define UI_MOD_BYLINE_H       18
+#define UI_MOD_BYLINE_GAP     10
+#define UI_MOD_HAIR_GAP       10    /* the hairline over a module's legs        */
+#define UI_MOD_BODY_LH        22    /* body_16 at its line space               */
+#define UI_MOD_BODY_LH_LG     26    /* body_20 at its line space               */
+#define UI_MOD_CAP_H          18
+#define UI_MOD_CAP_GAP         8
+#define UI_MOD_ART_GAP        10
 
-#define UI_LEAD_KICKER_Y      (UI_LEAD_Y)               /*  318, h  18 */
-#define UI_LEAD_HEAD_Y        (UI_LEAD_Y + 22)          /*  340, h 130 = 2 x 65 */
-#define UI_LEAD_HEAD_H        130
-#define UI_LEAD_DECK_Y        (UI_LEAD_Y + 160)         /*  478, h  54 = 2 x 27 */
-#define UI_LEAD_DECK_H        54
-#define UI_LEAD_DECK_W        UI_COL(4)                 /*  752 */
-#define UI_LEAD_BYLINE_Y      (UI_LEAD_Y + 222)         /*  540, h  18 */
-#define UI_LEAD_HAIR_Y        (UI_LEAD_Y + 248)         /*  566 */
-#define UI_LEAD_SPLIT_Y       (UI_LEAD_Y + 258)         /*  576 */
+/* The leg gutter inside a module, and the rule down its centre. Narrower than
+ * the page gutter: legs of one story are more closely related to each other
+ * than two stories are, and setting them at the page gutter makes one story
+ * read as two. */
+#define UI_LEG_GUTTER         20
+#define UI_LEG_RULE_DX  ((UI_LEG_GUTTER - UI_RULE_HAIR) / 2)
 
-#define UI_LEAD_VIS_X         UI_CONTENT_X              /*   30 */
-#define UI_LEAD_VIS_W         UI_CONTENT_W              /* 1140 */
-#define UI_LEAD_VIS_H         360                       /*  576..936 */
-#define UI_LEAD_CAP_Y         (UI_LEAD_Y + 624)         /*  942, h 18 */
+/* The end-of-story mark: a solid square set on the last line of the last leg.
+ * It is set INLINE — the room comes off the measure of the final line, not off
+ * the depth of the column — because a mark on a line of its own is a line of
+ * white the reader reads as the column having stopped early. */
+#define UI_END_SIDE            8
+#define UI_END_GAP             8
+#define UI_END_MEASURE(w)  ((w) - UI_END_SIDE - UI_END_GAP)
 
-/* The caption line carries two things and they are not the same thing. A photo
- * credit is not decoration — a broadsheet always prints one — and the version
- * this replaces concatenated caption and credit into ONE 558 px label and
- * ellipsized the pair, so the credit was the first thing destroyed and the
- * caption broke mid-word to destroy it. Two slots: the credit right-aligned at
- * the measure's right edge, the caption in what is left, and neither spends the
- * other's budget.
+/* --- the dossier rail -----------------------------------------------------
+ * One column, 170 px, and the only module on the sheet allowed to be that
+ * narrow, because it is the only one that sets no prose. A figure is a caps
+ * label over a value, and a group of them sits under a standing head.
  *
- * NEITHER WIDTH IS A NUMBER HERE ANY MORE, and that is the point. The credit
- * had a reserved 130 — a figure inherited from the days when this line ran
- * under a 558 px photograph — and "DEMO IMAGE" sets 110 in tracked label_14,
- * so the caption was paying twenty pixels a sheet for paper nobody would ever
- * print on. The photo is the full 1140 now, so the split is re-derived against
- * THAT measure at the one moment both strings are known: set_lead() measures
- * the credit with lv_text_get_size and hands the caption every pixel the credit
- * did not ask for. The two constants below are the ceiling that keeps a
- * pathological credit from eating the sentence, and the paper between them. */
-#define UI_LEAD_CRED_MAX_W    UI_COL(2)                 /*  364 */
-#define UI_LEAD_CAP_GAP       UI_TICKER_FIELD_GAP       /*    8 */
+ * The value is set in body_20 rather than in something larger. A rail of
+ * display figures competes with the lead headline for the eye, and the rail is
+ * reference — it is read deliberately, by someone who has already read the
+ * story, from closer than the headline was read from. */
+#define UI_FIG_LABEL_H        18
+#define UI_FIG_VALUE_H        26
+#define UI_FIG_GAP            14
+#define UI_FIG_GROUP_H        20
+#define UI_FIG_GROUP_GAP       8
+#define UI_FIG_GROUP_RULE_DY   6
 
-/* --- the end-of-story mark -------------------------------------------------
- * A small filled square on the last line of a story, flush right of its
- * measure. Every broadsheet closes a story with one, and this sheet needs it
- * more than most: a leg copyfitted to its box stops on whatever word the pixel
- * ran out on, so without a mark the reader cannot tell a story that ended from
- * one that was cut — and on a two-page paper whose second page is a quotation
- * table there is nowhere for a cut story to be continued TO. The bytes past the
- * cut are dropped, and the square is the page saying so.
+/* --- a table --------------------------------------------------------------
+ * Quarterly statements on A2, and the peer comparison on both pages. Rows are
+ * ruled with a hairline rather than boxed: a grid of boxes on this panel is a
+ * lot of black, and a broadsheet's tables are ruled horizontally and not
+ * vertically. */
+#define UI_TAB_HEAD_H         18
+#define UI_TAB_ROW_H          26
+#define UI_TAB_LABEL_W       160
+#define UI_TAB_RULE_GAP        4
+
+/* --- charts ---------------------------------------------------------------
+ * A chart on this sheet is small and it lives inside a module, never as a band
+ * of its own. The reference page for this design carries exactly one chart on
+ * its front, one column wide, inside a story about the index it plots. A page
+ * of charts is a terminal; a page of prose with one chart in it is a newspaper.
  *
- * Nine pixels: about half the line it sits on, which is the proportion a
- * printed end mark has against the type it closes.
- *
- * THE ROOM IS TAKEN OFF THE MEASURE AND NOT OFF THE DEPTH, and the difference
- * is a line of copy per story. Reserving a LINE at the foot of the box — set
- * the text into a box one line shorter, put the square in the line kept back —
- * is the obvious shape and it was rendered before this was written: on the demo
- * front page it cost the lead exactly the line that ended "...started calling a
- * schedule.", so the paragraph then stopped on an indefinite article with a
- * square after it announcing that it had finished. A mark that says "this story
- * ended" bought by deleting the sentence that ended it is the wrong trade at
- * any price.
- *
- * Off the MEASURE it costs about a character and a half a line, and it buys the
- * one property that makes the placement safe: no line of the box can ever enter
- * the column the square stands in, so the square goes on the LAST line — where
- * a printed end mark goes — with no possibility of it landing on type, and
- * without anything having to measure where that line's words actually stopped.
- * The copy is still copyfitted by ui_fit_text against the narrower measure, so
- * that function's contract is untouched: it is still being asked to fit this
- * text in this box, and the box is simply the one the mark is not in. */
-#define UI_END_SIDE            9
-#define UI_END_MEASURE(w)     ((w) - UI_END_SIDE - UI_TICKER_FIELD_GAP)
+ * The plot is what remains of the module after its caps head and its note. */
+#define UI_CHART_HEAD_H       18
+#define UI_CHART_HEAD_GAP      6
+#define UI_CHART_NOTE_H       18
+#define UI_CHART_NOTE_GAP      6
+#define UI_CHART_MIN_PLOT     90
+#define UI_CHART_PLOT_PREF   150
 
-/* The story's own legs, and they are the same two columns in both of the well's
- * shapes — only their depth changes, because only the top of the well does.
- *
- * UNDER a photograph: 132 px of them, y 968, six lines each. Two legs of 53
- * characters at six lines is about 636 characters of lead, which is what a
- * picture across the whole measure costs and what was bought with it.
- *
- * With no tile: the same two columns run the full 524 from the split down, and
- * the left one holds the story's chart instead of type. That is the shape this
- * band had before the photograph was widened, and it is still the right one
- * when there is nothing to put across the top — a well with a 360 px hole in it
- * is worse than a well laid out as if it never expected a picture.
- *
- * UI_LEAD_BODY_H is the deep one because it is the depth anything OTHER than
- * the lead borrows: the setup sheet sets its standing type down this same well
- * and has no photograph to make room for. */
-#define UI_LEAD_COLS          2
-#define UI_LEAD_COL_W         UI_MEASURE_LG_W           /*  558, 53 chars */
-#define UI_LEAD_COL_X(i)      UI_COLX(3 * (i))          /*   30, 612 */
-
-/* The LAST leg sets to a measure 17 px shorter, which is where the story's end
- * mark stands. Only the last one: the first leg has no end to mark — the story
- * runs out of it and into the second — so a column taken off it would buy
- * nothing and cost the same character and a half a line. Two ragged-right legs
- * differing by 17 px of measure is not a difference anybody can see; a first
- * leg with a square at the foot of it, in the middle of a sentence that
- * continues at the top of the next column, is. */
-#define UI_LEAD_LEG_W         UI_END_MEASURE(UI_LEAD_COL_W)     /*  541 */
-
-#define UI_LEAD_BODY_H        (UI_LEAD_Y + UI_LEAD_H - UI_LEAD_SPLIT_Y)   /* 524 */
-#define UI_LEAD_UNDER_Y       (UI_LEAD_Y + 650)                           /* 968 */
-#define UI_LEAD_UNDER_H       (UI_LEAD_Y + UI_LEAD_H - UI_LEAD_UNDER_Y)   /* 132 = 6 x 22 */
-
-/* The rule down the lead well's gutter. Column rules run down bands 6 and 7 and
- * stopped dead in the one band that dominates the sheet, so the lead read as
- * two floating tiles above a ruled grid. A broadsheet's column rules are the
- * page's spine and they are consistent — and now that band 6 divides on this
- * same x, the spine runs unbroken from the foot of the picture to the ticker. */
-#define UI_LEAD_VRULE_X       (UI_LEAD_COL_X(0) + UI_LEAD_COL_W + UI_GUTTER_RULE_DX)
-
-/* --- band 6: one story and the portfolio ----------------------------------
- * 176 px, which is what the lead well left when its photograph went to the full
- * measure, and it buys one story and the rail. The story is a kicker, a
- * headline and a deck, and then it stops — a below-the-fold story with no body
- * under it is ordinary in print, and the alternative at this height is four
- * lines of type that end mid-sentence, which is not.
- *
- * The measure divides in half, at the same x the lead's two legs divide on, so
- * the vrule at 599 runs from the foot of the picture to the ticker rule as one
- * line. The half is also what makes both sides fill: display_36 sets this
- * page's secondary headlines over two lines at 558 and deck_24 sets their decks
- * over two, so both boxes are full rather than padded — at 752 the same
- * headline takes one line and a half and the band would be air. And 558 is the
- * first width at which the rail can afford a NAME beside its symbol: the four
- * figure fields are fixed, and at the 364 it used to have, what was left over
- * for a name measured zero. */
-#define UI_SECOND_X           UI_CONTENT_X              /*   30 */
-#define UI_SECOND_W           UI_MEASURE_LG_W           /*  558 */
-#define UI_SECOND_VRULE_X     (UI_SECOND_X + UI_SECOND_W + UI_GUTTER_RULE_DX)  /* 599 */
-
-/* The three rows stack to the band's foot exactly: 18 + 82 + 54 = 154 of type
- * and 22 of air, and the air is spent between the headline and the deck because
- * that is where a broadsheet spends it. */
-#define UI_SECOND_KICKER_Y    (UI_SECOND_Y)             /* 1116, h  18 */
-#define UI_SECOND_HEAD_Y      (UI_SECOND_Y + 26)        /* 1142, h  82 = 2 x 41 */
-#define UI_SECOND_HEAD_H      82
-#define UI_SECOND_DECK_Y      (UI_SECOND_Y + 122)       /* 1238, h  54 = 2 x 27 */
-#define UI_SECOND_DECK_H      54
-
-/* The deck is the secondary's LAST element — there is no body under it — so it
- * is the deck that carries the story's end mark, on the same reserved column
- * the lead's last leg uses. There was in any case nothing in this band's depth
- * to take a line from: 18 + 82 + 54 is 154 of the 176, and the 22 that are left
- * are the air between the headline and the deck, which is where a broadsheet
- * spends it and not somewhere a square can be put instead. */
-#define UI_SECOND_DECK_W      UI_END_MEASURE(UI_SECOND_W)       /*  541 */
-
-/* The rail: its heading, a hairline, and six holdings at the 25 px pitch the
- * quotation table below it uses. Six rather than eight because six is what
- * 1142..1292 holds at that pitch, and the pitch is not negotiable — a rail set
- * tighter than the table it sits above reads as a different kind of thing. The
- * two holdings that no longer fit are not lost: the table quotes from where the
- * rail stopped. */
-#define UI_RAIL_X             UI_COLX(3)                /*  612 */
-#define UI_RAIL_W             UI_MEASURE_LG_W           /*  558 */
-#define UI_RAIL_HEAD_Y        (UI_SECOND_Y)             /* 1116, h 18 */
-#define UI_RAIL_HAIR_Y        (UI_SECOND_Y + 22)        /* 1138 */
-#define UI_RAIL_ROW_Y         (UI_SECOND_Y + 26)        /* 1142 */
-#define UI_RAIL_ROW_H         25
-#define UI_RAIL_ROWS          6                         /* 1142..1292 */
-
-/* And the field that exists only when the rail is wide.
- *
- * The rail takes the whole measure on a day with no second story, and the
- * version this replaces spent all 1140 of it on the same five fields — which
- * meant the NAME field, the only elastic one, went from 194 px to 776. "Nvidia"
- * sets 46 of that, so every row on a thin sheet carried an 800 px river between
- * a company and its own price, six times over: the exact fault that was just
- * fixed on A2's quotation rows, in the exact same shape. A field does not
- * become a better field for being given width it has no text to put in it.
- *
- * So the name is capped at the quotation table's own NAME width and the
- * leftover goes to a shape instead — the same session series the table below
- * prints, in the outermost column, which is where the table prints it too.
- * Below UI_RAIL_SPARK_MIN there is nothing a series can say and the width goes
- * back to the name; at the rail's own 558 that is always the case, so a narrow
- * rail is untouched to the pixel.
- *
- * THE HEIGHT IS THE ROW'S AND NOT THE TABLE'S 16, and that is a correction
- * rather than an inconsistency. This shape is 538 px wide where the table's is
- * 150, so at a shared height it drew the same twelve samples at a thirtieth of
- * the slope — six near-horizontal lines running from a percentage to the right
- * margin, which read as leader rules underlining the row rather than as the
- * shape of a session. A sparkline's amplitude is its box's height; a very wide
- * box has to take every pixel of row it can get. Nineteen in a pitch of
- * twenty-five leaves three above and three below, and the rail rules no lines
- * between its rows for it to touch. */
-#define UI_RAIL_SPARK_W       UI_TICKER_SPARK_W         /*  150 */
-#define UI_RAIL_SPARK_DY      3
-#define UI_RAIL_SPARK_H       (UI_RAIL_ROW_H - 2 * UI_RAIL_SPARK_DY)   /* 19 */
-#define UI_RAIL_SPARK_MIN     UI_RAIL_SPARK_W
-
-/* --- band 7: the watchlist and the briefs ---------------------------------
- * The table takes columns 1-4 so its five fields have room to breathe, and the
- * briefs take 5-6. One block of eight rather than two blocks of four: the model
- * holds sixteen quotes, and the eight that do not fit here are exactly what page
- * A2 exists for, rather than being crammed in at half the row pitch.
- *
- * The five fields sum to 752 with four 8 px gaps: 90 + 230 + 130 + 120 + 150. */
-#define UI_TICKER_X           UI_CONTENT_X              /*  30 */
-#define UI_TICKER_W           UI_COL(4)                 /* 752 */
-#define UI_TICKER_VRULE_X     (UI_TICKER_X + UI_TICKER_W + UI_GUTTER_RULE_DX)   /* 793 */
-#define UI_TICKER_HEAD_Y      (UI_TICKER_Y)             /* 1306, h 18 */
-#define UI_TICKER_HAIR_Y      (UI_TICKER_Y + 22)        /* 1328 */
-#define UI_TICKER_ROW_Y       (UI_TICKER_Y + 28)        /* 1334 */
-#define UI_TICKER_ROW_H       25
-#define UI_TICKER_ROWS        8                         /* 1334..1534 */
-
-#define UI_TICKER_SYM_W        90
-#define UI_TICKER_NAME_W      230
-#define UI_TICKER_LAST_W      130
-#define UI_TICKER_CHG_W       120
-#define UI_TICKER_SPARK_W     150
-#define UI_TICKER_SPARK_H      16
-#define UI_TICKER_FIELD_GAP     8
-
-#define UI_BRIEF_X            UI_COLX(4)                /*  806 */
-#define UI_BRIEF_W            UI_COL(2)                 /*  364 */
-#define UI_BRIEF_ROWS         3
-#define UI_BRIEF_H            68                        /* 1334..1538 */
-/* A sparkline is the one chart with no axis, no labels and no room to have
- * them, sized to sit inside a row without touching its rules. */
-#define UI_SPARK_W            UI_TICKER_SPARK_W
-#define UI_SPARK_H            UI_TICKER_SPARK_H
-
-/* The grid is stated twice on purpose — once as a span and once as a sum — and
- * these are where the two are made to agree. A column width edited without its
- * gutter, or a ribbon cell rounded to a friendlier number, fails the build here
- * rather than three pixels into the right margin on the glass. */
-#ifndef __cplusplus
-_Static_assert(UI_COL(UI_COLS) == UI_CONTENT_W,
-               "6 columns + 5 gutters must be exactly the content width");
-_Static_assert(1 * UI_RIBBON_CELL_W(1) == UI_CONTENT_W
-               && 2 * UI_RIBBON_CELL_W(2) == UI_CONTENT_W
-               && 3 * UI_RIBBON_CELL_W(3) == UI_CONTENT_W
-               && 4 * UI_RIBBON_CELL_W(4) == UI_CONTENT_W
-               && 5 * UI_RIBBON_CELL_W(5) == UI_CONTENT_W
-               && UI_RIBBON_CELLS == NEWS_INDEX_MAX,
-               "the index ribbon must divide the measure exactly at every count "
-               "of indices the model can hold");
-_Static_assert(UI_TICKER_SYM_W + UI_TICKER_NAME_W + UI_TICKER_LAST_W
-               + UI_TICKER_CHG_W + UI_TICKER_SPARK_W
-               + 4 * UI_TICKER_FIELD_GAP == UI_TICKER_W,
-               "the quotation table's five fields must fill its four columns exactly");
-_Static_assert(UI_TICKER_X + UI_TICKER_W + UI_GUTTER == UI_BRIEF_X
-               && UI_BRIEF_X + UI_BRIEF_W == UI_CONTENT_R,
-               "the quotation table and the briefs must fill the measure with one gutter");
-_Static_assert(UI_SECOND_X + UI_SECOND_W + UI_GUTTER == UI_RAIL_X
-               && UI_RAIL_X + UI_RAIL_W == UI_CONTENT_R,
-               "the secondary story and the rail must fill the measure with one gutter");
-_Static_assert(UI_LEAD_X + UI_LEAD_W == UI_CONTENT_R,
-               "the lead's headline runs the full measure");
-_Static_assert(UI_LEAD_VIS_X + UI_LEAD_VIS_W == UI_CONTENT_R,
-               "the lead's photograph runs the full measure too");
-_Static_assert(UI_LEAD_COL_X(0) + UI_LEAD_COL_W + UI_GUTTER == UI_LEAD_COL_X(1)
-               && UI_LEAD_COL_X(UI_LEAD_COLS - 1) + UI_LEAD_COL_W == UI_CONTENT_R,
-               "the lead's two legs must fill the measure with one gutter");
-
-/* The well's rows are stated as offsets from its top and have to add up to its
- * height, or the last leg either overruns the rule or stops short of it. The
- * caption is the row between the two that is easiest to lose in an edit. */
-_Static_assert(UI_LEAD_SPLIT_Y + UI_LEAD_VIS_H < UI_LEAD_CAP_Y
-               && UI_LEAD_CAP_Y + 18 <= UI_LEAD_UNDER_Y,
-               "the caption's line must sit clear between the photograph and the legs");
-_Static_assert(UI_LEAD_UNDER_Y + UI_LEAD_UNDER_H == UI_LEAD_Y + UI_LEAD_H
-               && UI_LEAD_SPLIT_Y + UI_LEAD_BODY_H == UI_LEAD_Y + UI_LEAD_H,
-               "a lead leg must end on the foot of the well in both of its shapes");
-
-/* Band 6 has two halves and neither may stop short of the band's foot: the
- * story's deck and the rail's last holding both land on 1292. */
-_Static_assert(UI_SECOND_DECK_Y + UI_SECOND_DECK_H == UI_SECOND_Y + UI_SECOND_H,
-               "the secondary story must set to the foot of its band");
-_Static_assert(UI_RAIL_ROW_Y + UI_RAIL_ROWS * UI_RAIL_ROW_H
-               == UI_SECOND_Y + UI_SECOND_H,
-               "the portfolio rail's rows must fill its band exactly");
+/* --- the invariants -------------------------------------------------------
+ * Everything above that can be checked at compile time, is. A geometry error on
+ * this panel costs twenty-five seconds to see and the build is free. */
+#ifndef UI_INTERNAL_NO_ASSERTS
 
 /* Every tile the server sends is packed two pixels to a byte, so a slot of odd
- * width or at an odd x would need a nibble-shifting blit for no reason. This is
- * what keeps the grid honest about that. */
+ * width or at an odd x would need a nibble-shifting blit for no reason. The
+ * grid guarantees it for column spans; the well has to be checked on its own,
+ * because a photograph is blitted into a module and a module is measured off
+ * the well. ui_compose() carries the same rule forward to every rectangle it
+ * produces, and ui_compose_check() proves it there. */
 _Static_assert((UI_COL_W % 2) == 0 && (UI_GUTTER % 2) == 0
-               && (UI_MARGIN % 2) == 0 && (UI_LEAD_VIS_W % 2) == 0
-               && (UI_LEAD_VIS_X % 2) == 0 && (UI_LEAD_VIS_H % 2) == 0,
+               && (UI_MARGIN % 2) == 0
+               && (UI_WELL_X % 2) == 0 && (UI_WELL_Y % 2) == 0
+               && (UI_WELL_W % 2) == 0 && (UI_WELL_H % 2) == 0,
                "every column span and origin must be even so a photo tile blits as a memcpy");
 
-/* The ribbon's three rows stack on measured line heights with no padding, and
- * the change figure is the one most likely to be pushed into the rule by an
- * edit above it. 18 + 41 + 18 from y=226 ends at 304, six clear of the rule. */
-/* TWO PIXELS. This is the tightest thing on the sheet, and it is deliberate: the
- * change row was raised from label_14's 18 to 22 because the one figure a market
- * ribbon exists to print was set two sizes below the level it modifies, and the
- * band was grown from 78 to 82 to pay for it rather than reflowing every band
- * below. If you are reading this because the build stopped here, the ribbon's
- * change row now ends ON OR BELOW the heavy rule at y=310: either the row got
- * taller (a regenerated face, a bigger UI_F_* on the chg label) or the rule
- * moved up. Nothing else on this sheet is within four pixels of anything. */
-_Static_assert(UI_RIBBON_CHG_Y + UI_RIBBON_CHG_LH < UI_RIBBON_RULE_Y,
-               "the index ribbon's change row is colliding with the heavy rule "
-               "beneath it: UI_RIBBON_CHG_Y + UI_RIBBON_CHG_LH must stay under "
-               "UI_RIBBON_RULE_Y, and there are only two pixels of slack");
-_Static_assert(UI_LEAD_Y + UI_LEAD_H_SOLO == UI_SECOND_Y + UI_SECOND_H,
-               "a promoted lead must end where the secondary row ended");
-_Static_assert(UI_FOLIO_Y + UI_FOLIO_H <= UI_CONTENT_B,
-               "the folio must sit above the bottom margin");
+_Static_assert(UI_COLS * UI_COL_W + (UI_COLS - 1) * UI_GUTTER == UI_CONTENT_W,
+               "the six columns and their five gutters must be the content width");
+
+/* The furniture and the well have to tile the sheet between the margins with
+ * nothing overlapping and nothing hanging past the bottom. Written as the chain
+ * of gaps rather than as one sum, so a failure names the strip that moved. */
+_Static_assert(UI_MAST_Y >= UI_CONTENT_Y
+               && UI_MAST_Y + UI_MAST_H < UI_MAST_RULE_Y
+               && UI_MAST_RULE_Y + UI_MAST_RULE_W < UI_DATELINE_Y
+               && UI_DATELINE_Y + UI_DATELINE_H < UI_DATELINE_RULE_Y
+               && UI_DATELINE_RULE_Y + UI_DATELINE_RULE_W < UI_TAPE_Y
+               && UI_TAPE_Y + UI_TAPE_H < UI_TAPE_RULE_Y
+               && UI_TAPE_RULE_Y + UI_TAPE_RULE_W < UI_WELL_Y,
+               "the furniture above the well must stack without overlapping");
+
+/* The well now runs to the bottom margin itself, because nothing is under it.
+ * Equality is the point rather than a coincidence: any slack here is paper the
+ * compositor was never offered, and the whole edit was about giving it away. */
+_Static_assert(UI_WELL_B == UI_CONTENT_B,
+               "the well must run to the bottom margin — there is no folio under it");
+
+/* The well is the whole point of the edit that removed the bands: if it is not
+ * materially bigger than what the eight bands left, the edit bought nothing.
+ * The old lead package, secondary row and ticker table came to 1190 px of
+ * content between them. */
+_Static_assert(UI_WELL_H > 1250,
+               "the well has lost the room the furniture edit was for");
+
+/* A band boundary's rule has to sit inside the gap the compositor reserved for
+ * it, with paper on both sides. */
+_Static_assert(UI_BAND_RULE_DY > 0
+               && UI_BAND_RULE_DY + UI_BAND_RULE_W < UI_BAND_GAP,
+               "a band rule must sit clear inside UI_BAND_GAP");
+
+/* One dossier entry — a label over a value plus its gap — has to divide the
+ * well often enough to be a rail rather than a list of four things. */
+_Static_assert((UI_FIG_LABEL_H + UI_FIG_VALUE_H + UI_FIG_GAP) * 12 < UI_WELL_H,
+               "the dossier rail cannot hold twelve figures in the well");
+
+/* A one-column module is the only one that may set no prose, and the reason is
+ * arithmetic rather than taste — see the measure table above. Guard the number
+ * the arithmetic rests on. */
+_Static_assert(UI_MEASURE_W == UI_COL(2) && UI_COL(1) == UI_COL_W,
+               "the two-column measure is the narrowest that sets prose");
 #endif
 
 /* --- colour ---------------------------------------------------------------
  * White paper, black type, edge to edge. Colour on this page is not decoration,
- * it is data: green and red appear on percentage changes and their marks — in
- * the index ribbon, the portfolio rail and the ticker table — and nowhere else.
- * Not on headlines, not on rules, not on a chart's axis.
+ * it is data. There are exactly two things it is allowed to mean, and every
+ * coloured pixel on the sheet answers to one of them:
  *
- * Blue and yellow never reach the glass from the UI at all. Partly because the
- * panel renders those two inks least faithfully of the six — but mostly because
- * a page that spends colour on ornament is a page where the two colours that
- * carry meaning stop being seen. The only other colour on the sheet is a photo
- * tile, which arrives already dithered across all six inks.
+ *   DIRECTION — green and red on a percentage change and its ▲▼ mark, through
+ *     ui_chg_colour() and nowhere else. On the tape, in the metric grid, in the
+ *     peer table, and on a rate line inside a drawn statement.
+ *   IDENTITY — which series a bar or a line belongs to, inside a graphic that
+ *     has more than one. That is what ui_series_t below is, and the same series
+ *     takes the same treatment in the plot and in the legend or the reader has
+ *     to guess.
  *
- * All four are exact palette entries, so they take wp_quantize()'s identity
+ * Type is black. Rules are black. A chart's axis is black. A headline is black.
+ * The test has not changed shape — "if a mark is not data, it is ink" — it has
+ * gained a second kind of data, because a graphic drawn in one ink cannot say
+ * which of three quantities a bar is and was making the reader read a legend
+ * position instead of a colour.
+ *
+ * WHAT THE PANEL CAN ACTUALLY DO, which is what decides everything below.
+ * WCAG contrast on gamma-corrected relative luminance, from the ink table
+ * transcribed in make_tile.py. Reproduce it rather than trusting it — an
+ * earlier draft of this note carried a set of figures computed from linear luma
+ * and every one of them was wrong:
+ *
+ *     ink      hex      vs PAPER  vs BLACK   rel. luminance
+ *     black    #1F2226   9.18:1    1.00:1     0.0158
+ *     red      #62201E   6.92:1    1.33:1     0.0372
+ *     blue     #233F8E   5.56:1    1.65:1     0.0587
+ *     green    #35563A   4.75:1    1.93:1     0.0772
+ *     ------------------------------------------------ the cliff
+ *     screen   1-in-3    1.42:1    6.46:1     0.3744
+ *     yellow   #C1BB1E   1.16:1    7.90:1     0.4697
+ *     paper    #B9C7C9   1.00:1    9.18:1     0.5538
+ *
+ * THE INKS ARE TWO BANDS, NOT A LADDER, and that is the fact the whole series
+ * design turns on. Four inks cluster at the dark end and three options at the
+ * light end, with a factor of five between the clusters and NOTHING in between.
+ * Inside a band, value is very nearly useless:
+ *
+ *     blue vs green 1.17:1     screen vs yellow 1.22:1
+ *     blue vs black 1.65:1     screen vs paper  1.42:1
+ *
+ * So a graphic gets two clean steps of value and no more. Every series past the
+ * second separates by HUE (blue against black is 1.65:1 in value and
+ * unmistakably blue) or by TEXTURE (a 1-in-3 screen against flat paper is
+ * 1.42:1 and obviously striped). Two series sharing a band, a hue and a texture
+ * are one series to a reader, whatever the legend claims.
+ *
+ * Yellow does not work on paper. It is not a weak colour there, it is very
+ * nearly no colour at all: a yellow bar reads as the outline of a bar. Against
+ * black, though, yellow is 7.90:1 — the best pair the panel has after black on
+ * paper. So yellow is legal only enclosed by a black keyline, which is what
+ * UI_SERIES_KEYED draws and why it draws it as one call rather than leaving a
+ * caller to remember. The simulator fails the build on a yellow pixel that can
+ * reach paper without crossing black, so the rule is structural in two
+ * independent places.
+ *
+ * Blue is excellent against paper and near-invisible against black, so blue
+ * earns its place by HUE and not by value: it is the line over black bars, or a
+ * bar with a gutter beside it, never the neighbouring segment of a stacked bar.
+ * ui_series_at() encodes that; do not hand-pick a treatment around it.
+ *
+ * All of these are exact palette entries, so they take wp_quantize()'s identity
  * path and come out flat — a colour anywhere between two inks would dither, and
  * a dithered hairline is a dashed one.
  *
@@ -593,17 +466,30 @@ _Static_assert(UI_FOLIO_Y + UI_FOLIO_H <= UI_CONTENT_B,
 #define UI_PAPER        lv_color_hex(WP_RGB_WHITE)
 #define UI_UP           lv_color_hex(WP_RGB_GREEN)
 #define UI_DOWN         lv_color_hex(WP_RGB_RED)
+#define UI_SERIES_BLUE_C lv_color_hex(WP_RGB_BLUE)
+#define UI_SERIES_KEYED_C lv_color_hex(WP_RGB_YELLOW)
+
+/* The keyline that makes yellow legal, in pixels. Two, not one: a one-pixel
+ * black edge around a 1.10:1 fill is a hairline holding back an area, and the
+ * first time the panel's registration is half a pixel out on one side the fill
+ * touches paper. Two survives that. */
+#define UI_SERIES_KEY_W 2
+
+/* The smallest box ui_series_fill() will draw a KEYED or OPEN treatment in.
+ * Below it the two keylines meet and the fill disappears, so a caller that
+ * cannot afford this must ask for fewer series rather than a thinner bar. */
+#define UI_SERIES_MIN_PX (2 * UI_SERIES_KEY_W + 2)
 
 /* Colour is data, and a figure the board cannot vouch for is not data. When the
  * snapshot is stale or the board is offline, every change figure and every mark
  * on both pages prints in ink instead: the alternative is a page of prices in
  * the colour reserved for live movement, asserting in the loudest way the sheet
- * has that it is current, with one 52 px word at the top saying otherwise.
+ * has that it is current, with one word at the top saying otherwise.
  *
- * The three call sites that decide a change's colour go through this rather
- * than through `bp < 0 ? UI_DOWN : UI_UP`, and zero is INK at every state: a
- * flat session is not a rise, and a solid green triangle beside +0.00% makes a
- * reader scanning a column for direction count it as a gainer.
+ * Every call site that decides a change's colour goes through this rather than
+ * through `bp < 0 ? UI_DOWN : UI_UP`, and zero is INK at every state: a flat
+ * session is not a rise, and a solid green triangle beside +0.00% makes a reader
+ * scanning a column for direction count it as a gainer.
  *
  * Defined in ui_news.c, which is where the link state arrives. */
 bool       ui_data_live(void);
@@ -614,8 +500,8 @@ lv_color_t ui_chg_colour(int32_t bp);
  * ui_fonts.h currently sets a deck in. Every text face covers ASCII, Latin-1
  * and S_DATA_PUNCT, so any of them can draw any string the network sends.
  *
- * There is no separate numeral face, so the ribbon's 6,412.83 is set in
- * UI_F_HEADLINE and the ticker's figures in UI_F_LABEL. That is not a
+ * There is no separate numeral face, so the tape's index levels are set in
+ * UI_F_LABEL and the dossier's figures in UI_F_BODY_LG. That is not a
  * compromise: the text faces here are a Didone and a text serif, whose lining
  * figures are the whole point of the family, and a table set in the same face
  * as the headlines above it is what makes a front page look typeset rather than
@@ -630,6 +516,13 @@ lv_color_t ui_chg_colour(int32_t bp);
 #define UI_F_BODY       (&ui_font_body_16)
 #define UI_F_LABEL      (&ui_font_label_14)
 
+/* The headline face for one of ui_head_weight()'s four steps, and the line
+ * height that goes with it. Two calls rather than one table because the caller
+ * needs them in different places — the face when it sets the label, the line
+ * height when it measures the module before the label exists. */
+const lv_font_t *ui_head_font(int weight);
+int              ui_head_lh(int weight);
+
 /* --- shapes ---------------------------------------------------------------
  * All coordinates are relative to `par`. Every one of these returns an object
  * that is non-scrollable, non-clickable, square-cornered and un-themed. */
@@ -641,13 +534,72 @@ lv_obj_t *ui_pane(lv_obj_t *par, int x, int y, int w, int h);
 /* A solid black rectangle — filled chips, the end-of-story square. */
 lv_obj_t *ui_fill(lv_obj_t *par, int x, int y, int w, int h);
 
+/* Paint `s`'s treatment into a rectangle: the one call that puts a series
+ * identity on the glass in WIDGET form. Its immediate-mode twin is
+ * ui_series_draw_abs() below, and between them they are the whole surface —
+ * see there for why there are two and why the invariant names ui_common.c
+ * rather than either function.
+ *
+ * It is a call and not a colour because two of the five treatments are not one
+ * colour. A KEYED fill is a black rectangle with a yellow one inset by
+ * UI_SERIES_KEY_W, and a SCREEN fill is a run of hairlines — returning
+ * lv_color_t and letting callers fill with it would put an unkeylined yellow on
+ * paper the first time somebody reached past this function, which is exactly
+ * the failure the colour note above says is structurally prevented.
+ *
+ * Boxes narrower or shorter than UI_SERIES_MIN_PX fall back to SOLID rather
+ * than drawing a keyline with nothing inside it. That is a silent substitution
+ * on purpose: it happens per bar, deep inside a plot, and the alternatives are
+ * a chart with a hole in it or an assert on a device that must not stop. The
+ * caller that cares picks a series count its bars can carry — ui_series_at()
+ * is the function that knows how. */
+void ui_series_fill(lv_obj_t *par, int x, int y, int w, int h, ui_series_t s);
+
+/* The legend swatch for `s`, UI_SERIES_SWATCH px square. Separate from
+ * ui_series_fill() only so that every legend on both sheets is the same size
+ * without each caller carrying the number. */
+#define UI_SERIES_SWATCH 14
+lv_obj_t *ui_series_swatch(lv_obj_t *par, int x, int y, ui_series_t s);
+
+/* The same five treatments drawn IMMEDIATELY into a layer, in absolute
+ * coordinates with x2/y2 inclusive — the house convention, shared with
+ * ui_draw_rect_c_abs() below.
+ *
+ * Two forms of one thing, and the split is not redundancy. A drawn statement's
+ * plot is a display list transcribed in a LV_EVENT_DRAW_MAIN handler, not a
+ * widget tree, and ui_modules.c's standing rule is that nothing there is
+ * created in an update. The widget form cannot serve it at any acceptable
+ * price: a SCREEN treatment built as objects is one object PER HAIRLINE, so a
+ * 200 px bar is about sixty-six of them and a six-period stack with one
+ * screened series is some four hundred created and destroyed on every poll, on
+ * a board where a poll is supposed to be free when nothing changed.
+ *
+ * The invariant the colour note claims is therefore NOT "ui_series_fill() is
+ * the only place blue or yellow comes from" — it is that **ui_common.c** is,
+ * and these two calls are its whole surface. Both honour the keyline, both
+ * honour the UI_SERIES_MIN_PX floor, and the simulator's yellow-on-paper check
+ * has one implementation to audit rather than two.
+ *
+ * Legend swatches inside a plot use THIS call at UI_SERIES_SWATCH px square
+ * rather than ui_series_swatch(), which is also what makes a legend entry and
+ * its bars provably the same drawing rather than two drawings that agree. */
+void ui_series_draw_abs(lv_layer_t *L, int x1, int y1, int x2, int y2,
+                        ui_series_t s);
+
+/* A polyline's ink for series `s`, for the immediate-mode chart draw, which
+ * strokes rather than fills and so cannot use ui_series_fill(). KEYED and OPEN
+ * have no stroke form — yellow cannot be a line on paper and paper cannot be a
+ * line at all — and both return black; a caller wanting more than two stroked
+ * series has run out of panel and needs to say so with shape instead. */
+lv_color_t ui_series_stroke(ui_series_t s);
+
 /* A white rectangle with a black border of `bw` px. */
 lv_obj_t *ui_frame(lv_obj_t *par, int x, int y, int w, int h, int bw);
 
 /* A horizontal rule of `weight` px, and a vertical one of `weight` px. Every
- * band draws at least one, and they exist as their own call rather than as
- * ui_fill() so that the three legal weights are the only thing a caller can
- * pass and the simulator has one shape to look for. */
+ * band boundary draws at least one, and they exist as their own call rather
+ * than as ui_fill() so that the three legal weights are the only thing a caller
+ * can pass and the simulator has one shape to look for. */
 lv_obj_t *ui_rule(lv_obj_t *par, int x, int y, int w, int weight);
 lv_obj_t *ui_vrule(lv_obj_t *par, int x, int y, int h, int weight);
 
@@ -669,9 +621,9 @@ lv_obj_t *ui_lab_w(lv_obj_t *par, int x, int y, int w,
 /* The same with a fixed HEIGHT as well, and the call most of this page is set
  * with: the text wraps inside `w` and is ellipsized where it would pass `h`.
  * LVGL rounds that cut down to the last whole line, so a height of n line
- * heights means exactly "at most n lines" — which is how the lead headline is
- * given two and its deck two without either being able to take a third from the
- * band beneath it. */
+ * heights means exactly "at most n lines" — which is how a headline is given
+ * three and its deck two without either being able to take a third from the
+ * module beneath it. */
 lv_obj_t *ui_lab_box(lv_obj_t *par, int x, int y, int w, int h,
                      const lv_font_t *f, lv_text_align_t align, const char *txt);
 
@@ -696,8 +648,8 @@ void ui_track(lv_obj_t *label, int px);
 
 /* ASCII and Latin-1 upper case, into `out`. ui_track() is letterspacing cut for
  * Franklin's CAPS, and applied to lower case it takes a word apart —
- * "N a s d a q" beside a correctly tracked "S&P 500" in the same row. Two of
- * the tracked slots on this sheet take a string the network wrote, so those two
+ * "N a s d a q" beside a correctly tracked "S&P 500" in the same row. Several
+ * tracked slots on this sheet take a string the network wrote, so those
  * uppercase it here first. Bytes outside the two ranges pass through unchanged,
  * which keeps a UTF-8 sequence a UTF-8 sequence. */
 void ui_upper(char *out, size_t n, const char *src);
@@ -742,17 +694,17 @@ void ui_draw_tri_abs(lv_layer_t *L, int x, int y, int w, int h,
 
 /* --- text ----------------------------------------------------------------- */
 
-/* 641283 -> "641,283". Grouping matters here: the ribbon's index levels are the
- * first thing read from across a room, and an ungrouped five-digit number is
- * genuinely slower to parse. */
+/* 641283 -> "641,283". Grouping matters here: an index level is read from
+ * across a room, and an ungrouped five-digit number is genuinely slower to
+ * parse. */
 void ui_group_int(char *out, size_t n, int v);
 
 /* The two figures this page prints, from the two integer units the wire sends:
  * 641283 cents -> "6,412.83" and 62 basis points -> "+0.62%". They live here
- * rather than in a snprintf at each call site because the ribbon, the portfolio
- * rail and the quotation table print the same two quantities and must not
- * disagree about a decimal or a separator — and because nothing on this board
- * is allowed to reach for a float to do it.
+ * rather than in a snprintf at each call site because the tape, the dossier
+ * rail and the peer table print the same two quantities and must not disagree
+ * about a decimal or a separator — and because nothing on this board is allowed
+ * to reach for a float to do it.
  *
  * A percentage always carries its sign, the plus included: a column where only
  * the losses are signed reads as a column of typos. The sign is the ASCII '-',
@@ -769,8 +721,15 @@ void ui_pct(char *out, size_t n, int32_t bp);
  * yourself" — which on a front page means an empty page, not a placeholder,
  * because the demo snapshot is what an unconfigured board shows.
  *
- * The pane is full-bleed rather than inset because the bands above are panel
- * coordinates: a page positions a child at UI_MAST_Y and that is where it
+ * BOTH PAGES ARE COMPOSED, and that changes what create() can do. It used to
+ * build every widget at its final coordinates, because the coordinates were in
+ * this header; now they are not known until a snapshot arrives, so create()
+ * builds the pool and update() places it. A widget that is not used by the
+ * day's make-up is hidden rather than freed — LVGL object churn on every poll
+ * is how a long-running board fragments its heap.
+ *
+ * The pane is full-bleed rather than inset because the furniture above is in
+ * panel coordinates: a page positions a child at UI_MAST_Y and that is where it
  * lands, with no origin to remember and no second frame of reference for the
  * simulator to have to undo.
  *
@@ -781,6 +740,16 @@ void      ui_page_front_update(const news_t *v);
 
 lv_obj_t *ui_page_markets_create(lv_obj_t *par);
 void      ui_page_markets_update(const news_t *v);
+
+/* What the day's make-up came out as, for the simulator to assert on. Both
+ * pages record their last composition here; the simulator reads it back and
+ * checks the tiling rather than checking that a rule landed on a row it can no
+ * longer predict. Returns the module count and points `mods` at the array.
+ *
+ * It is a debugging seam and the firmware never calls it, but it is not behind
+ * an #ifdef: a seam that is only compiled in the simulator is a seam that is
+ * only correct in the simulator. */
+int ui_page_layout(ui_page_t page, const ui_mod_t **mods, ui_compose_env_t *env);
 
 #ifdef __cplusplus
 }

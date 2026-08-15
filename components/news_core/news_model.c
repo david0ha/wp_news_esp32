@@ -8,6 +8,27 @@
 
 #include <string.h>
 
+/* --- how big this thing is, asserted rather than remembered ---------------
+ *
+ * sizeof(news_t) is quoted as a fact in CLAUDE.md, in user_app.cpp's comments
+ * and in the design spec, and every one of those copies has at some point been
+ * a number somebody typed. It is load-bearing: three whole snapshots are
+ * file-scope statics in user_app.cpp precisely because this is three times
+ * UiTask's 8 KB stack, and a snapshot on a frame is an instant overflow.
+ *
+ * So it is measured here, once, and the build breaks when it moves. That is the
+ * point of the assert rather than a defect in it: a capacity that grew wants
+ * the four places that quote the old number brought with it.
+ *
+ * Every member is a char array, an int32_t, an int, a bool, a uint8_t, an
+ * int16_t or an enum, so the widest alignment in the struct is four and the
+ * layout is the same on x86-64 and on Xtensa. That is why one number can serve
+ * the host tests, the simulator and the firmware. */
+_Static_assert(sizeof(news_t) == 32932,
+               "sizeof(news_t) moved. Measure it, then update the figure in "
+               "CLAUDE.md, in user_app.cpp and in the design spec — they all "
+               "quote it, and they are all wrong now.");
+
 /* --- UTF-8-safe copy ------------------------------------------------------ */
 
 /* Length in bytes of the UTF-8 sequence that starts with `c`, or 1 for a byte
@@ -145,6 +166,26 @@ chart_kind_t news_chart_kind_from(const char *word)
     return CHART_NONE;
 }
 
+/* --- table render --------------------------------------------------------- */
+
+/* Unknown is TABLE_PRINT, and that is the same argument news_chart_kind_from()
+ * makes one function up: a table drawn with the wrong geometry is worse than one
+ * that was only printed, and printing it is never wrong. A producer that invents
+ * a fourth word gets a grid of numbers — every cell it sent, correctly labelled —
+ * rather than a picture of a shape nobody chose.
+ *
+ * "bars+line" is accepted beside "bars_line" because the underscore is a
+ * transcription of a name that is naturally written with a plus, and a producer
+ * that types the obvious thing should not silently lose its chart. */
+table_render_t news_table_render_from(const char *word)
+{
+    if (!word) return TABLE_PRINT;
+    if (ieq(word, "stack"))     return TABLE_STACK;
+    if (ieq(word, "bars_line")) return TABLE_BARS_LINE;
+    if (ieq(word, "bars+line")) return TABLE_BARS_LINE;
+    return TABLE_PRINT;
+}
+
 /* --- fingerprint ---------------------------------------------------------- */
 
 /* FNV-1a. Fed field by field rather than over the struct: struct padding is
@@ -175,10 +216,10 @@ static void h_int(uint32_t *h, int32_t v)
     h_bytes(h, &v, sizeof(v));
 }
 
-/* A quote is the same three lines wherever it appears, so the ribbon and the
- * ticker table feed the hash through one function rather than two that can
- * drift apart. The sparkline is in it: it is 48x14 pixels of ink and it moves
- * every session. */
+/* A quote is the same three lines wherever it appears, so the ribbon and A2's
+ * copy of it feed the hash through one function rather than two that can drift
+ * apart. The sparkline is in it: it is 48x14 pixels of ink and it moves every
+ * session. */
 static void h_quote(uint32_t *h, const news_quote_t *q)
 {
     h_str(h, q->symbol);
@@ -189,16 +230,73 @@ static void h_quote(uint32_t *h, const news_quote_t *q)
     for (int i = 0; i < q->spark_n && i < NEWS_SPARK_MAX; i++) h_int(h, q->spark[i]);
 }
 
+/* The id addresses a tile the device caches, so two snapshots that differ only
+ * in which photograph the lead carries must not agree. The dimensions are in
+ * here for the same reason and for a second one: the compositor asks a picture
+ * how tall it wants to be at a given width, so a tile that changed shape
+ * changes the whole page under it. */
+static void h_photo(uint32_t *h, const news_photo_t *p)
+{
+    h_str(h, p->id);
+    h_int(h, p->w);
+    h_int(h, p->h);
+    h_str(h, p->caption);
+    h_str(h, p->credit);
+}
+
 static void h_chart(uint32_t *h, const news_chart_t *c)
 {
     h_int(h, (int32_t)c->kind);
+    h_str(h, c->label);
     h_str(h, c->span);
+    h_str(h, c->note);
     h_int(h, c->n);
     for (int i = 0; i < c->n && i < NEWS_BARS_MAX; i++) {
         h_int(h, c->o[i]);
         h_int(h, c->h[i]);
         h_int(h, c->l[i]);
         h_int(h, c->c[i]);
+    }
+}
+
+static void h_table(uint32_t *h, const news_table_t *t)
+{
+    h_str(h, t->title);
+    h_str(h, t->note);
+    h_int(h, t->col_count);
+    for (int c = 0; c < t->col_count && c < NEWS_TABLE_COLS; c++) h_str(h, t->col[c]);
+    h_int(h, t->row_count);
+    for (int r = 0; r < t->row_count && r < NEWS_TABLE_ROWS; r++) {
+        h_str(h, t->row[r].label);
+        /* Every declared column, not every filled one: a row whose tail went
+         * empty prints em dashes there, and a row that gained a cell where an
+         * em dash was is a different table. */
+        for (int c = 0; c < t->col_count && c < NEWS_TABLE_COLS; c++) {
+            h_str(h, t->row[r].v[c]);
+        }
+    }
+
+    /* `render` and `has_n` decide whether this table reaches the glass as a grid
+     * of numbers or as a picture, which is the largest single difference two
+     * payloads can make to A2 without changing a character of their text. A
+     * table that stopped being drawable — the producer dropped one cell of one
+     * numeric row — falls back to printing, and a hash that missed that would
+     * leave the drawn version on the panel forever. */
+    h_int(h, (int32_t)t->render);
+    h_int(h, t->has_n);
+
+    /* The numeric plane over the same declared rectangle the text plane uses.
+     * `n` is the geometry of every bar and every point of the line; the printed
+     * cell beside it is the label. Two payloads whose bars move but whose
+     * rounded strings do not — 9,340 against 9,344, both printed "9,340" when
+     * the day's make-up gives the table a narrow column — are two different
+     * pictures, so this is fed independently of `v` rather than assumed to
+     * follow it. The parser zeroes the plane whenever `has_n` is false, so an
+     * undrawn table hashes the same however much numeric junk arrived with it. */
+    for (int r = 0; r < t->row_count && r < NEWS_TABLE_ROWS; r++) {
+        for (int c = 0; c < t->col_count && c < NEWS_TABLE_COLS; c++) {
+            h_int(h, t->n[r][c]);
+        }
     }
 }
 
@@ -215,11 +313,28 @@ uint32_t news_hash(const news_t *v)
     h_str(&h, v->as_of);
     h_str(&h, v->generated_at);
 
-    h_int(&h, v->index_count);
-    for (int i = 0; i < v->index_count && i < NEWS_INDEX_MAX; i++) {
-        h_quote(&h, &v->indices[i]);
-    }
+    /* The subject is the whole edition, and every field of it is either printed
+     * in the nameplate or measured against another one — the last against the
+     * session's range, the range against the 52-week bounds. */
+    h_str(&h, v->subject.symbol);
+    h_str(&h, v->subject.name);
+    h_str(&h, v->subject.exchange);
+    h_str(&h, v->subject.sector);
+    h_int(&h, v->subject.last_c);
+    h_int(&h, v->subject.chg_bp);
+    h_int(&h, v->subject.prev_close_c);
+    h_int(&h, v->subject.open_c);
+    h_int(&h, v->subject.high_c);
+    h_int(&h, v->subject.low_c);
+    h_int(&h, v->subject.wk52_hi_c);
+    h_int(&h, v->subject.wk52_lo_c);
 
+    /* Each count is fed before its array, and that is not belt-and-braces. The
+     * compositor reads how many briefs and how many peers arrived before it
+     * decides whether those modules go on the sheet at all, so two payloads
+     * that differ only in a count lay out differently even when every string
+     * they share is identical. Feeding the count also separates "three items"
+     * from "two items, the second of which is empty". */
     h_int(&h, v->story_count);
     for (int i = 0; i < v->story_count && i < NEWS_STORIES_MAX; i++) {
         const news_story_t *s = &v->stories[i];
@@ -229,22 +344,63 @@ uint32_t news_hash(const news_t *v)
         h_str(&h, s->deck);
         h_str(&h, s->byline);
         h_str(&h, s->body);
-        h_str(&h, s->symbol);
-        h_int(&h, s->last_c);
-        h_int(&h, s->chg_bp);
-        h_chart(&h, &s->chart);
-        /* The photo id addresses a tile the device caches; two snapshots that
-         * differ only in which photograph the lead carries must not agree. */
-        h_str(&h, s->photo.id);
-        h_int(&h, s->photo.w);
-        h_int(&h, s->photo.h);
-        h_str(&h, s->photo.caption);
-        h_str(&h, s->photo.credit);
+        h_int(&h, s->chart);
+        h_photo(&h, &s->photo);
     }
 
-    h_int(&h, v->ticker_count);
-    for (int i = 0; i < v->ticker_count && i < NEWS_TICKERS_MAX; i++) {
-        h_quote(&h, &v->tickers[i]);
+    h_int(&h, v->figure_count);
+    for (int i = 0; i < v->figure_count && i < NEWS_FIGURES_MAX; i++) {
+        const news_figure_t *f = &v->figures[i];
+        h_str(&h, f->group);
+        h_str(&h, f->label);
+        h_str(&h, f->value);
+        h_int(&h, f->has_chg);
+        h_int(&h, f->chg_bp);
+        /* Which tier a figure is set in, and how long its bar is. Neither
+         * changes a character of the rail's text and both change most of its
+         * ink: a figure promoted to a hero is set several times larger and takes
+         * a whole line to itself, which moves everything under it. */
+        h_int(&h, f->emph);
+        h_int(&h, f->bar);
+    }
+
+    h_int(&h, v->brief_count);
+    for (int i = 0; i < v->brief_count && i < NEWS_BRIEFS_MAX; i++) {
+        h_str(&h, v->briefs[i].date);
+        h_str(&h, v->briefs[i].kicker);
+        h_str(&h, v->briefs[i].text);
+    }
+
+    h_int(&h, v->peer_count);
+    for (int i = 0; i < v->peer_count && i < NEWS_PEERS_MAX; i++) {
+        const news_peer_t *p = &v->peers[i];
+        h_str(&h, p->symbol);
+        h_str(&h, p->name);
+        h_str(&h, p->per);
+        h_str(&h, p->cap);
+        h_int(&h, p->last_c);
+        h_int(&h, p->chg_bp);
+        h_int(&h, p->is_subject);
+    }
+
+    h_int(&h, v->table_count);
+    for (int i = 0; i < v->table_count && i < NEWS_TABLES_MAX; i++) {
+        h_table(&h, &v->tables[i]);
+    }
+
+    h_int(&h, v->chart_count);
+    for (int i = 0; i < v->chart_count && i < NEWS_CHARTS_MAX; i++) {
+        h_chart(&h, &v->charts[i]);
+    }
+
+    h_int(&h, v->index_count);
+    for (int i = 0; i < v->index_count && i < NEWS_INDEX_MAX; i++) {
+        h_quote(&h, &v->indices[i]);
+    }
+
+    h_int(&h, v->thumb_count);
+    for (int i = 0; i < v->thumb_count && i < NEWS_THUMBS_MAX; i++) {
+        h_photo(&h, &v->thumbs[i]);
     }
 
     return h;

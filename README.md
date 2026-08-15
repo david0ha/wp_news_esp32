@@ -26,8 +26,8 @@ the simulator fails the build if they do — every exact palette colour takes `w
 identity path, so black type and 1 px hairlines come out crisp, and anything in between dithers.
 
 **Point it at nothing and it still works.** With no URL configured the board draws a built-in demo
-front page badged `DEMO` — four stories, five indices, sixteen quotations, a full-measure photograph.
-That is a complete configuration and a complete front page, not a placeholder.
+edition badged `DEMO` — one company, its stories, its dossier, its accounts and a photograph. That
+is a complete configuration and a complete edition, not a placeholder.
 
 ## Quick start
 
@@ -90,8 +90,8 @@ Photographs are made by `tools/make_tile.py`, which diffuses them across all six
 opts back into black ink on white paper:
 
 ```bash
-python3 tools/make_tile.py photo.jpg -o "$EDITION_DIR/tiles/nvda_hq.bin" \
-        -W 1140 -H 360 --preview /tmp/check.png
+python3 tools/make_tile.py photo.jpg -o "$EDITION_DIR/tiles/lead.bin" \
+        -W 1140 -H 320 --halftone --preview /tmp/check.png
 ```
 
 That was rendered both ways and looked at. Error-diffusing a photograph across Spectra 6's real
@@ -212,13 +212,20 @@ forever, and nobody notices until they read a stale number off it.
 
 Comparing them is cheap because a snapshot is a plain copyable value with fixed capacities and no
 pointers: one page, one struct, safe to snapshot under a mutex and hand to another task with no
-ownership question. It is also 19,780 bytes measured, against `NewsTask`'s 16 KB stack — so both
+ownership question. It is also 24,328 bytes measured, against `NewsTask`'s 16 KB stack — so both
 producers work off the heap or write the caller's storage directly, and neither ever puts a whole
-front page on a frame.
+edition on a frame.
 
-The clock is on the same footing. On the 5.83" the header was worth a windowed partial every five
-minutes; here a tick that changes one pixel costs the same twenty-five seconds as new data, so the
-folio's `UPDATED` pair is recomposed only when something else has already earned the refresh.
+The clock is on the same footing, and it is the reason nothing on the sheet ticks. On the 5.83" the
+header was worth a windowed partial every five minutes; here a tick that changes one pixel costs the
+same twenty-five seconds as new data. So `ui_news_tick()` moves the date on **in the framebuffer**
+and rides out with the next refresh that had a reason of its own. It never earns one.
+
+That is also why the only clock-derived thing left on the paper is the dateline, and only on a board
+whose payload did not spell one itself. `as_of` on the tape says when the numbers are from, which is
+the server's claim and the honest one; a second time at the foot saying when the glass last
+repainted would be a machine's concern printed on a reader's page. A newspaper carries a date, not a
+clock.
 
 ## The page
 
@@ -243,9 +250,8 @@ descender. The masthead reads `S_MASTHEAD` in `ui_strings.h`; its face carries a
 `.,'-&` rather than only the letters that string happens to use, so renaming the paper cannot
 silently blank the largest text on the sheet.
 
-The bands, the tier engine, the copyfitter and the length budget are in
-[docs/pages.md](docs/pages.md) and, in full, in
-[the design spec](docs/specs/2026-08-14-front-page-design.md).
+The compositor, the copyfitter and the length budget are in [docs/pages.md](docs/pages.md) and, in
+full, in [the design spec](docs/specs/2026-08-15-single-company-broadsheet-design.md).
 
 ## Project structure
 
@@ -261,17 +267,19 @@ components/
     news_parse.c          the wire contract, clamping every field
     news_mock.c           the built-in demo front page
     news_service.c        one fetch: http_get + parse
+    ui_compose.c          the make-up desk: guillotine cuts, packing, height, tombstoning
+    ui_modules.c          the module renderers both pages are built from
     ui_news.c             the two pages and the routing between them
-    ui_page_front.c       A1 — masthead, ribbon, lead well, secondaries, watchlist
-    ui_page_markets.c     A2 — the full watchlist, the indices at width, the briefs
+    ui_page_front.c       A1 — the day's modules: the lead, the stories, the dossier rail
+    ui_page_markets.c     A2 — the same company's accounts, composed the same way
     ui_fit.c              copyfit: as much text as fits, cut at a word boundary
     ui_chart.c            line / candle / bar, integer scaling, no libm
     ui_tile.c             fetch and blit a 4bpp photo tile
-    ui_common.c           the shared shapes; ui_internal.h holds the grid and the bands
+    ui_common.c           the shared shapes; ui_internal.h holds the grid and the furniture
     wp_palette.c          the six-ink quantizer, shared with the simulator
     device_api_json.c     the JSON the companion app receives
     fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
-    test/host/            the eight host tests
+    test/host/            the nine host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP onboarding
   device_api/             STA-mode HTTP/JSON control server + mDNS (wpnews.local)
   board_io/               battery ADC

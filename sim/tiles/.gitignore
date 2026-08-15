@@ -1,0 +1,13 @@
+# The tiles are the artefact; the PNGs beside them are not.
+#
+# tools/demo_photos.py writes only the .bin files by default. Its --keep-src
+# flag leaves the 8-bit source next to each one and --preview leaves what the
+# screened tile actually looks like on the panel, and both exist because a
+# pipeline whose output cannot be looked at is a pipeline nobody checks. They
+# are how the plates were judged; they are not deliverables, they are derived
+# from committed inputs by a deterministic script, and they are about 700 KB.
+#
+# Committing derived images beside the artefacts they were derived from is hard
+# to undo later, so they are ignored here rather than left to a habit of
+# remembering to delete them.
+*.png

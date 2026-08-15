@@ -155,9 +155,11 @@ I device_api: control server up on port 80
 I device_api: mDNS advertising http://wpnews.local
 ```
 
-`sntp sync timeout — header clock stays blank (--:--)` costs only the dateline and the folio's
-updated/next pair; snapshot staleness is measured monotonically and is unaffected. From here the
-board is reachable:
+`sntp sync timeout` costs **only the dateline**, and only on a board whose payload did not spell one
+itself — `ui_news_tick()` returns early when the snapshot carries its own, so on a normal edition an
+unsynced clock reaches the glass nowhere at all. With no payload dateline and no clock, the slot
+prints empty rather than 1970. Snapshot staleness is measured monotonically and is unaffected. From
+here the board is reachable:
 
 ```bash
 curl -s http://wpnews.local/api/info
@@ -215,7 +217,7 @@ poller. If it does not, `GET /api/state` reports `source.lastResult`, and the fa
 you somewhere different: [news-contract.md](news-contract.md) has them,
 [app-control.md](app-control.md) has the field.
 
-For the real thing — an agent that researches the watchlist and files a front page twice a day —
+For the real thing — an agent that researches one listed company and files an edition twice a day —
 see `tools/edition/`.
 
 ## Buttons

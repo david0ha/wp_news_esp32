@@ -33,6 +33,137 @@
 #include "ui_chart.h"
 
 #include <stddef.h>
+#include <stdint.h>
+
+/* --- series identity ------------------------------------------------------
+ *
+ * THE DERIVATION, written out so the next person can CHECK the table below
+ * rather than trust it. ui_chart.h says what is maximised; this says how it
+ * comes out and why there is no room left for taste in it.
+ *
+ * THE MEASUREMENTS. Relative luminance of the MEASURED inks — tools/make_tile.py's
+ * table, which is what the panel prints, not the saturated primaries the UI
+ * draws with and wp_quantize() takes as an index:
+ *
+ *              L        L+0.05   hue        texture
+ *     SOLID   0.0158    0.0658   neutral    flat
+ *     BLUE    0.0587    0.1087   blue       flat
+ *     SCREEN  0.3744    0.4244   neutral    striped     (L is (1*S + 2*O) / 3)
+ *     KEYED   0.4697    0.5197   yellow     flat
+ *     OPEN    0.5538    0.6038   neutral    flat
+ *
+ * THE ONE BOUNDARY THE PANEL DRAWS FOR ITSELF. Sort those luminances and there
+ * is exactly one gap worth the name: BLUE to SCREEN is 3.90:1, and the next
+ * largest step anywhere in the list is SOLID to BLUE at 1.65:1. So the panel is
+ * two bands — DARK {SOLID, BLUE} and LIGHT {SCREEN, KEYED, OPEN} — and that
+ * split is read off the ink table rather than chosen. Value can separate ACROSS
+ * the boundary and cannot separate inside a band; every within-band pair is
+ * under 1.7:1.
+ *
+ * WHICH PAIRS A READER CAN ACTUALLY TELL APART. A pair is separated when it
+ * differs on at least one of the three axes with room to spare, and each axis
+ * says when it has room:
+ *
+ *     VALUE    the two are in different bands
+ *     TEXTURE  one is striped and the other is not — the only axis that is
+ *              scale-free, and the reason a newspaper has always divided a
+ *              stacked bar with screen tone
+ *     HUE      the hues differ AND the pair is in the LIGHT band. Hue needs
+ *              luminance: yellow against paper is a colour, navy against black
+ *              is two darks.
+ *
+ * Run that over all ten pairs and exactly ONE fails:
+ *
+ *     SOLID-BLUE   same band, same texture, hue at the dark end   NOT SEPARATED
+ *
+ * which is the pair ui_internal.h's colour note spends a paragraph forbidding,
+ * arrived at here from the ink table instead of from the prohibition. Every
+ * other pair passes, including the two the value ordering alone would have
+ * condemned: SCREEN-KEYED is 1.22:1 but striped against flat AND neutral against
+ * yellow, and KEYED-OPEN is 1.16:1 but yellow against neutral inside identical
+ * keylines, in the band where hue works.
+ *
+ * SO THE PICKS FALL OUT WITH NOTHING LEFT TO CHOOSE. Take the sets of size n in
+ * which every pair is separated; among those, carry as many HUES as possible,
+ * and let the value spread break what ties remain. The dark band holds ONE
+ * usable treatment and the light band holds three, so the ceiling is four:
+ *
+ *     n   picks                             consecutive contrast
+ *     1   SOLID                              -
+ *     2   BLUE               KEYED          4.78
+ *     3   BLUE  SCREEN       KEYED          3.90  1.22
+ *     4   BLUE  SCREEN KEYED OPEN           3.90  1.22  1.16
+ *     5   SOLID BLUE SCREEN  KEYED OPEN     1.65  3.90  1.22  1.16
+ *
+ * n = 2: {BLUE, KEYED} is the only pair carrying both hues, and at 4.78:1 it is
+ *        comfortably separated as well.
+ * n = 3: SCREEN joins them rather than OPEN. {BLUE,SCREEN,OPEN} has the better
+ *        worst pair (1.42 against 1.22) and one hue fewer; the 1.22 pair is
+ *        SCREEN against KEYED, which is striped-neutral against flat-yellow and
+ *        so is separated twice over.
+ * n = 4: OPEN joins them, and this is the row where the panel is spent.
+ * n = 5: THERE IS NO SEPARATED SET OF FIVE. Asking for five puts SOLID next to
+ *        BLUE because the panel has nowhere else to put it. The row exists
+ *        because UI_SERIES_N is five and the function must answer, not because
+ *        five works — a graphic that needs five quantities needs two graphics.
+ * n = 1: no pair to separate, so nothing above applies. A hue that distinguishes
+ *        nothing is ornament, which the colour policy forbids, and a lone series
+ *        takes the page's ink.
+ *
+ * Each row is a subset of the one under it, which was not imposed and is worth
+ * knowing: a graphic that gains a series never re-treats the ones it already had.
+ *
+ * WHY HUES FIRST, WHICH IS THE HALF OF THE OBJECTIVE THAT WAS MISSING. This
+ * function was first written to maximise the value spread alone, and it produced
+ * a table — SOLID/OPEN, SOLID/SCREEN/OPEN, SOLID/SCREEN/KEYED/OPEN — in which
+ * BLUE appeared only at n = 5, which is unseparable anyway. Every graphic this
+ * paper draws carries two or three series, so the two coloured inks the panel
+ * has reached the glass exactly never and the sheets came back black. The
+ * arithmetic was right and the objective was wrong: `series_ok()` has ALREADY
+ * guaranteed that every pair is separated, so extra value contrast past that
+ * point buys a reader nothing they did not already have, while a hue buys the
+ * thing the design is for — a bar that says which quantity it is by its colour
+ * instead of by its rank in a legend.
+ *
+ * It is not "use colour wherever possible". Admissibility is absolute and is
+ * still tested first: SOLID beside BLUE is forbidden at every n, and KEYED's
+ * yellow still never touches paper. All that changed is which of two equally
+ * readable sets gets written down.
+ *
+ * WHY NOT MAXIMISE VALUE ALONE, beyond the above: rank by luminance contrast
+ * with no admissibility test and n = 3 comes out {SOLID, BLUE, OPEN} — a black
+ * bar against a navy one, scoring 1.65 where {SOLID,SCREEN,OPEN} scores 1.42 —
+ * because a ratio counts the dark end's 1.65 as a bigger difference than the
+ * light end's 1.42 and a reader does not. Rank by gamma-encoded luma DIFFERENCE
+ * instead and n = 4 comes out {SOLID,BLUE,SCREEN,OPEN}, the same mistake one row
+ * later. Both failures are the same failure: a scalar over value cannot express
+ * that the panel's dark band has one usable treatment in it and its light band
+ * has three.
+ *
+ * The arithmetic never changes, so this is a table and not a search.
+ * test_chart_scale.c encodes the three axes above and runs the search, and
+ * fails if any row here is beatable or contains an unseparated pair it did not
+ * have to. */
+ui_series_t ui_series_at(int i, int n)
+{
+    /* [n - 1][i]. Each row turns out to be a subset of the one under it: that
+     * was not imposed, it fell out, and it is worth knowing because it means a
+     * graphic that gains a series never introduces a treatment above one it was
+     * already using — the ladder is walked, not permuted. */
+    static const uint8_t pick[UI_SERIES_N][UI_SERIES_N] = {
+        { UI_SERIES_SOLID },
+        { UI_SERIES_BLUE, UI_SERIES_KEYED },
+        { UI_SERIES_BLUE, UI_SERIES_SCREEN, UI_SERIES_KEYED },
+        { UI_SERIES_BLUE, UI_SERIES_SCREEN, UI_SERIES_KEYED, UI_SERIES_OPEN },
+        { UI_SERIES_SOLID, UI_SERIES_BLUE, UI_SERIES_SCREEN, UI_SERIES_KEYED,
+          UI_SERIES_OPEN },
+    };
+
+    if (n < 1 || n > UI_SERIES_N) return UI_SERIES_SOLID;
+    if (i < 0 || i >= n)          return UI_SERIES_SOLID;
+
+    return (ui_series_t)pick[n - 1][i];
+}
 
 /* --- the scale ------------------------------------------------------------ */
 
@@ -456,6 +587,16 @@ lv_obj_t *ui_chart_create(lv_obj_t *par, int x, int y, int w, int h)
     return o;
 }
 
+void ui_chart_resize(lv_obj_t *chart, int w, int h)
+{
+    chart_t *s = state_of(chart);
+    if (!s) return;
+
+    s->bw = w;
+    s->bh = h;
+    lv_obj_set_size(chart, w, h);
+}
+
 /* The two value labels. They are children of the chart, so LVGL draws them
  * after DRAW_MAIN and they land on top of the polyline they annotate — which is
  * exactly why they are painted opaque: a stroke running through the middle of a
@@ -513,10 +654,18 @@ static void place_label(lv_obj_t *lab, int x, int y, int h)
     lv_obj_set_pos(lab, x, top);
 }
 
-/* Label the first and last values, or take the labels away. Only a line chart
- * gets them: a candle's extremes are already drawn as its wicks, and its close
- * is on the reference line, so a figure at each end would be the third way of
- * saying the same thing. */
+/* Label the first and last values, or take the labels away.
+ *
+ * A LINE and a BAR chart both get them; a candle does not, because its extremes
+ * are already drawn as its wicks and its close sits on the reference line, so a
+ * figure at each end would be the third way of saying the same thing.
+ *
+ * The bar chart was excluded and should not have been. Six black bars with no
+ * figure anywhere near them is a shape rather than a reading: it says the last
+ * quarter was the biggest and nothing whatever about how big, which on a page
+ * whose whole argument is a company's accounts is the one thing a reader came
+ * for. The price chart beside it prints 978.40 and 1,631.47 and works; the
+ * difference between the two was entirely this line. */
 static void label_ends(lv_obj_t *chart, chart_t *s, ui_chart_win_t win,
                        int w, int h)
 {
@@ -525,7 +674,8 @@ static void label_ends(lv_obj_t *chart, chart_t *s, ui_chart_win_t win,
     int cap = (w - 8) / 2;
     if (cap > CH_VAL_W) cap = CH_VAL_W;
 
-    bool wanted = s->kind == CHART_LINE && !s->spark && s->n > 0
+    bool wanted = (s->kind == CHART_LINE || s->kind == CHART_BAR)
+                  && !s->spark && s->n > 0
                   && cap >= CH_VAL_MIN_W
                   && h >= lv_font_get_line_height(UI_F_LABEL);
     if (!wanted) {

@@ -1,14 +1,17 @@
 # CLAUDE.md
 
 This repository is a **one-copy newspaper**: an ESP32-S3 driving a 13.3" Spectra 6 six-colour
-e-Paper panel, portrait 1200 × 1600, that prints a front page about the stocks its owner named. An
-agent researches them off-board and serves one JSON URL on the local network; the device typesets
-it. Two pages — A1, the front page, and A2, the markets page. It is set up over Wi-Fi from a
-captive portal.
+e-Paper panel, portrait 1200 × 1600, that prints a broadsheet about **one listed company a day**.
+An agent researches it off-board and serves one JSON URL on the local network; the device typesets
+it. Two pages — A1, why the price moved and what else happened to the company, and A2, the same
+company's accounts. It is set up over Wi-Fi from a captive portal.
 
-The authoritative design is [docs/specs/2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md).
-Read it before changing layout, the data model or the wire contract; everything below is what the
-code does about it.
+The authoritative design is
+[docs/specs/2026-08-15-single-company-broadsheet-design.md](docs/specs/2026-08-15-single-company-broadsheet-design.md),
+which supersedes the data model and layout of
+[2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md) (whose geometry,
+colour policy, chart rules and photo rules still hold). Read them before changing layout, the data
+model or the wire contract; everything below is what the code does about it.
 
 ## Quick start (do this first)
 
@@ -41,13 +44,13 @@ Four layers, three of them runnable without hardware. Run them in this order —
 the next and catches a different class of mistake.
 
 ```bash
-# 1) pure logic — eight host tests: the wire format, the demo snapshot, the fetch
+# 1) pure logic — nine host tests: the wire format, the demo snapshot, the fetch
 #    layer, the companion-app JSON, the quantizer, the framebuffer repack,
-#    copyfitting, chart scaling
+#    copyfitting, chart scaling, and the compositor's tiling invariants
 cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 /tmp/vt/test_news_parse && /tmp/vt/test_news_mock && /tmp/vt/test_news_service \
   && /tmp/vt/test_api_json && /tmp/vt/test_palette && /tmp/vt/test_epd6_transpose \
-  && /tmp/vt/test_fit && /tmp/vt/test_chart_scale
+  && /tmp/vt/test_fit && /tmp/vt/test_chart_scale && /tmp/vt/test_compose
 
 # 2) provisioning pure logic, and the reference producer against its committed fixture
 sh components/provisioning/test/run.sh
@@ -61,11 +64,18 @@ cd sim && ./sim.sh          # NEWS_URL=http://localhost:8123/news.json ./sim.sh
 idf.py build
 ```
 
-The simulator is not a preview, it is a **test**: it fails the build on a missing glyph, on a rule
-that does not land on its exact row, on ink outside the 30 px margin, on a band that rendered
+The simulator is not a preview, it is a **test**: it fails the build on a missing glyph, on a
+composition that does not tile the well, on ink outside the 30 px margin, on a module that rendered
 nothing, on a label wider than its slot, on a masthead over 1140 px, and on blue or yellow reaching
-the glass. Look at `sim/shots/*.png` after any UI change — they are drawn in the *measured* Spectra 6
-inks rather than the saturated ones the UI draws with, so they can be judged as paper.
+the glass. Its assertions are **properties**, not transcriptions — "the modules tile the well" holds
+for every payload, where the old "the lead rule lands on row 1108" could not survive a page that
+changes shape. Look at `sim/shots/*.png` after any UI change — they are drawn in the *measured*
+Spectra 6 inks rather than the saturated ones the UI draws with, so they can be judged as paper.
+
+The producing agent runs the same typesetter over its own candidate payload before it files, via
+`tools/edition/render-check.sh <news.json>`, and is required to look at the sheets it produces. A
+desk that cannot see the paper cannot know that a headline four characters over budget became an
+ellipsis in the middle of a sentence.
 
 ## Target hardware
 
@@ -131,12 +141,19 @@ this is the difference between a front page hanging quietly in its frame and one
 nobody all day. A fingerprint that is too narrow does not fail loudly; it shows yesterday's page
 forever.
 
-**3. The server decides what is important; the device decides what fits.** Stories arrive with a
-`rank` and nothing about geometry. The device sorts stably and assigns tiers *by position* — first
-is the lead, next two the secondary row, next three the briefs — so a payload numbered 10, 20, 30
-works exactly as one numbered 0, 1, 2. Then it copyfits into the fixed bands. Under-supply promotes
-rather than leaving a hole; a day with no stories at all prints the index ribbon at full size, which
-is a legitimate quiet-day front page and not an error state.
+**3. The server decides what is important; the device decides what fits — and now also where it
+goes.** Everything arrives with a `rank` and nothing about geometry, so a payload numbered 10, 20,
+30 works exactly as one numbered 0, 1, 2. The eight fixed bands are gone: `ui_compose.c` cuts the
+well fresh every edition, so a day with a photograph and eight briefs lays out differently from one
+without. Capacities in `news_model.h` are deliberately **larger than one page can hold** — the
+producer files a generous dossier and the device edits it down.
+
+The compositor is a **guillotine**: every cut runs edge to edge across the rectangle it divides.
+That is not a simplification, it is the safety argument. It makes every module a rectangle, makes
+the modules tile the well exactly, and makes a white hole at the foot of the page structurally
+impossible rather than something a test has to catch. `ui_compose()` is total — it never fails, it
+drops the lowest-ranked module instead — and pure, because `news_hash()` promises that the same
+fingerprint means the same pixels and the device skips a 25-second refresh on that promise.
 
 ## Project structure
 
@@ -150,19 +167,21 @@ components/
   news_core/              the portable core — compiles identically on device, sim and host tests
     news_model.c          the snapshot struct + UTF-8-safe copy + content fingerprint
     news_parse.c          wire JSON -> model, clamping every field
-    news_mock.c           the built-in demo front page (shown when no URL is set)
+    news_mock.c           the built-in demo edition (shown when no URL is set)
     news_service.c        one fetch: http_get + parse
-    ui_news.c             page routing, the badge, the folio, the overlay
-    ui_page_front.c       A1 — the eight bands
-    ui_page_markets.c     A2 — the full watchlist, the indices, the leftover stories
+    ui_compose.c          the make-up desk: guillotine cuts, packing, height, tombstoning
+    ui_modules.c          the module renderers both pages are built from
+    ui_news.c             page routing, the furniture, the badge, the overlay
+    ui_page_front.c       A1 — the day's modules, composed
+    ui_page_markets.c     A2 — the same company's accounts, composed the same way
     ui_fit.c              copyfitting: how much body text fits a box, cut at a word
     ui_chart.c            line / candle / bar / sparkline, integer scaling, hard pixels
     ui_tile.c             the one-entry photo cache
-    ui_common.c           the shared shapes; ui_internal.h holds the grid and the bands
+    ui_common.c           the shared shapes; ui_internal.h holds the grid and the furniture
     wp_palette.c          the six inks and the ordered dither — the only quantizer
     device_api_json.c     the JSON the companion app receives
     fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
-    test/host/            the eight host tests
+    test/host/            the nine host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
   device_api/             STA-mode HTTP/JSON control server + mDNS (wpnews.local)
   board_io/               battery ADC
@@ -185,17 +204,59 @@ tools/
   nibble-shifting slow path on the device for no reason at all. The grid is six columns of 170 with a
   24 px gutter inside a 30 px margin (`6·170 + 5·24 = 1140`), and both of those numbers are even so
   that every span and every origin is. `ui_internal.h` has a `_Static_assert` on it; keep it true.
-- **Colour is data, not decoration.** Green and red appear on percentage changes and their ▲▼ marks —
-  the index ribbon, the portfolio rail, the quotation table — and nowhere else. Not on headlines, not
-  on rules, not on a chart's axis. Blue and yellow never reach the glass from the UI at all; the
-  simulator fails the build if they do. The only other colour on the sheet is a photo tile. Every one
-  of the four colours used is an exact palette entry, so it takes `wp_quantize()`'s identity path and
-  comes out flat — a colour between two inks dithers, and a dithered hairline is a dashed one.
+- **Colour is data, not decoration**, and there are exactly **two** things it may mean. Type is
+  black, rules are black, a chart's axis is black, a headline is black. Everything coloured on the
+  sheet answers to one of these:
+  - **Direction** — green and red on a percentage change and its ▲▼ mark: the tape, a figure's
+    change, the industry table's `CHG` column, and a rate line inside a drawn statement. Always
+    through `ui_chg_colour()`, never a hardcoded green, so it is ink at zero and ink on the STALE and
+    OFFLINE sheets, where the colour reserved for live movement has no business.
+  - **Identity** — which series a bar or a segment belongs to, inside a graphic carrying more than
+    one. That is `ui_series_t`, and the same series takes the same treatment in the plot and in the
+    legend or the reader has to guess. A `TABLE_STACK`'s segments are shares, so they take series
+    treatments; what carries *direction* in that graphic is each segment's percentage-point change
+    beside its legend entry. A hero figure's range bar is ink, because a position inside a range is
+    neither a direction nor a series.
+
+  The rule is still a *test* and not a list — **if a mark is not data, it is ink** — it has simply
+  gained a second kind of data, because a graphic drawn in one ink cannot say which of three
+  quantities a bar is, and was making the reader count legend positions instead of seeing a colour.
+
+  **What the panel can do decides the rest, and it can do less than six inks suggests.** WCAG
+  contrast against the paper, from the ink table in `make_tile.py`: black 9.18:1, red 6.92, blue
+  5.56, green 4.75, **yellow 1.16**. But the number that governs the design is not any single one of
+  those — it is that **the inks are two bands with nothing between them.** Black, red, blue and green
+  all sit between 0.016 and 0.077 relative luminance; the 1-in-3 screen, yellow and paper between
+  0.374 and 0.554. Inside a band, brightness does nothing: blue vs green is **1.17:1**, screen vs
+  keylined yellow **1.22:1** — the same brightness. So a graphic gets *two* clean steps of value and
+  no more, and every series past the second must separate by **hue** (blue against black is 1.65:1 in
+  value and unmistakably blue) or by **texture** (a screen against flat paper is 1.42:1 and obviously
+  striped). Two series sharing a band, a hue and a texture are one series to a reader, whatever the
+  legend says. `ui_series_at()` maximises the minimum separation across all three axes; do not
+  hand-pick a treatment around it.
+  Yellow does not work on paper — it is the same value as the paper, so a yellow bar reads as the
+  *outline* of a bar. Against black it is 7.90:1, the best pair the panel has after black on paper,
+  so **yellow is legal only enclosed by a black keyline** and `ui_series_fill()` is the only call
+  that can draw one. The simulator fails the build on a yellow pixel that can reach paper without
+  crossing black, and on blue or yellow outside a graphic. The only other colour on the sheet is a
+  photo tile. Every colour used is an exact palette entry, so it takes `wp_quantize()`'s identity
+  path and comes out flat — a colour between two inks dithers, and a dithered hairline is a dashed
+  one. Recompute the table rather than trusting it — `python3 tools/contrast.py` prints it, along
+  with every pair and the ones a reader cannot separate. The first version of this paragraph carried
+  figures derived from linear luma and every one of them was wrong, which is why the numbers now
+  live in a script instead of in prose.
+- **A1 is a text-and-photograph newspaper.** Story bodies, headlines, decks and photographs hold the
+  majority of the well, and `ui_compose()` enforces it by dropping the lowest-ranked *figure* module
+  rather than by refusing to compose. A2 is the accounts page and may be figure-led. This is the
+  constraint that outranks the others: a front page filled with graphics is the failure this design
+  is furthest from wanting, and it is the one that arrives by accident, one well-argued chart at a
+  time.
 - **Charts and marks are drawn with hard pixels**, through `ui_draw_line_c_abs()` / `ui_draw_tri_abs()`,
   never `lv_draw_line()` or `lv_draw_triangle()`. LVGL antialiases a diagonal, this panel has nothing
   between ink and paper for a blend to land on, and `wp_quantize565()` resolves the mid-greys a black
   stroke on white paper makes to **GREEN**. A chart drawn with `lv_draw_line()` is a black chart
-  fringed with green speckle, in a band the colour policy does not allow colour in.
+  fringed with green speckle — and now that a chart *may* carry colour, that is worse rather than
+  better: the speckle is the exact ink that means "up", scattered along an axis that means nothing.
 - **Never hand-edit `components/news_core/fonts/*.c`.** Run
   `python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools`, then
   `/tmp/fontenv/bin/python tools/gen_fonts.py --download`. fontTools is needed because Google
@@ -217,8 +278,12 @@ tools/
 - **Respect the length budget.** Headlines and decks are ellipsized at a fixed height, not
   copyfitted, so a producer that overshoots gets a visible `…` mid-sentence rather than a shorter
   story: lead headline ≤ 72 characters, lead deck ≤ 118, secondary headline ≤ 54, secondary deck ≤ 58.
-  Bodies are the opposite — `ui_fit_text()` cuts them at a word boundary, so write them long (lead
-  600–740, secondary 260–330) and the column always fills. The full table is in the design spec §10.
+  A dossier label is ≤ 20 and its value ≤ 16, because both sit in a 170 px column. Bodies are the
+  opposite — `ui_fit_text()` cuts them at a word boundary, so write them long (lead 600–740,
+  secondary 260–330) and the column always fills. That matters more now than it did: the compositor
+  stretches an elastic module to fill the room it was given, so a short body is visible as white
+  paper rather than as a shorter story. The full table is in
+  [tools/edition/PROMPT.md](tools/edition/PROMPT.md), which is where the producer reads it.
 - **Labels get a fixed height, not just a width.** `ui_lab_w()` and `ui_lab_box()` do this; bypassing
   it makes LVGL auto-size the height and *wrap* instead of ellipsizing, and the second line lands on
   the row below.
@@ -237,10 +302,17 @@ tools/
   configuration, not a placeholder. `UiTask` puts it on the glass *before* the first poll rather than
   after it: on a panel this slow, a board that spends its first refresh on "Loading..." has spent
   twenty-five seconds saying nothing.
-- **`sizeof(news_t)` is 19,780 bytes** — measured, not estimated. That is more than `UiTask`'s whole
-  8 KB stack, so both the UI copy and the fetch buffer are file-scope statics, safe only because the
-  single-owner rule holds: `UiTask` is the only caller of one and `NewsTask` of the other. Never put a
-  snapshot on a frame.
+- **`sizeof(news_t)` is 32,932 bytes** — measured, not estimated. That is four times `UiTask`'s whole
+  8 KB stack, so all three snapshots in `user_app.cpp` — the state, the UI copy and the fetch buffer —
+  are file-scope statics, safe only because the single-owner rule holds: `UiTask` is the only caller
+  of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown twice: 19,720 to
+  24,328 when both statements gained a numeric plane beside their printed cells, and 24,328 to 32,932
+  when `NEWS_BODY_MAX` went to 4,000. The second is the banner forme's bill — a lead across the whole
+  measure runs four legs down most of a 1,600 px sheet, which is about four thousand characters of
+  body, and at 2,400 the field truncated the copy mid-word and the legs came up short. Three statics
+  plus `news_parse()`'s heap scratch is about 130 KB at the peak of a poll, which is not what
+  constrains this board — the 960 KB framebuffer is — but a snapshot on a stack is still an instant
+  overflow. Measure it rather than trusting this line: the number has been wrong twice.
 - **`sdkconfig` holds per-developer values and is gitignored — never commit it.** Wi-Fi passwords live
   in NVS via the portal, never in Kconfig.
 - The mDNS hostname is `wpnews` and the AP prefix `"WP News"` — deliberately **not** the
@@ -251,7 +323,8 @@ tools/
 
 ## Documentation
 
-- [docs/specs/2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md) — the design this was built from, and what was deliberately deferred
+- [docs/specs/2026-08-15-single-company-broadsheet-design.md](docs/specs/2026-08-15-single-company-broadsheet-design.md) — **the current design**: one company an edition, the guillotine compositor, and why the measure decides the layout
+- [docs/specs/2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md) — what this was built from. Its geometry, colour policy, chart and photo rules still hold; its data model and band table are superseded
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/pages.md](docs/pages.md) — A1 and A2, the grid, the bands, the font decision

@@ -37,13 +37,21 @@ if [ "${1:-}" = "--serve-only" ]; then serve; fi
 echo "filing into $EDITION_DIR  (log: $LOG)"
 
 # --print runs headless and exits; the prompt is the desk's standing instructions. The tools it
-# needs are the market data MCP, the filesystem under EDITION_DIR, and make_tile.py — nothing else,
-# which is why the allow-list is narrow rather than --dangerously-skip-permissions.
+# needs are the market data MCP, the filesystem under EDITION_DIR, make_tile.py, and the render
+# check — nothing else, which is why the allow-list is narrow rather than
+# --dangerously-skip-permissions.
+#
+# render-check.sh is on that list because the desk cannot see the paper. It writes JSON; the panel
+# spends twenty-five seconds turning that JSON into type, and a lead headline four characters too
+# long comes out with an ellipsis in the middle of a sentence. Validating the schema does not catch
+# that — only setting the type catches it — so the desk is given the typesetter and told to look at
+# what it produced before filing. It is the one tool here that changes what gets written rather
+# than what gets read.
 EDITION_DIR="$EDITION_DIR" \
 claude --print \
     --add-dir "$EDITION_DIR" \
     --allowedTools \
-        "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,mcp__claude_ai_Alpaca__*,Bash(python3 $REPO/tools/make_tile.py:*),Bash(python3 $REPO/tools/mock_news_server.py:*)" \
+        "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,mcp__claude_ai_Alpaca__*,Bash(python3 $REPO/tools/make_tile.py:*),Bash(python3 $REPO/tools/mock_news_server.py:*),Bash($REPO/tools/edition/render-check.sh:*)" \
     "$(cat "$REPO/tools/edition/PROMPT.md")
 
 The repository is at $REPO. The edition directory is $EDITION_DIR." \
@@ -56,16 +64,34 @@ fi
 
 python3 "$REPO/tools/mock_news_server.py" --validate "$EDITION_DIR/news.json"
 
+# And typeset it, as the last gate. The desk was told to do this before filing and the prompt is
+# emphatic about it, but a standing instruction is a request and this is a check: a page that does
+# not set is a page that reaches the wall broken, and the twenty-five seconds it costs to find that
+# out on the glass are twenty-five seconds nobody gets back. Non-zero here means the edition just
+# filed will not print correctly, and the log says which rule it broke.
+if ! "$REPO/tools/edition/render-check.sh" "$EDITION_DIR/news.json" "$EDITION_DIR/log/proof"; then
+    echo "file-edition: the filed edition does not typeset — see the log and $EDITION_DIR/log/proof" >&2
+    exit 1
+fi
+
 # Keep a week. The board only ever reads the current one, but when a page comes out wrong the
-# question is always "what changed since yesterday", and that needs yesterday.
-cp "$EDITION_DIR/news.json" "$EDITION_DIR/log/$(date +%Y-%m-%d_%H%M).json"
+# question is always "what changed since yesterday", and that needs yesterday — and the proof
+# sheets alongside it, because "what changed" is usually visible and rarely in the JSON.
+stamp="$(date +%Y-%m-%d_%H%M)"
+cp "$EDITION_DIR/news.json" "$EDITION_DIR/log/$stamp.json"
+for f in "$EDITION_DIR/log/proof"/*.png; do
+    [ -e "$f" ] && cp "$f" "$EDITION_DIR/log/${stamp}_$(basename "$f")"
+done
 find "$EDITION_DIR/log" -type f -mtime +7 -delete
 
 echo "filed: $(python3 -c "
-import json,sys
-d=json.load(open('$EDITION_DIR/news.json'))
-s=d['stories'][0] if d.get('stories') else {}
-print(f\"{len(d.get('stories',[]))} stories, {len(d.get('tickers',[]))} quotes — lead: {s.get('headline','(none)')}\")")"
+import json
+d = json.load(open('$EDITION_DIR/news.json'))
+s = (d.get('stories') or [{}])[0]
+sub = d.get('subject', {})
+print(f\"{sub.get('symbol','?')} — {len(d.get('stories',[]))} stories, \"
+      f\"{len(d.get('figures',[]))} figures, {len(d.get('briefs',[]))} briefs \"
+      f\"— lead: {s.get('headline','(none)')}\")")"
 
 [ "${1:-}" = "--serve" ] && serve
 exit 0

@@ -2,13 +2,27 @@
  * ui_chart.h — the price charts, and the integer arithmetic that decides where
  * their ink lands.
  *
- * Three shapes and a sparkline, all of them black on paper: a polyline for a
- * level over time, candles for a session's open/high/low/close, bars for a
- * quantity, and the same polyline again at 150 x 16 with its axis, its labels
- * and its reference line taken away. Colour never enters here — a candle's
- * direction is carried by whether its body is filled, which is the Japanese
- * convention and which at 150 dpi reads far better than red against green, two
- * inks this panel muddies into a pair of similar browns.
+ * Three shapes and a sparkline: a polyline for a level over time, candles for a
+ * session's open/high/low/close, bars for a quantity, and the same polyline
+ * again at 150 x 16 with its axis, its labels and its reference line taken
+ * away. Every one of them is a SINGLE series, and every one of them is black.
+ *
+ * Colour enters this file for exactly one thing, and it is none of those four:
+ * it enters as SERIES IDENTITY — ui_series_t and ui_series_at() below — for a
+ * graphic carrying more than one quantity, where a reader who cannot tell two
+ * bars apart is reading a legend position instead of a picture. The price
+ * charts did not change. A price line is one quantity, so it has no identity to
+ * carry, and colouring it would be the decoration the colour policy forbids.
+ *
+ * A CANDLE'S DIRECTION IS STILL NOT COLOUR, and it survives on its own argument
+ * rather than as a consequence of that one. Up and down are filled against
+ * hollow — the Japanese convention — because the two inks that would otherwise
+ * carry them are red at 3.56:1 against the paper and green at 2.33:1: both
+ * dark, both muddy, and at 150 dpi a pair of similar browns. Filled against
+ * hollow is the full range of value on a panel that has very little of it.
+ * Direction is read off ONE mark at a time, which is what a fill can say and a
+ * pair of near-identical hues cannot; identity is read by comparing two marks
+ * side by side, which is the job below.
  *
  * ## The scaling is separated out because it is the part that can be wrong
  *
@@ -61,6 +75,62 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* --- series identity ------------------------------------------------------
+ * Which treatment a bar, a segment or a line takes when a graphic carries more
+ * than one quantity. Listed dark to light:
+ *
+ *     SOLID   black                           rel. luminance 0.0158
+ *     BLUE    blue                                           0.0587
+ *     SCREEN  1-in-3 black line screen                       0.3744
+ *     KEYED   yellow inside a black keyline                  0.4697
+ *     OPEN    paper inside a black keyline                   0.5538
+ *
+ * That is an ORDER, not a ladder, and the difference matters enough that
+ * ui_internal.h's colour note spends a screen on it. The panel's inks are two
+ * clusters — SOLID and BLUE at the dark end, the other three at the light end,
+ * a factor of five between them and nothing in between — so the gaps here are
+ * wildly uneven: SOLID to BLUE is 1.65:1, BLUE to SCREEN is 3.91:1, SCREEN to
+ * KEYED is 1.22:1. Picking treatments by walking this list evenly produces
+ * pairs a reader cannot tell apart, which is why ui_series_at() exists and why
+ * it does not do that.
+ *
+ * This lives here, in the half that compiles without LVGL, because
+ * ui_series_at() is the arithmetic and arithmetic is what a host test can hold.
+ * The drawing is declared in ui_internal.h with the rest of the shapes.
+ *
+ * Deliberately NOT an ink each. Three of the five are black, and two of those
+ * three differ only in how the black is broken up — which is how a newspaper
+ * has always distinguished the segments of a stacked bar, and is the treatment
+ * that keeps working when the panel is the six inks it actually is rather than
+ * the six primaries the UI draws with. It is also the only separation this
+ * panel has that does not cost a value step, which it has just two of. */
+typedef enum {
+    UI_SERIES_SOLID = 0,
+    UI_SERIES_BLUE,
+    UI_SERIES_SCREEN,
+    UI_SERIES_KEYED,
+    UI_SERIES_OPEN,
+    UI_SERIES_N,
+} ui_series_t;
+
+/* The treatment for the i-th of n series, i and n both counted from the plot's
+ * own order — series 0 is the one the legend names first and the one a reader
+ * takes as the subject.
+ *
+ * Not `(ui_series_t)i`, and not "spread them evenly" either — the treatments
+ * are not evenly spaced and there is no arrangement of five that is. What this
+ * maximises is the minimum separation over the three axes the panel actually
+ * offers: VALUE (two clean steps, dark band against light band), HUE (neutral
+ * against blue against yellow) and TEXTURE (flat against striped). Two series
+ * are distinguishable when they differ on at least one of the three with room
+ * to spare; a pure value ordering certifies pairs like SCREEN beside KEYED
+ * (1.22:1, both light, both flat) that a reader sees as one series.
+ *
+ * i outside 0..n-1, or n outside 1..UI_SERIES_N, gives UI_SERIES_SOLID — a
+ * graphic that asked for a sixth series gets a black bar rather than a wrapped
+ * index into a treatment that means something else. */
+ui_series_t ui_series_at(int i, int n);
 
 /* --- the scale ------------------------------------------------------------ */
 
@@ -146,6 +216,19 @@ int ui_chart_pick(int i, int m, int n);
  * The box is transparent: the page is white paper and a chart that painted its
  * own background would be the one tinted panel on the sheet. */
 lv_obj_t *ui_chart_create(lv_obj_t *par, int x, int y, int w, int h);
+
+/* Give a chart a new box. Call it BEFORE ui_chart_set(), never after.
+ *
+ * The widget remembers the size it was created at rather than reading it back,
+ * because a size set on an object is not in that object's coordinates until the
+ * next layout pass — so a page that builds a chart and fills it in the same call
+ * would place every value label against a box of zero. That was free while the
+ * page's geometry was a table of macros and the chart never moved. It is not
+ * now: the compositor decides how many columns the chart gets from what else
+ * arrived, so the box changes between two snapshots of the same board, and a
+ * chart whose remembered box is last week's hangs its first and last figures off
+ * the old edges and insets the plot by the wrong amount. */
+void ui_chart_resize(lv_obj_t *chart, int w, int h);
 
 /* Fill a chart from a story's series. The chart keeps its own copy, so the
  * caller's snapshot may go out of scope; NULL, CHART_NONE or an empty series
