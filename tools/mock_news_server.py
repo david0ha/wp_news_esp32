@@ -61,7 +61,7 @@ import os
 import random
 import re
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "components", "news_core", "test", "host",
@@ -946,6 +946,21 @@ class Handler(BaseHTTPRequestHandler):
     live = False
     state = {"tick": 0}
 
+    # Announcing keep-alive over HTTP/1.0 is not merely untidy, it is a
+    # contradiction the client resolves the other way: RFC 1945 says a 1.0
+    # connection closes after one response, so the board is entitled to hang up
+    # while this server sits waiting for a second request. Say 1.1, which is
+    # what the header means, and which every response here can honour because
+    # every one of them sets Content-Length.
+    protocol_version = "HTTP/1.1"
+
+    # And reap the socket when the board goes quiet. A device that polls every
+    # five minutes is idle for four minutes fifty-nine, and a board that resets
+    # mid-poll — flashing, a brownout, a pulled cable — leaves a socket that is
+    # open, silent and never coming back. Without this the handler blocks in
+    # readline() on it forever.
+    timeout = 30
+
     def do_GET(self):
         path = self.path.split("?")[0]
 
@@ -1609,7 +1624,16 @@ def main():
         return 0
 
     Handler.live = args.live
-    srv = HTTPServer((args.host, args.port), Handler)
+    # Threaded, and this is not a nicety. A board fetches the snapshot and the
+    # photograph on two separate connections — `http_get()` and `http_get_bin()`
+    # are different client handles — so a single-threaded server cannot serve
+    # one edition. With keep-alive on, the snapshot's socket stays open and the
+    # tile's connection waits in the accept backlog until the board's HTTP
+    # timeout fires, and `ui_tile.c` drops a missed tile *silently* by design:
+    # the sheet prints with every word in place and a hole where the picture
+    # was. Threads are what make the second connection reachable.
+    srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    srv.daemon_threads = True
     print(f"serving the front page on http://{args.host}:{args.port}/news.json"
           + ("  (live)" if args.live else ""))
     try:
