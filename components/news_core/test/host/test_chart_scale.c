@@ -347,6 +347,258 @@ static void check_more_bars_than_pixels(void)
     CHECK_INT(ui_chart_pick(m - 1, m, 48), 47);
 }
 
+/* --- 6. series identity ---------------------------------------------------
+ *
+ * ui_series_at() is a table, and a test that transcribed the table would only
+ * prove somebody typed it twice. So this rebuilds the PANEL — the three axes
+ * ui_chart.h says the picks are maximised over — and searches, and the table
+ * has to come out of the search. Change an ink and this fails with the row that
+ * moved rather than agreeing with a stale answer.
+ *
+ * Everything below is transcribed from tools/make_tile.py's measured ink table,
+ * which is what the panel prints. The saturated primaries the UI draws with are
+ * an index into wp_quantize(), not something a reader sees.
+ */
+
+/* Relative luminance x 10,000. SCREEN is not an ink: it is one row of black in
+ * three over paper, so its luminance is (SOLID + 2 * OPEN) / 3. */
+static const int k_lum[UI_SERIES_N] = { 158, 587, 3744, 4697, 5538 };
+
+/* Neutral / blue / yellow, and flat / striped. Integers because nothing here
+ * compares them for anything but equality. */
+static const int k_hue[UI_SERIES_N] = { 0, 1, 0, 2, 0 };
+static const int k_tex[UI_SERIES_N] = { 0, 0, 1, 0, 0 };
+
+/* Contrast ratio x 1,000, the usual (L1 + 0.05) / (L2 + 0.05). */
+static long series_cr(int a, int b)
+{
+    const long x = k_lum[a] + 500, y = k_lum[b] + 500;
+    return x > y ? (x * 1000) / y : (y * 1000) / x;
+}
+
+/* Which band a treatment is in, with the boundary READ OFF the ink table rather
+ * than written into this file: split the ladder at its single largest step. On
+ * this panel that is BLUE to SCREEN at 3.90:1, against 1.65:1 for the next
+ * largest anywhere, so the split is not a close call. */
+static int series_light(int s)
+{
+    int  cut  = 1;
+    long best = 0;
+
+    for (int i = 1; i < UI_SERIES_N; i++) {
+        const long r = series_cr(i, i - 1);
+        if (r > best) { best = r; cut = i; }
+    }
+    return s >= cut;
+}
+
+/* Whether a reader can tell two treatments apart: value across the band
+ * boundary, or texture, or hue where there is enough light for hue. */
+static int series_sep(int a, int b)
+{
+    if (series_light(a) != series_light(b))               return 1;
+    if (k_tex[a] != k_tex[b])                             return 1;
+    if (k_hue[a] != k_hue[b] && series_light(a))          return 1;
+    return 0;
+}
+
+static int series_ok(const int *set, int n)
+{
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+            if (!series_sep(set[i], set[j])) return 0;
+    return 1;
+}
+
+/* The consecutive contrasts of a set held in ladder order, ascending. They are
+ * the whole story: a contrast ratio is monotone along the ladder, so a
+ * non-adjacent pair's ratio is the product of the ones between it and every
+ * factor is at least one. The smallest step IS the smallest pairwise
+ * separation. */
+static void series_steps(const int *set, int n, long *out)
+{
+    for (int i = 1; i < n; i++) out[i - 1] = series_cr(set[i], set[i - 1]);
+
+    for (int i = 1; i + 1 < n; i++) {
+        const long v = out[i];
+        int j = i - 1;
+        while (j >= 0 && out[j] > v) { out[j + 1] = out[j]; j--; }
+        out[j + 1] = v;
+    }
+}
+
+/* Ascending step vectors, compared smallest-first: > 0 when `a` is the better
+ * spread. A graphic is read at its worst pair, and where two sets share a worst
+ * pair the next one decides.
+ *
+ * This is the SECOND half of the objective. See series_hues(). */
+static int series_leximin(const long *a, const long *b, int k)
+{
+    for (int i = 0; i < k; i++) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    return 0;
+}
+
+/* How many distinct HUES a set carries — the first half of the objective, and
+ * the half that was missing.
+ *
+ * Ranking admissible sets by value spread alone is what this test asserted
+ * first, and it produced a table in which BLUE appears only at n = 5 (which is
+ * unseparable anyway) and KEYED only at n = 4. Every graphic this paper actually
+ * draws carries two or three series, so the panel's two coloured inks reached
+ * the glass exactly never, and the sheets came back in black — which is the
+ * complaint the whole pass exists to answer.
+ *
+ * The error was in the objective and not in the arithmetic. `series_ok()`
+ * already guarantees every pair in an admissible set is separated; past that
+ * point, extra value contrast buys a reader NOTHING, because they could already
+ * tell the series apart. Hue buys what the design asked for: a bar that says
+ * which quantity it is by its colour instead of by its position in a legend. So
+ * among admissible sets, more hues wins, and the value spread breaks the ties
+ * that are left.
+ *
+ * It is not "use colour wherever possible". Admissibility is still absolute and
+ * is tested first — SOLID beside BLUE remains forbidden at every n, and the
+ * yellow of KEYED still never touches paper. What changed is only which of two
+ * EQUALLY READABLE sets the table writes down. */
+static int series_hues(const int *set, int n)
+{
+    int seen[3] = { 0, 0, 0 }, k = 0;
+    for (int i = 0; i < n; i++)
+        if (k_hue[set[i]] > 0 && !seen[k_hue[set[i]]]) { seen[k_hue[set[i]]] = 1; k++; }
+    return k;
+}
+
+static void check_series_panel(void)
+{
+    /* The band split falls where the derivation says it does. */
+    CHECK_INT(series_light(UI_SERIES_SOLID), 0);
+    CHECK_INT(series_light(UI_SERIES_BLUE), 0);
+    CHECK_INT(series_light(UI_SERIES_SCREEN), 1);
+    CHECK_INT(series_light(UI_SERIES_KEYED), 1);
+    CHECK_INT(series_light(UI_SERIES_OPEN), 1);
+
+    /* And exactly one of the ten pairs is beyond the panel — the one the colour
+     * note forbids by name. This is the finding the whole table rests on: the
+     * dark band holds ONE usable treatment, so four series is the ceiling and
+     * five is over it. */
+    int bad = 0;
+    for (int a = 0; a < UI_SERIES_N; a++)
+        for (int b = a + 1; b < UI_SERIES_N; b++)
+            if (!series_sep(a, b)) bad++;
+    CHECK_INT(bad, 1);
+    CHECK_INT(series_sep(UI_SERIES_SOLID, UI_SERIES_BLUE), 0);
+
+    /* The two the value ordering alone would have condemned, and does not. */
+    CHECK_INT(series_sep(UI_SERIES_SCREEN, UI_SERIES_KEYED), 1);
+    CHECK_INT(series_sep(UI_SERIES_KEYED, UI_SERIES_OPEN), 1);
+}
+
+static void check_series_shape(void)
+{
+    /* A lone series has no identity to carry, so it takes the page's ink. */
+    CHECK_INT(ui_series_at(0, 1), UI_SERIES_SOLID);
+
+    /* Out of range is ink as well: a graphic that asked for a sixth series gets
+     * a black bar rather than a wrapped index into a treatment that means
+     * something else. */
+    CHECK_INT(ui_series_at(-1, 3), UI_SERIES_SOLID);
+    CHECK_INT(ui_series_at(3, 3), UI_SERIES_SOLID);
+    CHECK_INT(ui_series_at(0, 0), UI_SERIES_SOLID);
+    CHECK_INT(ui_series_at(0, -2), UI_SERIES_SOLID);
+    CHECK_INT(ui_series_at(0, UI_SERIES_N + 1), UI_SERIES_SOLID);
+    CHECK_INT(ui_series_at(7, 99), UI_SERIES_SOLID);
+
+    /* Every pick is a treatment, they are all different, and they walk the
+     * ladder in order — one counter each, because the interesting failure is
+     * which of the three broke and not how many times. */
+    int escaped = 0, repeated = 0, permuted = 0;
+    for (int n = 1; n <= UI_SERIES_N; n++) {
+        int prev = -1;
+        for (int i = 0; i < n; i++) {
+            const int s = (int)ui_series_at(i, n);
+            if (s < 0 || s >= UI_SERIES_N) escaped++;
+            else if (s == prev)            repeated++;
+            else if (s < prev)             permuted++;
+            prev = s;
+        }
+    }
+    CHECK_INT(escaped, 0);
+    CHECK_INT(repeated, 0);
+    CHECK_INT(permuted, 0);
+
+    /* And it is not (ui_series_t)i, which is the whole reason the function
+     * exists: the identity hands two series the two darkest treatments, which
+     * is the one pair on this panel that is not a pair. */
+    CHECK(ui_series_at(1, 2) != UI_SERIES_BLUE);
+}
+
+static void check_series_optimal(void)
+{
+    for (int n = 1; n <= UI_SERIES_N; n++) {
+        int  got[UI_SERIES_N];
+        long gsteps[UI_SERIES_N] = { 0 }, best[UI_SERIES_N] = { 0 };
+        int  have = 0, any_sep = 0, best_hues = -1;
+
+        for (int i = 0; i < n; i++) got[i] = (int)ui_series_at(i, n);
+        series_steps(got, n, gsteps);
+
+        /* Is a separated set of this size even available? */
+        for (unsigned m = 0; m < (1u << UI_SERIES_N); m++) {
+            int set[UI_SERIES_N], k = 0;
+            for (int t = 0; t < UI_SERIES_N; t++)
+                if (m & (1u << t)) set[k++] = t;
+            if (k == n && series_ok(set, n)) { any_sep = 1; break; }
+        }
+
+        /* The best spread among the sets in play — the separated ones when
+         * there are any, and all of them when there are none, which is what
+         * n = 5 is. */
+        for (unsigned m = 0; m < (1u << UI_SERIES_N); m++) {
+            int set[UI_SERIES_N], k = 0;
+            for (int t = 0; t < UI_SERIES_N; t++)
+                if (m & (1u << t)) set[k++] = t;
+            if (k != n) continue;
+            if (any_sep && !series_ok(set, n)) continue;
+
+            long st[UI_SERIES_N] = { 0 };
+            series_steps(set, n, st);
+
+            /* Hues first, then the spread — except at n = 1, where there is no
+             * pair to separate and a hue would therefore be carrying nothing.
+             * That is the definition of ornament, which the colour policy
+             * forbids, so a lone series takes the page's ink. */
+            const int h = n > 1 ? series_hues(set, n) : 0;
+            const int better = !have || h > best_hues ||
+                               (h == best_hues && series_leximin(st, best, n - 1) > 0);
+            if (better) {
+                for (int i = 0; i + 1 < n; i++) best[i] = st[i];
+                best_hues = h;
+                have = 1;
+            }
+        }
+        CHECK(have);
+
+        /* Nobody gets a pair the panel cannot separate unless every set of that
+         * size has one. Four can be separated and five cannot, so this is the
+         * assertion that pins BLUE out of every row but the last. */
+        CHECK_INT(any_sep, n <= 4);
+        if (any_sep) CHECK(series_ok(got, n));
+
+        /* The picks carry as much hue as any admissible set of this size. */
+        CHECK_INT(n > 1 ? series_hues(got, n) : 0, best_hues);
+
+        if (n >= 2) {
+            /* The worst pair in the picks is the best worst pair on offer... */
+            CHECK_INT(gsteps[0], best[0]);
+            /* ...and so is every pair after it. Equality and not identity: two
+             * sets can tie the whole way down, and what is being asserted is
+             * the spread rather than which of them the table happened to
+             * write. */
+            CHECK_INT(series_leximin(gsteps, best, n - 1), 0);
+        }
+    }
+}
+
 int main(void)
 {
     check_window_normal();
@@ -367,6 +619,10 @@ int main(void)
     check_cols();
     check_pick_keeps_the_ends();
     check_more_bars_than_pixels();
+
+    check_series_panel();
+    check_series_shape();
+    check_series_optimal();
 
     TH_REPORT("chart_scale");
 }

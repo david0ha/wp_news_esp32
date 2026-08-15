@@ -80,3 +80,12 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_scale.c AND EXISTS ${CORE}/ui_c
     add_host_test(test_chart_scale test_chart_scale.c ${CORE}/ui_chart.c)
     add_test(NAME chart_scale COMMAND test_chart_scale)
 endif()
+
+# The make-up desk. Pure geometry with the page's measurement passed in, so the
+# guillotine invariants — tiles the well, no overlap, no gap, every span even —
+# are asserted over thousands of generated module sets rather than over the
+# three payloads the simulator happens to build.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_compose.c AND EXISTS ${CORE}/ui_compose.c)
+    add_host_test(test_compose test_compose.c ${CORE}/ui_compose.c)
+    add_test(NAME compose COMMAND test_compose)
+endif()

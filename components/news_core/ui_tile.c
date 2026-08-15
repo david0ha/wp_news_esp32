@@ -23,14 +23,34 @@
 /* --- storage --------------------------------------------------------------
  * One allocation per tile: the 4 bpp codes, then the RGB565 copy. Two buffers
  * would be two failure paths and two frees for one picture that is either
- * resident or not. */
+ * resident or not.
+ *
+ * `used` is a monotonic stamp rather than a timestamp, because there is no clock
+ * this file is allowed to read: the simulator has to produce the same pixels as
+ * the device and news_hash() promises that the same fingerprint means the same
+ * page. A counter that only ever goes up orders the slots exactly as well as a
+ * clock would and is the same on both. */
 static struct {
     ui_tile_t pub;
     uint8_t  *mem;
-} s_cache;
+    size_t    bytes;
+    uint32_t  used;      /* 0 = empty */
+} s_slot[UI_TILE_SLOTS];
+
+static uint32_t s_clock;
+static size_t   s_resident;           /* bytes across every live slot          */
 
 static char s_base[192];              /* "<the snapshot's directory>/tiles/" */
-static char s_missed[UI_TILE_ID_MAX]; /* the id that could not be fetched     */
+
+/* The ids that could not be fetched, one per slot's worth.
+ *
+ * This was a single id when a page drew a single picture. A front page with a
+ * photograph and two thumbs would have overwritten it three times a repaint, so
+ * every missing picture would have been re-requested on every poll and the "try
+ * an id once" promise would have quietly stopped holding — which costs three
+ * failed round trips a poll on a board whose whole job is to be quiet. */
+static char s_missed[UI_TILE_SLOTS][UI_TILE_ID_MAX];
+static int  s_missed_n;
 
 /*
  * A photograph is 335 KB of RGB565 at the lead's size and the device has 8 MB
@@ -95,7 +115,7 @@ static void derive_base(const char *news_url)
 
 void ui_tile_set_base(const char *news_url)
 {
-    s_missed[0] = '\0';     /* a new poll is a new chance for a missing tile */
+    s_missed_n = 0;         /* a new poll is a new chance for a missing tile */
     derive_base(news_url);
 }
 
@@ -115,9 +135,18 @@ void ui_tile_set_base(const char *news_url)
  */
 static bool load_file(const char *id, uint8_t *dst, size_t want)
 {
+    /* The directory the caller named, or the one the build compiled in. The
+     * override exists for tools/edition/render-check.sh, which typesets a
+     * CANDIDATE payload sitting in the edition's own directory beside its own
+     * tiles — a proof of a page that has not been filed yet, whose pictures are
+     * therefore not the ones in sim/tiles/. An environment variable rather than
+     * an argument because nothing between the command line and here has any
+     * other business knowing about it. */
+    const char *dir = getenv("WP_TILE_DIR");
+    if (!dir || !dir[0]) dir = UI_TILE_LOCAL_DIR;
+
     char path[320];
-    if (snprintf(path, sizeof path, "%s/%s.bin", UI_TILE_LOCAL_DIR, id)
-        >= (int)sizeof path) {
+    if (snprintf(path, sizeof path, "%s/%s.bin", dir, id) >= (int)sizeof path) {
         return false;
     }
 
@@ -208,10 +237,57 @@ static bool palette565(uint16_t out[16], const uint8_t *codes, size_t bytes)
 
 /* --- the cache ------------------------------------------------------------ */
 
-void ui_tile_drop(void)
+static void slot_free(int i)
 {
-    free(s_cache.mem);
-    memset(&s_cache, 0, sizeof s_cache);
+    free(s_slot[i].mem);
+    s_resident -= s_slot[i].bytes;
+    memset(&s_slot[i], 0, sizeof s_slot[i]);
+}
+
+void ui_tile_drop_all(void)
+{
+    for (int i = 0; i < UI_TILE_SLOTS; i++) {
+        if (s_slot[i].mem) slot_free(i);
+    }
+    s_resident = 0;
+}
+
+/* The slot to take next: an empty one, or the least recently used.
+ *
+ * Strict LRU, with no protection for a tile that was handed out a moment ago,
+ * and that is safe for exactly one reason — see the note on UI_TILE_SLOTS in the
+ * header. Both pages are re-pointed at the resident set before anything renders,
+ * so a pointer that eviction invalidates is a pointer no widget will be asked to
+ * draw. The slot count is what keeps a single build from lapping itself. */
+static int lru_slot(void)
+{
+    int best = 0;
+    for (int i = 0; i < UI_TILE_SLOTS; i++) {
+        if (!s_slot[i].mem) return i;
+        if (s_slot[i].used < s_slot[best].used) best = i;
+    }
+    return best;
+}
+
+static bool missed(const char *id)
+{
+    for (int i = 0; i < s_missed_n; i++) {
+        if (strcmp(s_missed[i], id) == 0) return true;
+    }
+    return false;
+}
+
+static void remember_miss(const char *id)
+{
+    if (missed(id)) return;
+    /* Oldest out when it is full. A board that names more missing pictures than
+     * this has a producer problem, not a cache problem, and re-trying the oldest
+     * of them once a poll is the cheapest way to notice it got fixed. */
+    if (s_missed_n == UI_TILE_SLOTS) {
+        memmove(s_missed[0], s_missed[1], sizeof s_missed - sizeof s_missed[0]);
+        s_missed_n--;
+    }
+    snprintf(s_missed[s_missed_n++], UI_TILE_ID_MAX, "%s", id);
 }
 
 const ui_tile_t *ui_tile_get(const char *id, int w, int h)
@@ -223,11 +299,14 @@ const ui_tile_t *ui_tile_get(const char *id, int w, int h)
         return NULL;
     }
 
-    if (s_cache.mem && s_cache.pub.w == w && s_cache.pub.h == h
-        && strcmp(s_cache.pub.id, id) == 0) {
-        return &s_cache.pub;
+    for (int i = 0; i < UI_TILE_SLOTS; i++) {
+        if (s_slot[i].mem && s_slot[i].pub.w == w && s_slot[i].pub.h == h
+            && strcmp(s_slot[i].pub.id, id) == 0) {
+            s_slot[i].used = ++s_clock;
+            return &s_slot[i].pub;
+        }
     }
-    if (strcmp(s_missed, id) == 0) return NULL;
+    if (missed(id)) return NULL;
 
 #ifdef UI_TILE_LOCAL_DIR
     /* The simulator has no NVS to read a news URL out of; when it was given one
@@ -237,14 +316,34 @@ const ui_tile_t *ui_tile_get(const char *id, int w, int h)
     if (!s_base[0]) derive_base(getenv("NEWS_URL"));
 #endif
 
-    /* The new tile is loaded and checked before the old one is let go. Nothing
+    /* The new tile is loaded and checked before any old one is let go. Nothing
      * that goes wrong below — no heap, no server, a length that disagrees —
      * should cost the page a picture it already had and could still draw. */
     const size_t codes_n = (size_t)w * (size_t)h / 2;
     const size_t px_off  = (codes_n + 3u) & ~(size_t)3u;   /* uint16_t alignment */
     const size_t px_n    = (size_t)w * (size_t)h;
+    const size_t need    = px_off + px_n * sizeof(uint16_t);
 
-    uint8_t *mem = tile_alloc(px_off + px_n * sizeof(uint16_t));
+    /* A single picture larger than the whole budget is refused rather than made
+     * room for: emptying the cache for it would take both thumbs off the page to
+     * fit one photograph, and the payload that asks for it is describing a sheet
+     * this panel does not have. */
+    if (need > UI_TILE_BUDGET) {
+        remember_miss(id);
+        return NULL;
+    }
+
+    /* Make room BEFORE allocating, so the peak is the budget and not the budget
+     * plus this tile. On a board whose PSRAM also holds a 960 KB framebuffer and
+     * cJSON's parse tree, a transient double-hold of a 912 KB photograph is the
+     * allocation that fails. */
+    while (s_resident + need > UI_TILE_BUDGET) {
+        const int victim = lru_slot();
+        if (!s_slot[victim].mem) break;      /* nothing left to give */
+        slot_free(victim);
+    }
+
+    uint8_t *mem = tile_alloc(need);
     if (!mem) {
         /* Not remembered as a miss: this tile is fine and the heap is not, and
          * the next repaint may well have the room. */
@@ -262,7 +361,7 @@ const ui_tile_t *ui_tile_get(const char *id, int w, int h)
 
     if (!ok) {
         free(mem);
-        snprintf(s_missed, sizeof s_missed, "%s", id);
+        remember_miss(id);
         return NULL;
     }
 
@@ -271,12 +370,17 @@ const ui_tile_t *ui_tile_get(const char *id, int w, int h)
         px[2 * i + 1] = pal[mem[i] & 0x0F];
     }
 
-    ui_tile_drop();
-    s_cache.mem       = mem;
-    s_cache.pub.w     = w;
-    s_cache.pub.h     = h;
-    s_cache.pub.codes = mem;
-    s_cache.pub.px    = px;
-    snprintf(s_cache.pub.id, sizeof s_cache.pub.id, "%s", id);
-    return &s_cache.pub;
+    const int slot = lru_slot();
+    if (s_slot[slot].mem) slot_free(slot);
+
+    s_slot[slot].mem       = mem;
+    s_slot[slot].bytes     = need;
+    s_slot[slot].used      = ++s_clock;
+    s_slot[slot].pub.w     = w;
+    s_slot[slot].pub.h     = h;
+    s_slot[slot].pub.codes = mem;
+    s_slot[slot].pub.px    = px;
+    snprintf(s_slot[slot].pub.id, sizeof s_slot[slot].pub.id, "%s", id);
+    s_resident += need;
+    return &s_slot[slot].pub;
 }

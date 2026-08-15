@@ -19,6 +19,7 @@
  */
 #include "ui_internal.h"
 
+#include <stdint.h>
 #include <stdio.h>
 
 static void strip(lv_obj_t *o)
@@ -56,6 +57,142 @@ lv_obj_t *ui_frame(lv_obj_t *par, int x, int y, int w, int h, int bw)
     lv_obj_set_style_border_width(o, bw, 0);
     lv_obj_set_style_border_opa(o, LV_OPA_COVER, 0);
     return o;
+}
+
+/* --- series identity ------------------------------------------------------
+ *
+ * The five treatments of ui_series_t, drawn once, here, for both of the two
+ * ways this page has of putting a mark on the glass. ui_chart.c decides WHICH
+ * treatment a series takes and why; this decides what each one looks like.
+ *
+ * ONE FUNCTION HOLDS THE GEOMETRY AND THE OTHER THREE CALL IT, and that is the
+ * point rather than a tidiness. A legend swatch that is 14 px of one code path
+ * and a bar that is 300 px of another is how a legend ends up describing a
+ * graphic it does not match — and a legend that is wrong is worse than no
+ * legend, because a reader trusts it.
+ *
+ * THE COST, which is the constraint that shaped this. An earlier attempt at a
+ * screen built it as one LVGL object per hairline: a 60 x 300 bar came to a
+ * hundred objects and a checkered fill to about twelve thousand, each with its
+ * own style, its own layout and its own draw task, on a board that rebuilds the
+ * page every five minutes. So the treatments are drawn IMMEDIATE-MODE, into a
+ * layer, and ui_series_fill() is a single empty object with a DRAW_MAIN handler
+ * on it. Every treatment costs exactly ONE object; the screen's hundred
+ * hairlines are a hundred rectangles in one draw callback, which is the same
+ * order as the forty-eight candles ui_chart.c has always drawn. A caller that
+ * already has a draw callback — the drawn statements in ui_modules.c do — pays
+ * no object at all and calls ui_series_draw_abs() directly. */
+
+/* One row of ink in three. It is the ratio the ladder in ui_chart.c is built
+ * on: a third of #1F2226 over two thirds of #B9C7C9 comes to luma 142, which is
+ * the value SCREEN sits at between BLUE's 63 and KEYED's 177. Change the pitch
+ * and the ladder moves under the picks. */
+#define SERIES_SCREEN_PITCH  3
+
+void ui_series_draw_abs(lv_layer_t *L, int x0, int y0, int x1, int y1,
+                        ui_series_t s)
+{
+    if (!L || x1 < x0 || y1 < y0) return;
+
+    const int w = x1 - x0 + 1, h = y1 - y0 + 1;
+
+    /* An unknown treatment is ink, for ui_series_at()'s reason: a mark drawn in
+     * a treatment that means something else is worse than one drawn in the
+     * default. */
+    if ((unsigned)s >= (unsigned)UI_SERIES_N) s = UI_SERIES_SOLID;
+
+    /* And so is a box too small to carry the treatment — see ui_internal.h. A
+     * keyline in a 4 px bar meets itself and the fill disappears; a screen in
+     * one is two hairlines and reads as damage. It applies to BLUE as well, and
+     * that is the contract rather than an accident: a caller whose bars are
+     * under UI_SERIES_MIN_PX has asked for more series than its geometry can
+     * carry, and it should be asking for fewer rather than getting four
+     * treatments that all resolve to the same smudge. */
+    if (w < UI_SERIES_MIN_PX || h < UI_SERIES_MIN_PX) s = UI_SERIES_SOLID;
+
+    switch (s) {
+    case UI_SERIES_BLUE:
+        ui_draw_rect_c_abs(L, x0, y0, x1, y1, true, 0, UI_SERIES_BLUE_C);
+        break;
+
+    case UI_SERIES_SCREEN:
+        /* Phased from the box's OWN top row, so the first row is always inked.
+         * That row is the datum — a bar's top edge is the number the reader
+         * takes off it — and a screen phased on an absolute grid instead would
+         * leave it blank up to two rows out of three, understating the bar by a
+         * pixel or two for no reason a reader could see. Between two bars the
+         * cost is that their hairlines can sit out of phase; at one pixel in
+         * three, across a gutter, that is invisible, and inside a stack it is a
+         * visible division at each segment's top, which is what a division
+         * there is for. */
+        for (int y = y0; y <= y1; y += SERIES_SCREEN_PITCH)
+            ui_draw_rect_c_abs(L, x0, y, x1, y, true, 0, UI_INK);
+        break;
+
+    case UI_SERIES_KEYED:
+    case UI_SERIES_OPEN:
+        /* The keyline first, as a solid block, then the fill inset into it.
+         * Two exact rectangles rather than one rectangle with a border width:
+         * LVGL's border is drawn by the code path that rounds a corner, and
+         * this is the one shape on the sheet whose whole job is to hold a 1.10:1
+         * yellow off the paper. There is nothing behind a keyline for a pixel
+         * this file did not ask for to hide in. */
+        ui_draw_rect_c_abs(L, x0, y0, x1, y1, true, 0, UI_INK);
+        ui_draw_rect_c_abs(L, x0 + UI_SERIES_KEY_W, y0 + UI_SERIES_KEY_W,
+                           x1 - UI_SERIES_KEY_W, y1 - UI_SERIES_KEY_W,
+                           true, 0,
+                           s == UI_SERIES_KEYED ? UI_SERIES_KEYED_C : UI_PAPER);
+        break;
+
+    default:
+        ui_draw_rect_c_abs(L, x0, y0, x1, y1, true, 0, UI_INK);
+        break;
+    }
+}
+
+/* The treatment travels in the object's user data rather than in a heap struct,
+ * because it is one byte and lv_obj_set_user_data() takes a pointer-sized slot
+ * that is otherwise wasted. No allocation means no LV_EVENT_DELETE handler to
+ * free it and nothing to leak on a board that rebuilds its page for years. */
+static void series_draw_cb(lv_event_t *e)
+{
+    lv_obj_t   *o = lv_event_get_target_obj(e);
+    lv_layer_t *L = lv_event_get_layer(e);
+    if (!o || !L) return;
+
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    ui_series_draw_abs(L, a.x1, a.y1, a.x2, a.y2,
+                       (ui_series_t)(intptr_t)lv_obj_get_user_data(o));
+}
+
+static lv_obj_t *series_box(lv_obj_t *par, int x, int y, int w, int h,
+                            ui_series_t s)
+{
+    lv_obj_t *o = ui_pane(par, x, y, w, h);
+    lv_obj_set_user_data(o, (void *)(intptr_t)s);
+    lv_obj_add_event_cb(o, series_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    return o;
+}
+
+void ui_series_fill(lv_obj_t *par, int x, int y, int w, int h, ui_series_t s)
+{
+    (void)series_box(par, x, y, w, h, s);
+}
+
+lv_obj_t *ui_series_swatch(lv_obj_t *par, int x, int y, ui_series_t s)
+{
+    return series_box(par, x, y, UI_SERIES_SWATCH, UI_SERIES_SWATCH, s);
+}
+
+/* KEYED and OPEN have no stroke form and both answer ink: yellow at 1.10:1
+ * cannot be a line on paper, and paper cannot be a line at all. That is not a
+ * gap to be filled later — a plot wanting a third and fourth stroked series has
+ * run out of panel and has to say so with shape, a dash pattern or a marker,
+ * none of which is a colour. */
+lv_color_t ui_series_stroke(ui_series_t s)
+{
+    return s == UI_SERIES_BLUE ? UI_SERIES_BLUE_C : UI_INK;
 }
 
 /* A rule is a filled rectangle whose short side is its weight, and the two

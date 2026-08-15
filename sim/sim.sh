@@ -33,8 +33,9 @@ if command -v sips >/dev/null 2>&1; then
   done
 fi
 
-echo "previews in sim/shots/, in reading order — both pages on a full payload,"
-echo "on a one-story payload, and on a day that brought no stories at all; then"
-echo "the STALE and OFFLINE badges, the provisioning overlay, and the sheet"
-echo "before the first snapshot has landed"
+echo "previews in sim/shots/, in reading order — the ink specimen first, then"
+echo "both pages on a full payload, on a slow day, on a day whose copy all came"
+echo "in short, and on a day that brought no stories at all; then the STALE and"
+echo "OFFLINE badges, the provisioning overlay, and the sheet before the first"
+echo "snapshot has landed"
 exit $status

@@ -12,6 +12,11 @@
 #include "cJSON.h"
 #include "device_api_json.h"
 
+/* Big enough that a serialization into it never overflows, so a test that is
+ * about content is never quietly a test about length. The length tests use
+ * DEVICE_API_STATE_BUF_SZ itself. */
+#define ROOMY 16384
+
 static void fill(device_state_t *st)
 {
     memset(st, 0, sizeof(*st));
@@ -24,13 +29,29 @@ static void fill(device_state_t *st)
 
     st->news_valid = true;
     st->demo = false;
-    snprintf(st->edition, sizeof(st->edition), "PERSONAL PORTFOLIO");
+    snprintf(st->edition, sizeof(st->edition), "SEMICONDUCTORS");
     snprintf(st->generated_at, sizeof(st->generated_at), "2026-08-14T05:12:00Z");
-    st->story_count = 4;
-    st->ticker_count = 16;
-    snprintf(st->lead_symbol, sizeof(st->lead_symbol), "NVDA");
-    snprintf(st->lead_headline, sizeof(st->lead_headline),
-             "Nvidia's blowout quarter resets the whole AI trade");
+
+    snprintf(st->subject.symbol, sizeof(st->subject.symbol), "SNDK");
+    snprintf(st->subject.name, sizeof(st->subject.name), "Sandisk Corp.");
+    snprintf(st->subject.exchange, sizeof(st->subject.exchange), "NASDAQ");
+    snprintf(st->subject.sector, sizeof(st->subject.sector), "Semiconductors");
+    st->subject.last_c       = 24160;
+    st->subject.chg_bp       = 421;
+    st->subject.prev_close_c = 23184;
+    st->subject.open_c       = 23300;
+    st->subject.high_c       = 24505;
+    st->subject.low_c        = 23110;
+    st->subject.wk52_hi_c    = 26900;
+    st->subject.wk52_lo_c    =  8800;
+
+    st->story_count = 2;
+    st->stories[0].rank = 0;
+    snprintf(st->stories[0].headline, sizeof(st->stories[0].headline),
+             "Sandisk's memory squeeze finally shows up in the price");
+    st->stories[1].rank = 10;
+    snprintf(st->stories[1].headline, sizeof(st->stories[1].headline),
+             "The street raises its targets, quietly");
 
     st->index_count = 2;
     snprintf(st->indices[0].symbol, sizeof(st->indices[0].symbol), "SPX");
@@ -39,6 +60,13 @@ static void fill(device_state_t *st)
     snprintf(st->indices[1].symbol, sizeof(st->indices[1].symbol), "VIX");
     st->indices[1].last_c = 1462;
     st->indices[1].chg_bp = -310;
+
+    st->figure_count = 22;
+    st->brief_count  = 6;
+    st->peer_count   = 5;
+    st->table_count  = 1;
+    st->chart_count  = 2;
+    st->thumb_count  = 2;
 
     snprintf(st->news_url, sizeof(st->news_url), "http://mac.local:8123/news.json");
     snprintf(st->last_result, sizeof(st->last_result), "ok");
@@ -63,6 +91,27 @@ static cJSON *obj(cJSON *root, const char *key)
     }
     g_total++;
     return o;
+}
+
+/* An array of exactly `want` entries, or NULL and a failure. Every array in
+ * this document is fixed-capacity on both sides, so its length is part of the
+ * contract and not an incidental. */
+static cJSON *arr(cJSON *root, const char *key, int want)
+{
+    cJSON *a = root ? cJSON_GetObjectItem(root, key) : NULL;
+    g_total++;
+    if (!cJSON_IsArray(a)) {
+        g_fail++;
+        printf("  FAIL \"%s\" is not an array\n", key);
+        return NULL;
+    }
+    if (want >= 0 && cJSON_GetArraySize(a) != want) {
+        g_fail++;
+        printf("  FAIL \"%s\" has %d entries, want %d\n",
+               key, cJSON_GetArraySize(a), want);
+        return NULL;
+    }
+    return a;
 }
 
 static void check_int(cJSON *o, const char *key, int want)
@@ -123,7 +172,7 @@ static void test_state_shape(void)
     device_state_t st;
     fill(&st);
 
-    char buf[2048];
+    char buf[ROOMY];
     int n = device_api_json_state(&st, buf, sizeof(buf));
     CHECK(n > 0);
     CHECK_INT((int)strlen(buf), n);
@@ -142,26 +191,64 @@ static void test_state_shape(void)
     cJSON *v = obj(r, "news");
     check_bool(v, "valid", true);
     check_bool(v, "demo", false);
-    check_str(v, "edition", "PERSONAL PORTFOLIO");
+    check_str(v, "edition", "SEMICONDUCTORS");
     check_str(v, "generatedAt", "2026-08-14T05:12:00Z");
-    check_int(v, "stories", 4);
-    check_int(v, "tickers", 16);
 
-    /* The lead is what the phone shows as "the board is currently reporting".
-     * It is the only piece of the page that travels. */
-    cJSON *lead = obj(v, "lead");
-    check_str(lead, "symbol", "NVDA");
-    check_str(lead, "headline", "Nvidia's blowout quarter resets the whole AI trade");
+    /* One company a day. The subject is what the edition is about, and it is
+     * the cheapest "did the page change" check the app has. */
+    cJSON *sub = obj(v, "subject");
+    check_str(sub, "symbol", "SNDK");
+    check_str(sub, "name", "Sandisk Corp.");
+    check_str(sub, "exchange", "NASDAQ");
+    check_str(sub, "sector", "Semiconductors");
+    check_int(sub, "lastCents", 24160);
+    check_int(sub, "changeBp", 421);
+    check_int(sub, "prevCloseCents", 23184);
+    check_int(sub, "openCents", 23300);
+    check_int(sub, "highCents", 24505);
+    check_int(sub, "lowCents", 23110);
+    check_int(sub, "wk52HighCents", 26900);
+    check_int(sub, "wk52LowCents", 8800);
+
+    cJSON *c = obj(v, "counts");
+    check_int(c, "stories", 2);
+    check_int(c, "figures", 22);
+    check_int(c, "briefs", 6);
+    check_int(c, "peers", 5);
+    check_int(c, "tables", 1);
+    check_int(c, "charts", 2);
+    check_int(c, "indices", 2);
+    check_int(c, "thumbs", 2);
+
+    /* The rank travels unchanged: the device orders by position, but the number
+     * is what produced that order, and a phone list that re-sorted on anything
+     * else would disagree with the sheet. */
+    cJSON *hl = arr(v, "headlines", 2);
+    if (hl) {
+        check_int(cJSON_GetArrayItem(hl, 0), "rank", 0);
+        check_str(cJSON_GetArrayItem(hl, 0), "headline",
+                  "Sandisk's memory squeeze finally shows up in the price");
+        check_int(cJSON_GetArrayItem(hl, 1), "rank", 10);
+        check_str(cJSON_GetArrayItem(hl, 1), "headline",
+                  "The street raises its targets, quietly");
+    }
+
+    /* The dossier is a COUNT and nothing else. It was an array once and it cost
+     * 16 KB of .bss to duplicate the part of the sheet the reader is standing in
+     * front of; asserting its absence is what stops it coming back by accident.
+     * See device_api_model.h. */
+    g_total++;
+    if (cJSON_GetObjectItem(v, "figures") != NULL) {
+        g_fail++;
+        printf("  FAIL \"news.figures\" is back — the dossier does not travel; "
+               "give it its own endpoint\n");
+    }
 
     /* Cents and basis points, not formatted strings: the app owns the decimal
      * separator and the sign colour, and the two would drift if the firmware
      * decided them here as well. */
-    cJSON *idx = v ? cJSON_GetObjectItem(v, "indices") : NULL;
-    g_total++;
-    if (!cJSON_IsArray(idx) || cJSON_GetArraySize(idx) != 2) {
-        g_fail++;
-        printf("  FAIL \"indices\" is not an array of 2\n");
-    } else {
+    cJSON *idx = arr(v, "indices", 2);
+    if (idx) {
         check_str(cJSON_GetArrayItem(idx, 0), "symbol", "SPX");
         check_int(cJSON_GetArrayItem(idx, 0), "lastCents", 641283);
         check_int(cJSON_GetArrayItem(idx, 0), "changeBp", 62);
@@ -189,35 +276,45 @@ static void test_state_shape(void)
     cJSON_Delete(r);
 }
 
-static void test_index_count_is_clamped_to_the_array(void)
+static void test_counts_are_clamped_to_their_arrays(void)
 {
-    /* user_app copies this out of news_t under a lock. A count that outran the
+    /* user_app copies these out of news_t under a lock. A count that outran its
      * array — or a negative one from an uninitialised read — would serialise
-     * whatever follows the struct straight onto the network. */
+     * whatever follows the struct straight onto the network. The clamp must
+     * also reach `counts`, or the app would be told about entries the same
+     * document does not carry. */
     device_state_t st;
     fill(&st);
+    st.story_count = 99;
     st.index_count = 99;
 
-    char buf[2048];
+    char buf[ROOMY];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        cJSON *idx = cJSON_GetObjectItem(obj(r, "news"), "indices");
-        CHECK(cJSON_IsArray(idx));
-        CHECK_INT(cJSON_GetArraySize(idx), DEV_INDEX_MAX);
+        cJSON *v = obj(r, "news");
+        arr(v, "headlines", DEV_STORY_MAX);
+        arr(v, "indices", DEV_INDEX_MAX);
+        cJSON *c = obj(v, "counts");
+        check_int(c, "stories", DEV_STORY_MAX);
+        check_int(c, "indices", DEV_INDEX_MAX);
         cJSON_Delete(r);
     }
 
     fill(&st);
+    st.story_count = -3;
     st.index_count = -3;
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        cJSON *idx = cJSON_GetObjectItem(obj(r, "news"), "indices");
-        CHECK(cJSON_IsArray(idx));
-        CHECK_INT(cJSON_GetArraySize(idx), 0);
+        cJSON *v = obj(r, "news");
+        arr(v, "headlines", 0);
+        arr(v, "indices", 0);
+        cJSON *c = obj(v, "counts");
+        check_int(c, "stories", 0);
+        check_int(c, "indices", 0);
         cJSON_Delete(r);
     }
 }
@@ -230,11 +327,13 @@ static void test_utf8_passes_through(void)
      * the escaper must not mangle them either. */
     device_state_t st;
     fill(&st);
-    snprintf(st.lead_headline, sizeof(st.lead_headline),
+    snprintf(st.stories[0].headline, sizeof(st.stories[0].headline),
              "Société Générale — Zürich desk’s call");
     snprintf(st.edition, sizeof(st.edition), "MIDDAY EDITION №2");
+    snprintf(st.subject.name, sizeof(st.subject.name), "Fährhaus Müller SE");
+    snprintf(st.subject.sector, sizeof(st.subject.sector), "Bâtiment — Génie civil");
 
-    char buf[2048];
+    char buf[ROOMY];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     CHECK(strstr(buf, "Société Générale") != NULL);
 
@@ -243,7 +342,10 @@ static void test_utf8_passes_through(void)
     if (r) {
         cJSON *v = obj(r, "news");
         check_str(v, "edition", "MIDDAY EDITION №2");
-        check_str(obj(v, "lead"), "headline", "Société Générale — Zürich desk’s call");
+        check_str(obj(v, "subject"), "name", "Fährhaus Müller SE");
+        check_str(obj(v, "subject"), "sector", "Bâtiment — Génie civil");
+        check_str(cJSON_GetArrayItem(cJSON_GetObjectItem(v, "headlines"), 0),
+                  "headline", "Société Générale — Zürich desk’s call");
         cJSON_Delete(r);
     }
 }
@@ -252,19 +354,132 @@ static void test_control_characters_are_escaped(void)
 {
     /* A headline with a newline in it is not exotic — a producer's own JSON
      * will carry one sooner or later, and an unescaped 0x0A is invalid JSON
-     * that would break the app's parser rather than just looking odd. */
+     * that would break the app's parser rather than just looking odd. The
+     * quote and the backslash are the two that turn a document into a
+     * different document rather than an invalid one, which is worse. */
     device_state_t st;
     fill(&st);
     snprintf(st.edition, sizeof(st.edition), "a\"b\\c\nd\te");
+    snprintf(st.subject.name, sizeof(st.subject.name), "\\\"}],\"x\":1");
+    snprintf(st.stories[0].headline, sizeof(st.stories[0].headline),
+             "bell\ax\bback\fform\rcr");
 
-    char buf[2048];
+    char buf[ROOMY];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        check_str(obj(r, "news"), "edition", "a\"b\\c\nd\te");
+        cJSON *v = obj(r, "news");
+        check_str(v, "edition", "a\"b\\c\nd\te");
+        check_str(obj(v, "subject"), "name", "\\\"}],\"x\":1");
+        check_str(cJSON_GetArrayItem(cJSON_GetObjectItem(v, "headlines"), 0),
+                  "headline", "bell\ax\bback\fform\rcr");
         cJSON_Delete(r);
     }
+}
+
+/* Every string at its declared maximum, in the widest bytes it can hold, every
+ * array at capacity and every integer at nine digits with a sign. This is what
+ * fixes the field capacities in device_api_model.h. */
+static void fill_worst_case(device_state_t *st)
+{
+    memset(st, 0, sizeof(*st));
+
+    #define FILL_ASCII(field) do { \
+        size_t wc_n = sizeof(st->field) - 1; \
+        memset(st->field, 'W', wc_n); \
+        st->field[wc_n] = '\0'; \
+    } while (0)
+
+    FILL_ASCII(model);
+    FILL_ASCII(fw);
+    FILL_ASCII(device_id);
+    FILL_ASCII(ip);
+    FILL_ASCII(news_url);
+    FILL_ASCII(last_result);
+
+    /* A multi-byte codepoint passes through the escaper untouched, so a Latin-1
+     * field is the same length on the wire as an ASCII one. A field full of
+     * quotes is NOT: each becomes two bytes.
+     *
+     * The cursor is named `wc_` rather than `i` on purpose: the fields below are
+     * subscripted by the caller's own loop variable, and a macro that declared
+     * `i` would silently rewrite `st->figures[i]` into `st->figures[wc_]`. */
+    #define FILL_WIDEST(field, ch) do { \
+        for (size_t wc_ = 0; wc_ + 1 < sizeof(st->field); wc_++) st->field[wc_] = (ch); \
+        st->field[sizeof(st->field) - 1] = '\0'; \
+    } while (0)
+
+    FILL_WIDEST(edition, '"');
+    FILL_WIDEST(page_title, '\\');
+    FILL_WIDEST(generated_at, '\n');
+    FILL_WIDEST(subject.symbol, '"');
+    FILL_WIDEST(subject.name, '"');
+    FILL_WIDEST(subject.exchange, '"');
+    FILL_WIDEST(subject.sector, '"');
+
+    /* A C0 control is the true worst case — six bytes out of one — and a
+     * producer that pastes a tab into a label is one keystroke away. */
+    st->story_count = DEV_STORY_MAX;
+    for (int i = 0; i < DEV_STORY_MAX; i++) {
+        FILL_WIDEST(stories[i].headline, 0x01);
+        st->stories[i].rank = -999999999;
+    }
+
+    st->index_count = DEV_INDEX_MAX;
+    for (int i = 0; i < DEV_INDEX_MAX; i++) {
+        FILL_WIDEST(indices[i].symbol, 0x01);
+        st->indices[i].last_c = 999999999;
+        st->indices[i].chg_bp = -999999999;
+    }
+
+    #undef FILL_ASCII
+    #undef FILL_WIDEST
+
+    st->page = 3;
+    st->news_valid = true;
+    st->subject.last_c = st->subject.chg_bp = -999999999;
+    st->subject.prev_close_c = st->subject.open_c = 999999999;
+    st->subject.high_c = st->subject.low_c = 999999999;
+    st->subject.wk52_hi_c = st->subject.wk52_lo_c = 999999999;
+    st->figure_count = st->brief_count = st->peer_count = 999999999;
+    st->table_count = st->chart_count = st->thumb_count = 999999999;
+    st->poll_seconds = st->age_seconds = 999999999;
+    st->battery_pct = st->battery_mv = 999999999;
+    st->refresh_ms = 999999999;
+}
+
+static void test_worst_case_fits_the_servers_buffer(void)
+{
+    /* device_api.c serialises into a DEVICE_API_STATE_BUF_SZ buffer. If the
+     * worst case does not fit, the serializer returns -1 and an EMPTY body —
+     * so the symptom is "the app shows nothing", with no error anywhere to
+     * suggest a length problem. */
+    device_state_t st;
+    fill_worst_case(&st);
+
+    char buf[DEVICE_API_STATE_BUF_SZ];
+    int n = device_api_json_state(&st, buf, sizeof(buf));
+    if (n < 0) {
+        g_total++; g_fail++;
+        char scratch[ROOMY];
+        int want = device_api_json_state(&st, scratch, sizeof(scratch));
+        printf("  FAIL worst-case state needs %d bytes and DEVICE_API_STATE_BUF_SZ is %d — "
+               "raise it or shorten a field in device_api_model.h\n",
+               want, DEVICE_API_STATE_BUF_SZ);
+    } else {
+        g_total++;
+        printf("  worst-case state document: %d of %d bytes\n", n, DEVICE_API_STATE_BUF_SZ);
+        cJSON *r = cJSON_Parse(buf);
+        CHECK(r != NULL);
+        cJSON_Delete(r);
+    }
+
+    char ibuf[DEVICE_API_INFO_BUF_SZ];
+    char wide[DEV_MODEL_MAXLEN];
+    memset(wide, '"', sizeof(wide) - 1);
+    wide[sizeof(wide) - 1] = '\0';
+    CHECK(device_api_json_info(ibuf, sizeof(ibuf), wide, wide, wide, wide) > 0);
 }
 
 static void test_overflow_yields_an_empty_string_not_half_a_document(void)
@@ -289,81 +504,46 @@ static void test_overflow_yields_an_empty_string_not_half_a_document(void)
     CHECK_INT(device_api_json_info(buf, 0, "a", "b", "c", "d"), -1);
 }
 
-static void test_worst_case_fits_the_servers_buffer(void)
+/* The cursor is bounded, so prove it at every boundary rather than at one.
+ *
+ * A document is serialised into every capacity from 0 up to one past its own
+ * length, each into a buffer with a guard byte after it. Every truncation must
+ * return -1 with an empty string, the one exact fit must return the length, and
+ * nothing may ever touch the guard — which is the only way an off-by-one in
+ * `s->len + n + 1 > s->cap` shows up as a failure rather than as a corrupted
+ * neighbour on the device three weeks later. */
+static void test_every_truncation_stays_inside_its_buffer(void)
 {
-    /* device_api.c serialises into a DEVICE_API_STATE_BUF_SZ buffer. If the
-     * worst case does not fit, the serializer returns -1 and an EMPTY body —
-     * so the symptom is "the app shows nothing", with no error anywhere to
-     * suggest a length problem. Every string is therefore filled to its
-     * declared maximum here, in the widest bytes it can hold, which is also
-     * what fixes the field capacities in device_api_model.h. */
     device_state_t st;
-    memset(&st, 0, sizeof(st));
+    fill(&st);
 
-    #define FILL_ASCII(field) do { \
-        size_t n = sizeof(st.field) - 1; \
-        memset(st.field, 'W', n); \
-        st.field[n] = '\0'; \
-    } while (0)
+    char full[ROOMY];
+    int want = device_api_json_state(&st, full, sizeof(full));
+    CHECK(want > 0);
+    if (want <= 0) return;
 
-    FILL_ASCII(model);
-    FILL_ASCII(fw);
-    FILL_ASCII(device_id);
-    FILL_ASCII(ip);
-    FILL_ASCII(news_url);
-    FILL_ASCII(last_result);
+    int bad_return = 0, bad_term = 0, clobbered = 0;
+    for (size_t cap = 0; cap <= (size_t)want + 1; cap++) {
+        char *heap = (char *)malloc(cap + 8);
+        if (!heap) { CHECK(false); return; }
+        memset(heap, 'G', cap + 8);
 
-    /* A multi-byte codepoint passes through the escaper untouched, so a Latin-1
-     * field is the same length on the wire as an ASCII one. A field full of
-     * quotes is NOT: each becomes two bytes. */
-    #define FILL_WIDEST(field, ch) do { \
-        for (size_t i = 0; i + 1 < sizeof(st.field); i++) st.field[i] = (ch); \
-        st.field[sizeof(st.field) - 1] = '\0'; \
-    } while (0)
+        int n = device_api_json_state(&st, heap, cap);
 
-    FILL_WIDEST(edition, '"');
-    FILL_WIDEST(page_title, '\\');
-    FILL_WIDEST(generated_at, '\n');
-    FILL_WIDEST(lead_symbol, '"');
-    FILL_WIDEST(lead_headline, '"');
-    st.index_count = DEV_INDEX_MAX;
-    for (int i = 0; i < DEV_INDEX_MAX; i++) {
-        for (size_t k = 0; k + 1 < sizeof(st.indices[i].symbol); k++) {
-            st.indices[i].symbol[k] = '"';
+        for (size_t k = cap; k < cap + 8; k++) {
+            if (heap[k] != 'G') { clobbered++; break; }
         }
-        st.indices[i].last_c = 999999999;
-        st.indices[i].chg_bp = -999999999;
+        if (cap >= (size_t)want + 1) {
+            if (n != want || strlen(heap) != (size_t)want) bad_return++;
+        } else {
+            if (n != -1) bad_return++;
+            if (cap > 0 && heap[0] != '\0') bad_term++;
+        }
+        free(heap);
     }
-
-    #undef FILL_ASCII
-    #undef FILL_WIDEST
-
-    st.page = 3;
-    st.news_valid = true;
-    st.story_count = st.ticker_count = 999999999;
-    st.poll_seconds = st.age_seconds = 999999999;
-    st.battery_pct = st.battery_mv = 999999999;
-    st.refresh_ms = 999999999;
-
-    char buf[DEVICE_API_STATE_BUF_SZ];
-    int n = device_api_json_state(&st, buf, sizeof(buf));
-    if (n < 0) {
-        g_total++; g_fail++;
-        printf("  FAIL worst-case state does not fit DEVICE_API_STATE_BUF_SZ (%d) — "
-               "shorten a field in device_api_model.h\n", DEVICE_API_STATE_BUF_SZ);
-    } else {
-        g_total++;
-        printf("  worst-case state document: %d of %d bytes\n", n, DEVICE_API_STATE_BUF_SZ);
-        cJSON *r = cJSON_Parse(buf);
-        CHECK(r != NULL);
-        cJSON_Delete(r);
-    }
-
-    char ibuf[DEVICE_API_INFO_BUF_SZ];
-    char wide[DEV_MODEL_MAXLEN];
-    memset(wide, '"', sizeof(wide) - 1);
-    wide[sizeof(wide) - 1] = '\0';
-    CHECK(device_api_json_info(ibuf, sizeof(ibuf), wide, wide, wide, wide) > 0);
+    CHECK_INT(clobbered, 0);
+    CHECK_INT(bad_return, 0);
+    CHECK_INT(bad_term, 0);
 }
 
 static void test_null_state_is_rejected(void)
@@ -376,19 +556,27 @@ static void test_null_state_is_rejected(void)
 static void test_zeroed_state_still_parses(void)
 {
     /* This is what /api/state returns before the first poll — every string
-     * empty, every number zero. It must still be a valid document, with an
-     * empty indices array rather than a missing key. */
+     * empty, every number zero. It must still be a valid document, with empty
+     * arrays and a present-but-empty subject rather than missing keys: an app
+     * that has to distinguish "no key" from "no news" has two states to handle
+     * where the board only ever has one. */
     device_state_t st;
     memset(&st, 0, sizeof(st));
 
-    char buf[2048];
+    char buf[ROOMY];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
         cJSON *v = obj(r, "news");
         check_bool(v, "valid", false);
-        CHECK(cJSON_IsArray(cJSON_GetObjectItem(v, "indices")));
+        arr(v, "headlines", 0);
+        arr(v, "indices", 0);
+        cJSON *sub = obj(v, "subject");
+        check_str(sub, "symbol", "");
+        check_int(sub, "lastCents", 0);
+        check_int(obj(v, "counts"), "stories", 0);
+        check_int(obj(v, "counts"), "figures", 0);
         check_str(r, "deviceId", "");
         cJSON_Delete(r);
     }
@@ -398,11 +586,12 @@ int main(void)
 {
     test_info();
     test_state_shape();
-    test_index_count_is_clamped_to_the_array();
+    test_counts_are_clamped_to_their_arrays();
     test_utf8_passes_through();
     test_control_characters_are_escaped();
     test_worst_case_fits_the_servers_buffer();
     test_overflow_yields_an_empty_string_not_half_a_document();
+    test_every_truncation_stays_inside_its_buffer();
     test_null_state_is_rejected();
     test_zeroed_state_still_parses();
     TH_REPORT("api_json");

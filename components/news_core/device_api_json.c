@@ -103,6 +103,20 @@ static void put_bool_field(sink_t *s, const char *key, bool val, bool first)
     put(s, val ? "true" : "false");
 }
 
+/* How many entries of an array to serialize.
+ *
+ * user_app copies these counts out of news_t under a lock. A count that outran
+ * its array — or a negative one from an uninitialised read — would serialise
+ * whatever follows the struct straight onto the network, so the clamp lives
+ * here, at the only place that walks the arrays, rather than at each caller. */
+static int clamped(int n, int cap)
+{
+    if (n < 0) {
+        return 0;
+    }
+    return n > cap ? cap : n;
+}
+
 static int finish(sink_t *s)
 {
     if (!s->ok) {
@@ -154,24 +168,67 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put_bool_field(&s, "demo", st->demo, false);
     put_str_field(&s, "edition", st->edition, false);
     put_str_field(&s, "generatedAt", st->generated_at, false);
-    put_int_field(&s, "stories", st->story_count, false);
-    put_int_field(&s, "tickers", st->ticker_count, false);
 
-    /* The lead identifies the page better than any count does: it is what the
-     * board is actually showing, and it is how the app can tell "polled fine,
-     * same page as an hour ago" from "polled fine, new front page". */
-    put(&s, ",\"lead\":{");
-    put_str_field(&s, "symbol", st->lead_symbol, true);
-    put_str_field(&s, "headline", st->lead_headline, false);
+    /* The subject identifies the edition better than any count does: it is what
+     * the board is actually about, and it is how the app tells "polled fine,
+     * same company as an hour ago" from "polled fine, new front page".
+     *
+     * Cents and basis points, not formatted strings — the app owns the decimal
+     * separator and the sign colour, and the two would drift if the firmware
+     * decided them here as well. A zero 52-week bound means unknown; the page
+     * draws it as absent rather than as a price of nothing. */
+    put(&s, ",\"subject\":{");
+    put_str_field(&s, "symbol", st->subject.symbol, true);
+    put_str_field(&s, "name", st->subject.name, false);
+    put_str_field(&s, "exchange", st->subject.exchange, false);
+    put_str_field(&s, "sector", st->subject.sector, false);
+    put_int_field(&s, "lastCents", st->subject.last_c, false);
+    put_int_field(&s, "changeBp", st->subject.chg_bp, false);
+    put_int_field(&s, "prevCloseCents", st->subject.prev_close_c, false);
+    put_int_field(&s, "openCents", st->subject.open_c, false);
+    put_int_field(&s, "highCents", st->subject.high_c, false);
+    put_int_field(&s, "lowCents", st->subject.low_c, false);
+    put_int_field(&s, "wk52HighCents", st->subject.wk52_hi_c, false);
+    put_int_field(&s, "wk52LowCents", st->subject.wk52_lo_c, false);
     put(&s, "}");
 
-    /* Cents and basis points, not formatted strings — the app owns the decimal
-     * separator and the sign colour, and the two would drift if the firmware
-     * decided them here as well. */
+    /* What arrived, in one place, AFTER parsing. A count is the whole of what
+     * the app gets for the figures, the briefs, the peers, the tables and the
+     * thumbnails: a reader has those in front of them, and what the app needs is
+     * whether the board received them — "the producer filed a thin day" against
+     * "the parser dropped something" is a distinction only these numbers can
+     * make, and it is how a producer learns its forty figures became 28. */
+    put(&s, ",\"counts\":{");
+    put_int_field(&s, "stories", clamped(st->story_count, DEV_STORY_MAX), true);
+    put_int_field(&s, "figures", st->figure_count, false);
+    put_int_field(&s, "briefs", st->brief_count, false);
+    put_int_field(&s, "peers", st->peer_count, false);
+    put_int_field(&s, "tables", st->table_count, false);
+    put_int_field(&s, "charts", st->chart_count, false);
+    put_int_field(&s, "indices", clamped(st->index_count, DEV_INDEX_MAX), false);
+    put_int_field(&s, "thumbs", st->thumb_count, false);
+    put(&s, "}");
+
+    /* The headlines the board set, in the order it set them. No symbol on a
+     * headline: every story in the edition is about `subject`, and repeating it
+     * five times would say nothing. */
+    put(&s, ",\"headlines\":[");
+    int n = clamped(st->story_count, DEV_STORY_MAX);
+    for (int i = 0; i < n; i++) {
+        put(&s, i ? ",{" : "{");
+        put_int_field(&s, "rank", st->stories[i].rank, true);
+        put_str_field(&s, "headline", st->stories[i].headline, false);
+        put(&s, "}");
+    }
+    put(&s, "]");
+
+    /* No figures array, deliberately — see device_api_model.h. The dossier is
+     * twenty-eight preformatted strings and carrying it here cost 16 KB of .bss
+     * for the life of the board, to duplicate the part of the sheet the reader
+     * is already standing in front of. `counts.figures` says how many arrived. */
+
     put(&s, ",\"indices\":[");
-    int n = st->index_count;
-    if (n < 0) n = 0;
-    if (n > DEV_INDEX_MAX) n = DEV_INDEX_MAX;
+    n = clamped(st->index_count, DEV_INDEX_MAX);
     for (int i = 0; i < n; i++) {
         put(&s, i ? ",{" : "{");
         put_str_field(&s, "symbol", st->indices[i].symbol, true);

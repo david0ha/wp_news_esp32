@@ -79,8 +79,8 @@ static void test_success(void)
     memset(&g_v, 0, sizeof(g_v));
     CHECK(news_service_fetch("http://host/news.json", &g_v) == NEWS_FETCH_OK);
     CHECK_INT(g_v.story_count, 4);
-    CHECK_INT(g_v.ticker_count, 16);
-    CHECK_STR(g_v.stories[0].symbol, "NVDA");
+    CHECK_INT(g_v.figure_count, 22);
+    CHECK_STR(g_v.subject.symbol, "SNDK");
     CHECK(g_v.valid == true);
     CHECK(g_v.demo == false);
 
@@ -112,11 +112,11 @@ static void test_the_three_failures_are_distinguished(void)
      * "your JSON is wrong" send them to different places. */
     expect("transport", NULL, 0, NEWS_FETCH_TRANSPORT);
     expect("404", "<html>Not Found</html>", 404, NEWS_FETCH_HTTP_STATUS);
-    expect("500", "{\"tickers\":[{\"symbol\":\"AAPL\"}]}", 500, NEWS_FETCH_HTTP_STATUS);
+    expect("500", "{\"subject\":{\"symbol\":\"SNDK\"}}", 500, NEWS_FETCH_HTTP_STATUS);
     expect("302", "", 302, NEWS_FETCH_HTTP_STATUS);
     expect("captive portal", "<html>Sign in</html>", 200, NEWS_FETCH_BAD_PAYLOAD);
     expect("empty object", "{}", 200, NEWS_FETCH_BAD_PAYLOAD);
-    expect("truncated", "{\"tickers\":[{\"symbol\":\"AA", 200, NEWS_FETCH_BAD_PAYLOAD);
+    expect("truncated", "{\"subject\":{\"symbol\":\"SN", 200, NEWS_FETCH_BAD_PAYLOAD);
 }
 
 static void test_status_is_checked_before_the_body(void)
@@ -163,7 +163,7 @@ static void test_a_failure_leaves_the_destination_untouched(void)
         { "<html>404</html>",          404 },
         { "{}",                        200 },
         { "not json at all",           200 },
-        { "{\"tickers\":[{\"symbol\"", 200 },
+        { "{\"subject\":{\"symbol\"",  200 },
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         g_body = bad[i].body;

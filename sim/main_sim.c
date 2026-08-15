@@ -10,32 +10,49 @@
  * twice. A simulator that thresholded pixels itself would agree with itself and
  * with nothing else.
  *
- * The two failure modes it exists for are the ones that cost the most to find on
- * hardware, and on this panel a refresh is twenty-five seconds of flashing: a
- * missing glyph (a tofu box), and a widget that silently rendered nothing
- * because it was positioned into a band that had already been claimed. It also
- * carries the assertion the design spec is otherwise unenforceable by — that
- * colour on this sheet is data and appears in exactly the places §6 lists.
+ * WHAT THE ASSERTIONS BECAME, AND WHY
+ * -----------------------------------
+ * They used to be positions: "the lead rule lands on row 1108", "band 6 is
+ * y 942 to 1118". Those cannot survive a page whose shape is chosen from what
+ * arrived — and they were never the property anyone wanted anyway. What has
+ * replaced them is a set of PROPERTIES, each of which holds for every payload
+ * rather than for the three this file happens to build:
  *
- * The preview images are written in wp_palette_ink, the MEASURED inks, rather
- * than in the saturated primaries the UI draws with: a screenshot in primaries
- * flatters the page into a decision nobody could make from the real panel.
+ *   - the day's composition is a legal tiling of the well (ui_compose_check);
+ *   - every module the compositor placed has ink in its rectangle;
+ *   - no ink crosses the 30 px margin, and no two labels share paper;
+ *   - every glyph of every string, fixed or from the payload, exists in every
+ *     face that could be asked to draw it;
+ *   - blue and yellow reach the glass nowhere but inside a photograph;
+ *   - green and red reach it only inside the rectangles that legitimately carry
+ *     a change figure — and those are read back OUT OF THE COMPOSITION rather
+ *     than listed here, so they move when the page does;
+ *   - the masthead sets inside the measure;
+ *   - the page is not grey: it inks enough of the sheet, and it sets display
+ *     type when it is carrying prose.
+ *
+ * That is a stronger claim than the old one and it is one nobody can satisfy by
+ * moving a number in a header.
  *
  *   ./sim.sh                                            # the built-in demo snapshot
  *   NEWS_URL=http://localhost:8123/news.json ./sim.sh   # the device's own fetch path
+ *   ./build/sim shots --json payload.json --tiles dir --only-pages
  */
 #include "lvgl.h"
 
 #include "ui_news.h"
 #include "ui_internal.h"      /* the shared grid — see sim/CMakeLists.txt */
+#include "ui_compose.h"
 #include "ui_fonts.h"
 #include "ui_strings.h"
 #include "news_mock.h"
 #include "news_model.h"
+#include "news_parse.h"
 #include "news_service.h"
 #include "wp_palette.h"
 #include "epd6_transpose.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,8 +79,8 @@ static uint8_t g_fb[EPD6_FB_SIZE];
  * read by a failure message, and it is the difference between the two reports a
  * stray colour can produce: "the page drew green here", which is a colour-policy
  * bug in a page file, and "the page drew something between two inks and the
- * dither landed on green", which is the anti-aliasing §6 exists to keep off the
- * sheet. Without it every such failure costs a bisect. */
+ * dither landed on green", which is the anti-aliasing the policy exists to keep
+ * off the sheet. Without it every such failure costs a bisect. */
 static uint16_t g_want[(size_t)UI_W * UI_H];
 
 static uint32_t g_tick;
@@ -74,8 +91,8 @@ static bool     g_flushed;
 #define FAIL(msg)       do { g_fail++; printf("  FAIL %s\n", (msg)); } while (0)
 
 /* Enough of a failure to see the shape of it, not enough to bury the next
- * check. Every one of these prints coordinates: a count alone tells you the
- * page is wrong and not where. */
+ * check. Every one of these prints coordinates: a count alone tells you the page
+ * is wrong and not where. */
 #define REPORT_MAX 6
 
 static uint32_t tick_cb(void) { return g_tick; }
@@ -102,9 +119,7 @@ static void flush_cb(lv_display_t *d, const lv_area_t *a, uint8_t *px)
  *
  * The framebuffer is cleared to white first because that is what the panel is
  * after a refresh, and because a pass that rendered nothing would otherwise be
- * asserted against the PREVIOUS pass's pixels and quietly pass. Then the screen
- * is invalidated wholesale: LVGL redraws only what is dirty, and "dirty" after
- * ui_news_set_data() is whatever the setters happened to touch. */
+ * asserted against the PREVIOUS pass's pixels and quietly pass. */
 static void render(void)
 {
     memset(g_fb, (EPD6_WHITE << 4) | EPD6_WHITE, sizeof g_fb);
@@ -125,11 +140,6 @@ static const char *const INK_NAME[WP_PALETTE_N] = {
     "black", "white", "red", "yellow", "blue", "green",
 };
 
-/* The palette index of a pixel, or WP_I_WHITE for anything off the sheet, so a
- * predicate can be handed a box that runs past an edge without a bounds test of
- * its own. A code that is not one of the six is a quantizer that has stopped
- * being the only place the decision is made, and it is worth a failure of its
- * own rather than a silent -1 propagating into an array index. */
 static int ink_at(int x, int y)
 {
     if (x < 0 || y < 0 || x >= UI_W || y >= UI_H) return WP_I_WHITE;
@@ -147,9 +157,8 @@ static bool is_ink(int x, int y)   { return ink_at(x, y) != WP_I_WHITE; }
 static bool is_black(int x, int y) { return ink_at(x, y) == WP_I_BLACK; }
 
 /* The colour LVGL asked for at a pixel, expanded back out of RGB565 the way
- * wp_quantize565() expands it, so a failure message reports the value the
- * quantizer actually saw and not a rounding of it. Returns a pointer to a
- * static buffer; one call per printf. */
+ * wp_quantize565() expands it, so a failure reports the value the quantizer
+ * actually saw and not a rounding of it. */
 static const char *wanted_at(int x, int y)
 {
     static char buf[40];
@@ -206,8 +215,8 @@ static double ink_pct(void)
 /* --- the preview image ----------------------------------------------------
  *
  * 24-bit BMP in wp_palette_ink, which is roughly what Spectra 6 actually looks
- * like: a warm off-white, a brick red, an olive green. The saturated palette
- * the UI draws with would make every screenshot a cartoon, and the whole reason
+ * like: a warm off-white, a brick red, an olive green. The saturated palette the
+ * UI draws with would make every screenshot a cartoon, and the whole reason
  * sim/shots/ is looked at after a UI change is to judge the page as paper. */
 static void write_preview(const char *path)
 {
@@ -259,11 +268,8 @@ static void shot(const char *dir, const char *name)
  *
  * The tempting version of this looks in the bitmap for the hollow rectangle
  * LVGL draws in place of a missing glyph — unreliable, and unnecessary, because
- * the font will simply say. Ask it whether it has each codepoint of each string
- * it is going to be asked to draw.
- *
- * Half these strings arrive over the network, so the check has to run over the
- * DATA and not only over the source literals. */
+ * the font will simply say. Half these strings arrive over the network, so the
+ * check has to run over the DATA and not only over the source literals. */
 
 static uint32_t utf8_next(const char *s, int *i)
 {
@@ -299,11 +305,11 @@ static void cover(const lv_font_t *font, const char *label, const char *text)
 /* Every text face, not only the one that draws the string today.
  *
  * The six text faces are deliberately identical in coverage (ASCII + Latin-1 +
- * S_DATA_PUNCT), and the tier engine moves strings between them freely — a
- * headline demoted from the lead well to a 364 px column changes face without
- * changing a byte, and the same story appears again on A2 in deck_24. Checking
- * only today's face would let a regression through until the day a payload got
- * one story shorter.
+ * S_DATA_PUNCT), and the compositor moves strings between them freely: a
+ * headline demoted across a gutter changes face without changing a byte, and a
+ * module one column narrower sets its body in body_16 where it set body_20
+ * yesterday. Checking only today's face would let a regression through until the
+ * day a payload arrived one story shorter.
  *
  * ui_font_masthead_112 is deliberately absent. It is subset to the Latin
  * alphabet, it draws exactly one string, and that string is checked against it
@@ -320,6 +326,105 @@ static void cover_all(const char *label, const char *text)
     }
 }
 
+/* The mean advance of a face over a sample, measured with the same
+ * lv_text_get_size() every copyfit uses — so it is the number the layout
+ * actually experiences rather than a design value off the family's specimen.
+ *
+ * TWO samples are worth having and they are not the same number. Over printable
+ * ASCII it is a property of the FACE, weighted by nothing, and every capital and
+ * every bracket counts as much as an 'e'. Over a paragraph of English it is a
+ * property of the face SETTING PROSE, which is what a characters-per-column
+ * table is actually about, and it comes out about seven per cent narrower
+ * because English is mostly lower case. A table that divides a column width by
+ * the first and calls the answer "characters per line" overstates the measure. */
+static double mean_advance(const lv_font_t *f, const char *sample)
+{
+    if (!sample || !sample[0]) return 0.0;
+
+    int n = 0;
+    for (const char *p = sample; *p; p++) {
+        if ((*p & 0xC0) != 0x80) n++;       /* count characters, not bytes */
+    }
+
+    lv_point_t sz;
+    lv_text_get_size(&sz, sample, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return n > 0 ? (double)sz.x / n : 0.0;
+}
+
+static const char *ascii_sample(void)
+{
+    static char s[95 + 1];
+    int n = 0;
+
+    for (int c = 32; c < 127; c++) s[n++] = (char)c;
+    s[n] = '\0';
+    return s;
+}
+
+/* The prose every face is measured against, and it is FIXED HERE rather than
+ * taken from the day's payload.
+ *
+ * A characters-per-column table is a documented number, so it has to be a
+ * property of the seven committed font files and of nothing else. Measured over
+ * the demo snapshot's own body it would move the moment somebody rewrote the
+ * mock, and the table in docs/pages.md would go stale with no one able to see
+ * why. This is four sentences of ordinary newspaper English at ordinary letter
+ * frequencies — which is the whole point, since English is mostly lower case and
+ * a mean weighted by nothing overstates the measure by about a tenth.
+ *
+ * Do not "improve" it. Changing the sample changes every figure derived from it,
+ * and the only thing worse than one undocumented basis is two. */
+#define SIM_PROSE_SAMPLE \
+    "The company said on Thursday that contract prices for its densest parts " \
+    "had risen for the first time since the spring, and that the increase was " \
+    "larger than the distributors had been told to expect. Three of the four " \
+    "suppliers took it. What changed is not demand, which has been flat all " \
+    "year, but the willingness of buyers to hold stock against a market they " \
+    "now expect to tighten before the winter."
+
+/* Every face the page sets type in, in the order they appear on the sheet. The
+ * masthead is included even though it draws one string: a nameplate that grew
+ * wider than the measure is the failure check_masthead() exists for, and this is
+ * the number that would have predicted it. */
+static const struct { const char *name; const lv_font_t *f; } FACES[] = {
+    { "masthead_112", &ui_font_masthead_112 },
+    { "display_56",   &ui_font_display_56   },
+    { "display_36",   &ui_font_display_36   },
+    { "deck_24",      &ui_font_deck_24      },
+    { "body_20",      &ui_font_body_20      },
+    { "body_16",      &ui_font_body_16      },
+    { "label_14",     &ui_font_label_14     },
+};
+
+/* `sim --measure`: the advance table, for the one in docs/pages.md and the one
+ * in ui_internal.h. Both derive characters-per-column from these, and both have
+ * at times carried a figure nobody could say the basis of — which is how three
+ * different numbers for body_16 came to be in circulation at once. Printing
+ * every face on both bases from one command is what makes the table something
+ * somebody read rather than something two files assert at each other. */
+static void print_measures(void)
+{
+    printf("face          ascii   prose   line_height   "
+           "1col   2col   3col   4col  (characters, prose)\n");
+
+    for (size_t i = 0; i < sizeof FACES / sizeof *FACES; i++) {
+        const double a = mean_advance(FACES[i].f, ascii_sample());
+        const double p = mean_advance(FACES[i].f, SIM_PROSE_SAMPLE);
+
+        printf("%-12s %6.2f  %6.2f  %11d   ", FACES[i].name, a, p,
+               lv_font_get_line_height(FACES[i].f));
+        for (int c = 1; c <= 4; c++) {
+            printf("%5d  ", p > 0.0 ? (int)(UI_COL(c) / p) : 0);
+        }
+        printf("\n");
+    }
+
+    printf("\nascii: mean over printable ASCII 32..126, the face weighted by "
+           "nothing.\nprose: mean over a fixed paragraph of English "
+           "(SIM_PROSE_SAMPLE in sim/main_sim.c).\nThe character counts are "
+           "prose; a Title Case headline sets a little wider.\n");
+}
+
 static void check_fixed_strings(void)
 {
     static const char *const FIXED[] = {
@@ -327,16 +432,8 @@ static void check_fixed_strings(void)
         S_BADGE_DEMO, S_BADGE_STALE, S_BADGE_OFFLINE, S_NO_DATA, S_WAITING,
         S_KEY_PAGE, S_KEY_REFRESH, S_KEY_WIFI,
         S_PAGE_FRONT, S_PAGE_MARKETS,
-        S_MARKET_WRAP, S_PORTFOLIO, S_DAYS_RANGE,
-        /* The market summary's copy, which is the only prose on the sheet the
-         * BOARD wrote. It is composed at runtime out of these and an index
-         * name, so the format strings are checked here and the names arrive
-         * through check_data_strings() — between them that is every glyph the
-         * finished sentence can contain. */
-        S_SUMMARY_KICKER, S_SUMMARY_UP, S_SUMMARY_DOWN, S_SUMMARY_MIXED,
-        S_SUMMARY_FLAT, S_SUMMARY_DECK, S_SUMMARY_DECK_ONE,
-        S_COL_SYMBOL, S_COL_NAME, S_COL_LAST, S_COL_CHG,
-        S_IN_BRIEF, S_FOLIO_A1, S_FOLIO_A2, S_UPDATED, S_NEXT,
+        S_PEERS, S_INSIDE, S_IN_BRIEF, S_EMPTY_CELL,
+        S_COL_SYMBOL, S_COL_NAME, S_COL_PE, S_COL_CAP, S_COL_LAST, S_COL_CHG,
         S_WIFI_TITLE, S_RESTARTING,
         /* The setup sheet's standing type. It is the longest fixed copy on the
          * board and the first page a new owner sees, so a character outside the
@@ -347,31 +444,29 @@ static void check_fixed_strings(void)
         S_SETUP_TROUBLE_H, S_SETUP_TROUBLE,
         S_SETUP_SOURCE_H, S_SETUP_SOURCE,
         /* Characters that exist only inside a runtime-composed string — the
-         * separators in the folio's key legend, the digits and the decimal
-         * point of every figure ui_money() and ui_pct() produce. This is the
-         * check that catches the whole class of bug where a label renders but
-         * the space in "%s %s" comes out as a box. */
+         * separators the tape and the briefs put between two fields, the digits
+         * and the decimal point of every figure ui_money() and ui_pct()
+         * produce. This is the check that catches the whole class of bug where a
+         * label renders but the space in "%s %s" comes out as a box. */
         S_COMPOSED_CHARS,
         S_DATA_PUNCT,
         "0123456789",
+        "\xC2\xB7",                     /* the tape's separator */
     };
     for (size_t i = 0; i < sizeof FIXED / sizeof *FIXED; i++) {
         cover_all("fixed string", FIXED[i]);
     }
 
-    static const char *const WEEKDAYS[7] = S_WEEKDAYS_ABBR;
-    for (int i = 0; i < 7; i++) cover_all("weekday", WEEKDAYS[i]);
-
-    /* And the caps spellings the no-payload dateline is composed from, which is
-     * the one slot on the sheet whose string is built rather than set. */
+    /* The caps spellings the no-payload dateline is composed from, which is the
+     * one slot on the sheet whose string is built rather than set. */
     static const char *const WD_CAPS[7] = S_WEEKDAYS_CAPS;
     static const char *const MONTHS[12] = S_MONTHS_CAPS;
     for (int i = 0; i < 7; i++)  cover_all("weekday", WD_CAPS[i]);
     for (int i = 0; i < 12; i++) cover_all("month", MONTHS[i]);
 
     /* The masthead face against the one string it exists to draw, and against
-     * nothing else. Editing S_MASTHEAD without regenerating the fonts is
-     * exactly the mistake this catches, on the largest text on the sheet. */
+     * nothing else. Editing S_MASTHEAD without regenerating the fonts is exactly
+     * the mistake this catches, on the largest text on the sheet. */
     cover(&ui_font_masthead_112, "masthead", S_MASTHEAD);
 }
 
@@ -389,13 +484,14 @@ static void check_data_strings(const news_t *v)
     cover_all("as_of",        v->as_of);
     cover_all("generated_at", v->generated_at);
 
+    cover_all("subject symbol",   v->subject.symbol);
+    cover_all("subject name",     v->subject.name);
+    cover_all("subject exchange", v->subject.exchange);
+    cover_all("subject sector",   v->subject.sector);
+
     for (int i = 0; i < v->index_count; i++) {
         cover_all("index symbol", v->indices[i].symbol);
         cover_all("index name",   v->indices[i].name);
-    }
-    for (int i = 0; i < v->ticker_count; i++) {
-        cover_all("ticker symbol", v->tickers[i].symbol);
-        cover_all("ticker name",   v->tickers[i].name);
     }
     for (int i = 0; i < v->story_count; i++) {
         const news_story_t *s = &v->stories[i];
@@ -404,33 +500,64 @@ static void check_data_strings(const news_t *v)
         cover_all("deck",     s->deck);
         cover_all("byline",   s->byline);
         cover_all("body",     s->body);
-        cover_all("symbol",   s->symbol);
-        cover_all("chart span", s->chart.span);
         cover_all("caption",  s->photo.caption);
         cover_all("credit",   s->photo.credit);
     }
+    for (int i = 0; i < v->figure_count; i++) {
+        cover_all("figure group", v->figures[i].group);
+        cover_all("figure label", v->figures[i].label);
+        cover_all("figure value", v->figures[i].value);
+    }
+    for (int i = 0; i < v->brief_count; i++) {
+        cover_all("brief date",   v->briefs[i].date);
+        cover_all("brief kicker", v->briefs[i].kicker);
+        cover_all("brief text",   v->briefs[i].text);
+    }
+    for (int i = 0; i < v->peer_count; i++) {
+        cover_all("peer symbol", v->peers[i].symbol);
+        cover_all("peer name",   v->peers[i].name);
+        cover_all("peer P/E",    v->peers[i].per);
+        cover_all("peer cap",    v->peers[i].cap);
+    }
+    for (int i = 0; i < v->table_count; i++) {
+        const news_table_t *t = &v->tables[i];
+        cover_all("table title", t->title);
+        cover_all("table note",  t->note);
+        for (int c = 0; c < t->col_count; c++) cover_all("table column", t->col[c]);
+        for (int r = 0; r < t->row_count; r++) {
+            cover_all("table row", t->row[r].label);
+            for (int c = 0; c < t->col_count; c++) {
+                cover_all("table cell", t->row[r].v[c]);
+            }
+        }
+    }
+    for (int i = 0; i < v->chart_count; i++) {
+        cover_all("chart label", v->charts[i].label);
+        cover_all("chart span",  v->charts[i].span);
+        cover_all("chart note",  v->charts[i].note);
+    }
+    for (int i = 0; i < v->thumb_count; i++) {
+        cover_all("thumb caption", v->thumbs[i].caption);
+        cover_all("thumb credit",  v->thumbs[i].credit);
+    }
 }
 
-/* --- the sheet ------------------------------------------------------------
+/* --- the furniture --------------------------------------------------------
  *
- * Every check below reads the bands and the rules out of ui_internal.h's own
- * X-macro tables rather than out of a transcription of them. That is the whole
- * reason those tables exist: a band moved in the header moves the page and the
- * assertion together, and a band moved in a page file and not in the header
- * fails here with the row it landed on. */
-
-#define SIM_RULE(name, y, w) { name, (y), (w) },
+ * Four strips and four rules, and they are all that is left of the fixed
+ * geometry: the nameplate, the ruled line under it, the tape, and the folio.
+ * They print on both pages whatever the news did, so they are checked on both.
+ *
+ * The rules inside the WELL are not here and cannot be: they are the boundaries
+ * between the day's bands, they are as wide as the columns that end on them, and
+ * where they land is the composition's business. ui_compose_check() is what
+ * covers those. */
 static const struct { const char *name; int y, w; } SHEET_RULES[] = {
-    UI_RULE_TABLE(SIM_RULE)
+    { "masthead", UI_MAST_RULE_Y,     UI_MAST_RULE_W     },
+    { "dateline", UI_DATELINE_RULE_Y, UI_DATELINE_RULE_W },
+    { "tape",     UI_TAPE_RULE_Y,     UI_TAPE_RULE_W     },
 };
-
-#define SIM_BAND(name, y, h) { name, (y), (h) },
-static const struct { const char *name; int y, h; } SHEET_BANDS[] = {
-    UI_BAND_TABLE(SIM_BAND)
-};
-
 #define NRULES ((int)(sizeof SHEET_RULES / sizeof *SHEET_RULES))
-#define NBANDS ((int)(sizeof SHEET_BANDS / sizeof *SHEET_BANDS))
 
 /* A rule is black on every one of its rows across the whole measure, with no
  * tolerance at all. It is a filled rectangle in an exact palette colour, so it
@@ -461,23 +588,30 @@ static void check_rules(const char *pass)
     }
 }
 
-/* Nothing crosses the margin, on any of the four sides. The margin is what
- * makes the sheet read as a page in a frame rather than as a screen with
- * content pushed to its edges, and it is the one measurement a reader notices
- * being wrong without being able to say why.
+static void check_furniture(const char *pass, bool front)
+{
+    char what[96];
+
+    check_rules(pass);
+
+    snprintf(what, sizeof what, "%s: the nameplate", pass);
+    want_ink(what, UI_CONTENT_X, UI_MAST_Y, UI_CONTENT_R, UI_MAST_Y + UI_MAST_H);
+    snprintf(what, sizeof what, "%s: the dateline row", pass);
+    want_ink(what, UI_CONTENT_X, UI_DATELINE_Y, UI_CONTENT_R,
+             UI_DATELINE_Y + UI_DATELINE_H);
+    snprintf(what, sizeof what, "%s: the tape", pass);
+    want_ink(what, UI_CONTENT_X, UI_TAPE_Y, UI_CONTENT_R, UI_TAPE_Y + UI_TAPE_H);
+    (void)front;
+}
+
+/* Nothing crosses the margin, on any of the four sides.
  *
  * ONE PIXEL OF SLACK, and only on the left and right, because a glyph's ink is
  * allowed to start left of its origin and several of ours do. In
  * ui_font_display_56, A J V W j v y all carry ofs_x = -1: a Didone's pointed
  * foot and its flat apex serif overhang, which is how the family is drawn and
  * why a headline set flush left OPTICALLY aligns with the body text beneath it.
- * Pulling the label in by a pixel to satisfy a bounding box would make the
- * largest text on the sheet visibly inset against everything below it.
- *
- * So the check permits a single column of ink and still catches a real overrun,
- * which is always two pixels or more — a mispositioned widget, a rule drawn
- * from the wrong origin, a label wider than its slot. Top and bottom get no
- * slack: there is no vertical equivalent of a side bearing at a margin. */
+ * A real overrun is always two pixels or more. */
 #define MARGIN_BEARING 1
 
 static void check_margins(const char *pass)
@@ -495,118 +629,14 @@ static void check_margins(const char *pass)
     }
 }
 
-/* Every band has something in it. A band that rendered nothing is a failure and
- * not an empty state: the tier engine's whole job is to promote content up a
- * tier rather than leave paper, so 372 px of blank in the middle of the sheet
- * means the promotion did not happen. */
-static void check_bands_filled(const char *pass)
-{
-    for (int b = 0; b < NBANDS; b++) {
-        char what[96];
-        snprintf(what, sizeof what, "%s: band %s", pass, SHEET_BANDS[b].name);
-        want_ink(what, UI_CONTENT_X, SHEET_BANDS[b].y,
-                 UI_CONTENT_R, SHEET_BANDS[b].y + SHEET_BANDS[b].h);
-    }
-}
-
-/* A2's bands are its own and are private to ui_page_markets.c, so the band
- * table above cannot be pointed at them and copying them here is precisely the
- * second grid ui_internal.h's header warns against. What is checkable without
- * knowing them is where the page's ink starts, where it stops, and whether
- * anything between the two is bare.
- *
- * THIS CHECK CHANGED SHAPE, and the reason is worth writing down. It used to
- * demand ink in every 100 px strip of the content area — "the page fills the
- * sheet" — which is not a property a page can always have: two indices, three
- * quotations and one brief is a real payload, and the only way to satisfy the
- * assertion on that day was to inflate the rows until they reached the foot. The
- * markets page duly did, and the result passed: three watchlist rows at 290 px,
- * each holding one 24 px line of type and a sparkline stretched to 680 x 130 of
- * bare diagonal. The assertion was green and the page was broken, which is the
- * worst outcome available — an assertion that can be satisfied the wrong way
- * trains the code to satisfy it the wrong way, and the next person to see a
- * "nothing rendered" failure will reach for a taller row.
- *
- * So it asks the two questions that have one answer each:
- *
- *  - No HOLE. Between the page's topmost and bottommost inked rows, every strip
- *    carries ink. A gap in the MIDDLE of a page is a widget that rendered
- *    nothing, which is the bug worth catching and the only one the old form ever
- *    really found.
- *  - Bounded trailing paper. A page is allowed to END — a rule under the last
- *    row and the rest of the sheet left as paper — but not by so much that the
- *    payload should plainly have been given a different layout instead of simply
- *    stopping. A quarter of the sheet is where that line is drawn.
- *
- * The window stops at the hairline the folio hangs from, because the folio and
- * that hairline are FURNITURE: they print at the foot of every page whatever the
- * news did, so including them would make every page end exactly at the bottom
- * margin and measure no trailing paper at all. */
-#define SIM_SLICE     100
-
-/* THE TRAILING BOUND MOVED, from UI_CONTENT_H / 4 (385 px) to UI_CONTENT_H / 3
- * (513), and it is written down here because a constant like this is exactly
- * the kind a reader wants to know was reasoned rather than reached for.
- *
- * A quarter was a first estimate, invented in the same breath as the check
- * itself, and it landed 26 px from a page that is genuinely correct: two
- * indices, three quotations and one brief compose to a sheet that ends at
- * y=1185 with 359 px of paper under its closing rule. The obvious way to pass
- * it was to give the rows a second, higher ceiling and let them grow until they
- * reached the foot — which is the failure the ceilings in ui_page_markets.c
- * exist to prevent, and which this check was rewritten once already to stop
- * rewarding. An assertion that can be satisfied the wrong way trains the code
- * to satisfy it the wrong way; that is the whole reason it asks about holes
- * rather than about fullness.
- *
- * At a third of the sheet it still catches both things it is for. A page that
- * renders a masthead, three rows and a folio is 90% paper and still fails,
- * which is the case worth failing. A thin payload that ends its page early and
- * rules under it is not. */
-#define SIM_TRAIL_MAX (UI_CONTENT_H / 3)
-
-static void check_sheet_filled(const char *pass)
-{
-    int top = -1, bot = -1;
-
-    for (int y = UI_CONTENT_Y; y < UI_TICKER_RULE_Y; y++) {
-        if (!any_ink(UI_CONTENT_X, y, UI_CONTENT_R, y + 1)) continue;
-        if (top < 0) top = y;
-        bot = y;
-    }
-
-    if (top < 0) {
-        FAILV("%s: nothing at all is printed between the top margin and the folio",
-              pass);
-        return;
-    }
-
-    for (int y = top; y <= bot; y += SIM_SLICE) {
-        int y1 = y + SIM_SLICE;
-        if (y1 > bot + 1) y1 = bot + 1;
-        char what[128];
-        snprintf(what, sizeof what,
-                 "%s: the strip at y=%d, inside a page that runs y[%d..%d]",
-                 pass, y, top, bot);
-        want_ink(what, UI_CONTENT_X, y, UI_CONTENT_R, y1);
-    }
-
-    const int trail = UI_TICKER_RULE_Y - (bot + 1);
-    if (trail > SIM_TRAIL_MAX) {
-        FAILV("%s: the page's last ink is at y=%d and the folio's rule at y=%d — "
-              "%d px of paper, past the %d a page may end short by",
-              pass, bot, UI_TICKER_RULE_Y, trail, SIM_TRAIL_MAX);
-    }
-}
-
 /* The masthead, measured off the glass rather than off the font tables.
  *
  * S_MASTHEAD sets 1012 px solid at 112 and is tracked out to about 1102 of the
  * 1140 available, and this is the one measurement in the whole design that can
- * only fail at full size: a face regenerated a fraction wider, or a longer
- * paper name, and the largest text on the sheet either ellipsizes or stops
- * being centred. Both are visible from across a room, and neither is visible in
- * any host test. */
+ * only fail at full size: a face regenerated a fraction wider, or a longer paper
+ * name, and the largest text on the sheet either ellipsizes or stops being
+ * centred. Both are visible from across a room and neither is visible in any
+ * host test. */
 static void check_masthead(const char *pass)
 {
     int l = -1, r = -1;
@@ -631,9 +661,6 @@ static void check_masthead(const char *pass)
               pass, w, l, r, w - UI_CONTENT_W, UI_CONTENT_W);
     }
 
-    /* Centred is stated as "the two margins agree", which is the same thing and
-     * says which way it drifted. Four half-pixels of slack is two pixels of
-     * centre, and a blackletter's own side bearings are not symmetric. */
     const int gap_l = l - UI_CONTENT_X;
     const int gap_r = UI_CONTENT_R - 1 - r;
     if (gap_l - gap_r > 4 || gap_r - gap_l > 4) {
@@ -642,78 +669,21 @@ static void check_masthead(const char *pass)
     }
 }
 
-/* --- slots ---------------------------------------------------------------
+/* --- the widget tree ------------------------------------------------------
  *
- * The pixel checks above catch ink in the wrong place; this catches a WIDGET in
- * the wrong place, which is the same bug one step earlier and with a name
- * attached. LVGL's tree is walked and every visible object's box is held
- * against the sheet: inside the margins, and strictly between two consecutive
- * rules from §3.
- *
- * "Between two rules" is the whole containment test, and it is exact rather
- * than approximate: the seven rules divide the sheet into eight gaps, each gap
- * holds exactly one band plus its slack, and a widget that ends up in the wrong
- * band has to cross a rule to get there. Stating it that way also lets the
- * masthead be what it is — 113 px of face in a 112 px band, borrowing the
- * pixel from the ten of clearance above the heavy rule — without needing an
- * exception, because 176 is still short of 186.
- *
- * Only A1's widgets are held against it — walk()'s `slots` flag. A2's bands are
- * its own and cross A1's rule rows by design, so pointing this at them would be
- * asserting one page's grid on another; check_sheet_filled() is what that page
- * gets instead. */
-static void check_obj(const char *pass, lv_obj_t *o)
-{
-    lv_area_t a;
-    lv_obj_get_coords(o, &a);
+ * Two things are read out of it and neither can be got from the framebuffer: a
+ * LABEL printed over another label, which is two black boxes that look like one
+ * smear, and where the photographs landed, which is the one region on the sheet
+ * where all six inks are legal. */
+#define SIM_LABELS_MAX 2048
+#define SIM_ART_MAX      16
 
-    const int w = lv_area_get_width(&a), h = lv_area_get_height(&a);
+static struct { lv_area_t a; const char *txt; const lv_font_t *font; }
+             g_lab[SIM_LABELS_MAX];
+static int   g_labs;
 
-    /* The sheet itself: the screen, the two full-bleed page panes, the overlay.
-     * They are full-bleed on purpose — a page positions a child at UI_LEAD_Y
-     * and that is where it lands — so they are the one thing that legitimately
-     * covers the margin. */
-    if (w >= UI_W && h >= UI_H) return;
-    if (w <= 0 || h <= 0) return;
-
-    for (int r = 0; r < NRULES; r++) {
-        const int ry = SHEET_RULES[r].y, rw = SHEET_RULES[r].w;
-
-        /* The rule objects themselves occupy exactly those rows. */
-        if (a.y1 == ry && a.y2 == ry + rw - 1) return;
-
-        if (a.y1 <= ry + rw - 1 && a.y2 >= ry) {
-            FAILV("%s: a widget at x[%d..%d] y[%d..%d] crosses the %s rule at y=%d",
-                  pass, a.x1, a.x2, a.y1, a.y2, SHEET_RULES[r].name, ry);
-            return;
-        }
-    }
-
-    if (a.x1 < UI_CONTENT_X || a.x2 >= UI_CONTENT_R
-        || a.y1 < UI_CONTENT_Y || a.y2 >= UI_CONTENT_B) {
-        FAILV("%s: a widget at x[%d..%d] y[%d..%d] runs past the %d px margin",
-              pass, a.x1, a.x2, a.y1, a.y2, UI_MARGIN);
-    }
-}
-
-/* --- two labels on one piece of paper -------------------------------------
- *
- * The check that catches type printed over type, which no pixel predicate can:
- * both copies are black, both are inside their band, and the result is a smear
- * that reads as a rendering fault rather than as a layout one. It is worth its
- * own assertion because the way it happens is structural — two files each
- * believing they own a band, which on a sheet where the furniture is drawn by
- * one file and the news by another is the standing risk.
- *
- * LABELS only, and only labels with text in them. Panes overlap by design
- * (a container holds its children, the ribbon's marks pane spans the change
- * row, a badge chip sits under its own inverted word), and an empty label is a
- * box with nothing in it — a slot the payload did not fill, which is the normal
- * case and not a collision. */
-#define SIM_LABELS_MAX 1024
-
-static struct { lv_area_t a; const char *txt; } g_lab[SIM_LABELS_MAX];
-static int g_labs;
+static lv_area_t g_art[SIM_ART_MAX];
+static int       g_arts;
 
 static bool blank_text(const char *s)
 {
@@ -721,29 +691,52 @@ static bool blank_text(const char *s)
     return true;
 }
 
-static void walk(const char *pass, lv_obj_t *o, int depth, bool slots)
+static void walk(lv_obj_t *o, int depth)
 {
     if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return;
 
     if (depth > 0) {
-        if (slots) check_obj(pass, o);
-
         if (lv_obj_check_type(o, &lv_label_class)) {
             const char *txt = lv_label_get_text(o);
             if (txt && !blank_text(txt) && g_labs < SIM_LABELS_MAX) {
                 lv_obj_get_coords(o, &g_lab[g_labs].a);
-                g_lab[g_labs].txt = txt;
+                g_lab[g_labs].txt  = txt;
+                g_lab[g_labs].font = lv_obj_get_style_text_font(o, LV_PART_MAIN);
                 g_labs++;
+            }
+        } else if (lv_obj_check_type(o, &lv_image_class)) {
+            /* The picture's own box is the whole TILE, hung at a negative offset
+             * inside a pane that crops it — see ui_modules.c — so what is
+             * exempted from the colour policy is the pane, which is the only ink
+             * that actually reached the glass. Exempting the image's own
+             * rectangle would open a hole the size of the uncropped photograph
+             * across half the sheet. */
+            if (lv_image_get_src(o) && g_arts < SIM_ART_MAX) {
+                lv_obj_get_coords(lv_obj_get_parent(o), &g_art[g_arts++]);
             }
         }
     }
 
     const uint32_t n = lv_obj_get_child_count(o);
-    for (uint32_t i = 0; i < n; i++) {
-        walk(pass, lv_obj_get_child(o, i), depth + 1, slots);
-    }
+    for (uint32_t i = 0; i < n; i++) walk(lv_obj_get_child(o, i), depth + 1);
 }
 
+static void scan_tree(void)
+{
+    g_labs = 0;
+    g_arts = 0;
+    walk(lv_screen_active(), 0);
+}
+
+/* Type printed over type, which no pixel predicate can catch: both copies are
+ * black, both are inside their module, and the result is a smear that reads as a
+ * rendering fault rather than as a layout one. It is worth its own assertion
+ * because the way it happens is structural — a measurement and a placement that
+ * disagree by a line.
+ *
+ * LABELS only, and only labels with text in them. Panes overlap by design (a
+ * module holds its children, a marks pane spans its module) and an empty label
+ * is a slot the payload did not fill, which is the normal case. */
 static void check_label_overlap(const char *pass)
 {
     int seen = 0;
@@ -769,69 +762,261 @@ static void check_label_overlap(const char *pass)
 
 /* --- colour ---------------------------------------------------------------
  *
- * The assertion this file exists for, and the one that keeps §6 true as the
- * page evolves. Colour on this sheet is data: green and red on percentage
- * changes and their marks, in the index ribbon, the portfolio rail and the
- * quotation table's CHG column, and a photo tile which arrives already dithered
- * across all six inks. Everything else is black on white.
+ * Colour on this sheet is data, and there are exactly TWO things a coloured
+ * pixel is allowed to mean. Every check below is one of those two sentences
+ * written against the framebuffer:
  *
- * The rule is not a preference. Every exact palette colour takes
- * wp_quantize()'s identity path, so black type and black hairlines come out
- * flat; a colour anywhere between two inks dithers, and a dithered hairline is
- * a dashed one. A page that starts spending colour on ornament is a page where
- * the two colours that carry meaning stop being seen.
+ *   DIRECTION — green and red, on a percentage change and its mark, through
+ *     ui_chg_colour(). It is a claim about movement the board can only make
+ *     about a figure it can vouch for, so it goes to INK when the snapshot is
+ *     stale or the link is down — which is why check_no_chg_colour() exists and
+ *     why check_page() calls it off ui_data_live() rather than off a flag a
+ *     caller could forget.
  *
- * Blue and yellow are checked separately and everywhere, on both pages: they
- * never reach the glass from the UI at all, so that half of the policy needs no
- * geometry and holds even where A2's is private to its own file. */
-typedef struct { int x0, y0, x1, y1; const char *why; } slot_t;
+ *   IDENTITY — blue and yellow, saying which SERIES a bar or a line belongs to
+ *     inside a graphic that draws more than one. A legend, not a claim.
+ *
+ * The old rule here was simpler and is gone: blue and yellow used to fail the
+ * build anywhere outside a photograph. That ban was lifted deliberately. Blue is
+ * 2.77:1 against the paper and a perfectly good ink on this panel; what the ban
+ * was really protecting against was YELLOW, which is 1.10:1 — the same value as
+ * the paper, so a yellow bar reads as the outline of a bar rather than as a bar.
+ * Against black yellow is 4.09:1, so yellow is legal enclosed by a black
+ * keyline and illegal otherwise, and that is a property of the PIXELS rather
+ * than of the drawing code. sim/shots/00_inks.png is the sheet the two contrast
+ * figures can be judged on.
+ *
+ * So there are three questions now where there was one:
+ *
+ *   1. can any yellow pixel reach the paper without crossing black?
+ *      — check_yellow_sealed(), a flood fill, plus the keyline's WEIGHT;
+ *   2. is every coloured pixel inside a rectangle allowed to carry THAT ink?
+ *      — check_colour_slots(), which now carries a per-slot ink mask;
+ *   3. is any TYPE blue or yellow? — check_type_not_series().
+ *
+ * WHERE the slots are is read back out of the composition rather than listed
+ * here. That is the whole reason ui_page_layout() exists: the modules that
+ * carry a change and the modules that draw a graphic land somewhere different
+ * every time the day's file does. */
+
+/* Which inks a rectangle may carry. A mask and not a bool because the two
+ * meanings do not travel together: the industry table prints changes and draws
+ * no graphic, a chart draws a graphic and prints no change, and a drawn
+ * statement does both. One flag would have to be the union of the three, which
+ * is the permission the old check already had too much of. */
+#define INK_BIT(i)   (1u << (i))
+#define SLOT_CHG     (INK_BIT(WP_I_GREEN) | INK_BIT(WP_I_RED))
+#define SLOT_SERIES  (INK_BIT(WP_I_BLUE)  | INK_BIT(WP_I_YELLOW))
+
+typedef struct { int x0, y0, x1, y1; unsigned inks; const char *why; } slot_t;
+
+static const char *inks_name(unsigned m)
+{
+    static char buf[64];
+    int n = 0;
+
+    buf[0] = '\0';
+    for (int i = 0; i < WP_PALETTE_N; i++) {
+        if (!(m & INK_BIT(i))) continue;
+        n += snprintf(buf + n, sizeof buf - (size_t)n, "%s%s",
+                      n ? "/" : "", INK_NAME[i]);
+    }
+    return buf[0] ? buf : "nothing";
+}
 
 static bool inside(const slot_t *s, int x, int y)
 {
     return x >= s->x0 && x < s->x1 && y >= s->y0 && y < s->y1;
 }
 
-/* The photograph is the one place all six inks are allowed, and it is an
- * exemption rather than a hole in the policy: a tile arrives already dithered
- * across the full palette by tools/make_tile.py, so blue in a sky and yellow in
- * a lit window are the tile doing exactly its job. Everything the UI DRAWS still
- * has to be black, white, green or red.
- *
- * The exemption is a rectangle rather than a flag because that is what makes it
- * safe: a stray blue pixel one row above the slot still fails, which is the
- * case worth catching — a blit landing off by a row, or a widget drawn in a
- * colour it should not own, immediately next to the one region where colour is
- * unremarkable. */
-static const slot_t PHOTO_SLOT = {
-    UI_LEAD_VIS_X, UI_LEAD_SPLIT_Y,
-    UI_LEAD_VIS_X + UI_LEAD_VIS_W, UI_LEAD_SPLIT_Y + UI_LEAD_VIS_H,
-    "the lead's photo slot",
-};
-
-static bool in_photo(const slot_t *photo, int x, int y)
+static bool in_art(int x, int y)
 {
-    return photo && inside(photo, x, y);
+    for (int i = 0; i < g_arts; i++) {
+        if (x >= g_art[i].x1 && x <= g_art[i].x2
+            && y >= g_art[i].y1 && y <= g_art[i].y2) {
+            return true;
+        }
+    }
+    return false;
 }
 
-static void check_no_blue_yellow(const char *pass, const slot_t *photo)
+/* --- yellow may not touch paper -------------------------------------------
+ *
+ * The invariant is about the SHEET and not about the drawing code, which is the
+ * whole reason it is checked here: ui_series_fill() is the only function that
+ * may put yellow down and it draws its own keyline, but "the only function that
+ * may" is a claim about the source, and this file's job is to look at pixels.
+ * A keyed bar clipped by the pane it is drawn in, a keyline inset the wrong way
+ * round, a fill drawn after the keyline instead of inside it — none of those is
+ * visible in a grep and all of them put a 1.10:1 fill on 1.00 paper.
+ *
+ * TWO checks, because one of them can be satisfied by a keyline too thin to
+ * survive the panel and the other can be satisfied by a keyline with a hole in
+ * it, and they are different bugs:
+ *
+ *   REACHABILITY — flood the sheet from its edge through every pixel that is
+ *     NOT black, and no yellow pixel may be reached. This is the invariant
+ *     stated exactly: "yellow cannot be got at from the paper without crossing
+ *     black". It catches a keyline open on one side, a keyline with a one-pixel
+ *     gap in it, and a keyline that never got drawn.
+ *
+ *     EIGHT-CONNECTED, and that is the line between a check that bites and one
+ *     that quietly passes. A four-connected flood cannot get through a diagonal
+ *     pinhole — paper at (0,0), yellow at (1,1), black at (1,0) and (0,1) — so
+ *     it would call a keyline with a corner missing sealed. Flooding eight-
+ *     connected demands that the black barrier be FOUR-connected all the way
+ *     round, which is what "a solid keyline" actually means. Getting this pair
+ *     backwards is the classic way a fill-and-boundary test passes on a
+ *     boundary that leaks.
+ *
+ *   WEIGHT — from every yellow pixel on the edge of its region, in each of the
+ *     four cardinal directions, there must be at least UI_SERIES_KEY_W black
+ *     pixels before anything else. Reachability alone cannot see this: a
+ *     one-pixel keyline seals the framebuffer perfectly and passes the flood,
+ *     and it is still the bug, because UI_SERIES_KEY_W is 2 for a physical
+ *     reason — the first time the panel's registration is half a pixel out on
+ *     one side a hairline keyline lets the fill touch paper on the glass, where
+ *     no simulator will ever see it. Measuring from the EDGE pixels of the
+ *     region and in all four directions independently is what stops a bar
+ *     keylined correctly on three sides and thinly on the fourth from passing
+ *     on the strength of the three.
+ *
+ * Both skip pixels inside a photograph: `make_tile.py --color` may legitimately
+ * put yellow in a tile, and a photograph is the one region on the sheet where
+ * all six inks are the picture rather than the policy. */
+
+/* 0 unvisited, 1 reachable from the paper without crossing black, 2 black.
+ * A byte per pixel rather than a bitmap: it is 1.9 MB on a desktop and it is
+ * what lets the ink sheet below ASK the flood a question afterwards. */
+static uint8_t g_reach[(size_t)UI_W * UI_H];
+
+static void flood_from_paper(void)
 {
-    int seen = 0;
-    for (int y = 0; y < UI_H; y++) {
-        for (int x = 0; x < UI_W; x++) {
-            const int i = ink_at(x, y);
-            if (i != WP_I_BLUE && i != WP_I_YELLOW) continue;
-            if (in_photo(photo, x, y)) continue;
-            if (seen++ < REPORT_MAX) {
-                FAILV("%s: %s at (%d,%d), drawn as %s — neither ink may reach the glass",
-                      pass, INK_NAME[i], x, y, wanted_at(x, y));
+    memset(g_reach, 0, sizeof g_reach);
+
+    /* Each pixel is pushed at most once — it is marked as it goes on — so the
+     * stack can never be deeper than the sheet. */
+    int32_t *stack = malloc(sizeof(int32_t) * (size_t)UI_W * UI_H);
+    if (!stack) { FAIL("out of memory flooding the sheet"); return; }
+    size_t top = 0;
+
+#define REACH_PUSH(X, Y) do {                                         \
+        const size_t _i = (size_t)(Y) * UI_W + (X);                   \
+        if (g_reach[_i]) break;                                       \
+        if (ink_at((X), (Y)) == WP_I_BLACK) { g_reach[_i] = 2; break; } \
+        g_reach[_i] = 1;                                              \
+        stack[top++] = (int32_t)_i;                                   \
+    } while (0)
+
+    for (int x = 0; x < UI_W; x++) { REACH_PUSH(x, 0); REACH_PUSH(x, UI_H - 1); }
+    for (int y = 0; y < UI_H; y++) { REACH_PUSH(0, y); REACH_PUSH(UI_W - 1, y); }
+
+    while (top) {
+        const int32_t i = stack[--top];
+        const int x = (int)(i % UI_W), y = (int)(i / UI_W);
+
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                const int nx = x + dx, ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= UI_W || ny >= UI_H) continue;
+                REACH_PUSH(nx, ny);
             }
         }
     }
-    if (seen > REPORT_MAX) {
-        printf("       ...and %d more such pixels\n", seen - REPORT_MAX);
-    }
+#undef REACH_PUSH
+
+    free(stack);
 }
 
+static bool reached_from_paper(int x, int y)
+{
+    return g_reach[(size_t)y * UI_W + x] == 1;
+}
+
+/* Yellow the paper can get at, counted. Reports when `report`, so the ink sheet
+ * below can use the same function as a positive control without spending a
+ * failure on the patch it drew on purpose. */
+static int yellow_on_paper(const char *pass, bool report, int y0, int y1)
+{
+    int seen = 0;
+
+    flood_from_paper();
+
+    for (int y = y0; y < y1; y++) {
+        for (int x = 0; x < UI_W; x++) {
+            if (!reached_from_paper(x, y)) continue;
+            if (ink_at(x, y) != WP_I_YELLOW) continue;
+            if (in_art(x, y)) continue;
+
+            if (report && seen < REPORT_MAX) {
+                FAILV("%s: yellow at (%d,%d) can be reached from the paper "
+                      "without crossing black — yellow is 1.10:1 on paper and "
+                      "is legal only inside a black keyline", pass, x, y);
+            }
+            seen++;
+        }
+    }
+    if (report && seen > REPORT_MAX) {
+        printf("       ...and %d more yellow pixels open to the paper\n",
+               seen - REPORT_MAX);
+    }
+    return seen;
+}
+
+static int check_yellow_keyline(const char *pass, bool report, int y0, int y1)
+{
+    static const struct { int dx, dy; const char *side; } D[4] = {
+        { -1, 0, "left" }, { 1, 0, "right" }, { 0, -1, "top" }, { 0, 1, "bottom" },
+    };
+    int seen = 0;
+
+    for (int y = y0; y < y1; y++) {
+        for (int x = 0; x < UI_W; x++) {
+            if (ink_at(x, y) != WP_I_YELLOW || in_art(x, y)) continue;
+
+            for (int d = 0; d < 4; d++) {
+                int nx = x + D[d].dx, ny = y + D[d].dy;
+
+                /* Interior in this direction: the pixel beyond is more of the
+                 * same fill, so the edge — and the keyline — is somebody
+                 * else's row to answer for. */
+                if (ink_at(nx, ny) == WP_I_YELLOW) continue;
+
+                int black = 0;
+                while (black < UI_SERIES_KEY_W && ink_at(nx, ny) == WP_I_BLACK) {
+                    black++;
+                    nx += D[d].dx;
+                    ny += D[d].dy;
+                }
+                if (black >= UI_SERIES_KEY_W) continue;
+
+                if (report && seen < REPORT_MAX) {
+                    FAILV("%s: the yellow at (%d,%d) has %d px of keyline on its "
+                          "%s, against the %d UI_SERIES_KEY_W asks for",
+                          pass, x, y, black, D[d].side, UI_SERIES_KEY_W);
+                }
+                seen++;
+            }
+        }
+    }
+    if (report && seen > REPORT_MAX) {
+        printf("       ...and %d more thin or missing keyline edges\n",
+               seen - REPORT_MAX);
+    }
+    return seen;
+}
+
+static void check_yellow_sealed(const char *pass)
+{
+    yellow_on_paper(pass, true, 0, UI_H);
+    check_yellow_keyline(pass, true, 0, UI_H);
+}
+
+/* Every coloured pixel is inside a rectangle that may carry THAT ink.
+ *
+ * With no slots at all this is "the sheet is black and white", which is what
+ * the setup sheet and the no-data sheet are and is why they pass `NULL, 0`.
+ * A page passes what its own composition earned. */
 static void check_colour_slots(const char *pass, const slot_t *ok, int n)
 {
     int seen = 0;
@@ -840,24 +1025,31 @@ static void check_colour_slots(const char *pass, const slot_t *ok, int n)
         for (int x = 0; x < UI_W; x++) {
             const int i = ink_at(x, y);
             if (i == WP_I_BLACK || i == WP_I_WHITE) continue;
+            if (in_art(x, y)) continue;
 
             bool allowed = false;
-            for (int s = 0; s < n && !allowed; s++) allowed = inside(&ok[s], x, y);
+            for (int s = 0; s < n && !allowed; s++) {
+                allowed = inside(&ok[s], x, y) && (ok[s].inks & INK_BIT(i));
+            }
             if (allowed) continue;
 
-            /* The slots are named once, at the first failure. "Outside every
-             * slot" is only actionable if the reader can see which slots those
-             * were — the alternative is a coordinate and a trip to this file. */
+            /* The slots are named once, at the first failure, WITH what each
+             * may carry. "Outside every slot" is only actionable if the reader
+             * can see which slots those were and which ink each allows — a blue
+             * pixel inside the industry table is a different bug from a blue
+             * pixel in the gutter, and the coordinate alone tells them apart
+             * only after a trip to this file. */
             if (seen == 0) {
                 printf("  colour is allowed only in:");
                 for (int s = 0; s < n; s++) {
-                    printf("%s %s x[%d..%d) y[%d..%d)", s ? ";" : "",
-                           ok[s].why, ok[s].x0, ok[s].x1, ok[s].y0, ok[s].y1);
+                    printf("%s %s x[%d..%d) y[%d..%d) may carry %s", s ? ";" : "",
+                           ok[s].why, ok[s].x0, ok[s].x1, ok[s].y0, ok[s].y1,
+                           inks_name(ok[s].inks));
                 }
                 printf("\n");
             }
             if (seen++ < REPORT_MAX) {
-                FAILV("%s: %s at (%d,%d), drawn as %s — outside every slot allowed to carry colour",
+                FAILV("%s: %s at (%d,%d), drawn as %s — no slot here may carry it",
                       pass, INK_NAME[i], x, y, wanted_at(x, y));
             }
         }
@@ -868,233 +1060,401 @@ static void check_colour_slots(const char *pass, const slot_t *ok, int n)
     }
 }
 
-/* The quotation table's CHG column, run out of the field widths ui_internal.h
- * states as a sum. It is arithmetic on the header's own constants rather than a
- * copy of ui_page_front.c's FP_T_CHG_X, so a field widened there without its
- * neighbour narrowed moves this box with it. */
-#define SIM_CHG_X  (UI_TICKER_X + UI_TICKER_SYM_W + UI_TICKER_NAME_W \
-                    + UI_TICKER_LAST_W + 3 * UI_TICKER_FIELD_GAP)
-
-/* Where a figure may be green or red on A1. The rail's x is not pinned because
- * the rail widens into the columns a thin paper's missing stories left, so what
- * is fixed about it is the eight rows, not the measure they are set across. */
-static int a1_colour_slots(const news_t *v, slot_t *out)
+/* TYPE IS BLACK, and where it is not black it is a change figure.
+ *
+ * The slot check cannot say this on its own: a chart module's rectangle holds
+ * its caps head and its note as well as its plot, so a rectangle that may carry
+ * blue may carry a blue HEADING, and blue type is the one thing the colour
+ * decision never included. Series colour is an identity that belongs to a bar;
+ * a word is not a series.
+ *
+ * Green and red are deliberately not checked here — a change figure IS type,
+ * and colouring it is the whole of the DIRECTION rule.
+ *
+ * Read off the label boxes rather than the framebuffer, which is the same trick
+ * check_label_overlap() uses and for the same reason: nothing in the pixels
+ * distinguishes a glyph from a graphic. */
+static void check_type_not_series(const char *pass)
 {
-    int n = 0;
+    int seen = 0;
 
-    out[n++] = (slot_t){ UI_CONTENT_X, UI_RIBBON_Y, UI_CONTENT_R,
-                         UI_RIBBON_Y + UI_RIBBON_H, "the index ribbon" };
-    out[n++] = (slot_t){ UI_CONTENT_X, UI_RAIL_ROW_Y, UI_CONTENT_R,
-                         UI_RAIL_ROW_Y + UI_RAIL_ROWS * UI_RAIL_ROW_H,
-                         "the portfolio rail" };
-    out[n++] = (slot_t){ SIM_CHG_X, UI_TICKER_ROW_Y, SIM_CHG_X + UI_TICKER_CHG_W,
-                         UI_TICKER_ROW_Y + UI_TICKER_ROWS * UI_TICKER_ROW_H,
-                         "the quotation table's CHG column" };
-    out[n++] = PHOTO_SLOT;
+    for (int i = 0; i < g_labs; i++) {
+        const lv_area_t *a = &g_lab[i].a;
 
-    /* On a day that brought no stories the lead well IS the index ribbon, set
-     * at the size a headline is set in, so the whole band carries the same
-     * figures band 4 does. That promotion is the one thing that legitimately
-     * puts colour in band 5, and it is conditional here for the same reason it
-     * is conditional in the page: on any other day this band is type. */
-    if (v && v->story_count == 0 && v->index_count > 0) {
-        out[n++] = (slot_t){ UI_CONTENT_X, UI_LEAD_Y, UI_CONTENT_R,
-                             UI_LEAD_Y + UI_LEAD_H, "the lead well's index panel" };
+        for (int y = a->y1; y <= a->y2; y++) {
+            for (int x = a->x1; x <= a->x2; x++) {
+                if (x < 0 || y < 0 || x >= UI_W || y >= UI_H) continue;
+                const int ink = ink_at(x, y);
+                if (ink != WP_I_BLUE && ink != WP_I_YELLOW) continue;
+                if (in_art(x, y)) continue;
+
+                if (seen++ < REPORT_MAX) {
+                    FAILV("%s: %s at (%d,%d), inside the label \"%s\" — blue and "
+                          "yellow are series identities and type is never one",
+                          pass, INK_NAME[ink], x, y, g_lab[i].txt);
+                }
+                y = a->y2;            /* one report per label, not per pixel */
+                break;
+            }
+        }
     }
-    return n;
-}
-
-/* --- the passes -----------------------------------------------------------
- *
- * One helper per page, so a payload can be pointed at both and the assertions
- * do not have to be repeated at each call site. A1 gets the whole battery; A2
- * gets everything that does not need its private geometry. */
-
-static void check_a1(const char *pass, const news_t *v)
-{
-    slot_t ok[5];
-    const int n = a1_colour_slots(v, ok);
-
-    check_rules(pass);
-    check_margins(pass);
-    check_masthead(pass);
-    check_bands_filled(pass);
-    check_no_blue_yellow(pass, &PHOTO_SLOT);
-    check_colour_slots(pass, ok, n);
-
-    g_labs = 0;
-    walk(pass, lv_screen_active(), 0, true);
-    check_label_overlap(pass);
-}
-
-static void check_a2(const char *pass)
-{
-    check_margins(pass);
-    check_sheet_filled(pass);
-    check_no_blue_yellow(pass, NULL);
-
-    /* A2's bands are private to its own file, so the slot check has nothing to
-     * hold its widgets against — but two labels on one piece of paper is a
-     * property of the tree and not of the grid, and it is the failure a sheet
-     * whose furniture is drawn by one file and whose news is drawn by another
-     * is most likely to have. */
-    g_labs = 0;
-    walk(pass, lv_screen_active(), 0, false);
-    check_label_overlap(pass);
-
-    /* Bands 1 and 8 frame the SHEET rather than either page, so their two rules
-     * are printed on the same rows of both — the kicker strip's hairline at the
-     * top and the one the folio hangs from at the foot. The five between them
-     * are A1's alone. */
-    check_rule(pass, "kicker",  UI_KICKER_RULE_Y, UI_KICKER_RULE_W);
-    check_rule(pass, "folio",   UI_TICKER_RULE_Y, UI_TICKER_RULE_W);
-
-    char what[96];
-    snprintf(what, sizeof what, "%s: the kicker strip", pass);
-    want_ink(what, UI_CONTENT_X, UI_KICKER_Y, UI_CONTENT_R, UI_KICKER_Y + UI_KICKER_H);
-    snprintf(what, sizeof what, "%s: the running head", pass);
-    want_ink(what, UI_CONTENT_X, UI_MAST_Y, UI_CONTENT_R, UI_MAST_Y + UI_MAST_H);
-    snprintf(what, sizeof what, "%s: the folio", pass);
-    want_ink(what, UI_CONTENT_X, UI_FOLIO_Y, UI_CONTENT_R, UI_FOLIO_Y + UI_FOLIO_H);
-}
-
-/* The state word: DEMO, STALE or OFFLINE, set as black tracked caps on the
- * kicker strip's centre slot.
- *
- * This assertion used to look for a CHIP — a filled black rectangle with the
- * word reversed out of it — and it was written that way because that is what
- * the page drew. It is stated the other way round now, and deliberately: the
- * word replaced the chip because a filled pill with reversed type is the one
- * inverted region on a sheet whose whole brief is white paper and black type,
- * and it reads as a status badge on a device. So what is checked is that the
- * strip's centre carries INK — the word is there — and that at least one row of
- * that centre is PAPER, which a word always leaves and a solid chip never does.
- * The second half is the half that would catch the chip coming back. */
-static void want_badge(const char *what)
-{
-    const int x0 = UI_W / 2 - 16, x1 = UI_W / 2 + 16;
-    bool word = false, gap = false;
-
-    for (int y = UI_KICKER_Y; y < UI_KICKER_Y + UI_KICKER_H; y++) {
-        if (any_ink(x0, y, x1, y + 1)) word = true;
-        else                           gap  = true;
+    if (seen > REPORT_MAX) {
+        printf("       ...and %d more labels holding series colour\n",
+               seen - REPORT_MAX);
     }
-    if (!word) FAILV("%s: the strip's centre is bare paper — the word is missing", what);
-    if (!gap)  FAILV("%s: the strip's centre inks every row — that is a chip, not a word", what);
 }
 
-/* --- the payloads ---------------------------------------------------------
+/* No DIRECTION colour at all, for the sheets that may not claim one.
  *
- * Three, and each is a shape the tier engine resolves differently. The demo
- * snapshot is the widest the page gets — four stories, five indices, sixteen
- * quotations — and is also the board's out-of-box experience, so it is the one
- * that has to look like a newspaper. The other two are what the promotion rules
- * in §4 exist for, and neither may leave a hole. */
-
-static void sparse_payload(news_t *v)
+ * ui_chg_colour() returns ink when the board cannot vouch for the figure, and
+ * until now nothing asserted that it had: check_colour_slots() ALLOWS green and
+ * red in the rail and the industry table, so a stale sheet that kept its greens
+ * passed every check on the page. The comment beside the STALE pass claimed the
+ * property and no line of code held it.
+ *
+ * SERIES colour is deliberately left alone here, and that is a decision rather
+ * than an omission. Green on a price is a claim that the price moved that way,
+ * and a board that has lost its feed cannot make it. Blue on a bar is not a
+ * claim about anything — it says "this bar is revenue and that one is profit",
+ * which is exactly as true on a three-day-old sheet as on a live one. Taking it
+ * away would not make the sheet more honest, it would make the graphic
+ * unreadable and leave the reader to attribute that to a rendering fault; the
+ * STALE badge is the state signal, and a chart nobody can read is damage. It
+ * would also cost the property the device banks on: ui_series_at() is pure in
+ * (i, n), test_chart_scale holds it to that, and a link state inside it would
+ * have to enter news_hash() before the same fingerprint could still promise the
+ * same pixels. */
+static void check_no_chg_colour(const char *pass)
 {
-    memset(v, 0, sizeof *v);
-    v->valid = true;
+    int seen = 0;
 
-    news_str_copy(v->edition,      sizeof v->edition,      "PERSONAL PORTFOLIO EDITION");
-    news_str_copy(v->dateline,     sizeof v->dateline,     "TUESDAY, AUGUST 11, 2026");
-    news_str_copy(v->session,      sizeof v->session,      "U.S. MARKETS OPEN — 11:04 ET");
-    news_str_copy(v->as_of,        sizeof v->as_of,        "AS OF 00:04 KST");
-    news_str_copy(v->generated_at, sizeof v->generated_at, "2026-08-11T00:04:00Z");
+    for (int y = 0; y < UI_H; y++) {
+        for (int x = 0; x < UI_W; x++) {
+            const int i = ink_at(x, y);
+            if (i != WP_I_GREEN && i != WP_I_RED) continue;
+            if (in_art(x, y)) continue;
 
-    v->index_count = 2;
-    news_str_copy(v->indices[0].symbol, sizeof v->indices[0].symbol, "SPX");
-    news_str_copy(v->indices[0].name,   sizeof v->indices[0].name,   "S&P 500");
-    v->indices[0].last_c = 641283;
-    v->indices[0].chg_bp = 62;
-    news_str_copy(v->indices[1].symbol, sizeof v->indices[1].symbol, "IXIC");
-    news_str_copy(v->indices[1].name,   sizeof v->indices[1].name,   "Nasdaq");
-    v->indices[1].last_c = 2140055;
-    v->indices[1].chg_bp = -138;
+            if (seen++ < REPORT_MAX) {
+                FAILV("%s: %s at (%d,%d) — the board cannot vouch for this "
+                      "snapshot, so every change figure and every mark on it "
+                      "prints in ink", pass, INK_NAME[i], x, y);
+            }
+        }
+    }
+    if (seen > REPORT_MAX) {
+        printf("       ...and %d more pixels of direction colour on a sheet "
+               "that may not claim one\n", seen - REPORT_MAX);
+    }
+}
 
-    v->ticker_count = 3;
-    static const struct { const char *sym, *name; int32_t last, bp; } Q[3] = {
-        { "AAPL", "Apple",     23140, 31   },
-        { "MSFT", "Microsoft", 51022, -18  },
-        { "KO",   "Coca-Cola",  7115, 0    },
-    };
-    for (int i = 0; i < 3; i++) {
-        news_quote_t *q = &v->tickers[i];
-        news_str_copy(q->symbol, sizeof q->symbol, Q[i].sym);
-        news_str_copy(q->name,   sizeof q->name,   Q[i].name);
-        q->last_c  = Q[i].last;
-        q->chg_bp  = Q[i].bp;
-        /* The series has to AGREE WITH THE FIGURE BESIDE IT. This was
-         * `120 * k + 40 * i` — a monotonic ramp for every symbol whatever its
-         * change — so the sparse sheet published a rising line beside MSFT's
-         * red -0.18% and another beside KO's flat 0.00%, on a page whose whole
-         * claim is that colour and shape are data. The shots are the
-         * deliverable; a fixture that contradicts itself is a fixture that
-         * publishes a contradiction.
+/* --- the composition ------------------------------------------------------ */
+
+static const char *KIND_NAME[UI_MOD_KIND_COUNT] = {
+    "none", "lead", "story", "dossier", "chart", "briefs", "peers",
+    "table", "thumbs", "quote",
+};
+
+/* Everything that is true of a legal make-up, whatever the day brought.
+ *
+ * Returns the number of colour slots it wrote into `ok` — the modules that
+ * legitimately carry a change figure. Deriving them here rather than listing
+ * them is the point: a rail that moved to the right-hand column moves its
+ * exemption with it, and a module that started drawing green somewhere it should
+ * not fails immediately. */
+static int check_layout(const char *pass, ui_page_t page, const news_t *v,
+                        slot_t *ok, int ok_max)
+{
+    const ui_mod_t  *mods = NULL;
+    ui_compose_env_t env;
+    char             why[200];
+    int              n = ui_page_layout(page, &mods, &env);
+    int              slots = 0;
+
+    if (n <= 0 || !mods) return 0;
+
+    if (!ui_compose_check(&env, mods, n, why, sizeof why)) {
+        FAILV("%s: the day's make-up is not a legal tiling of the well — %s",
+              pass, why);
+    }
+
+    for (int i = 0; i < n; i++) {
+        const ui_mod_t *m = &mods[i];
+        if (!m->placed) continue;
+
+        const char *kind = (m->kind >= 0 && m->kind < UI_MOD_KIND_COUNT)
+                         ? KIND_NAME[m->kind] : "?";
+
+        if (getenv("SIM_DUMP_LAYOUT")) {
+            printf("      %-8s band %d slot %d  col %d+%d  "
+                   "x %4d y %4d w %4d h %4d\n",
+                   kind, m->band, m->slot, m->col, m->cols,
+                   m->x, m->y, m->w, m->h);
+        }
+
+        /* A tile packs two pixels to a byte, so an odd origin or an odd width
+         * would need a nibble-shifting blit on the device for nothing. */
+        if ((m->x & 1) || (m->w & 1)) {
+            FAILV("%s: the %s module is at x=%d w=%d — both must be even",
+                  pass, kind, m->x, m->w);
+        }
+
+        char what[128];
+        snprintf(what, sizeof what,
+                 "%s: the %s module (%d columns at column %d)",
+                 pass, kind, m->cols, m->col);
+        want_ink(what, m->x, m->y, m->x + m->w, m->y + m->h);
+
+        /* The two modules that PRINT a change figure. The metric grid also
+         * draws — its range bars and its sparkline are graphics — so it takes
+         * series colour as well; the industry table is a printed table with a
+         * CHG column and nothing drawn in it, so it does not.
          *
-         * So it is built from the quote's own change: the last sample sits
-         * above the first when the session rose and below it when it fell, the
-         * span is proportional to how far it moved, and a little sawtooth keeps
-         * it from being the straight line a two-point series would draw. A flat
-         * session gets a flat line. */
-        q->spark_n = 8;
-        const int span = Q[i].bp * 8;
-        const int amp  = (span < 0 ? -span : span) / 6;
-        for (int k = 0; k < 8; k++) {
-            const int ramp = span * k / 7;
-            const int wig  = (k % 3 == 1) ? amp : (k % 3 == 2) ? -amp : 0;
-            q->spark[k] = (int16_t)(500 + ramp + wig);
+         * The grant is per MODULE RECTANGLE, which is the resolution this
+         * machinery has and is worth saying out loud: it says "colour may
+         * appear in this module", not "colour may appear on this bar".
+         * check_type_not_series() is what stops the slack being spent on a
+         * coloured heading inside the same rectangle. */
+        if (m->kind == UI_MOD_DOSSIER && slots < ok_max) {
+            ok[slots++] = (slot_t){
+                m->x, m->y, m->x + m->w, m->y + m->h,
+                SLOT_CHG | SLOT_SERIES, "the metric grid",
+            };
+        }
+        if (m->kind == UI_MOD_PEERS && slots < ok_max) {
+            ok[slots++] = (slot_t){
+                m->x, m->y, m->x + m->w, m->y + m->h,
+                SLOT_CHG, "the industry table",
+            };
+        }
+
+        /* A chart is a graphic and nothing else: it draws series and prints no
+         * change figure, so it earns the identity inks and not the direction
+         * ones. If a chart ever wants green it is drawing a change, and that is
+         * a decision to make out loud rather than to inherit. */
+        if (m->kind == UI_MOD_CHART && slots < ok_max) {
+            ok[slots++] = (slot_t){
+                m->x, m->y, m->x + m->w, m->y + m->h,
+                SLOT_SERIES, "a chart",
+            };
+        }
+
+        /* A DRAWN statement is a colour slot and a printed one is not.
+         *
+         * ui_grf_t carries `lbp` — the percentage line's last less its first —
+         * precisely so the line can be given ui_chg_colour(), which makes a
+         * TABLE_BARS_LINE the only module on the sheet that draws colour without
+         * printing a change figure. That is the colour policy holding rather than
+         * bending: the line IS a change, over six quarters instead of one
+         * session. The bars under it and every printed cell stay ink.
+         *
+         * It is also the module that carries the most series at once — bars,
+         * their tones and their legend swatches — so it takes both masks, and
+         * it is the only place on either sheet where they meet.
+         *
+         * Derived from the PAYLOAD's own `render`, not from the module kind, so a
+         * table the producer sent as a record gets no exemption and a green cell
+         * in a printed statement still fails. */
+        if (m->kind == UI_MOD_TABLE && v && slots < ok_max
+            && m->src >= 0 && m->src < v->table_count
+            && v->tables[m->src].render != TABLE_PRINT
+            && v->tables[m->src].has_n) {
+            ok[slots++] = (slot_t){
+                m->x, m->y, m->x + m->w, m->y + m->h,
+                SLOT_CHG | SLOT_SERIES, "a drawn statement",
+            };
+        }
+    }
+    return slots;
+}
+
+/* What must be true of a BANNER, when the compositor granted one.
+ *
+ * Read off `bannered` — the output — and never off `banner`, the request, nor
+ * off the rectangle. A refused banner can legitimately end up alone on a
+ * full-measure band at the top of the well through ordinary packing, so the
+ * geometry cannot tell "I asked and won" from "I asked, was refused, and the
+ * packing happened to agree". Those are different pages and the difference shows
+ * up on about one payload in fifty.
+ *
+ * Properties rather than positions: it spans the whole measure, it starts at the
+ * top of the well, and nothing is above it. */
+static void check_banner(const char *pass, ui_page_t page)
+{
+    const ui_mod_t *mods = NULL;
+    ui_compose_env_t env;
+    const int n = ui_page_layout(page, &mods, &env);
+    int seen = 0;
+
+    for (int i = 0; i < n && mods; i++) {
+        const ui_mod_t *m = &mods[i];
+        if (!m->placed || !m->bannered) continue;
+
+        seen++;
+        if (m->w != env.w) {
+            FAILV("%s: the banner is %d px wide against the well's %d — a banner "
+                  "is the whole measure or it is not a banner", pass, m->w, env.w);
+        }
+        if (m->y != env.y) {
+            FAILV("%s: the banner starts at y=%d against the well's %d — it is "
+                  "the first cut, so nothing may be above it", pass, m->y, env.y);
+        }
+        for (int j = 0; j < n; j++) {
+            if (j == i || !mods[j].placed) continue;
+            if (mods[j].y < m->y + m->h && mods[j].y + mods[j].h > m->y) {
+                FAILV("%s: the %s module shares rows with the banner — the banner "
+                      "is alone on its band", pass,
+                      (mods[j].kind >= 0 && mods[j].kind < UI_MOD_KIND_COUNT)
+                      ? KIND_NAME[mods[j].kind] : "?");
+                break;
+            }
         }
     }
 
-    /* One story, which is the promotion the spec spends a paragraph on: the
-     * lead swallows nothing, its chart moves to the columns the missing
-     * secondary stories left, and the portfolio rail widens into the rest. A
-     * front page with a hole in it is the failure everyone sees. */
-    v->story_count = 1;
-    news_story_t *s = &v->stories[0];
-    s->rank = 0;
-    news_str_copy(s->kicker,   sizeof s->kicker,   "RATES");
-    news_str_copy(s->headline, sizeof s->headline,
-                  "Two-year yield sinks after a soft claims print");
-    news_str_copy(s->deck, sizeof s->deck,
-                  "The front end prices two cuts before Christmas. The long end "
-                  "is not persuaded, and the curve says so.");
-    news_str_copy(s->byline, sizeof s->byline, "By CLAUDE · RATES DESK");
-    news_str_copy(s->body, sizeof s->body,
-        "WASHINGTON — Initial claims came in at 231,000 against a consensus of "
-        "220,000, and the two-year note did the rest of the talking. The yield "
-        "fell eleven basis points inside an hour, its sharpest move since the "
-        "spring, and the futures market moved to price a second cut before the "
-        "end of the year. The long end barely moved at all. That divergence is "
-        "the whole story: the front end is trading policy and the back end is "
-        "trading supply, and neither has much to say about the other. Traders "
-        "who spent the summer paying for steepeners finally have something to "
-        "show for it, and the Treasury's refunding schedule has not changed a "
-        "line. What happens next depends on a payroll print nobody has seen, "
-        "which is the same sentence the desk has written every month this year "
-        "and will write again in September without much hope of it improving.");
-    news_str_copy(s->symbol, sizeof s->symbol, "");
-    s->chart.kind = CHART_LINE;
-    news_str_copy(s->chart.span, sizeof s->chart.span, "5D");
-    s->chart.n = 12;
-    for (int i = 0; i < 12; i++) s->chart.c[i] = 41200 - 90 * i + (i % 3) * 130;
+    if (seen > 1) {
+        FAILV("%s: %d modules came back bannered — at most one may have the band",
+              pass, seen);
+    }
 }
 
-/* Indices and quotations, and no stories at all. A quiet day is not a broken
- * feed: the lead well becomes the index ribbon at full size and the sheet is a
- * markets page, which §4 calls a legitimate front page rather than an error
- * state — so every band still has to fill. */
-static void quiet_payload(news_t *v)
+/* Display type, and the one thing an ink-coverage figure cannot say: that the
+ * page has something on it a reader's eye can land on from across a room.
+ *
+ * What is required depends on what the day brought, and is read out of the
+ * composition for the same reason the colour slots are. A page carrying a lead
+ * must set a lead-sized headline somewhere in the well; a page carrying only a
+ * story or a pulled quote must set at least a headline; a page of figures alone
+ * — a quiet day with no prose at all — is a legitimate sheet and is asked for
+ * nothing, because there is nothing on it that could honestly be set large. */
+static void check_display_type(const char *pass, ui_page_t page)
 {
-    news_mock(v);
-    v->demo = false;
-    v->story_count = 0;
-    memset(v->stories, 0, sizeof v->stories);
-    news_str_copy(v->session, sizeof v->session, "U.S. MARKETS CLOSED — HOLIDAY");
+    const ui_mod_t *mods = NULL;
+    ui_compose_env_t env;
+    const int n = ui_page_layout(page, &mods, &env);
+
+    int want = 0;
+    for (int i = 0; i < n && mods; i++) {
+        if (!mods[i].placed) continue;
+        if (mods[i].kind == UI_MOD_LEAD) {
+            want = lv_font_get_line_height(ui_head_font(0));
+            break;
+        }
+        if (mods[i].kind == UI_MOD_STORY || mods[i].kind == UI_MOD_QUOTE) {
+            const int h = lv_font_get_line_height(ui_head_font(1));
+            if (h > want) want = h;
+        }
+    }
+    if (want == 0) return;
+
+    int best = 0;
+    for (int i = 0; i < g_labs; i++) {
+        if (g_lab[i].a.y1 < UI_WELL_Y || g_lab[i].a.y2 >= UI_WELL_B) continue;
+        const int h = g_lab[i].font ? lv_font_get_line_height(g_lab[i].font) : 0;
+        if (h > best) best = h;
+    }
+    if (best < want) {
+        FAILV("%s: the largest type in the well is %d px against the %d the day's "
+              "modules called for — the page is grey", pass, best, want);
+    }
 }
 
-/* --- main ----------------------------------------------------------------- */
+/* A sheet of white paper passes every check above. This is the one that says the
+ * page was actually SET.
+ *
+ * The number is the thin day rather than the full one: A1 on the demo snapshot
+ * inks 14% of the sheet and A2 8%, and a markets page on a payload with two
+ * stories and no statements comes in just under 4 — legitimately, because a
+ * paper with nothing to print prints a short page and rules under it. Three per
+ * cent is where a page stops being short and starts being empty: the sheet with
+ * no snapshot at all, which is a nameplate, four rules and a folio, inks 1.9. */
+#define SIM_INK_MIN  3.0
+
+static void check_inked(const char *pass)
+{
+    const double pct = ink_pct();
+    if (pct < SIM_INK_MIN) {
+        FAILV("%s: only %.2f%% of the sheet carries ink, against the %.1f%% a set "
+              "page never falls under", pass, pct, SIM_INK_MIN);
+    }
+}
+
+/* --- a pass --------------------------------------------------------------- */
+
+/* NO STATEMENT REACHES BOTH SHEETS.
+ *
+ * This is the one invariant on the board that spans two agents' files, and it is
+ * the one whose failure is silent. A1 chooses its statements through
+ * ui_a1_graphic() / ui_a1_table() in ui_modules.c; A2 takes what is left through
+ * ui_a2_takes_table(); and if those three ever disagree the reader gets the same
+ * six quarters printed twice, on two pages, with nothing in either page file
+ * wrong on its own. The rule used to be the same arithmetic written out in both
+ * page files with a comment in each admitting they had to agree — which is
+ * exactly the shape of bug that survives review.
+ *
+ * Asserted on the COMPOSITIONS rather than on the source, so it holds for
+ * whatever those functions become: read both pages' placed modules back and
+ * intersect their table sources. It runs once per payload, after both sheets
+ * have been composed, and it is the reason ui_page_layout() records both. */
+static void check_table_split(const char *pass)
+{
+    const ui_mod_t *mods = NULL;
+    ui_compose_env_t env;
+    bool on_a1[NEWS_TABLES_MAX] = { false };
+
+    int n = ui_page_layout(UI_PAGE_FRONT, &mods, &env);
+    for (int i = 0; i < n && mods; i++) {
+        if (!mods[i].placed || mods[i].kind != UI_MOD_TABLE) continue;
+        if (mods[i].src >= 0 && mods[i].src < NEWS_TABLES_MAX) {
+            on_a1[mods[i].src] = true;
+        }
+    }
+
+    n = ui_page_layout(UI_PAGE_MARKETS, &mods, &env);
+    for (int i = 0; i < n && mods; i++) {
+        if (!mods[i].placed || mods[i].kind != UI_MOD_TABLE) continue;
+        if (mods[i].src >= 0 && mods[i].src < NEWS_TABLES_MAX
+            && on_a1[mods[i].src]) {
+            FAILV("%s: table %d is printed on A1 AND on A2 — "
+                  "ui_a1_graphic()/ui_a1_table() and ui_a2_takes_table() "
+                  "disagree about who takes it", pass, mods[i].src);
+        }
+    }
+}
+
+static void check_page(const char *pass, ui_page_t page, const news_t *v)
+{
+    slot_t ok[UI_MOD_MAX + 2];
+    int    n = 0;
+
+    scan_tree();
+
+    check_furniture(pass, page == UI_PAGE_FRONT);
+    check_margins(pass);
+    check_masthead(pass);
+    check_inked(pass);
+
+    n = check_layout(pass, page, v, ok, UI_MOD_MAX);
+    check_banner(pass, page);
+    check_display_type(pass, page);
+
+    /* The tape's percentages are the furniture's own change figures, and the
+     * strip is the same rows on every sheet. It draws nothing, so it never
+     * carries a series ink. */
+    if (n < (int)(sizeof ok / sizeof *ok)) {
+        ok[n++] = (slot_t){ UI_CONTENT_X, UI_TAPE_Y, UI_CONTENT_R,
+                            UI_TAPE_Y + UI_TAPE_H, SLOT_CHG, "the tape" };
+    }
+
+    check_colour_slots(pass, ok, n);
+    check_yellow_sealed(pass);
+    check_type_not_series(pass);
+
+    /* Off the link state rather than off an argument, so the one sheet that
+     * must not claim a direction cannot be the one sheet somebody forgot to
+     * pass the flag for. */
+    if (!ui_data_live()) check_no_chg_colour(pass);
+
+    check_label_overlap(pass);
+}
 
 /* One payload, both pages, named so `ls` prints them in reading order. */
 static void pass(const char *dir, const char *tag, int seq, const news_t *v)
@@ -1108,21 +1468,622 @@ static void pass(const char *dir, const char *tag, int seq, const news_t *v)
     snprintf(name,  sizeof name,  "%02d_a1_%s", seq, tag);
     snprintf(label, sizeof label, "A1 %s", tag);
     shot(dir, name);
-    check_a1(label, v);
+    check_page(label, UI_PAGE_FRONT, v);
 
     ui_news_show_page(UI_PAGE_MARKETS);
     render();
     snprintf(name,  sizeof name,  "%02d_a2_%s", seq + 1, tag);
     snprintf(label, sizeof label, "A2 %s", tag);
     shot(dir, name);
-    check_a2(label);
+    check_page(label, UI_PAGE_MARKETS, v);
+
+    /* Both sheets have now been composed from this payload, which is the only
+     * moment the split between them can be looked at. */
+    check_table_split(tag);
 
     ui_news_show_page(UI_PAGE_FRONT);
 }
 
+/* --- the payloads ---------------------------------------------------------
+ *
+ * Three beside the demo snapshot, and each is a shape the compositor resolves
+ * differently. They matter more than they used to: with a fixed grid a thin
+ * payload left holes, and with a compositor a thin payload is the case that
+ * proves the elastic modules actually stretch into the well rather than leaving
+ * the foot of the sheet as paper.
+ *
+ * FEW MODULES AND LITTLE COPY ARE TWO DIFFERENT FAILURES, and this file used to
+ * conflate them: `sparse` was two short stories, so a page that came out grey
+ * could not say which of the two had done it. They are separated now.
+ *
+ *   sparse — a genuine SLOW DAY: few modules, full-length copy. The lead runs
+ *     to its whole budget and carries a photograph, because a front page is
+ *     text and a photograph whatever the day brought; a company exists and
+ *     there is a picture of it on a quiet morning as much as on a loud one.
+ *     What this proves is that a page with little ON it still fills.
+ *
+ *   thin — the opposite and the harder one: every module the demo has, with the
+ *     copy starved. A page whose graphics are all present and whose bodies are
+ *     all short is the page the owner rejected, and it is the adversarial case
+ *     for A1's prose share — the compositor hands room to whoever wants it, and
+ *     short bodies are how a text paper turns into a graphics one without any
+ *     single decision being wrong.
+ *
+ *   quiet — no stories at all, which keeps the artless path covered. */
+static void sparse_payload(news_t *v)
+{
+    memset(v, 0, sizeof *v);
+    v->valid = true;
+
+    news_str_copy(v->edition,      sizeof v->edition,      "SEMICONDUCTORS");
+    news_str_copy(v->dateline,     sizeof v->dateline,     "TUESDAY, AUGUST 11, 2026");
+    news_str_copy(v->session,      sizeof v->session,      "U.S. MARKETS OPEN — 11:04 ET");
+    news_str_copy(v->as_of,        sizeof v->as_of,        "AS OF 00:04 KST");
+    news_str_copy(v->generated_at, sizeof v->generated_at, "2026-08-11T00:04:00Z");
+
+    news_str_copy(v->subject.symbol,   sizeof v->subject.symbol,   "SNDK");
+    news_str_copy(v->subject.name,     sizeof v->subject.name,     "Sandisk Corp.");
+    news_str_copy(v->subject.exchange, sizeof v->subject.exchange, "NASDAQ");
+    news_str_copy(v->subject.sector,   sizeof v->subject.sector,   "Semiconductors");
+    v->subject.last_c = 21455;
+    v->subject.chg_bp = 412;
+
+    v->index_count = 2;
+    news_str_copy(v->indices[0].symbol, sizeof v->indices[0].symbol, "SPX");
+    news_str_copy(v->indices[0].name,   sizeof v->indices[0].name,   "S&P 500");
+    v->indices[0].last_c = 641283;
+    v->indices[0].chg_bp = 62;
+    news_str_copy(v->indices[1].symbol, sizeof v->indices[1].symbol, "SOX");
+    news_str_copy(v->indices[1].name,   sizeof v->indices[1].name,   "PHLX Semis");
+    v->indices[1].last_c = 587411;
+    v->indices[1].chg_bp = -138;
+
+    /* The dossier is FULL even on a thin day, and that is not a convenience:
+     * the rail is the company's fundamentals, they exist whether or not anything
+     * happened, and a producer that sent five of them on a quiet morning would be
+     * describing a different product. What makes this payload sparse is the
+     * COUNT of things the day brought — two stories, two briefs, one chart, no
+     * statements — and not the LENGTH of any of them. Both stories run to their
+     * full budget and the lead carries a photograph, so the one thing a reader
+     * would notice on this sheet is that there is less on it, never that what is
+     * on it was cut short. Those are the two complaints this file used to answer
+     * with one payload and now answers with two; see thin_payload(). */
+    static const struct { const char *g, *l, *val; bool chg; int32_t bp; } F[] = {
+        { "VALUATION",     "MARKET CAP",  "$31.2B",  false, 0    },
+        { "VALUATION",     "P/E (FWD)",   "11.4x",   false, 0    },
+        { "VALUATION",     "PRICE/BOOK",  "2.08x",   false, 0    },
+        { "VALUATION",     "LAST",        "$214.55", true,  412  },
+        { "PROFITABILITY", "GROSS MARGIN","38.4%",   false, 0    },
+        { "PROFITABILITY", "NET MARGIN",  "11.9%",   false, 0    },
+        { "PROFITABILITY", "RETURN ON EQ","14.2%",   false, 0    },
+        { "BALANCE SHEET", "DEBT/EQUITY", "0.31x",   false, 0    },
+        { "BALANCE SHEET", "CURRENT RATIO","188.0%", false, 0    },
+        { "BALANCE SHEET", "CASH",        "$2.14B",  false, 0    },
+        { "THE STREET",    "CONSENSUS",   "BUY",     false, 0    },
+        { "THE STREET",    "TARGET",      "$248.00", true,  1550 },
+    };
+    for (size_t i = 0; i < sizeof F / sizeof *F; i++) {
+        news_figure_t *f = &v->figures[v->figure_count++];
+        news_str_copy(f->group, sizeof f->group, F[i].g);
+        news_str_copy(f->label, sizeof f->label, F[i].l);
+        news_str_copy(f->value, sizeof f->value, F[i].val);
+        f->has_chg = F[i].chg;
+        f->chg_bp  = F[i].bp;
+    }
+
+    v->peer_count = 3;
+    static const struct { const char *s, *n, *pe, *cap; int32_t last, bp; bool me; } P[] = {
+        { "SNDK", "Sandisk",       "11.4x", "$31.2B",  21455, 412,  true  },
+        { "MU",   "Micron",        "14.9x", "$142.8B", 12840, 188,  false },
+        { "WDC",  "Western Dig.",  "9.8x",  "$24.1B",   7212, -55,  false },
+    };
+    for (int i = 0; i < 3; i++) {
+        news_peer_t *p = &v->peers[i];
+        news_str_copy(p->symbol, sizeof p->symbol, P[i].s);
+        news_str_copy(p->name,   sizeof p->name,   P[i].n);
+        news_str_copy(p->per,    sizeof p->per,    P[i].pe);
+        news_str_copy(p->cap,    sizeof p->cap,    P[i].cap);
+        p->last_c     = P[i].last;
+        p->chg_bp     = P[i].bp;
+        p->is_subject = P[i].me;
+    }
+
+    v->brief_count = 2;
+    news_str_copy(v->briefs[0].date,   sizeof v->briefs[0].date,   "AUG 10");
+    news_str_copy(v->briefs[0].kicker, sizeof v->briefs[0].kicker, "SUPPLY");
+    news_str_copy(v->briefs[0].text,   sizeof v->briefs[0].text,
+                  "A second fab in Yokkaichi returned to full output a week "
+                  "ahead of the schedule the company gave in June.");
+    news_str_copy(v->briefs[1].date,   sizeof v->briefs[1].date,   "AUG 8");
+    news_str_copy(v->briefs[1].kicker, sizeof v->briefs[1].kicker, "RATINGS");
+    news_str_copy(v->briefs[1].text,   sizeof v->briefs[1].text,
+                  "Two houses raised their price targets without changing a "
+                  "recommendation, which is the week in one line.");
+
+    v->chart_count = 1;
+    news_chart_t *c = &v->charts[0];
+    c->kind = CHART_LINE;
+    news_str_copy(c->label, sizeof c->label, "PRICE");
+    news_str_copy(c->span,  sizeof c->span,  "1M");
+    news_str_copy(c->note,  sizeof c->note,  "Daily closes, one month");
+    c->n = 14;
+    for (int i = 0; i < 14; i++) c->c[i] = 19800 + 140 * i + (i % 3) * 210;
+
+    /* Two stories, so the front page keeps one and the markets page gets the
+     * other — the minimum at which both sheets carry prose.
+     *
+     * BOTH RUN TO BUDGET: the lead is 720 characters against the 600-740 in
+     * tools/edition/PROMPT.md and the second is 284 against 260-330. That is
+     * the whole difference between this payload and the one it replaces. A
+     * slow day is a day with FEWER things on it, not a day whose stories were
+     * cut in half, and the compositor stretches an elastic module to fill the
+     * room it was given — so a short body on a thin page shows up as white
+     * paper inside a ruled box and makes every other fault on the sheet
+     * unreadable. Keep them at budget when editing, and keep the counts in
+     * this comment true. */
+    v->story_count = 2;
+
+    news_story_t *s = &v->stories[0];
+    s->rank  = 0;
+    s->chart = 0;
+    news_str_copy(s->kicker,   sizeof s->kicker,   "MEMORY");
+    news_str_copy(s->headline, sizeof s->headline,
+                  "Contract NAND prices turn for the first time since spring");
+    news_str_copy(s->deck, sizeof s->deck,
+                  "Buyers who spent two quarters running inventory down are "
+                  "signing again, and the spot market moved first.");
+    news_str_copy(s->byline, sizeof s->byline, "By CLAUDE · SEMICONDUCTOR DESK");
+    news_str_copy(s->body, sizeof s->body,
+        "SEOUL — Contract prices for the densest NAND parts rose in the August "
+        "round for the first time since March, and the move was larger than the "
+        "distributors had guided. Three of the four suppliers took the increase; "
+        "the fourth has not published. What changed is not demand, which has been "
+        "flat all year, but the willingness of buyers to hold inventory: two "
+        "quarters of drawing stock down has left the channel thinner than it has "
+        "been since 2023, and a thin channel prices differently. The company's own "
+        "commentary in June put the turn a quarter later than this. That is the "
+        "kind of miss a market forgives, and the shares did. What the round does "
+        "not say is how long it lasts, and the last two turns lasted one quarter "
+        "each.");
+
+    /* A PHOTOGRAPH, on the thinnest payload this file builds.
+     *
+     * It used to have none, and the comment above called that "the shape a real
+     * slow day has". It is not: this paper prints one company a day and the
+     * company is there on a quiet morning too. A front page is text AND a
+     * photograph, always — a sheet of type with a chart on it is a report, and
+     * the day the compositor is allowed to produce one on a slow day is the day
+     * it will produce one on every slow day.
+     *
+     * sndk_fab is the 1140 x 320 plate, so it is wider than anything but the
+     * whole measure and CROPS into whatever the lead is given. That is the
+     * intended path — the device never resizes a tile — and it is the case
+     * worth exercising here, because a slow day is exactly when the lead might
+     * be handed the whole measure and a banner. */
+    news_str_copy(s->photo.id,      sizeof s->photo.id,      "sndk_fab");
+    s->photo.w = 1140;
+    s->photo.h = 320;
+    news_str_copy(s->photo.caption, sizeof s->photo.caption,
+                  "The Yokkaichi fab, which returned to full output a week ahead "
+                  "of the schedule given in June.");
+    news_str_copy(s->photo.credit,  sizeof s->photo.credit, "COMPANY HANDOUT");
+
+    s = &v->stories[1];
+    s->rank = 1;
+    news_str_copy(s->kicker,   sizeof s->kicker,   "THE ACCOUNTS");
+    news_str_copy(s->headline, sizeof s->headline,
+                  "What the June quarter actually said");
+    news_str_copy(s->deck, sizeof s->deck,
+                  "Gross margin did the work; the revenue line barely moved.");
+    news_str_copy(s->byline, sizeof s->byline, "By CLAUDE · MARKETS DESK");
+    news_str_copy(s->body, sizeof s->body,
+        "The quarter looks better than it reads. Revenue was up four per cent on "
+        "the year and flat on the quarter, which is not the shape of a recovery — "
+        "but gross margin came in six points wider, and almost all of that is mix "
+        "rather than price. The company sold more of the parts it earns on.");
+}
+
+/* Everything the demo brought, with the copy starved.
+ *
+ * The opposite failure to sparse_payload() and the one that is harder to see,
+ * because nothing on this page is missing: every statement, every chart, every
+ * thumbnail and every table is there, and the only thing wrong with it is that
+ * the writing is a third of what it should be. That is how a text-and-
+ * photograph newspaper turns into a page of graphics with no single decision
+ * being wrong — the compositor hands room to whoever asks for it, and a story
+ * that brought 150 characters does not ask.
+ *
+ * So this is the adversarial payload for A1's prose share. A rule that holds on
+ * the demo snapshot and on a slow day but not here is a rule that holds when
+ * the producer behaves, and the producer is the thing the rule exists to defend
+ * against.
+ *
+ * The bodies are SHORT AND WHOLE rather than truncated: a body cut mid-sentence
+ * would make every shot of this payload unreadable for the one thing the shots
+ * are looked at for, which is judging the page as paper. */
+static void thin_payload(news_t *v)
+{
+    static const char *const BODY[] = {
+        "The company confirmed the round and said very little else. Two analysts "
+        "asked about the second half on the call and were told to wait for the "
+        "October guidance.",
+
+        "Margin did the work again this quarter. Nobody on the call would say "
+        "whether the mix that produced it holds through the winter.",
+
+        "The line restarted on Tuesday. The company has not said what the "
+        "quarter's output will be, and the distributors have stopped guessing.",
+    };
+
+    news_mock(v);
+    v->demo = false;
+    news_str_copy(v->session, sizeof v->session, "U.S. MARKETS OPEN — 10:12 ET");
+
+    for (int i = 0; i < v->story_count; i++) {
+        news_str_copy(v->stories[i].body, sizeof v->stories[i].body,
+                      BODY[i % (int)(sizeof BODY / sizeof *BODY)]);
+    }
+}
+
+/* Figures, briefs and an industry table, and no stories at all. A quiet day is
+ * not a broken feed: the modules that have material stretch into the well and
+ * the sheet is a page of reference — which is what a paper prints on a day it
+ * has nothing to report, and is a legitimate front page rather than an error
+ * state. */
+static void quiet_payload(news_t *v)
+{
+    news_mock(v);
+    v->demo = false;
+    v->story_count = 0;
+    memset(v->stories, 0, sizeof v->stories);
+    v->thumb_count = 0;
+    memset(v->thumbs, 0, sizeof v->thumbs);
+    news_str_copy(v->session, sizeof v->session, "U.S. MARKETS CLOSED — HOLIDAY");
+}
+
+/* --- the ink sheet --------------------------------------------------------
+ *
+ * A specimen, not a page: the six inks and the five series treatments printed
+ * as bars, hairlines and stems on the paper they will actually sit on, each
+ * labelled with its measured contrast. It is the artefact the colour decision
+ * was argued from and the one thing that can settle the argument, because
+ * "blue is 2.77:1" is arithmetic and "does a blue bar beside a black one
+ * separate at arm's length" is a question only a sheet answers.
+ *
+ * DRAWN IN THE MEASURED INKS, like every other shot: the UI paints saturated
+ * palette entries, wp_quantize565() resolves them to the six, and
+ * write_preview() prints them in wp_palette_ink, which is roughly what Spectra 6
+ * looks like. A specimen drawn in #0000FF would be a specimen of a panel nobody
+ * owns.
+ *
+ * THREE FORMS PER INK, because contrast is not the whole answer. A ratio
+ * describes an area of ink against an area of paper, and most of what this page
+ * actually draws is neither: a 3 px rule and a 12 px stem are thin enough that
+ * the eye integrates them with the paper around them and every colour reads
+ * lighter than its number. That is why the value ladder in ui_internal.h talks
+ * about bars and lines separately, and it is why a blue HAIRLINE is a worse
+ * idea than a blue bar however good 2.77:1 looks written down.
+ *
+ * AND EACH ONE ABUTTING BLACK, which is the question the ladder is really
+ * about. Blue is 2.77:1 on paper and 1.63:1 on black, so a blue bar with a
+ * black bar beside it and no gutter is two bars that read as one shape. The
+ * pair column is that case, drawn rather than described.
+ *
+ * The sheet is also this file's own POSITIVE CONTROL. It is the one place in
+ * the tree where bare yellow is drawn on paper deliberately, so it is the one
+ * place check_yellow_sealed()'s reachability test can be shown to bite without
+ * mutating a file another agent is editing. ink_sheet_selftest() below asserts
+ * that the bare row IS caught, that the keylined row is NOT, and — the part
+ * that matters — that the keylined row drew yellow at all, because a treatment
+ * that quietly drew nothing would pass "no yellow escaped" perfectly. */
+
+#define SW_HEAD_H       152
+#define SW_ROW_H        138
+#define SW_BAR_H         56
+#define SW_LINE_W         3
+#define SW_STEM_W        12
+
+#define SW_X_LABEL      UI_CONTENT_X                    /*   30 */
+#define SW_X_BAR        (UI_CONTENT_X + 270)            /*  300 */
+#define SW_X_PAIR       (UI_CONTENT_X + 470)            /*  500 */
+#define SW_X_LINE       (UI_CONTENT_X + 670)            /*  700 */
+#define SW_X_STEM       (UI_CONTENT_X + 870)            /*  900 */
+#define SW_SPAN         180
+
+/* sRGB relative luminance and the WCAG contrast ratio, over wp_palette_ink —
+ * the MEASURED table, so these are numbers about the panel rather than about
+ * the saturated colours the UI draws with.
+ *
+ * libm here and nowhere near the device: ui_chart.h's integer rule is about
+ * code that runs on both x86 and Xtensa and must agree to the pixel. This runs
+ * on a desktop, prints a caption, and decides nothing. */
+static double sw_lin(double c)
+{
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+
+static double sw_luma(const uint8_t rgb[3])
+{
+    return 0.2126 * sw_lin(rgb[0] / 255.0)
+         + 0.7152 * sw_lin(rgb[1] / 255.0)
+         + 0.0722 * sw_lin(rgb[2] / 255.0);
+}
+
+static double sw_contrast(int a, int b)
+{
+    const double la = sw_luma(wp_palette_ink[a]), lb = sw_luma(wp_palette_ink[b]);
+    const double hi = la > lb ? la : lb;
+    const double lo = la > lb ? lb : la;
+    return (hi + 0.05) / (lo + 0.05);
+}
+
+/* Set a label and check every glyph of it in the same breath. The sheet's
+ * strings are the SIMULATOR's own rather than the paper's, so they are not in
+ * ui_strings.h and the generator has never seen them — which is exactly why
+ * they have to be covered here instead of trusted. */
+static void sw_lab(lv_obj_t *par, int x, int y, const lv_font_t *f, const char *txt)
+{
+    cover_all("the ink sheet", txt);
+    ui_lab(par, x, y, f, txt);
+}
+
+static void sw_row_head(lv_obj_t *par, int y, const char *name, const char *note)
+{
+    sw_lab(par, SW_X_LABEL, y, UI_F_BODY_LG, name);
+    cover_all("the ink sheet", note);
+    ui_lab_box(par, SW_X_LABEL, y + 30, 250, 60, UI_F_LABEL,
+               LV_TEXT_ALIGN_LEFT, note);
+}
+
+/* A flat palette entry, in the four forms. The middle stem is black in every
+ * row so that the narrowest form is always shown against the ink it will
+ * usually stand beside. */
+static void sw_flat_row(lv_obj_t *par, int y, uint32_t rgb)
+{
+    const lv_color_t c = lv_color_hex(rgb);
+    lv_obj_t *o;
+
+    o = ui_fill(par, SW_X_BAR, y, SW_SPAN, SW_BAR_H);
+    lv_obj_set_style_bg_color(o, c, 0);
+
+    o = ui_fill(par, SW_X_PAIR, y, SW_SPAN / 2, SW_BAR_H);
+    lv_obj_set_style_bg_color(o, c, 0);
+    ui_fill(par, SW_X_PAIR + SW_SPAN / 2, y, SW_SPAN / 2, SW_BAR_H);
+
+    o = ui_fill(par, SW_X_LINE, y + SW_BAR_H / 2, SW_SPAN, SW_LINE_W);
+    lv_obj_set_style_bg_color(o, c, 0);
+
+    for (int i = 0; i < 3; i++) {
+        o = ui_fill(par, SW_X_STEM + i * 2 * SW_STEM_W, y, SW_STEM_W, SW_BAR_H);
+        if (i != 1) lv_obj_set_style_bg_color(o, c, 0);
+    }
+}
+
+/* The same four forms through ui_series_fill(), which is the only call on the
+ * board allowed to put blue or yellow down. The 3 px line is deliberately below
+ * UI_SERIES_MIN_PX: what it shows is the documented fallback to SOLID, which is
+ * a thing worth being able to see rather than to read about. */
+static void sw_series_row(lv_obj_t *par, int y, ui_series_t s)
+{
+    ui_series_fill(par, SW_X_BAR, y, SW_SPAN, SW_BAR_H, s);
+
+    ui_series_fill(par, SW_X_PAIR, y, SW_SPAN / 2, SW_BAR_H, s);
+    ui_fill(par, SW_X_PAIR + SW_SPAN / 2, y, SW_SPAN / 2, SW_BAR_H);
+
+    ui_series_fill(par, SW_X_LINE, y + SW_BAR_H / 2, SW_SPAN, SW_LINE_W, s);
+
+    for (int i = 0; i < 3; i++) {
+        const int x = SW_X_STEM + i * 2 * SW_STEM_W;
+        if (i == 1) ui_fill(par, x, y, SW_STEM_W, SW_BAR_H);
+        else        ui_series_fill(par, x, y, SW_STEM_W, SW_BAR_H, s);
+    }
+
+    ui_series_swatch(par, SW_X_STEM + 6 * SW_STEM_W + 20,
+                     y + (SW_BAR_H - UI_SERIES_SWATCH) / 2, s);
+}
+
+/* The bare-yellow row's band, so the self-test can tell the control apart from
+ * a leak. Written by ink_sheet() and read by ink_sheet_selftest(). */
+static int g_sw_bare_y0, g_sw_bare_y1;
+
+static void ink_sheet_selftest(void)
+{
+    const int inside  = yellow_on_paper(NULL, false, g_sw_bare_y0, g_sw_bare_y1);
+    const int above   = yellow_on_paper(NULL, false, 0, g_sw_bare_y0);
+    const int below   = yellow_on_paper(NULL, false, g_sw_bare_y1, UI_H);
+    const int keylined = check_yellow_keyline(NULL, false, g_sw_bare_y1, UI_H);
+
+    /* Does the reachability test bite at all? The bare row is 180 px of yellow
+     * sitting on paper with nothing between; if this comes back zero the check
+     * on every real page is not checking anything. */
+    if (inside == 0) {
+        FAIL("the ink sheet: the bare-yellow row reaches the paper nowhere, so "
+             "check_yellow_sealed() would pass a sheet of unkeylined yellow");
+    }
+
+    /* And does it stay quiet where the keyline is real? Everything below the
+     * bare row is drawn through ui_series_fill(). */
+    if (above + below > 0) {
+        FAILV("the ink sheet: %d yellow pixels outside the bare row reach the "
+              "paper — ui_series_fill()'s keyline has a hole in it",
+              above + below);
+    }
+    if (keylined > 0) {
+        FAILV("the ink sheet: %d keyline edges below the bare row are thinner "
+              "than UI_SERIES_KEY_W", keylined);
+    }
+
+    /* THE ONE THAT STOPS THE TWO ABOVE BEING VACUOUS. A ui_series_fill() that
+     * drew no yellow at all — a KEYED treatment that quietly fell back to
+     * SOLID everywhere, a fill inset until it vanished — passes "no yellow
+     * escaped" perfectly and tells nobody. So count the yellow the keylined
+     * rows actually laid down and require there to be some. */
+    long keyed = 0;
+    for (int y = g_sw_bare_y1; y < UI_H; y++) {
+        for (int x = 0; x < UI_W; x++) {
+            if (ink_at(x, y) == WP_I_YELLOW) keyed++;
+        }
+    }
+    if (keyed == 0) {
+        FAIL("the ink sheet: the KEYED row put no yellow on the sheet at all — "
+             "\"no yellow escaped\" below it is true and means nothing");
+    } else {
+        printf("  yellow: %d px bare and open to the paper (the control), "
+               "%ld px keylined and sealed\n", inside, keyed);
+    }
+}
+
+static void ink_sheet(const char *dir, lv_obj_t *news_scr)
+{
+    static const struct { const char *name; uint32_t rgb; int ink; } FLAT[] = {
+        { "BLACK",  WP_RGB_BLACK,  WP_I_BLACK  },
+        { "RED",    WP_RGB_RED,    WP_I_RED    },
+        { "BLUE",   WP_RGB_BLUE,   WP_I_BLUE   },
+        { "GREEN",  WP_RGB_GREEN,  WP_I_GREEN  },
+        { "YELLOW", WP_RGB_YELLOW, WP_I_YELLOW },
+    };
+    static const struct { const char *name, *note; ui_series_t s; } SERIES[] = {
+        { "SOLID",  "UI_SERIES_SOLID. Black. The first series of every graphic.",
+          UI_SERIES_SOLID },
+        { "BLUE",   "UI_SERIES_BLUE. A line over black bars, or a bar with a "
+                    "gutter beside it.", UI_SERIES_BLUE },
+        { "SCREEN", "UI_SERIES_SCREEN. A 1-in-3 black line screen, which is how "
+                    "a paper has always printed a share.", UI_SERIES_SCREEN },
+        { "KEYED",  "UI_SERIES_KEYED. Yellow inside a 2 px black keyline, and "
+                    "the only legal yellow on the sheet.", UI_SERIES_KEYED },
+        { "OPEN",   "UI_SERIES_OPEN. Paper inside a black keyline.",
+          UI_SERIES_OPEN },
+    };
+    static char note[sizeof FLAT / sizeof *FLAT][96];
+
+    lv_obj_t *scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr, UI_PAPER, 0);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_screen_load(scr);
+
+    sw_lab(scr, UI_CONTENT_X, UI_CONTENT_Y, UI_F_HEADLINE, "The six inks");
+    ui_rule(scr, UI_CONTENT_X, UI_CONTENT_Y + 56, UI_CONTENT_W, 2);
+    cover_all("the ink sheet",
+              "Contrast against the paper, measured off wp_palette_ink. Each ink "
+              "as a bar, as a bar abutting black, as a 3 px rule and as a 12 px "
+              "stem beside one.");
+    ui_lab_box(scr, UI_CONTENT_X, UI_CONTENT_Y + 68, UI_CONTENT_W, 60,
+               UI_F_BODY, LV_TEXT_ALIGN_LEFT,
+               "Contrast against the paper, measured off wp_palette_ink. Each ink "
+               "as a bar, as a bar abutting black, as a 3 px rule and as a 12 px "
+               "stem beside one.");
+
+    sw_lab(scr, SW_X_BAR,  UI_CONTENT_Y + 128, UI_F_LABEL, "BAR");
+    sw_lab(scr, SW_X_PAIR, UI_CONTENT_Y + 128, UI_F_LABEL, "AGAINST BLACK");
+    sw_lab(scr, SW_X_LINE, UI_CONTENT_Y + 128, UI_F_LABEL, "3 PX RULE");
+    sw_lab(scr, SW_X_STEM, UI_CONTENT_Y + 128, UI_F_LABEL, "12 PX STEMS");
+
+    int y = UI_CONTENT_Y + SW_HEAD_H;
+
+    printf("the six inks, against the paper (wp_palette_ink):\n");
+    for (size_t i = 0; i < sizeof FLAT / sizeof *FLAT; i++) {
+        const double paper = sw_contrast(FLAT[i].ink, WP_I_WHITE);
+        const double black = sw_contrast(FLAT[i].ink, WP_I_BLACK);
+
+        snprintf(note[i], sizeof note[i], "%.2f:1 ON PAPER / %.2f:1 ON BLACK",
+                 paper, black);
+        printf("  %-7s #%02X%02X%02X  %5.2f:1 on paper  %5.2f:1 on black\n",
+               FLAT[i].name,
+               wp_palette_ink[FLAT[i].ink][0], wp_palette_ink[FLAT[i].ink][1],
+               wp_palette_ink[FLAT[i].ink][2], paper, black);
+
+        sw_row_head(scr, y, FLAT[i].name, note[i]);
+        sw_flat_row(scr, y, FLAT[i].rgb);
+
+        /* The bare-yellow row is the control, and it is the LAST flat row so
+         * that everything under it is keylined and the self-test can split the
+         * sheet on one number. */
+        if (FLAT[i].ink == WP_I_YELLOW) {
+            g_sw_bare_y0 = y;
+            g_sw_bare_y1 = y + SW_ROW_H;
+        }
+        y += SW_ROW_H;
+    }
+
+    for (size_t i = 0; i < sizeof SERIES / sizeof *SERIES; i++) {
+        sw_row_head(scr, y, SERIES[i].name, SERIES[i].note);
+        sw_series_row(scr, y, SERIES[i].s);
+        y += SW_ROW_H;
+    }
+
+    if (y > UI_CONTENT_B) {
+        FAILV("the ink sheet runs to y=%d, past the %d bottom margin",
+              y, UI_CONTENT_B);
+    }
+
+    render();
+    shot(dir, "00_inks");
+
+    scan_tree();
+    check_margins("the ink sheet");
+    ink_sheet_selftest();
+
+    lv_screen_load(news_scr);
+    lv_obj_delete(scr);
+}
+
+/* --- main ----------------------------------------------------------------- */
+
+static char *slurp(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n < 0) { fclose(f); return NULL; }
+
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return NULL; }
+
+    *len = fread(buf, 1, (size_t)n, f);
+    buf[*len] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static void usage(void)
+{
+    fprintf(stderr,
+        "usage: sim <shotdir> [--json <file>] [--tiles <dir>] [--only-pages]\n"
+        "\n"
+        "  --json        typeset this payload instead of the built-in demo snapshot\n"
+        "  --tiles       where to look for the photographs it names\n"
+        "  --only-pages  A1 and A2 alone; skip the badge, overlay and no-data sheets\n"
+        "  --measure     print the seven faces' advance table and exit\n"
+        "\n"
+        "  NEWS_URL=<url> fetches and parses over the wire, the way the device does.\n");
+}
+
 int main(int argc, char **argv)
 {
-    const char *outdir = (argc > 1) ? argv[1] : "shots";
+    const char *outdir = "shots";
+    const char *json   = NULL;
+    bool only_pages    = false;
+    bool measure_only  = false;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0 && i + 1 < argc) {
+            json = argv[++i];
+        } else if (strcmp(argv[i], "--tiles") == 0 && i + 1 < argc) {
+            setenv("WP_TILE_DIR", argv[++i], 1);
+        } else if (strcmp(argv[i], "--only-pages") == 0) {
+            only_pages = true;
+        } else if (strcmp(argv[i], "--measure") == 0) {
+            measure_only = true;
+        } else if (argv[i][0] == '-') {
+            usage();
+            return 2;
+        } else {
+            outdir = argv[i];
+        }
+    }
 
     lv_init();
     lv_tick_set_cb(tick_cb);
@@ -1134,18 +2095,40 @@ int main(int argc, char **argv)
 
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_screen_load(scr);
+
+    /* Before anything is built: the table is a property of the committed font
+     * files and of nothing on the page. */
+    if (measure_only) {
+        print_measures();
+        return 0;
+    }
     ui_news_create(scr);
 
-    /* The built-in demo snapshot, or — with NEWS_URL set — the real fetch and
-     * parse path the device runs, against the real server. Same code, same
-     * bytes, same pixels. */
+    /* A named payload, the device's own fetch-and-parse path, or the built-in
+     * demo snapshot. Same code, same bytes, same pixels in all three. */
     news_t v;
     const char *url = getenv("NEWS_URL");
-    if (url && *url) {
+
+    if (json) {
+        size_t len = 0;
+        char  *txt = slurp(json, &len);
+        if (!txt) {
+            fprintf(stderr, "sim: cannot read %s\n", json);
+            return 2;
+        }
+        if (!news_parse(txt, len, &v)) {
+            fprintf(stderr, "sim: %s is not a payload this device would accept\n",
+                    json);
+            free(txt);
+            return 1;
+        }
+        free(txt);
+        printf("typesetting %s\n", json);
+    } else if (url && *url) {
         const news_fetch_result_t r = news_service_fetch(url, &v);
         if (r == NEWS_FETCH_OK) {
-            printf("fetched %s -> %d stories, %d indices, %d quotations\n",
-                   url, v.story_count, v.index_count, v.ticker_count);
+            printf("fetched %s -> %d stories, %d figures, %d peers\n",
+                   url, v.story_count, v.figure_count, v.peer_count);
         } else {
             printf("fetch of %s failed (%s) — falling back to the demo snapshot\n",
                    url, news_fetch_result_name(r));
@@ -1156,11 +2139,47 @@ int main(int argc, char **argv)
         printf("using the built-in demo snapshot (set NEWS_URL=... for a live fetch)\n");
     }
 
+    /* The measure table in ui_internal.h rests on two numbers — the average
+     * advance of the two body faces — and every characters-per-column figure in
+     * it and in docs/pages.md is derived from them. They are printed here rather
+     * than asserted anywhere, because they are a property of the committed font
+     * tables: a face regenerated at a different optical size moves them, and the
+     * table that divides column widths by them is then quietly wrong. One line
+     * of output on every run is the cheapest way for the number in the header to
+     * be something somebody read rather than something two files assert at each
+     * other.
+     *
+     * IT MEASURES SIM_PROSE_SAMPLE, THE SAME FIXED PARAGRAPH `--measure` USES,
+     * and that is the whole point of the line rather than an implementation
+     * detail. It used to measure `v.stories[0].body` instead — the payload's own
+     * copy — which defeated it twice over: the number moved whenever the demo's
+     * prose was rewritten, and it disagreed with `--measure` while being printed
+     * under the same word. Two correctly-computed means over different samples,
+     * one label. That is how three figures for body_16 came to be in circulation
+     * at once, and this line was one of them.
+     *
+     * The payload's own advance is a legitimate thing to want — it is what the
+     * copyfitter actually sees — but it answers a different question and would
+     * need its own label and its own sample named. One number per question. */
+    printf("measure: body_16 %.2f ascii / %.2f prose,"
+           "  body_20 %.2f ascii / %.2f prose"
+           "  (px per character, prose = SIM_PROSE_SAMPLE)\n",
+           mean_advance(UI_F_BODY, ascii_sample()),
+           mean_advance(UI_F_BODY, SIM_PROSE_SAMPLE),
+           mean_advance(UI_F_BODY_LG, ascii_sample()),
+           mean_advance(UI_F_BODY_LG, SIM_PROSE_SAMPLE));
+
     printf("checking glyph coverage\n");
     check_fixed_strings();
     check_data_strings(&v);
 
     printf("rendering %s/ at %dx%d in six inks\n", outdir, UI_W, UI_H);
+
+    /* The specimen first, and numbered 00 so it sorts first: it is what the
+     * pages below are judged against, and it is the only sheet on which bare
+     * yellow is drawn on purpose. --only-pages skips it with everything else
+     * that is not A1 or A2. */
+    if (!only_pages) ink_sheet(outdir, scr);
 
     const ui_status_t online = {
         .online = true, .stale = false, .battery_present = true, .battery_pct = 84,
@@ -1170,150 +2189,128 @@ int main(int argc, char **argv)
 
     pass(outdir, "full", 1, &v);
 
+    if (only_pages) {
+        printf("%s — %d layout/glyph/colour problem(s)\n",
+               g_fail ? "FAILED" : "ok", g_fail);
+        return g_fail ? 1 : 0;
+    }
+
     news_t sparse;
     sparse_payload(&sparse);
     check_data_strings(&sparse);
     pass(outdir, "sparse", 3, &sparse);
 
+    news_t thin;
+    thin_payload(&thin);
+    check_data_strings(&thin);
+    pass(outdir, "thin", 5, &thin);
+
     news_t quiet;
     quiet_payload(&quiet);
     check_data_strings(&quiet);
-    pass(outdir, "quiet", 5, &quiet);
+    pass(outdir, "quiet", 7, &quiet);
 
-    /* The two badges, which no ordinary render reaches: they are the kicker
-     * strip's one inverted element and the only thing on the sheet that reports
-     * the board rather than the news. Both are checked on the full payload, so
-     * a badge that failed to draw shows up against a page that otherwise did. */
+    /* The two state chips, which no ordinary render reaches. Both are checked on
+     * the full payload, so a chip that failed to draw shows up against a page
+     * that otherwise did — and both are also the passes where every change
+     * figure on the sheet must have gone back to INK, which is the half of the
+     * state signal a reader actually sees from across a room. */
     ui_news_set_data(&v);
 
     ui_status_t st = online;
     st.stale = true;
     ui_news_set_status(&st);
     render();
-    shot(outdir, "07_a1_stale");
-    check_a1("A1 stale", &v);
-    want_badge("the STALE badge");
+    shot(outdir, "09_a1_stale");
+    check_page("A1 stale", UI_PAGE_FRONT, &v);
 
     st.online = false;
     st.battery_present = false;
     ui_news_set_status(&st);
     render();
-    shot(outdir, "08_a1_offline");
-    check_a1("A1 offline", &v);
-    want_badge("the OFFLINE badge");
+    shot(outdir, "10_a1_offline");
+    check_page("A1 offline", UI_PAGE_FRONT, &v);
 
     ui_news_set_status(&online);
 
-    /* The setup sheet. It used to be a modal — a bordered card floating in the
-     * middle of an otherwise blank page — and the two assertions here used to
-     * say "the sheet underneath is GONE", masthead and folio included, because
-     * a full-bleed opaque pane covered both.
+    /* The setup sheet. It is a PAGE of this paper rather than a modal: the pane
+     * covers the news, because on e-Paper a hidden page is still physically on
+     * the glass until something paints over it, but it is created under the
+     * furniture so the nameplate, the rules, the tape and the folio print over it
+     * exactly as they do on A1.
      *
-     * It is a PAGE now: the pane still covers the news, because on e-Paper a
-     * hidden page is still physically on the glass until something paints over
-     * it, but it is created under the furniture so the kicker strip, the
-     * masthead, the rules and the folio print over it exactly as they do on A1.
-     * A new owner's first sight of the board is the paper with the setup story
-     * where the lead goes, not a projector's no-signal card.
-     *
-     * So the checks are restated to that layout rather than removed. What the
-     * old pair were really protecting is opacity, and band 6 says it better
-     * anyway: it is dense with news on A1 and must be bare paper here. The two
-     * rules the SHEET owns are checked as they are on A2, and the masthead and
-     * folio are now asserted PRESENT — the opposite of before, because the
-     * design is the opposite of before. */
+     * Label overlap is deliberately not checked here. The page underneath is
+     * still in the tree — hidden it would not be covering anything — so every
+     * label on it is legitimately under one of the setup sheet's, which is what
+     * "opaque" means. What is checked instead is that the pane really is opaque:
+     * the strip between the setup sheet's two bands is bare on this page and
+     * dense with news on A1. */
     ui_news_set_overlay(S_WIFI_TITLE, "WP News-1A2B",
                         "1. Join that Wi-Fi network\n\n"
                         "2. Stay connected, then open the page it offers");
     render();
-    shot(outdir, "09_setup");
-    want_ink("the setup sheet's copy", UI_CONTENT_X, UI_LEAD_SPLIT_Y,
-             UI_CONTENT_X + UI_MEASURE_LG_W, UI_LEAD_SPLIT_Y + 120);
-    want_ink("the setup sheet's headline", UI_CONTENT_X, UI_LEAD_HEAD_Y,
-             UI_CONTENT_R, UI_LEAD_HEAD_Y + UI_LEAD_HEAD_H);
-    want_ink("the setup sheet keeps the masthead",
-             UI_CONTENT_X, UI_MAST_Y, UI_CONTENT_R, UI_MAST_Y + UI_MAST_H);
-    want_ink("the setup sheet keeps the folio",
-             UI_CONTENT_X, UI_FOLIO_Y, UI_CONTENT_R, UI_FOLIO_Y + UI_FOLIO_H);
+    shot(outdir, "11_setup");
+    scan_tree();
 
-    /* The network's name, at the size the owner can read across a room. It is
-     * the one string on this sheet that has to reach another device, and it was
-     * 13 px of ink buried in a body run — so it is asserted where it now is
-     * rather than left to the "the copy rendered" check above, which a
-     * paragraph satisfies whatever size its most important line is set at. */
-    want_ink("the setup sheet's network name",
-             UI_CONTENT_X, UI_LEAD_Y + 180, UI_CONTENT_R, UI_LEAD_Y + 245);
-
-    /* THE OPACITY WITNESS MOVED, and deliberately. What this pair of checks is
-     * protecting is that the pane is opaque — on e-Paper a hidden page is still
-     * physically on the glass until something paints over it — and band 6 was
-     * the witness because A1 fills it with news and the setup sheet printed
-     * nothing there.
-     *
-     * The setup sheet now prints a page: the standing type in ui_strings.h runs
-     * through band 6, which is what closed the 826 px of bare paper this sheet
-     * used to end in. So the witness is band 7, where A1 prints eight ruled
-     * quotation rows and a briefs column and the setup sheet prints nothing at
-     * all. The assertion is the same assertion about the same property, held
-     * against the band the two layouts still disagree about. */
+    want_ink("the setup sheet's headline", UI_CONTENT_X, UI_WELL_Y + 26,
+             UI_CONTENT_R, UI_WELL_Y + 91);
+    want_ink("the setup sheet's network name", UI_CONTENT_X, UI_WELL_Y + 194,
+             UI_CONTENT_R, UI_WELL_Y + 259);
+    want_ink("the setup sheet's standing type", UI_CONTENT_X, UI_WELL_Y + 288,
+             UI_CONTENT_R, UI_WELL_Y + 500);
     want_blank("the setup sheet covers the news",
-               UI_CONTENT_X, UI_TICKER_Y, UI_CONTENT_R, UI_TICKER_Y + UI_TICKER_H);
-    check_rule("the setup sheet", "kicker", UI_KICKER_RULE_Y, UI_KICKER_RULE_W);
-    check_rule("the setup sheet", "masthead", UI_MAST_RULE_Y, UI_MAST_RULE_W);
+               UI_CONTENT_X, UI_WELL_Y + 832, UI_CONTENT_R, UI_WELL_Y + 840);
+
+    check_furniture("the setup sheet", true);
     check_margins("the setup sheet");
     check_masthead("the setup sheet");
-    check_no_blue_yellow("the setup sheet", NULL);
+
+    /* The tape, and nothing else. "A setup sheet has no data on it" is what
+     * this used to claim, and it is false by the design stated forty lines up:
+     * the pane is created UNDER the furniture so that the nameplate, the rules
+     * and the tape print over it exactly as they do on A1. The tape is data —
+     * two index levels and their changes — so the sheet has data on it, and the
+     * assertion caught the furniture doing precisely what it was built to do.
+     *
+     * ALLOWING THE SLOT IS NOT WEAKENING THE LIVE-DATA RULE, and that is worth
+     * being explicit about, because the instinct is that a board serving its own
+     * access point has no business printing a green percentage. It has not: a
+     * slot PERMITS colour, it does not require it, and every change figure on
+     * every sheet goes through ui_chg_colour(), which returns ink whenever
+     * ui_data_live() is false. So if the device is genuinely not online while it
+     * is provisioning, the tape prints black and this assertion passes exactly
+     * as it does now. The two rules are independent and both still hold. */
+    slot_t setup_ok[1] = {
+        { UI_CONTENT_X, UI_TAPE_Y, UI_CONTENT_R, UI_TAPE_Y + UI_TAPE_H,
+          SLOT_CHG, "the tape" },
+    };
+    check_colour_slots("the setup sheet", setup_ok, 1);
+    check_yellow_sealed("the setup sheet");
     ui_news_set_overlay(NULL, NULL, NULL);
 
-    /* No snapshot at all — the state between power-on and the first payload. A
-     * blank sheet is the right answer here and the band table is deliberately
-     * not applied: an unconfigured board shows the demo snapshot and never
-     * reaches this, so what has to be true is only that the paper is still the
-     * paper — the rules, the masthead, the folio — and that nothing has escaped
-     * the margin while the setters were writing empty strings. */
+    /* No snapshot at all — the state between power-on and the first payload. An
+     * unconfigured board shows the demo snapshot and never reaches this, so what
+     * has to be true is only that the paper is still the paper: the four rules,
+     * the nameplate, one line where the tape goes, and the folio. The well is
+     * EMPTY, and that is the right answer rather than a placeholder — a
+     * nameplate over an empty page is a paper waiting for news, and "Loading..."
+     * set across a broadsheet is a device. */
     ui_news_set_data(NULL);
     render();
-    shot(outdir, "10_a1_nodata");
+    shot(outdir, "12_a1_nodata");
+    scan_tree();
 
-    /* THE RULE CHECK IS THE FURNITURE'S FIVE HERE, NOT ALL SEVEN, and the
-     * change is deliberate rather than a failure being got out of the way.
-     *
-     * Five of the seven rules belong to the SHEET: the kicker strip's hairline,
-     * the masthead's heavy rule, the dateline's, the ribbon's, and the one the
-     * folio hangs from. ui_news.c prints all five on both pages whatever the
-     * news did, and on a board with no snapshot they are exactly what still has
-     * to be true — the paper is still the paper.
-     *
-     * The other two are BOUNDARIES BETWEEN BANDS, drawn by the page, and a
-     * boundary needs something on both sides of it. With no payload at all
-     * there is nothing in band 5, nothing in band 6 and nothing in band 7, and
-     * printing the two of them anyway gave the sheet its worst composition: a
-     * masthead, one italic line, and then two full-width rules cutting 1,200 px
-     * of bare paper into three empty boxes. That is not a newspaper waiting for
-     * news, it is a printer that ran out of ink — and it is a state the frame
-     * genuinely sits in, at boot and whenever the wire goes quiet.
-     *
-     * So ui_page_front.c's blank() now takes those two away with the bands they
-     * divide, and this check asks for what the page should be printing rather
-     * than for what it used to. The assertion that all seven land on their rows
-     * is unchanged for every pass that HAS a payload, which is where it was
-     * catching something. */
-    check_rule("A1 no data", "kicker",   UI_KICKER_RULE_Y,   UI_KICKER_RULE_W);
-    check_rule("A1 no data", "masthead", UI_MAST_RULE_Y,     UI_MAST_RULE_W);
-    check_rule("A1 no data", "dateline", UI_DATELINE_RULE_Y, UI_DATELINE_RULE_W);
-    check_rule("A1 no data", "ribbon",   UI_RIBBON_RULE_Y,   UI_RIBBON_RULE_W);
-    check_rule("A1 no data", "folio",    UI_TICKER_RULE_Y,   UI_TICKER_RULE_W);
-    want_blank("the no-data sheet's empty bands", UI_CONTENT_X, UI_LEAD_Y,
-               UI_CONTENT_R, UI_TICKER_RULE_Y);
+    check_rules("A1 no data");
+    want_blank("the no-data sheet's well", UI_CONTENT_X, UI_WELL_Y,
+               UI_CONTENT_R, UI_WELL_B);
+    want_ink("the tape says the board is waiting", UI_CONTENT_X, UI_TAPE_Y,
+             UI_CONTENT_R, UI_TAPE_Y + UI_TAPE_H);
 
     check_margins("A1 no data");
     check_masthead("A1 no data");
-    check_no_blue_yellow("A1 no data", NULL);
-    g_labs = 0;
-    walk("A1 no data", lv_screen_active(), 0, true);
+    check_colour_slots("A1 no data", NULL, 0);
+    check_yellow_sealed("A1 no data");
     check_label_overlap("A1 no data");
-    want_ink("the folio with no data", UI_CONTENT_X, UI_FOLIO_Y,
-             UI_CONTENT_R, UI_FOLIO_Y + UI_FOLIO_H);
 
     printf("%s — %d layout/glyph/colour problem(s)\n", g_fail ? "FAILED" : "ok", g_fail);
     return g_fail ? 1 : 0;

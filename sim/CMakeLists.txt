@@ -40,9 +40,11 @@ add_executable(sim
     ${CORE}/news_mock.c
     ${CORE}/news_service.c
     ${CORE}/ui_common.c
+    ${CORE}/ui_compose.c
     ${CORE}/ui_fit.c
     ${CORE}/ui_chart.c
     ${CORE}/ui_tile.c
+    ${CORE}/ui_modules.c
     ${CORE}/ui_news.c
     ${CORE}/ui_page_front.c
     ${CORE}/ui_page_markets.c

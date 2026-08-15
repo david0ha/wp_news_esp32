@@ -16,7 +16,7 @@ device holds no credentials worth stealing, and the only actions are "show the o
 | Method | Path | Body | Effect |
 |---|---|---|---|
 | GET | `/api/info` | — | discovery probe |
-| GET | `/api/state` | — | the device summary |
+| GET | `/api/state` | — | what the board is doing (not what the paper says) |
 | POST | `/api/refresh` | — | poll the news source now |
 | POST | `/api/page` | `{"page":0\|1}` | switch page — **a full refresh, twenty to thirty seconds** |
 | POST | `/api/news` | `{"url":"http://..."}` | change the snapshot URL (persisted, live) |
@@ -32,9 +32,9 @@ thirty seconds, flashes the whole sheet, and cannot be interleaved with another.
 in particular replies as soon as it is queued and then blocks the UI task for about a minute and a
 half.
 
-**There are two pages, not four.** `page` is `0` for A1, the front page, and `1` for A2, the markets
-page. Anything else is `page_range`. `POST /api/refresh` is safe to call repeatedly: the panel is
-only refreshed if what comes back differs from what is already on the glass.
+**There are two pages, not four.** `page` is `0` for A1, the front page, and `1` for A2, the
+company's accounts. Anything else is `page_range`. `POST /api/refresh` is safe to call repeatedly:
+the panel is only refreshed if what comes back differs from what is already on the glass.
 
 ## `GET /api/info`
 
@@ -47,6 +47,10 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
 
 ## `GET /api/state`
 
+**This describes the board, not the edition.** It answers "is it alive, what is it printing, and did
+the last poll work" — the three questions a control app exists to ask. The edition itself is at the
+URL in `source.url`, which the phone can fetch as easily as the board can.
+
 ```json
 {
   "deviceId": "1A2B", "model": "WP News", "fw": "0.1.0", "ip": "192.168.0.42",
@@ -54,17 +58,31 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
 
   "news": {
     "valid": true, "demo": false,
-    "edition": "PERSONAL PORTFOLIO EDITION",
+    "edition": "SEMICONDUCTORS",
     "generatedAt": "2026-08-14T05:12:00Z",
-    "stories": 6, "tickers": 16,
-    "lead": { "symbol": "NVDA",
-              "headline": "Nvidia's blowout quarter resets the AI trade" },
+
+    "subject": {
+      "symbol": "SNDK", "name": "Sandisk Corp.",
+      "exchange": "NASDAQ", "sector": "Semiconductors",
+      "lastCents": 24160, "changeBp": 421, "prevCloseCents": 23184,
+      "openCents": 23300, "highCents": 24505, "lowCents": 23110,
+      "wk52HighCents": 26900, "wk52LowCents": 8800
+    },
+
+    "counts": { "stories": 4, "figures": 22, "briefs": 6, "peers": 5,
+                "tables": 1, "charts": 2, "indices": 3, "thumbs": 2 },
+
+    "headlines": [
+      { "rank": 0, "headline": "Sandisk's memory squeeze finally shows up in the price" },
+      { "rank": 1, "headline": "The whole tape moved, but not this far" },
+      { "rank": 2, "headline": "Yokkaichi runs flat out into a fourth quarter of shortage" },
+      { "rank": 3, "headline": "The street raises its targets, quietly" }
+    ],
+
     "indices": [
-      { "symbol": "SPX",  "lastCents":  641283, "changeBp":   62 },
-      { "symbol": "NDX",  "lastCents": 2210455, "changeBp": -118 },
-      { "symbol": "DJI",  "lastCents": 4489012, "changeBp":   15 },
-      { "symbol": "KS11", "lastCents":  271844, "changeBp": -240 },
-      { "symbol": "VIX",  "lastCents":    1432, "changeBp":  530 }
+      { "symbol": "SPX", "lastCents": 641283, "changeBp":   62 },
+      { "symbol": "SOX", "lastCents": 582014, "changeBp":  187 },
+      { "symbol": "VIX", "lastCents":   1432, "changeBp": -530 }
     ]
   },
 
@@ -82,27 +100,29 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
 }
 ```
 
-That document is 794 bytes. The buffer is 1600, and `test_api_json` builds the worst case — every
-string at its maximum length, every character one the escaper doubles — and asserts it fits, printing
-the margin (currently **1315 of 1600**). The margin is checked rather than assumed because the
-overflow path returns `-1` and an **empty body**, so the symptom of being one byte over is "the app
-shows nothing" with no error anywhere.
+That document is 1,220 bytes. The buffer is `DEVICE_API_STATE_BUF_SZ`, 5120, and `test_api_json`
+builds the worst case — every string at its maximum length, every array at capacity, every character
+one the escaper expands to six — and asserts it fits, printing the margin (currently **4111 of
+5120**). The margin is checked rather than assumed because the overflow path returns `-1` and an
+**empty body**, so the symptom of being one byte over is "the app shows nothing" with no error
+anywhere.
 
-### This is a summary, not the front page
+### One company, and how a client tells one edition from another
 
-The phone does not need four bodies of copy and forty-eight candles. It needs to know the board is
-alive, what is on the glass, and whether the last poll worked. The full snapshot is available from
-the same URL the board polls, which the phone can reach too.
+Every edition is about a single listed company, so `news.subject` is the whole of what the board is
+about. It is also the cheapest "did the page change" check there is: poll it, and a new `symbol` or a
+new `generatedAt` means a new edition where an unchanged pair means the board is quietly doing its
+job. The old `news.lead` object, one symbol and one headline, is gone — every story on the sheet now
+names the same symbol, so repeating it per headline said nothing.
 
-So `news` carries the counts, the edition line, and the **lead** — one symbol and a headline cut to
-fit a 72-byte field, on a character boundary rather than mid-codepoint, because headlines arrive from
-a copy desk that emits em dashes and curly quotes and half a codepoint is not a short headline, it is
-a JSON string the app's parser rejects. The lead identifies the page better than any count does: it is how
-a client tells "polled fine, same page as an hour ago" from "polled fine, new front page".
+`headlines` is what the board actually set, in the order it set it, carrying the server's `rank`
+unchanged so a phone list sorts the way the paper reads. Each is cut to a 72-byte field on a
+**character** boundary rather than mid-codepoint: headlines arrive from a copy desk that emits em
+dashes and curly quotes, and half a codepoint is not a short headline, it is a JSON string the app's
+parser rejects. No `symbol` on a headline — see `subject`.
 
-`indices` is the whole ribbon, up to five cells, and the array is the one place the summary carries
-real market data. The name is not repeated — the symbol identifies the cell and the app already has a
-label for each — which is what buys the room for the lead's headline inside the same buffer.
+`indices` is the tape, up to five cells. The name is not repeated; the symbol identifies the cell and
+the app already has a label for each.
 
 **Every number is an integer.** `lastCents` is money in cents; `changeBp` is a percentage change in
 basis points (`bp = pct × 100`, so `62` is `+0.62%` and `-240` is `-2.40%`). Nothing on either side of
@@ -111,8 +131,29 @@ decimal point and emit JSON that strict parsers reject, and the class of bug is 
 than guarded. The client owns the decimal separator, the sign, and which of green and red goes with
 which — the firmware decides none of those here, because the two would drift.
 
+`subject.wk52HighCents` and `wk52LowCents` are **`0` when unknown**, which is not a price of nothing.
+The sheet draws an unknown bound as absent rather than pinning the current price to one end of a
+range that starts at zero, and a client should do the same.
+
+### `counts`, and why the dossier is not here
+
+`counts` is what arrived, **after parsing**. It is the difference between "the producer filed a thin
+day" and "the parser dropped something", which is a distinction no other field can make: a producer
+that sent forty figures learns here that twenty-eight of them landed.
+
+The figures themselves do not travel, and their absence is a decision rather than an oversight.
+Carrying the dossier — twenty-eight preformatted values, at the widths the escaper can expand
+sixfold — put the worst-case document at 15,092 bytes and cost 16 KB of `.bss` for the life of the
+board, because `device_api.c` serialises into a file static that exists whether anyone polls or not.
+The dossier is what the *paper* is for; a reader who wants the figures is standing in front of them.
+If a later version does want them on a phone, they get an endpoint of their own that builds the
+response on demand rather than a line item on every dashboard poll.
+
+Same argument, shorter, for `briefs`, `peers`, `tables`, `charts` and `thumbs`: a count each.
+
 The fields the old vault dashboard reported — `notes`, `links`, `orphans`, `tags`, `agents`,
-`recent`, `inbox` — are **gone**, along with the four page indices they went with. So is
+`recent`, `inbox` — are **gone**, along with the four page indices they went with, and so are
+`news.stories` / `news.tickers` (now `counts.stories`; there is no watchlist to count). So is
 `panel.partialChain` / `fullRefreshMs` / `partialRefreshMs`: Spectra 6 has one kind of refresh, so
 there is one number.
 
@@ -126,9 +167,13 @@ page. Those three point at three different mistakes, which is why they are not o
 `source.ageSeconds` is **`-1` when no fetch has ever succeeded**, which is different from "zero
 seconds ago". A client that treats it as a number draws a board that just synced when it never has.
 
-`news.demo` is not an error state. A board with no URL renders the built-in demo front page, which is
-a complete and intentional configuration; `POST /api/news` with `{"url":""}` puts it back there
+`news.demo` is not an error state. A board with no URL renders the built-in demo edition, which is a
+complete and intentional configuration; `POST /api/news` with `{"url":""}` puts it back there
 deliberately.
+
+`news.valid` is `false` before the first successful parse, and everything under `news` is then empty
+rather than missing — an empty `subject`, empty arrays, zero counts. A client that has to tell "no
+key" from "no news" has two states to handle where the board only ever has one.
 
 **`panel.refreshMs` is not decoration.** The whole refresh policy — one refresh per changed snapshot,
 none for a clock tick, no partial anything — rests on "twenty to thirty seconds", and that figure is
@@ -142,7 +187,7 @@ this server is answering, the number is a real measurement and not a zero.
 ```bash
 curl -s http://wpnews.local/api/state | jq
 
-curl -X POST http://wpnews.local/api/page -d '{"page":1}'     # A2, the markets page
+curl -X POST http://wpnews.local/api/page -d '{"page":1}'     # A2, the accounts
 curl -X POST http://wpnews.local/api/refresh
 curl -X POST http://wpnews.local/api/news \
      -d '{"url":"http://mymac.local:8123/news.json"}'
@@ -153,8 +198,11 @@ curl -X POST http://wpnews.local/api/news -d '{"url":""}'
 # what a refresh actually costs on this board
 curl -s http://wpnews.local/api/state | jq .panel
 
-# the lead story, which is the cheapest "did the edition change" check there is
-curl -s http://wpnews.local/api/state | jq .news.lead
+# which company is on the glass — the cheapest "did the edition change" check there is
+curl -s http://wpnews.local/api/state | jq '.news.subject.symbol, .news.generatedAt'
+
+# what the board received against what the producer thinks it filed
+curl -s http://wpnews.local/api/state | jq .news.counts
 ```
 
 ## Where the contract is defined
@@ -183,11 +231,12 @@ collects the Wi-Fi credentials and the news URL, saves them to NVS, and reboots.
 is the TypeScript mirror of this document and the only file in the app that knows a field name, so a
 change here is a change there.
 
-> **`app/src/lib/esp32.ts` has not yet been updated for the front page.** It still parses `notes`,
-> `links`, `orphans`, `agents`, `recent` and `inbox` out of `state.news`, still declares
-> `panel.partialChain`, and still documents `page` as `0=stats 1=graph 2=agents 3=notes`. Against the
-> current firmware every one of those reads `0` and the page names are wrong. This document describes
-> what the device serves; the app is the thing that has to catch up.
+> **`app/src/lib/esp32.ts` has not been updated for any of this.** Its `NewsSummary` still parses
+> `notes`, `links`, `orphans`, `agents`, `recent` and `inbox` out of `state.news`, its `PanelInfo`
+> still declares `partialChain` / `fullRefreshMs` / `partialRefreshMs`, and it still documents `page`
+> as `0=stats 1=graph 2=agents 3=notes`. Against the current firmware every one of those reads `0`
+> and the page names are wrong. It has never seen `subject`, `counts` or `headlines`. This document
+> describes what the device serves; the app is the thing that has to catch up.
 
 Two things in the app are worth knowing about when changing this contract:
 

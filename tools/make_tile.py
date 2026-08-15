@@ -39,8 +39,8 @@ Raw bytes, no header: `h` rows of `w/2` bytes, row-major, two pixels per byte, *
 high nibble**. That is the framebuffer's own layout (epd6_transpose.h), so the blit is a memcpy
 per row — which is why `w` and the destination x must both be even.
 
-    python3 tools/make_tile.py photo.jpg --out tiles/nvda_hq.bin -W 1140 -H 360
-    python3 tools/make_tile.py scan.png   --out tiles/doc.bin     -W 558 -H 300 --halftone
+    python3 tools/make_tile.py photo.jpg --out tiles/lead.bin  -W 1140 -H 320 --halftone
+    python3 tools/make_tile.py thumb.jpg --out tiles/inside.bin -W 364 -H 204 --halftone
 """
 
 import argparse

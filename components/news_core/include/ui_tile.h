@@ -46,6 +46,42 @@ extern "C" {
 /* news_photo_t::id's own width — the two must match, since one names the other. */
 #define UI_TILE_ID_MAX 16
 
+/*
+ * HOW MANY PICTURES ARE ALIVE AT ONCE, AND WHY THAT IS THE NUMBER THAT MATTERS
+ * ---------------------------------------------------------------------------
+ * This was a ONE-ENTRY cache while a page drew one picture, and the header said
+ * so: the returned pointer was valid only until the next call that loaded a
+ * different tile. The composed front page draws a photograph across the top and
+ * two more in the box at its foot, so that contract would have handed a page
+ * three pointers of which only the last was still allocated — and LVGL keeps the
+ * pointer in an lv_image_dsc_t and dereferences it at RENDER time, so the
+ * failure would have appeared as garbage on the glass, several calls away from
+ * the mistake.
+ *
+ * The live set is not "the pictures on the page" but "the pictures on BOTH
+ * pages", because A1 and A2 both exist as widget trees the whole time and the
+ * router only shows and hides them. So the number to size against is every tile
+ * either page can name at once, and the eviction rule has to be safe across the
+ * moment when a new snapshot re-points one page and has not yet reached the
+ * other.
+ *
+ * It is, and this is the invariant the whole design rests on: ui_news_set_data()
+ * pushes a snapshot into BOTH pages before anything renders, so by the time a
+ * frame is drawn every widget on both sheets has been re-pointed at whatever is
+ * resident now. Eviction can therefore only ever free bytes that no widget will
+ * be asked to draw. Break that ordering — render between the two page updates —
+ * and this stops being true.
+ *
+ * Eight slots and three megabytes: a 1140x320 lead is 912 KB on its own (the
+ * RGB565 copy is two bytes a pixel and dwarfs the 4 bpp codes), the two thumbs
+ * are about 186 KB each, and there is 8 MB of PSRAM next to a 960 KB
+ * framebuffer. A request that fits in neither budget is a MISS, not an eviction
+ * of something live — a page reflowing without a picture is an ordinary front
+ * page and a dangling pointer is not.
+ */
+#define UI_TILE_SLOTS   8
+#define UI_TILE_BUDGET  (3u * 1024u * 1024u)
+
 typedef struct {
     char id[UI_TILE_ID_MAX];
     int  w, h;
@@ -70,19 +106,34 @@ void ui_tile_set_base(const char *news_url);
 /*
  * The tile for `id` at exactly `w` x `h`, or NULL.
  *
- * A hit is a pointer comparison. A miss loads: over HTTP from the base above,
- * or out of the simulator's tile directory when there is no base. One id is
- * tried once — a failure is remembered until the next ui_tile_set_base() — so a
- * page that repaints every five minutes does not re-GET a picture that is not
- * there.
+ * A hit is a string and dimension comparison against the resident set. A miss
+ * loads: over HTTP from the base above, or out of the simulator's tile directory
+ * when there is no base. One id is tried once — a failure is remembered until
+ * the next ui_tile_set_base() — so a page that repaints every five minutes does
+ * not re-GET a picture that is not there.
  *
- * The returned pointer stays valid until the next call that loads a different
- * tile, which on a page that draws one picture is until the picture changes.
+ * **The returned pointer stays valid for the whole of one page build**, and in
+ * fact until a later build needs the room. Ask for every picture a page draws,
+ * hold all the pointers, blit in any order; there is no need to copy the bytes
+ * out and no need to order the blits defensively. See the note on UI_TILE_SLOTS
+ * above for the exact bound and the ordering it depends on.
+ *
+ * NULL is an ordinary condition and not an error: a slow wire, an id that went
+ * stale between the JSON and the GET, a length that disagrees with w*h/2, or a
+ * picture too large for the remaining budget. The page reflows without it.
  */
 const ui_tile_t *ui_tile_get(const char *id, int w, int h);
 
-/* Forget the resident tile and free it. */
-void ui_tile_drop(void);
+/* Forget every resident tile and free them.
+ *
+ * Nothing on the device calls this in normal operation — a tile that is still
+ * wanted is cheaper to keep than to re-fetch over the wire, and the budget above
+ * is what bounds the cost. It exists so a test can start from a known heap, and
+ * so a future low-memory path has one call to make. Any pointer handed out by
+ * ui_tile_get() is dead afterwards, so nothing may be on screen that was drawn
+ * from one.
+ */
+void ui_tile_drop_all(void);
 
 #ifdef __cplusplus
 }

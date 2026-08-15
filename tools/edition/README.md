@@ -5,16 +5,21 @@ directory, and the contract between it and the firmware is one JSON file plus so
 polls a URL; anything that can serve that URL works, so the least machinery that can produce it wins.
 
 Twice a day, `file-edition.sh` wakes Claude Code headless, hands it
-[`PROMPT.md`](PROMPT.md) — the desk's standing instructions — and lets it research the symbols the
-owner named and write a front page into `$EDITION_DIR` (default `~/.wpnews/edition`):
+[`PROMPT.md`](PROMPT.md) — the desk's standing instructions — and lets it research **one company**
+and write a two-page edition into `$EDITION_DIR` (default `~/.wpnews/edition`):
 
 ```
 ~/.wpnews/edition/
-  watchlist.json        what to report on          (you write this)
-  news.json             the front page             (the desk writes this)
-  tiles/<id>.bin        one 4 bpp tile per photo   (the desk writes these)
-  log/                  a week of transcripts and filed editions
+  watchlist.json        the candidates and the rotation   (you write this)
+  news.json             the edition                       (the desk writes this)
+  tiles/<id>.bin        one 4 bpp tile per picture        (the desk writes these)
+  log/                  a week of transcripts, filed editions and proof sheets
 ```
+
+**One company an edition.** A1 is why the price moved, whether the tape moved with it, what else
+happened to the company this week, and its numbers in a rail down the side; A2 is the same
+company's accounts. This is not a portfolio digest — the sixteen-quote watchlist the earlier
+version printed is gone, and a reader who wants a table of quotes is holding the wrong object.
 
 `news.json` is [the contract](../../docs/news-contract.md). The desk writes it **last** and writes
 it atomically — to `news.json.tmp`, then rename — because the board may poll mid-write and a
@@ -27,18 +32,19 @@ previous edition and badges it `STALE`, but a whole wasted cycle is not.
 writes a default if it is missing.
 
 ```json
-{ "holdings": ["NVDA", "AAPL", "MSFT"],
-  "watch":    ["AMD", "TSM", "AVGO", "COST", "XOM"],
-  "indices":  ["SPY", "QQQ", "DIA", "IWM", "VIX"] }
+{ "symbols": ["NVDA", "AAPL", "MSFT", "AMD", "TSM", "AVGO"],
+  "last":    "AAPL" }
 ```
 
-The three keys map onto three places on the sheet. `holdings` are the owner's own positions and get
-the portfolio rail in band 6; `watch` fills the quotation table in band 7; `indices` fill the five
-cells of the ribbon across the top. The board reads that split off the **order** of `tickers[]` in
-the payload — the first eight go to the rail, the next eight to the table — so `holdings` first and
-`watch` after is not a convention, it is the wire format.
+The desk takes the next symbol after `last`, wrapping, and updates `last` when it files — so the
+board works through the list a company at a time. It is allowed to break the rotation when one of
+the others did something that genuinely outranks it: an earnings print, a guide, a downgrade that
+moved the stock several percent. A newspaper covers what happened.
 
-Sixteen quotes and five indices is the page full. More than that is dropped by the parser.
+**The board never chooses.** It prints the company the payload names, which is the same rule the
+rest of this system runs on: the server decides what is important, the device decides what fits.
+Moving the selection into the firmware would put an editorial decision on the one machine with no
+way to research it.
 
 ## Filing one edition by hand
 
@@ -54,22 +60,96 @@ the whole transcript lands in `$EDITION_DIR/log/`, which is where a filing that 
 explains itself.
 
 The tool allowlist is narrow rather than `--dangerously-skip-permissions`: reads and writes, search,
-the Alpaca MCP tools, and exactly two scripts — `tools/make_tile.py` and `tools/mock_news_server.py`.
-The desk needs nothing else.
+the Alpaca MCP tools, and exactly three scripts — `tools/make_tile.py`, `tools/mock_news_server.py`
+and `tools/edition/render-check.sh`. The desk needs nothing else.
 
-Before it reports success the script runs
+## The desk sets the type before it files
+
+This is the part that is easy to skip and the part that matters most. **The desk cannot see the
+paper.** It writes JSON; twenty minutes later a panel on a wall spends twenty-five seconds turning
+that JSON into type, and if the lead headline was four characters too long the reader gets an
+ellipsis in the middle of a sentence and nobody finds out. Validating the schema does not catch
+that. Only setting the type catches it.
+
+So `PROMPT.md` requires, and `file-edition.sh` re-runs as a gate:
+
+```bash
+tools/edition/render-check.sh "$EDITION_DIR/news.json"
+```
+
+That runs the **real typesetter** — the same `news_core`, the same seven faces, the same
+compositor, the same six-ink quantizer the firmware runs — over the candidate payload at the
+panel's real 1200 × 1600, and leaves both sheets as PNGs. It fails what the build fails: a missing
+glyph, a rule off its row, ink outside the margin, a module that rendered nothing, a label wider
+than its slot, a masthead over 1140 px, blue or yellow reaching the glass, a composition that does
+not tile the well. Anything it lets through will print.
+
+Then the desk is told to **look at the sheets** — it can see images — because the mechanical checks
+cannot tell it that a column ran short, that a headline broke on the wrong word, that the page is
+grey because nothing on it is set larger than a deck, or that the photograph halftoned to mush.
+
+Before that it still runs
 
 ```bash
 python3 tools/mock_news_server.py --validate "$EDITION_DIR/news.json"
 ```
 
-which checks what the device checks plus the length budget the device *cannot* check, because the
-device ellipsizes rather than failing. A headline four characters over budget is not a validation
-error on the board, it is a `…` in the middle of a sentence six hours later.
+which is the cheap check: the schema, the length budget, and the tiles. Both run, because they fail
+different things and the fast one gives a better error message.
 
-It then copies the edition into `log/` and deletes anything there older than seven days. The board
-only ever reads the current one, but when a page comes out wrong the question is always "what
-changed since yesterday", and that needs yesterday.
+It **fails** on anything that will be wrong on the glass: a headline or deck past the measure it is
+set in, a string past the C array that carries it, a chart index naming a chart that was not sent, a
+tile that is missing or the wrong size, a character the fonts cannot draw, a payload the device would
+reject outright.
+
+Two limits sit behind each field. The **character** budget is what a copy desk can act on, and it is
+counted in characters because an em dash is one character of measure — failing a headline for being
+three bytes over when it sets perfectly well would be worse than not checking. The **byte** capacity
+is the fixed array in `news_model.h`, and it is the failure with nothing to show for it:
+`news_str_copy()` trims and the value simply stops, where an over-long headline at least prints a
+visible `…`. It should essentially never fire for ASCII; when it does, the payload carried
+typography, which is exactly the case where the character count looks fine and the field runs out.
+
+Six of `PROMPT.md`'s numbers **warn** rather than fail — kicker, brief text, figure label, figure
+value, column header, table cell. Those are margins held inside their arrays, not limits, so a field
+a character or two past one of them still typesets on most days.
+
+**Which make-up is the tight one is not the same for every field**, so where it matters `PROMPT.md`
+says so on the row itself rather than this file asserting it once for all six. The dossier is no
+longer a fixed 170 px column: it is one column when it stands as the rail beside a body and wider
+when the day gives it more, and the figures change *face* as well as measure when it does — so a
+wider rail is not automatically a more forgiving one. A budget reasoned from any single width would
+be true of one make-up and quietly false of the other. `sim --measure` is the authority on what a
+face sets at a width, and neither this file nor `PROMPT.md` keeps its own copy.
+
+Failing there would leave yesterday's page on the glass over a house-style preference, which is this
+project's own policy — clamp, do not reject — inverted.
+
+They still fail if they overrun the array behind them, and that is the division worth remembering:
+**the array is the contract and fails; the margin is the house style and warns.**
+
+It looks for each picture at `<the payload's directory>/tiles/<id>.bin` and holds it to exactly
+`w * h / 2` bytes, which is the layout `file-edition.sh` files an edition in. The one payload that
+does not live that way is the committed fixture — its pictures are in `sim/tiles/`, because that is
+where the simulator reads them from — so it is checked with the base overridden:
+
+```bash
+python3 tools/mock_news_server.py \
+    --validate components/news_core/test/host/fixtures/news.json --tiles sim/tiles
+```
+
+`--tiles` exists only for that. A real edition gets the strict default, because a desk that wrote
+`news.json` and never made the pictures is exactly what this catches, and a missing `tiles/`
+directory is that failure rather than a reason to skip the check.
+
+The same validation guards `--write-fixture`, tiles included: the fixture is what `test_news_mock`
+holds `news_mock.c` against, so one describing pictures nobody packed would make the demo edition
+quietly wrong until somebody looked at a screenshot.
+
+The script then copies the edition **and its proof sheets** into `log/` and deletes anything there
+older than seven days. The board only ever reads the current one, but when a page comes out wrong
+the question is always "what changed since yesterday" — and that answer is usually visible rather
+than in the JSON.
 
 ## Installing the two agents
 

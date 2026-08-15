@@ -18,12 +18,27 @@ extern "C" {
 
 /* Buffer sizes the server must allocate. They live here rather than in
  * device_api.c so the host tests can assert that a WORST-CASE state document —
- * every string at its maximum length — actually fits. A 128-character news URL
- * plus a long Korean page title is not a hypothetical; it is one paste away,
- * and the overflow path returns -1 and an empty body, so the symptom would be
- * "the app shows nothing" with no error anywhere. */
-#define DEVICE_API_STATE_BUF_SZ  1600
-#define DEVICE_API_INFO_BUF_SZ    256
+ * every string at its maximum length, every array at capacity — actually fits.
+ * The overflow path returns -1 and an empty body, so the symptom of being one
+ * byte over is "the app shows nothing" with no error anywhere. A 128-character
+ * news URL beside a full company name is not a hypothetical; it is one paste
+ * away.
+ *
+ * Measured worst case is **4,111 bytes** (test_api_json.c prints it on every
+ * run), and the multiplier that gets it there is the escape: a C0 control with
+ * no short form becomes `\u00XX`, six bytes out of one, and cJSON hands the
+ * parser a raw 0x01 for any producer that wrote one. Sizing for the two-byte
+ * escape instead would hold every payload anyone files by accident and blank
+ * the app on the one nobody expected, which is the failure this whole file is
+ * arranged against.
+ *
+ * device_api.c allocates both as file statics — one httpd task serializes one
+ * response at a time — so this is .bss for the lifetime of the board, not per
+ * request, which is why the document is control state and not a copy of the
+ * page. Carrying the dossier put the same number at 15,092 and the buffer at
+ * 16 KB; see device_api_model.h for why it does not. */
+#define DEVICE_API_STATE_BUF_SZ   5120
+#define DEVICE_API_INFO_BUF_SZ     256
 
 /* GET /api/info -> {"deviceId","model","fw","ip"}
  *
