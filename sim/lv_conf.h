@@ -40,7 +40,19 @@
  * - LV_STDLIB_RTTHREAD:    RT-Thread implementation
  * - LV_STDLIB_CUSTOM:      Implement the functions externally
  */
-#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
+/*
+ * BUILTIN rather than CLIB, and the reason is a test rather than a preference.
+ *
+ * Under CLIB every lv_malloc() is the host's malloc(), which on a desktop never
+ * refuses — so the simulator could render the whole sheet without ever noticing
+ * that the same page does not fit in the memory the device gives LVGL. It did
+ * not notice: the front page needs three times the 64 KB pool the firmware used
+ * to configure, the simulator passed every layout, glyph and colour check, and
+ * the board crashed on the first boot inside lv_obj_class_create_obj() with
+ * nothing in the log to say why. The builtin allocator is the one that can be
+ * asked how much it handed out, and check_lvgl_budget() in main_sim.c asks.
+ */
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
 
 /** Possible values
  * - LV_STDLIB_BUILTIN:     LVGL's built in implementation
@@ -68,8 +80,17 @@
 #define LV_STDARG_INCLUDE       <stdarg.h>
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
-    /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
-    #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] */
+    /*
+     * Deliberately far larger than the page needs, and NOT the device's figure.
+     *
+     * The pool here exists so the run completes and the high-water mark can be
+     * read off it; the actual ceiling is asserted by check_lvgl_budget(), which
+     * is where the number that matters lives. Sizing this pool to the budget
+     * instead would turn an overrun into a segfault inside LVGL — the same
+     * unreadable crash this whole check exists to replace — rather than into a
+     * FAIL line that says how many bytes over it went.
+     */
+    #define LV_MEM_SIZE (1024 * 1024U)          /**< [bytes] */
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
     #define LV_MEM_POOL_EXPAND_SIZE 0
