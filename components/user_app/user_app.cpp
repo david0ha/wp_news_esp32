@@ -186,6 +186,30 @@ void UserApp_UiInit(void)
         lv_obj_delete(prev);
     }
     ui_news_create(s_screen);
+
+    /* What the page actually cost, on the board, once.
+     *
+     * The simulator holds an LVGL budget (check_lvgl_budget) and its own comment
+     * says the number it measures is a HOST figure and an over-estimate — this
+     * binary is 64-bit and every pointer inside an lv_obj_t is twice the width
+     * it is here. It then points at "lv_mem_monitor()'s max_used on the board"
+     * as where the real figure comes from, and nothing on the board printed it.
+     * The only LVGL memory line the firmware had was the one in lvgl_mem_psram's
+     * oom(), which by construction only ever appears when it is already too
+     * late.
+     *
+     * So it is printed here, at the one moment it means something: every widget
+     * both pages will ever own has just been created, and nothing is created in
+     * an update after this. docs/bring-up.md asks for this number to be
+     * recorded; this is the line to read it off. */
+    {
+        lv_mem_monitor_t m;
+        lv_mem_monitor(&m);
+        ESP_LOGI(TAG, "LVGL widgets built: %u B held, %u B peak, %u B free in "
+                      "the pool",
+                 (unsigned)(m.total_size - m.free_size),
+                 (unsigned)m.max_used, (unsigned)m.free_size);
+    }
 }
 
 /* --- presenting (UiTask only) --------------------------------------------- */

@@ -1456,6 +1456,89 @@ static void check_page(const char *pass, ui_page_t page, const news_t *v)
     check_label_overlap(pass);
 }
 
+/* --- the LVGL memory budget ------------------------------------------------
+ *
+ * The check that was missing, and the one that cost the most to find without.
+ *
+ * ui_news_create() builds BOTH pages, both badges and the provisioning overlay
+ * up front and keeps every handle — that is the design, and it is what makes a
+ * page change a widget update rather than a rebuild. It also means the whole
+ * sheet's worth of widgets is resident from the first boot, and on a device
+ * that is a fixed cost the firmware has to have somewhere to put.
+ *
+ * It did not. The firmware configured LVGL's default 64 KB pool in internal
+ * .bss, the page needs several times that, and the board crashed inside
+ * lv_obj_class_create_obj() on the first boot — the function reallocates the
+ * parent's child array and stores into the result WITHOUT CHECKING IT, so an
+ * exhausted heap arrives as a StoreProhibited on a small address in whichever
+ * widget happened to be next, and nothing in the log names memory at all. The
+ * simulator passed every check on the same code, because it was linked against
+ * the host's malloc() and the host's malloc() does not run out.
+ *
+ * THE NUMBER BELOW IS A HOST FIGURE, NOT A DEVICE ONE. This binary is 64-bit,
+ * so every pointer inside an lv_obj_t is twice the width it is on the ESP32-S3
+ * and the measurement here is an over-estimate of what the device allocates.
+ * That is the useful direction to be wrong in for a ceiling — a page that fits
+ * here fits there — but it does mean this budget cannot be read as "the device
+ * will use N bytes". The device's own figure is what docs/bring-up.md asks to
+ * be recorded, and lv_mem_monitor()'s max_used on the board is where it comes
+ * from.
+ *
+ * So the budget is not a prediction. It is a ratchet: it says the page costs
+ * about what it costs today, and a change that quietly doubles it has to say so
+ * here first.
+ */
+/* 448 KB. It was 256 KB against a measured peak of ~203 KB, and the compositor
+ * passes took it to 424,440 B — a little over double.
+ *
+ * THE RATCHET WORKED, WHICH IS WHY THIS COMMENT EXISTS. The merge that brought
+ * the two together was textually clean: one additive conflict in this file, both
+ * sides kept. Nothing about the page was broken. What failed was this assertion,
+ * on the first run after the merge, saying the page now costs twice what it did
+ * — which is exactly the thing it was added to make impossible to ship quietly.
+ *
+ * WHERE IT WENT, measured rather than assumed. 391,184 B of the 424,440 is
+ * allocated by ui_news_create() before a single page is rendered; the render
+ * adds about 33 KB and gives it back. So this is the static widget pool and not
+ * a leak, and the rule that nothing is created in an update still holds. The
+ * pool grew because the page did: a compositor that lays out BOTH sheets from
+ * module renderers, two drawn statements, and a metric grid sized for the
+ * model's maximum — UI_DOSSIER_GROUPS heads and NEWS_FIGURES_MAX figures at
+ * three widgets each is about a hundred objects, and each page builds one.
+ *
+ * THIS IS STILL A HOST FIGURE AND STILL AN OVER-ESTIMATE, for the reason the
+ * note above gives: 64-bit pointers throughout an lv_obj_t. The device number is
+ * smaller and is the one that decides whether the board is fine, and the board
+ * now prints it — user_app.cpp logs lv_mem_monitor() the moment the widgets are
+ * built, which it did not do when this budget was written. Record that figure in
+ * docs/bring-up.md and set this from it.
+ *
+ * Until then 448 KB is the honest ceiling: the measurement plus about 5% of head
+ * room, which is tight enough that the next doubling still has to argue for
+ * itself. On the device this lands in PSRAM — 8 MB of it, against a 960 KB
+ * framebuffer — so the cost is real but it is not what constrains this board. */
+#define UI_LVGL_BUDGET_BYTES  458752u     /* 448 KB; measured peak 424,440 B */
+
+static void check_lvgl_budget(void)
+{
+    lv_mem_monitor_t m;
+    lv_mem_monitor(&m);
+
+    printf("LVGL heap: %u B peak of a %u B budget (host figure — see "
+           "check_lvgl_budget)\n",
+           (unsigned)m.max_used, (unsigned)UI_LVGL_BUDGET_BYTES);
+
+    if (m.max_used > UI_LVGL_BUDGET_BYTES) {
+        FAILV("the UI's LVGL heap peaked at %u B, over the %u B budget by %u B "
+              "— raise UI_LVGL_BUDGET_BYTES only with a device measurement to "
+              "back it, or the board runs out of PSRAM instead of paper",
+              (unsigned)m.max_used, (unsigned)UI_LVGL_BUDGET_BYTES,
+              (unsigned)(m.max_used - UI_LVGL_BUDGET_BYTES));
+    }
+}
+
+/* --- main ----------------------------------------------------------------- */
+
 /* One payload, both pages, named so `ls` prints them in reading order. */
 static void pass(const char *dir, const char *tag, int seq, const news_t *v)
 {
@@ -2312,6 +2395,11 @@ int main(int argc, char **argv)
     check_yellow_sealed("A1 no data");
     check_label_overlap("A1 no data");
 
-    printf("%s — %d layout/glyph/colour problem(s)\n", g_fail ? "FAILED" : "ok", g_fail);
+    /* Last, so the high-water mark covers every page, badge and overlay this
+     * run built — including the ones only these late passes reach. */
+    check_lvgl_budget();
+
+    printf("%s — %d layout/glyph/colour/memory problem(s)\n",
+           g_fail ? "FAILED" : "ok", g_fail);
     return g_fail ? 1 : 0;
 }

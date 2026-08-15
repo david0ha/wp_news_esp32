@@ -127,6 +127,26 @@ static epd6_pins_t         s_pins;
 static bool                s_ready;
 static int                 s_last_refresh_ms;
 
+/*
+ * What the last DRF actually did, kept so the refresh log can say it.
+ *
+ * `refresh N ms` alone is not enough to act on. A refresh is a 960,000-byte SPI
+ * push at 10 MHz — about 0.8 s of wire — plus a handful of fixed settles, plus
+ * the waveform, and only the last of those is supposed to be the twenty to
+ * thirty seconds. A total that comes in near a second is a panel that never ran
+ * its waveform, and it is indistinguishable in the old log line from a panel
+ * that did. See docs/bring-up.md §4, which asks for these numbers.
+ */
+static int                 s_drf_wait_ms;
+static bool                s_drf_saw_busy;
+static bool                s_drf_busy_immediate;
+
+/* The same, for the hardware reset — see hw_reset() for why RST is the line
+ * whose answer separates a missing panel from a mute one. */
+static int                 s_rst_wait_ms;
+static bool                s_rst_saw_busy;
+static bool                s_rst_busy_immediate;
+
 /* --- low level ------------------------------------------------------------ */
 
 static inline void pin(int gpio, int level)
@@ -188,20 +208,48 @@ static void wr_both(uint8_t cmd, const uint8_t *data, size_t len)
  * *this* panel reads the pin alone, and a 0x71 issued while the slave select is
  * low would reach both controllers at once. Follow Seeed here.
  */
-static bool wait_busy(int timeout_ms)
+/*
+ * The same wait, with two facts recorded about it.
+ *
+ * `wait_busy()` cannot tell "the panel refreshed and finished" from "the panel
+ * never started" — both end with BUSY reading HIGH, and both return true. On a
+ * refresh that is supposed to take twenty to thirty seconds that difference is
+ * the whole diagnosis, so the DRF step uses this instead: `saw_low` says
+ * whether BUSY was ever observed asserted, and `waited_ms` says for how long.
+ *
+ * A caveat this is worth stating rather than papering over: the loop delays
+ * before its first sample, so `saw_low == false` means "BUSY was already high
+ * 10 ms after the command", which is a panel that did not start OR a panel that
+ * started and finished inside 10 ms. Only one of those is possible on Spectra 6,
+ * which is exactly why the reading is worth having.
+ */
+static bool wait_busy_watched(int timeout_ms, bool *saw_low, int *waited_ms)
 {
-    int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    const int64_t t0 = esp_timer_get_time();
+    const int64_t deadline = t0 + (int64_t)timeout_ms * 1000;
+
+    *saw_low = false;
     for (;;) {
         ms(10);
         if (gpio_get_level((gpio_num_t)s_pins.busy) == 1) {
+            *waited_ms = (int)((esp_timer_get_time() - t0) / 1000);
             return true;
         }
+        *saw_low = true;
         if (esp_timer_get_time() > deadline) {
+            *waited_ms = (int)((esp_timer_get_time() - t0) / 1000);
             ESP_LOGE(TAG, "BUSY stuck low for %d ms — panel wired and powered?",
                      timeout_ms);
             return false;
         }
     }
+}
+
+static bool wait_busy(int timeout_ms)
+{
+    bool saw_low;
+    int  waited_ms;
+    return wait_busy_watched(timeout_ms, &saw_low, &waited_ms);
 }
 
 static void hw_reset(void)
@@ -211,8 +259,20 @@ static void hw_reset(void)
     pin(s_pins.rst, 0);
     ms(20);
     pin(s_pins.rst, 1);
+    /*
+     * Sample BUSY before the settle, not after it.
+     *
+     * RST is the one line that reaches the controllers without going through
+     * SPI, DC or either chip select, so whether BUSY answers it is the single
+     * bit that separates "no panel, no power, or an unseated FPC" from "the
+     * panel is there and powered but the commands are not landing". A UC8179
+     * pulls BUSY low while it comes out of reset; the 20 ms settle below is
+     * long enough to miss that entirely, which is why this read is here and
+     * not after it.
+     */
+    s_rst_busy_immediate = (gpio_get_level((gpio_num_t)s_pins.busy) == 0);
     ms(20);
-    wait_busy(BUSY_MS_RESET);
+    wait_busy_watched(BUSY_MS_RESET, &s_rst_saw_busy, &s_rst_wait_ms);
 }
 
 static void power_on(void)
@@ -381,7 +441,12 @@ static void update_panel(void)
 
     slave_sel(true);
     wr(CMD_DRF, DRF_V, sizeof DRF_V);
-    wait_busy(BUSY_MS_REFRESH);             /* twenty to thirty seconds */
+    /* Read the pin before the wait's own first delay: a UC8179 asserts BUSY
+     * within microseconds of accepting DRF, so this sample is the earliest
+     * evidence that the command was taken at all, and it is free. */
+    s_drf_busy_immediate = (gpio_get_level((gpio_num_t)s_pins.busy) == 0);
+    wait_busy_watched(BUSY_MS_REFRESH,      /* twenty to thirty seconds */
+                      &s_drf_saw_busy, &s_drf_wait_ms);
     slave_sel(false);
     ms(30);
 
@@ -534,7 +599,44 @@ void epd6_refresh(void)
     power_off();
 
     s_last_refresh_ms = (int)((esp_timer_get_time() - t0) / 1000);
-    ESP_LOGI(TAG, "refresh %d ms", s_last_refresh_ms);
+    ESP_LOGI(TAG, "refresh %d ms — of which the DRF wait was %d ms",
+             s_last_refresh_ms, s_drf_wait_ms);
+
+    /* The waveform is the only part of a refresh that takes seconds, so a DRF
+     * wait that returned without ever seeing BUSY asserted means the sheet did
+     * not change, whatever the framebuffer holds. It is worth a line of its own
+     * because the failure is otherwise completely silent: every wait returns,
+     * every call succeeds, and the panel simply keeps the image it had. */
+    if (!s_drf_saw_busy && !s_drf_busy_immediate) {
+        ESP_LOGW(TAG, "DRF returned in %d ms and BUSY was never seen asserted — "
+                      "the panel did not run its waveform. Expect the sheet to "
+                      "be unchanged or torn.", s_drf_wait_ms);
+
+        /*
+         * RST reaches the controllers without SPI, DC or either chip select.
+         * If BUSY answered it, the panel is present, powered and wired on those
+         * two lines, and what is failing is further along — the commands. If it
+         * did not, nothing is listening at all and no amount of driver work
+         * changes that. Saying which one it is here saves the reader the
+         * afternoon that telling them apart otherwise costs.
+         */
+        if (s_rst_saw_busy || s_rst_busy_immediate) {
+            ESP_LOGW(TAG, "...but BUSY DID answer the hardware reset (%d ms). "
+                          "The panel is present and powered, so suspect the "
+                          "command path: MOSI/SCLK/DC, or CS1 (GPIO%d), or the "
+                          "init sequence — not the FPC.",
+                     s_rst_wait_ms, s_pins.cs_slave);
+        } else {
+            ESP_LOGW(TAG, "...and BUSY did not answer the hardware reset either. "
+                          "Nothing is driving it: check the FPC orientation and "
+                          "latch, and that PWR_EN (GPIO%d) really brings the "
+                          "panel's 3.3 V up.", s_pins.power);
+        }
+        ESP_LOGW(TAG, "BUSY is GPIO%d, active LOW. A board-level pull-up holds "
+                      "it high with the FPC unseated, which also satisfies "
+                      "busy_line_probe() — so 'both controllers idle' at init "
+                      "is not proof the panel is answering.", s_pins.busy);
+    }
 }
 
 int epd6_last_refresh_ms(void)

@@ -20,6 +20,22 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_DEFAULT_MONTSERRAT_14=y
 
+# LVGL allocates its widgets from the PSRAM, through the nine functions in
+# components/app_bsp/lvgl_mem_psram.c, rather than from the 64 KB static pool in
+# internal .bss that LV_USE_BUILTIN_MALLOC defaults to. The front page is 390
+# objects and 197,096 bytes the moment ui_news_create() returns — measured, in
+# the simulator, against this exact UI code — peaking at 202,672 across both
+# pages and the overlays. That is three times the default pool, and it does not
+# fit in ANY internal pool: the boot log leaves about 186 KiB of internal DRAM
+# free once the 64 KB pool has been reserved, and Wi-Fi and mbedTLS have to come
+# out of what remains.
+#
+# Getting this wrong does not report itself. lv_obj_class_create_obj() stores
+# into the result of an unchecked lv_realloc(), so a full LVGL heap arrives as a
+# StoreProhibited on a small address, in whichever widget happened to be next.
+CONFIG_LV_USE_CUSTOM_MALLOC=y
+# CONFIG_LV_USE_BUILTIN_MALLOC is not set
+
 # The news snapshot normally comes from a machine on the same LAN over plain
 # HTTP, so no certificate is involved at all. An https:// URL still works and
 # validates against IDF's default bundle; the fortune board this forked from
