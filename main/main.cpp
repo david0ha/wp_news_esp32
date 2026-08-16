@@ -65,19 +65,30 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 	s_flush_px += (int64_t)(area->x2 - area->x1 + 1) * (area->y2 - area->y1 + 1);
 
 	/*
-	 * Let the idle task run before the next strip.
+	 * Let the rest of core 0 run before the next strip.
 	 *
 	 * LVGL renders and flushes the WHOLE sheet inside one lv_timer_handler()
 	 * call, and on 1200x1600 that is 1.92 million trips through
-	 * wp_quantize565() — six palette distances and a Bayer offset each. It
-	 * does not yield, it is pinned to core 0, and it outruns the ten-second
-	 * task watchdog, which then reports IDLE0 rather than the code that
-	 * starved it. The strip boundary is the natural place to breathe: LVGL
-	 * allows a blocking flush callback, and fourteen ticks a frame is nothing
-	 * against a refresh of twenty to thirty seconds.
+	 * wp_quantize565() — six palette distances and a Bayer offset each. The
+	 * LVGL task is priority 5 and pinned to core 0, so without this it holds
+	 * that core for the entire four seconds and every lower-priority task on
+	 * it stops dead. The strip boundary is the natural place to breathe: LVGL
+	 * allows a blocking flush callback, and fourteen milliseconds a frame is
+	 * nothing against a refresh of twenty to thirty seconds.
 	 *
-	 * NOTE: this feeds the watchdog, it does not make the render fast. The
-	 * log line below is what says whether it needs to be.
+	 * It does NOT feed the task watchdog, whatever the shape of it suggests.
+	 * The TWDT watches the IDLE tasks; IDLE is priority 0, so the millisecond
+	 * given up here goes to whichever task is next in line — on core 0 that is
+	 * main at priority 1 — and IDLE0 is scheduled only once nothing else on
+	 * the core is runnable. Measured: main took six seconds of wall clock to
+	 * get through the Wi-Fi bring-up it normally does in a few hundred
+	 * milliseconds, finishing sixteen milliseconds after this loop released
+	 * the core, and IDLE0 did not run once in that window. The watchdog
+	 * window is widened in sdkconfig.defaults instead, where the reasoning
+	 * and the measurements live.
+	 *
+	 * This is a latency fix, not a speed one. The log line below is what says
+	 * whether the render itself needs to be faster.
 	 */
 	vTaskDelay(1);
 

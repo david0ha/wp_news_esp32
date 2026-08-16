@@ -115,10 +115,22 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
             .keep_alive_enable = true,   /* TCP keepalive: detect dead idle sockets */
 #if CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
             /* Save the negotiated TLS session so a later reconnect to the SAME host
-             * resumes (abbreviated handshake, skips the ECDSA cert verify). Helps the
-             * single-host slow weather task (30 min) whose keep-alive the
-             * server drops while idle; the cert bundle still gates a full handshake. */
-            .save_client_session = true,
+             * resumes (abbreviated handshake, skips the ECDSA cert verify). Helps a
+             * slow single-host poller whose keep-alive the server drops while idle;
+             * the cert bundle still gates a full handshake.
+             *
+             * Only for https://, because there is no session to save otherwise and
+             * asking for one is not free of consequence: esp_http_client hangs the
+             * request off the transport list's ssl entry regardless of scheme, and
+             * on a plain-HTTP connection that entry's tls context is NULL, so the
+             * save lands in esp_mbedtls_get_client_session(NULL) and the board
+             * logs `esp_tls session context cannot be NULL` once per connection —
+             * an error line, in red, for a board doing exactly what it should.
+             *
+             * The handle outlives one URL, so this is decided by the scheme of the
+             * URL that first created it. A later switch from http:// to https:// on
+             * the same task loses session resumption, not correctness. */
+            .save_client_session = (strncmp(url, "https://", 8) == 0),
 #endif
             .user_agent        = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -136,8 +148,45 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
     /* Serialize only the (re)connect+handshake; same-host reuse runs lock-free. */
     if (will_handshake && s_tls_connect_lock) xSemaphoreTake(s_tls_connect_lock, portMAX_DELAY);
     esp_err_t err = esp_http_client_perform(t_client);
-    int code = esp_http_client_get_status_code(t_client);
     if (will_handshake && s_tls_connect_lock) xSemaphoreGive(s_tls_connect_lock);
+
+    /*
+     * A reused connection that fails is the price of keep-alive, not a fault.
+     * The peer is entitled to close an idle socket and does not ask first:
+     * tools/mock_news_server.py is a Python ThreadingHTTPServer with
+     * `timeout = 30`, and this board polls every 300 seconds, so the server's
+     * FIN lands 270 seconds before the GET that discovers it. The socket sits
+     * in CLOSE_WAIT until we write, which is why the failure arrives at the
+     * WRITE and not at the connect — ECONNRESET, ESP_ERR_HTTP_WRITE_DATA.
+     *
+     * Untreated this does not look like a stale socket, it looks like a flaky
+     * network, because it self-heals into an alternating pattern: the failure
+     * closes the connection, the next poll reconnects and succeeds, and the
+     * one after that is stale again. Every second edition, silently missed.
+     *
+     * So retry once on a fresh connection — the same diagnosis and the same
+     * remedy curl applies. The retry is gated on the connection having been
+     * REUSED: a request that opened its own connection and still failed has a
+     * server-side or network reason, and repeating it would only double every
+     * fifteen-second timeout in front of a board that has five minutes to
+     * wait anyway.
+     */
+    if (err != ESP_OK && !will_handshake) {
+        ESP_LOGD(TAG, "reused connection failed (%s) — retrying on a fresh one",
+                 esp_err_to_name(err));
+        esp_http_client_close(t_client);
+        t_host[0] = '\0';
+        /* The dead attempt may have accumulated a partial body before it died,
+         * and the retry appends. Start it empty; user_data still points here. */
+        free(a.buf);
+        memset(&a, 0, sizeof(a));
+
+        if (s_tls_connect_lock) xSemaphoreTake(s_tls_connect_lock, portMAX_DELAY);
+        err = esp_http_client_perform(t_client);
+        if (s_tls_connect_lock) xSemaphoreGive(s_tls_connect_lock);
+    }
+
+    int code = esp_http_client_get_status_code(t_client);
 
     if (out_status) *out_status = code;
     if (err != ESP_OK || a.oom) {

@@ -406,8 +406,15 @@ static void cp_spread(const ui_mod_t *mods, const int *ord, int *cols,
     for (int i = 0; i < n; i++) sum += cols[first + i];
     if (sum >= pane_cols) return;
 
-    int64_t share[CP_SLOTS];
-    int     add[CP_SLOTS];
+    /* Zeroed rather than left to the loop below, which fills exactly [0, n) —
+     * the same range cp_apportion reads. n <= CP_SLOTS holds because the only
+     * caller passes b->np, which cp_band's front-row loop caps at CP_SLOTS, but
+     * that is an invariant established one function away and GCC does not carry
+     * it through the inline: at -O2 it reports `'share' may be used
+     * uninitialized`, which -Werror=all turns into a failed build. Defining all
+     * three costs nothing measurable and does not depend on the caller. */
+    int64_t share[CP_SLOTS] = {0};
+    int     add[CP_SLOTS]   = {0};
     for (int i = 0; i < n; i++) {
         const int w = mods[ord[first + i]].weight;
         share[i] = w > 0 ? w : 0;
