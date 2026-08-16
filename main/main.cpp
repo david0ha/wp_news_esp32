@@ -105,18 +105,31 @@ static void SetStatus(const char *title, const char *ssid, const char *body)
 	epd6_refresh();
 }
 
+/*
+ * Only the states a person has to act on reach the glass.
+ *
+ * A refresh here is twenty-five seconds, so the two station events cost fifty
+ * of them on a board that is working perfectly — and the first one was spent
+ * BEFORE prov_wifi_connect() was even called, so the board announced it was
+ * connecting and then waited half a minute to start. They are log lines now.
+ *
+ * The portal states keep theirs: those are the two moments the sheet is the
+ * only instruction the user has. Losing the connecting/connected pair also
+ * improves the failure path rather than degrading it — a board whose saved
+ * network has gone away now holds yesterday's front page for the fifteen-second
+ * connect timeout and changes once, when the portal comes up, instead of
+ * flashing a status nobody is reading yet.
+ */
 static void OnProvisioningEvent(prov_event_t event, const char *info, void *user)
 {
 	(void)user;
 	char body[192];
 	switch (event) {
 	case PROV_EVENT_STA_CONNECTING:
-		snprintf(body, sizeof(body), "Connecting to\n%s", info ? info : "");
-		SetStatus(S_WIFI_TITLE, NULL, body);
+		ESP_LOGI(TAG, "connecting to '%s'", info ? info : "");
 		break;
 	case PROV_EVENT_STA_CONNECTED:
-		snprintf(body, sizeof(body), "Connected\n%s", info ? info : "");
-		SetStatus(S_WIFI_TITLE, NULL, body);
+		ESP_LOGI(TAG, "connected: %s", info ? info : "");
 		break;
 	case PROV_EVENT_PORTAL_STARTED:
 		// The network's name is passed on its own: the setup sheet sets it at
@@ -181,7 +194,12 @@ extern "C" void app_main(void)
 	if (connected) {
 		ESP_LOGI(TAG, "online — news URL '%s'",
 		         cfg.news_url[0] ? cfg.news_url : "(none: demo snapshot)");
-		net_time_sync(10000);   // the dateline has no other source
+		// The dateline has no other source, and this runs before the tasks
+		// start so the first sheet is never printed with a blank clock. That
+		// ordering is worth keeping and the ten-second budget was not: SNTP on
+		// a working LAN is one UDP round trip, and the boards that need longer
+		// than four seconds are the ones that will time out at ten as well.
+		net_time_sync(4000);
 		if (Lvgl_lock(-1)) {
 			ui_news_set_overlay(NULL, NULL, NULL);   // dismiss the setup overlay
 			Lvgl_unlock();

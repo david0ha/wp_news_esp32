@@ -68,7 +68,7 @@ static prov_config_t s_cfg;
 /* --- cadences ------------------------------------------------------------ */
 
 #ifndef CONFIG_WP_NEWS_POLL_SECONDS
-#define CONFIG_WP_NEWS_POLL_SECONDS 300
+#define CONFIG_WP_NEWS_POLL_SECONDS 60
 #endif
 #ifndef CONFIG_WP_NEWS_FEED_URL
 #define CONFIG_WP_NEWS_FEED_URL ""
@@ -89,10 +89,51 @@ static prov_config_t s_cfg;
  * A front page carries a date, not a ticking clock — see docs/pages.md. */
 #define TICK_SECONDS       60
 
-/* A snapshot older than this many poll intervals gets the "오래됨" badge. Two
- * rather than one: a single missed poll is a laptop closing its lid, not a
- * problem the user needs told about. */
-#define STALE_AFTER_POLLS    2
+/* A snapshot older than this gets the "오래됨" badge.
+ *
+ * Two poll intervals rather than one: a single missed poll is a laptop closing
+ * its lid, not a problem the user needs told about. But the badge answers a
+ * question about the NEWS ("is what I am reading still current?"), not about the
+ * poll loop, and at a one-minute cadence two intervals is two minutes — which
+ * would badge a front page that is fine because somebody's Wi-Fi hiccuped
+ * during lunch. So the poll interval sets the shape and a floor sets the
+ * meaning: a quarter of an hour is the point at which a reader would want to
+ * know, whatever the device's cadence happens to be. */
+#define STALE_FLOOR_SECONDS  900
+#define STALE_SECONDS \
+    (POLL_SECONDS * 2 > STALE_FLOOR_SECONDS ? POLL_SECONDS * 2 : STALE_FLOOR_SECONDS)
+
+/* How long the first sheet of a boot waits for real news before giving up and
+ * printing the demo snapshot instead.
+ *
+ * This exists because there is exactly one refresh worth spending on a boot and
+ * the question is which page gets it. Printing the demo the instant the UI is
+ * built — which is what this used to do — buys a finished-looking screen at the
+ * price of the real one arriving twenty-five seconds later, on top of the
+ * twenty-five the demo itself takes. On a panel with a partial waveform that
+ * trade is free and obviously right; on this one it is the single biggest term
+ * in the time-to-first-page.
+ *
+ * Fifteen seconds is a fetch that includes every photograph in the edition over
+ * a home network, with room for a server that is slow rather than absent. Past
+ * that the demo goes up: a complete front page badged DEMO is a better answer
+ * than a blank panel, and the real one lands on the next poll anyway. */
+#define FIRST_PAINT_WAIT_MS 15000
+
+/* Poll interval used for the first few attempts of a boot, so a first fetch
+ * that lands a moment before the server does is not punished with a whole
+ * interval of blank panel.
+ *
+ * Bounded, and the bound is the point. "Retry fast until one succeeds" is the
+ * obvious rule and it is a trap: a board pointed at a server that is simply
+ * switched off never succeeds, so it would retry every three seconds forever —
+ * twenty-eight thousand requests a day, and on battery about a thousand
+ * milliamp-hours of them. Four attempts covers the twelve seconds inside
+ * FIRST_PAINT_WAIT_MS where a retry can still change which page gets printed,
+ * which is the entire benefit; after that the normal interval is the correct
+ * behaviour for a server that is not there. */
+#define FIRST_RETRY_SECONDS 3
+#define FIRST_RETRY_MAX     4
 
 /* KEY2 held this long forces Wi-Fi setup mode — the escape hatch when the board
  * is stuck on a network the user can no longer reach. */
@@ -253,7 +294,7 @@ static void push_data_to_ui(void)
      * forever would look healthy. */
     if (s_last_ok_us != 0) {
         int64_t age_us = esp_timer_get_time() - s_last_ok_us;
-        st.stale = age_us > (int64_t)POLL_SECONDS * STALE_AFTER_POLLS * 1000000;
+        st.stale = age_us > (int64_t)STALE_SECONDS * 1000000;
     } else {
         st.stale = s_cfg.news_url[0] != '\0';
     }
@@ -274,6 +315,30 @@ static void read_battery(void)
     s_batt_mv      = (int)(v * 1000.0f + 0.5f);
     s_batt_pct     = board_io_battery_percent();
     state_unlock();
+}
+
+/* Bring every widget on the page up to date with the current state — the
+ * snapshot, the battery, the clock — and stop there. No render, no refresh:
+ * this is the half of "showing something" that costs nothing, and separating it
+ * from the half that costs twenty-five seconds is what lets the boot hold its
+ * one refresh open while still having a finished page ready to spend it on.
+ * UiTask only, like everything else that touches LVGL. */
+static void restate_page(void)
+{
+    read_battery();
+    push_data_to_ui();
+    if (Lvgl_lock(-1)) {
+        ui_news_tick();
+        Lvgl_unlock();
+    }
+}
+
+/* The URL this board actually polls: what setup stored, or the build-time
+ * fallback when it stored nothing. Empty means the demo snapshot is the whole
+ * configuration and no fetch will ever happen. Caller holds s_mtx. */
+static void current_url(char *out, size_t n)
+{
+    strlcpy(out, s_cfg.news_url[0] ? s_cfg.news_url : CONFIG_WP_NEWS_FEED_URL, n);
 }
 
 /* --- actions -------------------------------------------------------------- */
@@ -420,6 +485,56 @@ static void handle_press(button_id_t id)
 }
 
 /*
+ * Hold the boot's one refresh until there is something worth spending it on.
+ *
+ * Returns true if UiTask still owes the panel its first page — on a snapshot
+ * arriving, or on the wait running out with the demo left to print. False means
+ * something else already reached the glass while we waited and there is no
+ * first page left to protect.
+ */
+static bool await_first_snapshot(void)
+{
+    char url[PROV_URL_MAX_LEN + 1];
+    state_lock();
+    current_url(url, sizeof(url));
+    state_unlock();
+
+    if (!url[0]) {
+        return true;        /* demo board: nothing better is ever coming */
+    }
+
+    /* esp_timer rather than the tick count: this is a deadline held across
+     * several blocking waits, and TickType_t wraps. */
+    const int64_t deadline_us =
+        esp_timer_get_time() + (int64_t)FIRST_PAINT_WAIT_MS * 1000;
+
+    for (;;) {
+        app_cmd_t cmd;
+        int64_t left_ms = (deadline_us - esp_timer_get_time()) / 1000;
+        if (left_ms <= 0 ||
+            xQueueReceive(s_cmd_queue, &cmd, pdMS_TO_TICKS(left_ms)) != pdTRUE) {
+            ESP_LOGW(TAG, "no snapshot within %d ms — printing the demo page",
+                     FIRST_PAINT_WAIT_MS);
+            return true;
+        }
+        if (cmd.kind == APP_CMD_DATA) {
+            return true;
+        }
+        /* Anything the app asked for in the meantime is still honoured — the
+         * control server comes up moments after this task does, so a command
+         * landing inside the window is a real user, not a race. But anything
+         * that reaches the glass ends the wait: once a page has been printed
+         * there is no first refresh left to save. REFRESH_NOW is the one kind
+         * that only pokes NewsTask, so it is the one we can keep waiting after
+         * — and waiting is exactly what the caller wanted. */
+        handle_cmd(&cmd);
+        if (cmd.kind != APP_CMD_REFRESH_NOW) {
+            return false;
+        }
+    }
+}
+
+/*
  * UiTask — the only task that touches LVGL or the panel. Blocks on buttons OR
  * app commands, and wakes every TICK_SECONDS to keep the clock and battery
  * current.
@@ -429,10 +544,11 @@ static void UiTask(void *arg)
     (void)arg;
     ESP_LOGI(TAG, "controls: KEY0 = page, KEY1 = refresh, KEY2 = page 1 (5s hold = Wi-Fi setup)");
 
-    /* The demo snapshot goes up immediately rather than after the first poll:
-     * a board that shows a finished screen one second after boot and then
-     * quietly replaces it with real data reads as fast, where a board that
-     * shows "불러오는 중" for eight seconds reads as broken. */
+    /* The demo snapshot is loaded now but not necessarily printed. It is what
+     * the companion app reads before the first poll lands, what action_set_url
+     * falls back to, and the whole configuration of a board with no URL — but
+     * on a configured board it is a page we already know is about to be
+     * superseded, and this panel charges twenty-five seconds to say so. */
     state_lock();
     if (!s_data.valid) {
         news_mock(&s_data);
@@ -440,14 +556,21 @@ static void UiTask(void *arg)
     }
     state_unlock();
 
-    read_battery();
-    push_data_to_ui();
+    /* Draw the page before the wait, not after it. What await_first_snapshot()
+     * defers is the REFRESH; it still honours commands while it waits, and
+     * those go straight to present_full() with whatever the widgets are
+     * holding. Populating them here is what makes that "the demo page" rather
+     * than a sheet of furniture with no news in it. */
+    restate_page();
     if (Lvgl_lock(-1)) {
-        ui_news_tick();
         ui_news_show_page(UI_PAGE_FRONT);
         Lvgl_unlock();
     }
-    present_full();
+
+    if (await_first_snapshot()) {
+        restate_page();     /* the snapshot that ended the wait, or the demo */
+        present_full();
+    }
 
     for (;;) {
         QueueSetMemberHandle_t member =
@@ -500,14 +623,18 @@ static news_t s_fetched;
 static void NewsTask(void *arg)
 {
     (void)arg;
-    /* Let the WiFi/TLS stack settle before the first request. */
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    /* No settle delay. This task is only ever created after provisioning_run()
+     * has returned true, and what that returns true on is an acquired IP — the
+     * stack is not "settling", it is up. The three seconds this used to wait
+     * were three seconds UiTask spent holding a blank panel. If the first fetch
+     * does lose a race with something, the retry below costs less than the wait
+     * did. */
+    int fast_retries = 0;      /* spent inside the first-paint window only */
 
     for (;;) {
         char url[PROV_URL_MAX_LEN + 1];
         state_lock();
-        strlcpy(url, s_cfg.news_url[0] ? s_cfg.news_url : CONFIG_WP_NEWS_FEED_URL,
-                sizeof(url));
+        current_url(url, sizeof(url));
         state_unlock();
 
         if (url[0]) {
@@ -578,8 +705,26 @@ static void NewsTask(void *arg)
             }
         }
 
+        /* A board that has not yet fetched anything tries again in seconds
+         * rather than after a full interval, for the first few attempts only.
+         * The cases that reach here are a first fetch that lost a race with the
+         * network coming up and a server that is not listening yet, and both
+         * are usually over within seconds — while UiTask is holding the boot's
+         * one refresh open for FIRST_PAINT_WAIT_MS, so a full interval here
+         * would guarantee it times out and prints the demo page for a server
+         * that was about to answer. Past that window a retry can no longer
+         * change which page got printed, so there is nothing left to buy. */
+        int wait_s = POLL_SECONDS;
+        state_lock();
+        bool never_fetched = (s_last_ok_us == 0);
+        state_unlock();
+        if (never_fetched && fast_retries < FIRST_RETRY_MAX) {
+            fast_retries++;
+            wait_s = FIRST_RETRY_SECONDS;
+        }
+
         /* Woken early by KEY1, by POST /api/refresh, or by a URL change. */
-        xSemaphoreTake(s_poll_wake, pdMS_TO_TICKS(POLL_SECONDS * 1000));
+        xSemaphoreTake(s_poll_wake, pdMS_TO_TICKS(wait_s * 1000));
     }
 }
 
@@ -740,7 +885,7 @@ void user_app_snapshot(device_state_t *out)
     strlcpy(out->last_result, news_fetch_result_name(s_last_result), sizeof(out->last_result));
     if (s_last_ok_us != 0) {
         out->age_seconds = (int)((esp_timer_get_time() - s_last_ok_us) / 1000000);
-        out->stale = out->age_seconds > POLL_SECONDS * STALE_AFTER_POLLS;
+        out->stale = out->age_seconds > STALE_SECONDS;
     } else {
         out->age_seconds = -1;      /* never succeeded — not "zero seconds ago" */
         out->stale = s_cfg.news_url[0] != '\0';
