@@ -27,6 +27,7 @@
  * that mostly sits still, that is the difference between a front page hanging
  * quietly in its frame and one that flashes at nobody all day.
  */
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -157,6 +158,7 @@ typedef enum {
     APP_CMD_SET_URL,         /* text = the new snapshot URL          */
     APP_CMD_DISPLAY_TEST,    /* run epd6_selftest()                  */
     APP_CMD_DATA,            /* NewsTask published a new snapshot   */
+    APP_CMD_SET_SLEEP,       /* ival = seconds between polls asleep  */
 } app_cmd_kind_t;
 
 typedef struct {
@@ -434,6 +436,48 @@ static void action_set_url(const char *url)
     }
 }
 
+/*
+ * Change the deep-sleep interval, from a phone.
+ *
+ * This is the third of the three layers that set it — Kconfig, then the setup
+ * form's NVS value, then this — and it exists because taking a frame off a wall
+ * and finding a USB-C cable in order to change a polling interval is the thing
+ * that gets resented within a month.
+ *
+ * It runs on UiTask rather than on the HTTP task, like every other write in
+ * this file, and here that buys something specific beyond consistency: arriving
+ * as a command restarts the awake window. Without it a user who set the
+ * interval from the app could watch the board sleep in their face a second
+ * later, having just been told the request succeeded.
+ */
+static void action_set_sleep_seconds(uint32_t seconds)
+{
+    /* One gate for every writer — the setup form, NVS and this — so there is
+     * one answer to "what does 5 seconds mean" rather than three. Zero survives
+     * it unchanged, because zero is not a short interval, it is "nobody said". */
+    const uint32_t v = prov_clamp_sleep_seconds(seconds);
+
+    state_lock();
+    s_cfg.sleep_seconds = v;
+    state_unlock();
+
+    if (!prov_store_save(&s_cfg)) {
+        ESP_LOGW(TAG, "sleep interval: NVS save failed (will not survive a cold boot)");
+    }
+
+    /* And into RTC memory, which is what the quiet path reads. A wake that
+     * changes nothing never touches NVS at all — that is most of the point of
+     * it — so without this line the new interval would not take effect until
+     * something else forced a cold boot.
+     *
+     * The resolved figure rather than the raw one: this field means "the
+     * interval in force", and UNSET is an instruction, not an interval. */
+    power_state()->sleep_seconds = v ? v : power_default_sleep_seconds();
+
+    ESP_LOGI(TAG, "sleep interval set to %us%s", (unsigned)power_state()->sleep_seconds,
+             v ? "" : " (the build-time default)");
+}
+
 static void action_display_test(void)
 {
     ESP_LOGI(TAG, "e-Paper self-test starting");
@@ -545,6 +589,7 @@ static void handle_cmd(const app_cmd_t *c)
     switch (c->kind) {
     case APP_CMD_SET_PAGE:     action_set_page(c->ival); break;
     case APP_CMD_SET_URL:      action_set_url(c->text); break;
+    case APP_CMD_SET_SLEEP:    action_set_sleep_seconds((uint32_t)c->ival); break;
     case APP_CMD_DISPLAY_TEST: action_display_test(); break;
     case APP_CMD_REFRESH_NOW:
         if (s_poll_wake) xSemaphoreGive(s_poll_wake);
@@ -667,11 +712,12 @@ static bool await_first_snapshot(void)
          * control server comes up moments after this task does, so a command
          * landing inside the window is a real user, not a race. But anything
          * that reaches the glass ends the wait: once a page has been printed
-         * there is no first refresh left to save. REFRESH_NOW is the one kind
-         * that only pokes NewsTask, so it is the one we can keep waiting after
-         * — and waiting is exactly what the caller wanted. */
+         * there is no first refresh left to save. The two kinds that touch no
+         * pixels are the ones we can keep waiting after — REFRESH_NOW only
+         * pokes NewsTask, and SET_SLEEP only writes NVS — and waiting is
+         * exactly what the caller of either wanted. */
         handle_cmd(&cmd);
-        if (cmd.kind != APP_CMD_REFRESH_NOW) {
+        if (cmd.kind != APP_CMD_REFRESH_NOW && cmd.kind != APP_CMD_SET_SLEEP) {
             return false;
         }
     }
@@ -1191,9 +1237,25 @@ void user_app_snapshot(device_state_t *out)
     /* The counters, copied with no arithmetic in the copy — device_api_json.c
      * derives the mean and the daily estimate, because it is the half of this
      * that has a host test and both of its divisors are legitimately zero on a
-     * board that has not slept yet. Read outside the lock: these belong to the
-     * RTC state, not to s_mtx's state, and every one is a single word written
-     * by one task. */
+     * board that has not slept yet.
+     *
+     * READ WITHOUT s_mtx, deliberately. Three reasons, and the third is the one
+     * that decides it:
+     *
+     * 1. They are not s_mtx's state. That lock guards things with invariants
+     *    BETWEEN fields — s_data against s_data_hash, s_last_ok_us against
+     *    s_last_result — and taking a lock over data it does not own would
+     *    imply a relationship these fields do not have.
+     * 2. Each is one naturally-aligned 32-bit word, so an LX7 load cannot tear
+     *    one. The worst a race can produce is a value one wake out of date, and
+     *    "out of date" is the normal condition of every counter here anyway:
+     *    the document is a sample of a board that keeps running.
+     * 3. Nothing downstream needs them to agree with each other. `wakes` and
+     *    `awake_ms_total` are divided into a mean by the serialiser, and a mean
+     *    computed across a wake boundary is off by one wake in a figure whose
+     *    whole purpose is to replace a range of 190-to-260 days with a
+     *    measurement. If that mattered the fix would be a snapshot in RTC
+     *    memory, not this lock. */
     const wp_rtc_state_t *rs = power_state();
     out->deep_sleep     = power_deep_sleep_enabled();
     out->sleep_seconds  = (int)(rs->sleep_seconds ? rs->sleep_seconds
@@ -1227,4 +1289,16 @@ bool user_app_set_news_url(const char *url)
 bool user_app_display_test(void)
 {
     return post_cmd(APP_CMD_DISPLAY_TEST, 0, NULL);
+}
+
+bool user_app_set_sleep_seconds(uint32_t seconds)
+{
+    /* Narrowed here rather than in the queue: app_cmd_t carries an int, and
+     * every value that survives prov_clamp_sleep_seconds() is at most 86,400.
+     * Clamping to INT_MAX first means a hostile or confused caller cannot turn
+     * a huge unsigned into a negative one on the way through. */
+    if (seconds > (uint32_t)INT_MAX) {
+        seconds = (uint32_t)INT_MAX;
+    }
+    return post_cmd(APP_CMD_SET_SLEEP, (int)seconds, NULL);
 }

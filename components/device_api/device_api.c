@@ -202,6 +202,36 @@ static esp_err_t api_display_test_post(httpd_req_t *req)
     return user_app_display_test() ? send_ok(req) : send_err(req, "busy");
 }
 
+// POST /api/sleep { seconds } — how long the board sleeps between polls. Persisted to NVS and
+// copied into RTC memory, so it applies from the next wake without a reboot. `0` means "use the
+// build-time default"; anything else is clamped into [60, 86400] rather than rejected.
+//
+// Only reachable on a board that is awake — which, once deep sleep is on, means during the window
+// a button press opens. That is expected rather than a fault; see docs/app-control.md.
+static esp_err_t api_sleep_post(httpd_req_t *req)
+{
+    esp_err_t sent;
+    cJSON *root = parse_body(req, &sent);
+    if (root == NULL) return sent;
+
+    cJSON *sec = cJSON_GetObjectItem(root, "seconds");
+    esp_err_t rc;
+    if (!cJSON_IsNumber(sec)) {
+        rc = send_err(req, "bad_json");
+    } else if (sec->valuedouble < 0 || sec->valuedouble > 4294967295.0) {
+        // The clamp downstream takes any uint32_t, so the only genuinely wrong answers are the
+        // ones that are not one. A negative is named rather than folded to zero: zero already
+        // means "use the default", and silently granting that to somebody who asked for -1 is a
+        // board doing something nobody requested.
+        rc = send_err(req, "sleep_seconds_invalid");
+    } else {
+        rc = user_app_set_sleep_seconds((uint32_t)sec->valuedouble) ? send_ok(req)
+                                                                    : send_err(req, "busy");
+    }
+    cJSON_Delete(root);
+    return rc;
+}
+
 // ---------------------------------------------------------------------------
 // Server + mDNS bring-up
 // ---------------------------------------------------------------------------
@@ -226,6 +256,7 @@ static void start_http(void)
         {.uri = "/api/refresh",      .method = HTTP_POST, .handler = api_refresh_post},
         {.uri = "/api/page",         .method = HTTP_POST, .handler = api_page_post},
         {.uri = "/api/news",        .method = HTTP_POST, .handler = api_news_post},
+        {.uri = "/api/sleep",        .method = HTTP_POST, .handler = api_sleep_post},
         {.uri = "/api/display/test", .method = HTTP_POST, .handler = api_display_test_post},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
