@@ -55,6 +55,9 @@ GPIO41 in its warning for exactly this reason.
   up at the start of the next. On the monochrome panel that was forbidden, because cutting power drops
   the previous-image plane a partial refresh diffs against; Spectra 6 has no partial refresh, so there
   is nothing to preserve, and cutting the rail stops the charge pump's audible buzz between updates.
+  `power_sleep()` calls `epd6_sleep()` on the way into deep sleep to cover the boot that refreshed
+  nothing and therefore never reached that path — and on a wake that never touched the panel at all,
+  the pulldown has already answered the question: a pin nobody drove is a panel that is off.
 - **GPIO43/44 are the ESP32-S3's default UART0 pins.** The console therefore runs on USB Serial/JTAG
   (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` in `sdkconfig.defaults`); a UART0 console would clock every
   log byte into PWR_EN and the master chip select.
@@ -79,6 +82,34 @@ to anything destructive; KEY1's "poll now" is chosen with that in mind.
 The long press is detected by *sampling the pin*, not by timing two edges: the driver interrupts on
 the press only, so a release generates no event to time against.
 
+### All four wake the board from deep sleep
+
+GPIO3 is the carrier's *hardware* wake pin, but it is not the only one that wakes the firmware. The
+ESP32-S3's RTC GPIOs are **0–21**, and every button here — 0, 2, 3, 5 — is inside that range, so all
+four are `ext1` wake sources. `power_sleep()` builds the mask from the same four pins the buttons
+driver was given (`0x2d`, which is bits 0, 2, 3 and 5) and arms `ESP_EXT1_WAKEUP_ANY_LOW`, which
+works precisely because they are all press-to-GND. No extra hardware, no dedicated wake button: the
+board wakes because somebody pressed something, and a press is a person standing in front of the
+frame.
+
+> **Trap: a wake pin above GPIO21 cannot wake the chip, and nothing anywhere says so.**
+>
+> This is not like the other traps on this page, which at least produce a symptom. Arm `ext1` on a
+> pin outside the RTC range and nothing is rejected, nothing is logged by the IDF, and no call
+> fails — the board sleeps normally, the timer still wakes it, and the button is simply dead for as
+> long as it is asleep. It works perfectly on a bench, where the board never sleeps at all.
+>
+> `power_sleep()` therefore checks each pin itself and drops the ones it cannot use, naming them:
+> `E power: GPIO46 cannot wake the chip (RTC GPIOs are 0..21) — that button is dead while asleep`.
+> If every pin is dropped it says `W power: no usable wake pins — only the timer can wake this
+> board`. Both are errors you can act on, which is the whole reason they exist; moving a button to a
+> pin above 21 is otherwise a change with no visible consequence until a board is on a wall.
+
+Deep sleep is off by default, so none of this is in play until `CONFIG_WP_NEWS_DEEP_SLEEP` is
+enabled — see [bring-up.md](bring-up.md#6-deep-sleep-during-bring-up). The KEY2 escape hatch and the
+rest of getting back into a sleeping board are §7 of the
+[deep-sleep design](specs/2026-08-17-deep-sleep-design.md).
+
 ## Battery
 
 | Signal | XIAO pad | GPIO | `user_config.h` |
@@ -87,10 +118,21 @@ the press only, so a release generates no event to time against.
 | ADC_EN | D5 | 6 | `BATT_ENABLE_PIN` |
 
 A 1:3 divider on GPIO1 (ADC1_CH0) behind a load switch. **The divider is disconnected — and the
-reading meaningless — until GPIO6 is driven HIGH**, which `board_io_init()` does and leaves on. A
-reading below 2.5 V is reported as "no cell fitted" rather than as a flat battery: a Li-ion whose
-protection circuit has cut off never presents that voltage, so it means USB-only operation, and
-showing an empty battery there is a false alarm somebody will chase.
+reading meaningless — until GPIO6 is driven HIGH**, which `board_io_init()` does and leaves on for as
+long as the board is awake. A reading below 2.5 V is reported as "no cell fitted" rather than as a
+flat battery: a Li-ion whose protection circuit has cut off never presents that voltage, so it means
+USB-only operation, and showing an empty battery there is a false alarm somebody will chase.
+
+**GPIO6 goes back down before deep sleep.** `board_io_sleep()` drives it LOW and then latches it with
+`gpio_hold_en()`, and `board_io_init()` releases that hold on the way back up. Until deep sleep
+existed, `board_io_init()` drove this pin high and *nothing ever lowered it* — which cost nothing on a
+board that was always awake and is a standing drain on one that is asleep 99.7% of its life, drawn
+continuously from the cell to measure a voltage nobody is awake to read. The hold is not belt and
+braces either: deep sleep disconnects the digital pad from the GPIO matrix, so a pin that was merely
+driven low floats, and a floating load-switch enable is whatever that switch's input leakage decides.
+The matching `gpio_hold_dis()` in `board_io_init()` is what stops the latch outliving the sleep — a
+held-low enable that nobody released would read 0 V forever after, be reported as "no cell fitted",
+and in turn disable deep sleep permanently.
 
 The JST 2.0 battery input also passes a hardware slide switch; it must be ON for battery operation.
 
@@ -104,6 +146,15 @@ same two pins are KEY2 and the battery divider's enable**, and the board has no 
 I2C bus and the PCF85063A driver are therefore gone entirely, and the clock comes from SNTP alone —
 which is also why `CONFIG_WP_NEWS_TIMEZONE` is the only thing standing between UTC and the dateline
 the sheet prints.
+
+**This costs nothing at all for deep sleep, and it is worth being clear about, because "no RTC" is
+easy to read as "cannot wake itself".** The missing part is an external RTC *chip* — a PCF85063A on
+an I2C bus that would keep wall-clock time while the SoC is unpowered. The timer that performs a
+scheduled wake is the ESP32-S3's own internal RTC, in the always-on power domain, and it needs no
+external part: `esp_sleep_enable_timer_wakeup()` arms it and the chip wakes on its own. What the
+absent chip actually costs is the thing it always cost — the date. A board that has been unplugged
+comes back not knowing what day it is until SNTP answers, and that is a dateline problem, not a wake
+problem.
 
 ## Unused
 

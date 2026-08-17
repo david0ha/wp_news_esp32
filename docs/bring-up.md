@@ -43,6 +43,15 @@ flashing still fails, force download mode: hold **BOOT**, tap **RESET**, release
 Each line below is the checkpoint for one subsystem. They appear in this sequence; the first one
 missing is where to stop and look.
 
+> **Deep sleep does not change any of this, and the first person to flash this firmware needs to know
+> that before they go looking for a bug.** The board does not sleep with a USB console attached, and
+> it does not sleep with no cell fitted — either one alone is enough. During bring-up you have a cable
+> in your hand and quite possibly no battery on the JST connector, so **both** gates are closed and
+> the log below is exactly what you will see, in full, every boot. On top of that the feature is off
+> at build time unless you turn it on. Nothing is broken; a bench is the one place this board is
+> deliberately never allowed to sleep. [§6](#6-deep-sleep-during-bring-up) is how to actually see it
+> work.
+
 ### `board_io` — battery
 
 ```
@@ -208,7 +217,7 @@ job.
 These are the measurements the firmware was deliberately built not to guess at.
 
 ```bash
-curl -s http://wpnews.local/api/state | jq '.panel, .battery'
+curl -s http://wpnews.local/api/state | jq '.panel, .battery, .power'
 ```
 
 | number | where it comes from | what it decides |
@@ -216,6 +225,20 @@ curl -s http://wpnews.local/api/state | jq '.panel, .battery'
 | `panel.refreshMs` | `epd6_last_refresh_ms()`, also logged as `I epd6: refresh N ms` after every refresh | everything. The whole refresh policy — one refresh per changed snapshot, no refresh for a clock tick, no partial anything — is built on "twenty to thirty seconds", and that figure is Seeed's, not this board's. Write the real one down here. |
 | the SPI push, separately | `idf.py monitor` with `esp_log_level_set("epd6", ESP_LOG_DEBUG)`: `D epd6: pushed 2 x 480000 B in N ms` | how much of the refresh is bus and how much is panel. 960,000 bytes at 10 MHz is about 0.8 s of wire; if the push is materially longer than that, the DMA staging path is worth looking at, and if it is not, the rest is the waveform and no amount of code will move it. |
 | `battery.millivolts` against a multimeter on the cell | `BATT_DIVIDER` in `components/board_io/board_io.c` | that constant is 3.0 **from the documentation, never measured**. It fails quietly — a wrong ratio gives a percentage that looks entirely plausible and is wrong every time you glance at the panel. Scale it by the ratio between the two readings, then record here that it has been checked, and the question is closed. |
+| `power.meanAwakeMs` | `GET /api/state`, after the board has slept — see [§6](#6-deep-sleep-during-bring-up) | how long a wake actually costs. The design assumes a quiet wake is about three seconds, almost all of it the Wi-Fi connect, and three seconds against fifteen minutes is what makes the whole feature work. If it comes back at eight, the awake term is nearly three times what the table assumed and the interval wants lengthening. This is a **measurement**, taken by the board about itself: `awake_ms_total / wakes`. |
+| deep-sleep current, by subtraction | `power.estMahPerDay` and `battery.percent`, a day apart | the other unmeasured term, and the only one here that is arithmetic rather than a reading. Leave the board on a cell for a day, turn the drop in `battery.percent` into mAh against the cell's rated capacity (1% of a 4200 mAh cell is 42 mAh, so this is coarse — give it two days if the numbers are close), subtract `power.estMahPerDay` and 2.3 mAh for each refresh it printed, and what remains is the standing draw. Nobody knows this number: the XIAO is specified at 14 µA, published reports run from 9 µA to several hundred, and the carrier's own load switches add an unpublished amount. The design's §10 works it through — at 300 µA instead of 40, the 15-minute row goes from 16–22 mAh/day to 22–29, which is roughly a quarter off the life of the cell. |
+
+**`power.estMahPerDay` is the awake-time term only.** It is `wakes/day × meanAwakeMs × 23 µAh/s`, and
+it carries neither the refreshes nor the standing sleep current — the second precisely because
+nobody has measured it, which is what the row above is for. Subtracting a number that already
+contained a guess at the thing you are trying to find would tell you only what you assumed. The
+23 µAh per awake second is itself measured, and it is pinned by a test in `test_api_json` so it
+cannot drift quietly.
+
+The rest of the `power` object is counters rather than conclusions: `wakes`, `quietWakes` (the ones
+that cost no refresh — on a healthy board this should be nearly all of them), `sleepSeconds` for the
+interval actually in force, and `deepSleep` for whether the feature is on at all. They are lost on a
+power-on reset, because they live in RTC memory; a day's worth means a day without unplugging it.
 
 Record the origin answer from §3 too, even when it is "top-left, correct". It is the only fact in this
 document that cannot be re-derived from the code.
@@ -235,6 +258,97 @@ you somewhere different: [news-contract.md](news-contract.md) has them,
 For the real thing — an agent that researches one listed company and files an edition twice a day —
 see `tools/edition/`.
 
+## 6. Deep sleep during bring-up
+
+**It is off unless you turn it on, and then it stays off until you unplug the cable.** Those are two
+separate gates and both of them will look like a broken feature if you do not know they are there.
+
+Off at build time:
+
+```bash
+idf.py menuconfig     # WP News power -> Sleep between polls (battery mode)
+```
+
+`CONFIG_WP_NEWS_DEEP_SLEEP` defaults to **n**, because a sleeping board is a board you cannot reach.
+Remember that `sdkconfig` is gitignored and per-developer, so turning it on is a change to your tree
+alone and a colleague's board still never sleeps.
+
+Then off at runtime, whatever the build says, for any one of three reasons:
+
+| gate | why | what it means at a bench |
+|---|---|---|
+| a USB console is attached | `usb_serial_jtag_is_connected()` is the best available answer to "is a developer watching", and a board that sleeps in the middle of `idf.py monitor` is a board nobody can debug | **the cable in your hand is enough on its own** |
+| no cell fitted | there is no battery to save, and sleeping on USB power buys nothing | a board with nothing on the JST connector never sleeps |
+| no news URL configured | a board that wakes every fifteen minutes to fetch nothing | a fresh board on the demo snapshot never sleeps |
+
+So the whole of §2 above reads exactly as it always did, and that is the intended asymmetry: enabling
+this changes nothing on a bench and everything on a wall. To actually watch it work you need the
+build option on, a charged cell on the JST connector with its slide switch ON, a URL set, and the USB
+cable **out** — which also means the log below is one you cannot watch live, since attaching the
+monitor to read it is itself the thing that stops the board sleeping. That is not a gap in the
+tooling; it is why the counters in §4 exist at all. The board writes down what it did so that a
+reader who was not there can find out. Press a button and it stays reachable for two minutes
+(`CONFIG_WP_NEWS_AWAKE_WINDOW_SECONDS`), which is the window to get a `curl` in.
+
+### What a wake looks like in the log
+
+One line says what this wake decided and one says what it is doing about it. Together they are the
+fastest way to tell whether the feature is working at all, because a wake that costs nothing and a
+wake that costs a refresh look completely different.
+
+A **quiet wake** — the common case, and the one the whole design is for. The panel is never powered,
+LVGL is never built, the 960,000-byte framebuffer is never allocated:
+
+```
+I main: quiet fetch: not_modified
+I main: wake=timer fetch=unchanged -> sleep (sleep 900s, fails 0)
+I power: sleeping 900s (wakes 12, quiet 11, awake 34210ms total, mask 0x2d)
+```
+
+Three seconds, start to finish. `awake` is cumulative across every wake since the last power-on, so
+34,210 ms over 12 wakes is a mean of 2.9 s — that division is exactly what `power.meanAwakeMs`
+reports. `quiet 11` of `wakes 12` is a healthy board: eleven wakes that printed nothing. `mask 0x2d`
+is bits 0, 2, 3 and 5 — the four buttons armed as wake sources; a `0x0` there means nothing but the
+timer can wake this board and is worth investigating.
+
+A **printing wake** — the server had something new, so the board takes the full path:
+
+```
+I main: quiet fetch: ok
+I main: wake=timer fetch=changed -> refresh (sleep 900s, fails 0)
+I main: content changed — printing without a second connect
+```
+
+and from there the boot proceeds through the whole of §2 — `epd6`, `LvglPort`, the refresh — before
+sleeping. This is the expensive kind, and on a normal day there should be about two of them.
+
+A **button wake** stays up instead of sleeping, which is what makes the companion app usable:
+
+```
+I main: wake=button fetch=not_attempted -> awake (sleep 900s, fails 0)
+```
+
+`fetch=not_attempted` is correct here rather than a failure — a button wake does not run the quiet
+poll, because a person is standing in front of the frame and the point is to be reachable, not to be
+quick. The interval still appears in the line; it is what the board will use when the window closes.
+
+A **failed wake** counts and sleeps rather than starting the setup portal:
+
+```
+W main: quiet path: no network — counting a failure
+I main: wake=timer fetch=not_attempted -> sleep (sleep 900s, fails 1)
+```
+
+Watch `fails` climb across wakes; the interval holds until the fourth, then steps up — at a 900 s
+base, `sleep 900s` becomes `sleep 3600s`. Note what does *not* happen: a board whose Wi-Fi has gone
+away never puts up the captive portal, because doing that on every wake would flatten the cell in
+under three weeks while showing a setup screen nobody is looking at. The backoff and the rest of the
+decision are §3 and §7 of the [deep-sleep design](specs/2026-08-17-deep-sleep-design.md).
+
+Two lines you should never see, both from `power.c`, both meaning a button will not wake the board:
+`GPIO46 cannot wake the chip (RTC GPIOs are 0..21)` and `no usable wake pins — only the timer can
+wake this board`. See [pinout.md](pinout.md#all-four-wake-the-board-from-deep-sleep).
+
 ## Buttons
 
 | | |
@@ -250,3 +364,9 @@ content actually differs from what is already on the glass.
 
 The KEY2 hold is the escape hatch for a board stuck on a network that no longer exists. It keeps the
 saved config so the portal pre-fills, and only the Wi-Fi needs re-entering.
+
+On a sleeping board, any of the four also **wakes** it — all four are RTC GPIOs and all four are armed
+as `ext1` sources ([pinout.md](pinout.md#all-four-wake-the-board-from-deep-sleep)) — and the board
+then stays up and reachable for two minutes rather than going straight back to sleep. Add the boot to
+the refresh and a press takes noticeably longer to show anything than the twenty to thirty seconds
+above.
