@@ -1,8 +1,20 @@
-# The desk
+# The desk, standalone
 
-There is no server-side application. The "backend" is an agent with a market-data connection and a
-directory, and the contract between it and the firmware is one JSON file plus some tiles. The board
-polls a URL; anything that can serve that URL works, so the least machinery that can produce it wins.
+There is no server-side application *here*. The "backend" is an agent with a market-data connection
+and a directory, and the contract between it and the firmware is one JSON file plus some tiles. The
+board polls a URL; anything that can serve that URL works, so the least machinery that can produce
+it wins.
+
+> **This is the standalone path, and it still works.** It needs no Docker, no domain and no
+> container: a `launchd` job, a directory, and `python3 -m http.server`. If the board and this
+> machine are on the same network and this machine is awake when the board polls, stop here.
+>
+> [`server/`](../../server/README.md) is the other path — an always-on service that can be *told*
+> things: a command queue agents push into from anywhere, a schedule, and a typesetting gate on
+> every candidate page. It **reuses this directory rather than replacing it**: `PROMPT.md` is still
+> the standing instructions it hands the agent, `render-check.sh` is still the gate, and
+> `mock_news_server.py --validate` is still the schema check. What it adds is somewhere to put an
+> instruction at three in the morning. See [docs/desk-server.md](../../docs/desk-server.md).
 
 Twice a day, `file-edition.sh` wakes Claude Code headless, hands it
 [`PROMPT.md`](PROMPT.md) — the desk's standing instructions — and lets it research **one company**

@@ -7,11 +7,19 @@ not. So this is a choice about your own circumstances, not about the device:
 | | What answers the URL | Good when |
 |---|---|---|
 | **Local** — [tools/edition/README.md](../tools/edition/README.md) | `python3 -m http.server` on the machine that files the edition, under `com.wpnews.serve.plist` | the board and that machine are on the same network, and the machine is awake whenever the board polls |
-| **Cloudflare** — this document | a Worker serving two static files | they are not, or the machine sleeps, or you would rather not run a server on your LAN at all |
+| **Cloudflare Worker** — this document | a Worker serving two static files | they are not, or the machine sleeps, or you would rather not run a server on your LAN at all |
+| **The desk server** — [desk-server.md](desk-server.md) | a container behind a Cloudflare **tunnel**, answering live | you want to *tell* it things: a queue agents push instructions into from anywhere, a schedule, and a typesetting gate on every candidate page |
 
-Both are supported and neither is a migration you have to finish. `publish.sh` does not care whether
-something is also serving locally, and you can switch back by pointing the board at the other URL.
-Keep whichever fits.
+All three are supported and none is a migration you have to finish. `publish.sh` does not care
+whether something is also serving locally, and you can switch back by pointing the board at the
+other URL. Keep whichever fits.
+
+The third differs in kind rather than in degree, and it is worth being clear about which problem it
+solves. The first two are *publishing*: something files an edition, something else copies it
+somewhere, and neither can be asked a question. The desk server can be asked — which is what buys a
+queue, a schedule, and a page that is typeset before it reaches a wall. It costs a container that
+has to keep running. If all you want is the edition on a public URL, the Worker below is less
+machinery and it is the right answer.
 
 The rest of this describes the Cloudflare path, in a way that should work for anyone with a
 Cloudflare account. **You do not need to own a domain.**
