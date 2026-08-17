@@ -1,0 +1,16 @@
+# The filled-in copy of .env.example. It names one person's vault path.
+.env
+
+# A real tunnel config names a hostname and a credentials file that belong to
+# one account. The example beside it is what is committed.
+tunnel/*.yml
+!tunnel/*.yml.example
+
+# Fixtures the tests generate for themselves, so no reviewable-by-nobody binary
+# blob is ever committed.
+test/fixtures/*.bmp
+test/fixtures/*.png
+
+# Anything a local run leaves behind.
+data/
+__pycache__/

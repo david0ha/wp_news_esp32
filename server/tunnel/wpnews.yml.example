@@ -1,0 +1,39 @@
+# Copy to ~/.cloudflared/wpnews.yml and fill in. It is NOT copied into the repo,
+# and compose mounts ~/.cloudflared read-only.
+#
+# One hostname, one service. The control plane lives at /api/* behind a bearer
+# token rather than on a hostname of its own -- two hostnames would let
+# Cloudflare Access sit in front of the API and nothing else, which is cleaner,
+# but Access in front of non-browser agents means service tokens, a second
+# credential system to hold and rotate. This file can grow that second hostname
+# later without the application changing.
+#
+# Setup, once:
+#
+#   cloudflared tunnel create wpnews
+#   cloudflared tunnel route dns wpnews wpnews.example.dev
+#   cp server/tunnel/wpnews.yml.example ~/.cloudflared/wpnews.yml
+#   # then put the uuid it printed into both fields below
+#
+# Then point the board at it, once:
+#
+#   curl -X POST http://wpnews.local/api/news \
+#        -d '{"url":"https://wpnews.example.dev/news.json"}'
+#
+# ONE CLOUDFLARE SETTING WILL BITE: Bot Fight Mode must stay off. It "may
+# challenge API or mobile app traffic" and the challenge assumes a JavaScript
+# engine. The board has none, so a challenge is a hard failure: the device gets
+# HTML where it expected JSON, news_parse() rejects it (leaving the previous
+# edition alone, as designed), and the sheet badges STALE with nothing in the
+# board's log to say why. On the Free plan you cannot carve out an exception --
+# Bot Fight Mode does not run on the Ruleset Engine, so WAF Skip rules have no
+# effect on it. See docs/hosting-cloudflare.md.
+
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/00000000-0000-0000-0000-000000000000.json
+
+ingress:
+  - hostname: wpnews.example.dev
+    service: http://desk:8080
+  # Everything else is refused at the edge rather than reaching the desk at all.
+  - service: http_status:404

@@ -1,0 +1,41 @@
+# The build context is the repository root, and most of it is not wanted in an
+# image that answers a tunnel. Excluding by listing what to drop rather than
+# what to keep is the wrong way round in general -- but the Dockerfile COPYs by
+# explicit path, so this file is only about making the context small and about
+# making certain that a stray local artifact cannot be swept up.
+
+.git/
+.github/
+.claude/
+.omc/
+.worktrees/
+
+# ESP-IDF build products and the per-developer config that may hold a Wi-Fi
+# password. Neither belongs in an image; sdkconfig especially.
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# The simulator's own build tree and screenshots. The image builds its own.
+sim/build/
+sim/shots/
+shots/
+
+# The React Native companion app: a different product with a different toolchain.
+app/
+
+# Assembled by tools/edition/publish.sh from a live edition.
+tools/edition/public/
+
+# Local server state and secrets.
+server/.env
+server/data/
+server/tunnel/*.yml
+!server/tunnel/*.yml.example
+
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+*.log

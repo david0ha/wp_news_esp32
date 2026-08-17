@@ -1,0 +1,86 @@
+# The desk, the worker, and the tunnel.
+#
+#   cp server/.env.example server/.env      # then fill it in
+#   docker compose -f server/compose.yaml up -d
+#
+# Three services, and the boundaries between them are the design:
+#
+#   desk        holds the current edition and answers the board. Reachable from
+#               the internet. Holds no credential of the owner's beyond the
+#               bearer tokens that authorise writing to itself.
+#   agent       holds the owner's API key and reads the owner's vault. Reachable
+#               from nothing -- it makes outbound calls only.
+#   cloudflared publishes exactly one hostname at exactly one container port.
+#
+# The desk publishes to 127.0.0.1 rather than 0.0.0.0 because the tunnel is the
+# intended way in and a second, unauthenticated way in on the LAN is a second
+# thing to reason about. 8790 because 8787-8789 are the existing MCP tunnels.
+
+name: wpnews
+
+services:
+  desk:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: wpnews-desk:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8790:8080"
+    volumes:
+      # Serving state. A named volume, NOT the vault: the vault lives on an
+      # external SSD, and pulling a disk must not blank a newspaper.
+      - wpnews-data:/data
+      # The private half. One subdirectory of the vault, never the whole thing:
+      # the vault is the owner's second brain and this container answers the
+      # internet, so the blast radius is chosen rather than inherited.
+      - ${WPNEWS_VAULT:?set WPNEWS_VAULT in server/.env}:/vault
+      # Tokens. Read-only, and outside the vault because the vault is a git
+      # repository and git history is permanent.
+      - ${HOME}/.wpnews:/run/secrets:ro
+    environment:
+      WPDESK_KEEP_EDITIONS: ${WPDESK_KEEP_EDITIONS:-30}
+      WPDESK_LOG_LEVEL: ${WPDESK_LOG_LEVEL:-INFO}
+      TZ: ${TZ:-Asia/Seoul}
+    security_opt:
+      - no-new-privileges:true
+    read_only: false          # /data and /repo/sim/build are written at runtime
+    tmpfs:
+      - /tmp
+
+  agent:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile.agent
+    image: wpnews-agent:latest
+    restart: unless-stopped
+    depends_on:
+      desk:
+        condition: service_healthy
+    volumes:
+      - ${WPNEWS_VAULT:?set WPNEWS_VAULT in server/.env}:/vault
+      - ${HOME}/.wpnews:/run/secrets:ro
+      - wpnews-scratch:/scratch
+    environment:
+      WPNEWS_DESK: http://desk:8080
+      TZ: ${TZ:-Asia/Seoul}
+    security_opt:
+      - no-new-privileges:true
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      desk:
+        condition: service_healthy
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/wpnews.yml", "run"]
+    volumes:
+      # The named tunnel's credentials and the ingress file. Read-only: the
+      # tunnel needs to present a certificate, not to manage one.
+      - ${HOME}/.cloudflared:/etc/cloudflared:ro
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  wpnews-data:
+  wpnews-scratch:

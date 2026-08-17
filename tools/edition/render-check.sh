@@ -48,10 +48,23 @@ out="${2:-$paydir/proof}"
 # Build only when something changed. A desk that runs twice a day should not pay
 # for a cold CMake configure, and a desk iterating on copy should not pay for
 # anything at all after the first run.
-if [ ! -d "$root/sim/build" ]; then
-    cmake -S "$root/sim" -B "$root/sim/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
+#
+# A container has the opposite arrangement: the image built the simulator at
+# `docker build` time and then threw the toolchain away, so that a broken build
+# fails when the image is built rather than at the first edition of the day, and
+# so that the runtime image does not carry a C compiler on a host reachable from
+# the internet. There, cmake is absent and the binary is already correct.
+if command -v cmake >/dev/null 2>&1; then
+    if [ ! -d "$root/sim/build" ]; then
+        cmake -S "$root/sim" -B "$root/sim/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
+    fi
+    cmake --build "$root/sim/build" -j8 >/dev/null
+elif [ ! -x "$root/sim/build/sim" ]; then
+    echo "render-check: no cmake, and no simulator at $root/sim/build/sim." >&2
+    echo "  On a developer machine, install cmake. In a container, the image build" >&2
+    echo "  was supposed to leave the binary there — see server/Dockerfile." >&2
+    exit 2
 fi
-cmake --build "$root/sim/build" -j8 >/dev/null
 
 mkdir -p "$out"
 rm -f "$out"/*.bmp "$out"/*.png
