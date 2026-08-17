@@ -156,10 +156,37 @@ typedef struct {
     int  age_seconds;                     /* since the last SUCCESSFUL fetch  */
     bool stale;
 
-    /* --- power --- */
+    /* --- battery --- */
     bool battery_present;
     int  battery_pct;
     int  battery_mv;
+
+    /* --- power: the design measuring itself ---
+     *
+     * The deep-sleep design rests on two numbers nobody has measured on this
+     * board — the standing deep-sleep current, and how long a Wi-Fi connect
+     * actually takes, which is the dominant term in a wake that is otherwise
+     * three seconds long. Estimating them gave a battery life stated as a range
+     * of 190 to 260 days, and a range that wide is not a prediction.
+     *
+     * So the board counts instead. Every wake accumulates into RTC memory, and
+     * these are those counters: after a day on a wall, with no instruments and
+     * no serial cable, the estimate becomes a measurement. That is the whole
+     * purpose of the object, and it is why it reports raw counters rather than
+     * a verdict — a number a reader can re-derive survives a change to the
+     * arithmetic that produced it.
+     *
+     * These fields are copied straight out of wp_rtc_state_t and share its
+     * names on purpose, so the wiring is a copy with no arithmetic in it. The
+     * two DERIVED numbers the phone receives — the mean awake time and the
+     * daily estimate — are computed in device_api_json.c, which is host-tested,
+     * rather than by whoever fills this struct. Both of them divide, and both
+     * divisors are legitimately zero on a real board. */
+    bool deep_sleep;      /* the feature is enabled for this board            */
+    int  sleep_seconds;   /* the interval actually in force; 0 = none set yet */
+    int  wakes;           /* since the last cold boot (RTC memory is lost on one) */
+    int  quiet_wakes;     /* of those, the ones that cost no refresh          */
+    int  awake_ms_total;  /* summed over `wakes`; the mean is derived from it */
 
     /* --- e-Paper ---
      * Spectra 6 has one kind of refresh and it is slow, so there is one number.

@@ -79,6 +79,16 @@ static void fill(device_state_t *st)
     st->battery_mv = 4012;
 
     st->refresh_ms = 24800;
+
+    /* A board a day and a half into a 15-minute interval: 137 wakes, 129 of
+     * which cost no refresh, and 411 seconds awake in total — a 3,000 ms mean.
+     * These are the numbers the estimate below is derived from, so they are the
+     * spec's §10 15-minute row seen from the inside. */
+    st->deep_sleep     = true;
+    st->sleep_seconds  = 900;
+    st->wakes          = 137;
+    st->quiet_wakes    = 129;
+    st->awake_ms_total = 411000;
 }
 
 static cJSON *obj(cJSON *root, const char *key)
@@ -273,7 +283,103 @@ static void test_state_shape(void)
     cJSON *p = obj(r, "panel");
     check_int(p, "refreshMs", 24800);
 
+    /* The power object is the design measuring itself. Both of its derived
+     * numbers are computed here rather than by the caller, so this is the only
+     * place either of them can be got wrong. */
+    cJSON *pw = obj(r, "power");
+    check_bool(pw, "deepSleep", true);
+    check_int(pw, "sleepSeconds", 900);
+    check_int(pw, "wakes", 137);
+    check_int(pw, "quietWakes", 129);
+    check_int(pw, "meanAwakeMs", 3000);     /* 411000 / 137 */
+    check_int(pw, "estMahPerDay", 6);       /* see the pinned case below */
+
     cJSON_Delete(r);
+}
+
+/* Serialize a state that differs from the ordinary one only in its power
+ * counters, and read the two derived numbers back out of the document. */
+static void power_case(int sleep_seconds, int wakes, int awake_ms_total,
+                       int want_mean, int want_est)
+{
+    device_state_t st;
+    fill(&st);
+    st.sleep_seconds  = sleep_seconds;
+    st.wakes          = wakes;
+    st.awake_ms_total = awake_ms_total;
+
+    char buf[ROOMY];
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    cJSON *r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (!r) return;
+    cJSON *pw = obj(r, "power");
+    check_int(pw, "meanAwakeMs", want_mean);
+    check_int(pw, "estMahPerDay", want_est);
+    cJSON_Delete(r);
+}
+
+static void test_the_daily_estimate_is_pinned_to_its_measured_constant(void)
+{
+    /* estMahPerDay is the number that tells a user whether the whole feature
+     * worked, and it rests on one measured constant: 23 µAh per awake second
+     * (spec §10). A constant that drifted would not fail anything — it would
+     * quietly report a different battery life, which is exactly the kind of
+     * number nobody re-derives. So it is pinned to a worked example here.
+     *
+     * At a 15-minute interval a day has 86400/900 = 96 wakes. At the 3,000 ms
+     * mean the fill above records, that is 96 × 3000 × 23 / 1000 = 6,624 µAh,
+     * or 6 mAh a day.
+     *
+     * That is the AWAKE-TIME TERM of the spec's §10 15-minute row, not the whole
+     * row: the 16–22 mAh/day there also carries two refreshes at 2.3 mAh and the
+     * standing deep-sleep current, and this number does not claim to know
+     * either. What it does know is measured on the board rather than assumed,
+     * which is the entire point of §9. */
+    power_case(900, 137, 411000, 3000, 6);
+
+    /* The rest of the interval table, at the same mean, so the shape of the
+     * curve is asserted and not just one point on it. */
+    power_case(60, 10, 30000, 3000, 99);       /* 1440 wakes/day */
+    power_case(3600, 5, 15000, 3000, 1);       /*   24 wakes/day */
+    power_case(86400, 1, 3000, 3000, 0);       /*    1 wake/day, under 1 mAh */
+
+    /* Polling every second, which is the absurdity that proves the arithmetic
+     * carries: 86400 × 1000 ms × 23 / 1000 = 1,987,200 µAh ≈ 1,987 mAh/day,
+     * next door to the 1,944 the spec's §10 gives for a board that never
+     * sleeps at all. */
+    power_case(1, 1, 1000, 1000, 1987);
+}
+
+static void test_the_estimate_does_not_overflow_thirty_two_bits(void)
+{
+    /* The intermediate is the trap, not the answer. 86400 wakes × 999,999,999 ms
+     * × 23 is 1.99e15 — five orders of magnitude past an int32 — while the
+     * result, 1,987,199,998 mAh/day, fits in one. Computing it in 32 bits does
+     * not fail loudly; it reports some small, plausible, wrong number of
+     * milliamp-hours. These values cannot happen on a real board, which is
+     * precisely why nothing else would ever catch it. */
+    power_case(1, 1, 999999999, 999999999, 1987199998);
+}
+
+static void test_the_power_estimate_never_divides_by_zero(void)
+{
+    /* Both divisors are legitimately zero. sleepSeconds is 0 on a board that
+     * has never been told an interval (PROV_SLEEP_SECONDS_UNSET) and on one
+     * whose firmware has not wired the field up yet; wakes is 0 on every board
+     * before its first sleep. An integer divide by zero on Xtensa is not a NaN
+     * or a silly number — it is an exception that panics and reboots the board,
+     * and it would do it from inside the HTTP handler answering the phone that
+     * asked. */
+    power_case(0, 137, 411000, 3000, 0);         /* no interval: no estimate  */
+    power_case(-1, 137, 411000, 3000, 0);        /* uninitialised read        */
+    power_case(900, 0, 0, 0, 0);                 /* never woken: no mean      */
+    power_case(900, -3, 411000, 0, 0);           /* uninitialised read        */
+
+    /* A total with no wakes to divide it by cannot happen, and is still not
+     * allowed to produce a mean — reporting the raw total as if it were one
+     * would read as a 411-second wake. */
+    power_case(900, 0, 411000, 0, 0);
 }
 
 static void test_counts_are_clamped_to_their_arrays(void)
@@ -447,6 +553,14 @@ static void fill_worst_case(device_state_t *st)
     st->poll_seconds = st->age_seconds = 999999999;
     st->battery_pct = st->battery_mv = 999999999;
     st->refresh_ms = 999999999;
+
+    /* The power counters at their widest, and a one-second interval so the
+     * derived estimate is the longest number the document can carry — ten
+     * digits. The derived fields are the reason this matters: they are the only
+     * numbers here that are not simply copied from the struct, so their width
+     * is not obvious from the struct's own field sizes. */
+    st->sleep_seconds = 1;
+    st->wakes = st->quiet_wakes = st->awake_ms_total = 999999999;
 }
 
 static void test_worst_case_fits_the_servers_buffer(void)
@@ -578,6 +692,19 @@ static void test_zeroed_state_still_parses(void)
         check_int(obj(v, "counts"), "stories", 0);
         check_int(obj(v, "counts"), "figures", 0);
         check_str(r, "deviceId", "");
+
+        /* The power object is present and zeroed rather than absent, for the
+         * same reason as everything else here: an app that has to tell "no key"
+         * from "no wakes yet" has two states to handle where the board has one.
+         * Both divisors are zero in this state — it is the very first poll of a
+         * board that has never slept. */
+        cJSON *pw = obj(r, "power");
+        check_bool(pw, "deepSleep", false);
+        check_int(pw, "sleepSeconds", 0);
+        check_int(pw, "wakes", 0);
+        check_int(pw, "quietWakes", 0);
+        check_int(pw, "meanAwakeMs", 0);
+        check_int(pw, "estMahPerDay", 0);
         cJSON_Delete(r);
     }
 }
@@ -587,6 +714,9 @@ int main(void)
     test_info();
     test_state_shape();
     test_counts_are_clamped_to_their_arrays();
+    test_the_daily_estimate_is_pinned_to_its_measured_constant();
+    test_the_estimate_does_not_overflow_thirty_two_bits();
+    test_the_power_estimate_never_divides_by_zero();
     test_utf8_passes_through();
     test_control_characters_are_escaped();
     test_worst_case_fits_the_servers_buffer();
