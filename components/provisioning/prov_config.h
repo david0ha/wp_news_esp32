@@ -90,8 +90,14 @@ bool prov_validate_news_url(const char *url);
 uint32_t prov_clamp_sleep_seconds(uint32_t seconds);
 
 // Read the setup form's optional interval box: digits only, clamped as above.
-// Anything else — an empty box, "abc", "30 minutes", a stray minus sign, a
-// number too large for a uint32_t — is PROV_SLEEP_SECONDS_UNSET.
+// Anything that is not a run of digits — an empty box, "abc", "30 minutes", a
+// stray minus sign — is PROV_SLEEP_SECONDS_UNSET.
+//
+// A run of digits too large to hold saturates and then clamps, so it comes out
+// as PROV_SLEEP_SECONDS_MAX rather than as UNSET. That is the deliberate answer
+// and not a near-miss of one: somebody who typed twenty nines was asking for the
+// longest interval there is, and handing them the build-time default instead
+// would be the one reading of that input nobody could have meant.
 //
 // Deliberately not a validation failure. The field is optional, so the whole
 // form must not be thrown back at a user who mistyped a box they were entitled

@@ -20,9 +20,16 @@ config WP_NEWS_POLL_SECONDS
       differs from what is on the glass — so the floor here is about not
       hammering somebody's laptop, not about e-Paper wear.
 
-      It is not free on battery, though, and that is the number to set this by:
-      a wake costs roughly 0.04 mAh, so a minute's cadence is about 58 mAh a day
-      against a quarter-hour's 3.8. On USB it makes no difference at all.
+      This governs the AWAKE board only — the poll loop that runs while the
+      board is powered and connected. It is NOT the deep-sleep cadence, and
+      changing it does not move the battery figures at all on a board that
+      sleeps: that knob is WP_NEWS_SLEEP_SECONDS, whose help text carries the
+      arithmetic. Between polls here the radio stays up and the board stays at
+      about 81 mA whatever this is set to, so the cost of a shorter interval is
+      somebody's laptop serving more requests, not charge.
+
+      A board reaches this path when deep sleep is off, when it is on USB or has
+      no cell fitted, and during the window a button press opens.
 
       A snapshot older than twice this interval — or a quarter of an hour,
       whichever is longer — is badged "오래됨".

@@ -913,9 +913,11 @@ static news_t s_fetched;
 static void NewsTask(void *arg)
 {
     (void)arg;
-    /* No settle delay. This task is only ever created after provisioning_run()
-     * has returned true, and what that returns true on is an acquired IP — the
-     * stack is not "settling", it is up. The three seconds this used to wait
+    /* No settle delay. This task is only ever created once the board has an IP
+     * — from provisioning_run() on a cold boot, or from
+     * provisioning_connect_only() when the quiet path found changed content and
+     * fell through — and an acquired IP is what both of those return true on.
+     * The stack is not "settling", it is up. The three seconds this used to wait
      * were three seconds UiTask spent holding a blank panel. If the first fetch
      * does lose a race with something, the retry below costs less than the wait
      * did. */

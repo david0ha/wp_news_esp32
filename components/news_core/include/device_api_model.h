@@ -183,7 +183,11 @@ typedef struct {
      * rather than by whoever fills this struct. Both of them divide, and both
      * divisors are legitimately zero on a real board. */
     bool deep_sleep;      /* the feature is enabled for this board            */
-    int  sleep_seconds;   /* the interval actually in force; 0 = none set yet */
+    /* The interval actually in force. The device's own filler resolves the
+     * build-time default before it gets here, so 0 should never reach a phone —
+     * but the serialiser still guards it, because this struct is also filled by
+     * the host tests and a 0 here is a divide by zero in est_mah_per_day(). */
+    int  sleep_seconds;
     int  wakes;           /* since the last cold boot (RTC memory is lost on one) */
     int  quiet_wakes;     /* of those, the ones that cost no refresh          */
     int  awake_ms_total;  /* summed over `wakes`; the mean is derived from it */
