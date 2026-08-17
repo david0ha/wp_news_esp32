@@ -327,6 +327,7 @@ tools/
 - [docs/specs/2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md) — what this was built from. Its geometry, colour policy, chart and photo rules still hold; its data model and band table are superseded
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
+- [docs/hosting-cloudflare.md](docs/hosting-cloudflare.md) — serving the edition from a domain instead of a Mac on the LAN: what must be published, what must not, and what changes on the device once the URL is `https://`
 - [docs/pages.md](docs/pages.md) — A1 and A2, the grid, the bands, the font decision
 - [docs/epaper-13in3.md](docs/epaper-13in3.md) — the dual-UC8179 driver, the refresh policy, the self-test
 - [docs/graphics.md](docs/graphics.md) — six-ink rendering: the two palettes, the dither, the halftone

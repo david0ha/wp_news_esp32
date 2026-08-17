@@ -578,6 +578,13 @@ static void NewsTask(void *arg)
             }
         }
 
+        /* Every GET this cycle had to make is made. Let the connection go rather
+         * than carrying it across the wait below: five minutes is longer than any
+         * server keeps an idle socket — the mock server closes at thirty seconds —
+         * so holding it saves no handshake and merely guarantees the next poll
+         * writes its request into a socket the peer already closed. */
+        http_port_release();
+
         /* Woken early by KEY1, by POST /api/refresh, or by a URL change. */
         xSemaphoreTake(s_poll_wake, pdMS_TO_TICKS(POLL_SECONDS * 1000));
     }

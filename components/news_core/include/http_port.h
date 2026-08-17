@@ -41,6 +41,27 @@ char *http_get(const char *url, int *out_status);
  */
 void *http_get_bin(const char *url, size_t *out_len, int *out_status);
 
+/*
+ * Drop whatever connection THIS thread is holding open. Call it when the caller
+ * knows it has no more requests coming for a while; the next http_get() then
+ * starts from a fresh connection instead of a stale one.
+ *
+ * Connection reuse pays inside a burst — a snapshot and the photographs beside
+ * it are four GETs to one host — and pays nothing across a five-minute poll
+ * interval, because no server holds an idle connection that long. The mock
+ * server closes at thirty seconds. Reusing across the gap therefore does not
+ * save a handshake, it guarantees the next request is written into a socket the
+ * peer has already closed: ECONNRESET, an error the layers below log at ERROR
+ * level whatever we do about it, and a wasted round trip to discover it.
+ *
+ * The device port recovers from that on its own (http_port_esp.c retries), so
+ * this is not what makes the fetch correct — it is what stops the board
+ * reporting a fault every five minutes for the rest of its life.
+ *
+ * Safe to call with nothing open, and safe never to call at all.
+ */
+void http_port_release(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -81,6 +81,76 @@ static void host_of(const char *url, char *out, size_t n) {
     out[i] = '\0';
 }
 
+/* A fresh handle, configured for `url`.
+ *
+ * This is factored out because the retry below cannot reuse a handle, and that
+ * is not obvious. esp_http_client keeps the state of the request it is
+ * SERIALIZING separately from the state of its connection:
+ *
+ *     esp_http_client_request_send()          (esp_http_client.c:1556)
+ *         if (!client->first_line_prepared) {
+ *             http_client_prepare_first_line(...);
+ *             client->first_line_prepared = true;
+ *             client->header_index        = 0;
+ *             client->data_written_index  = 0;
+ *             client->data_write_left     = 0;
+ *         }
+ *
+ * When a write dies mid-request those four are left as the dead attempt found
+ * them. esp_http_client_close() winds the CONNECTION back to HTTP_STATE_INIT
+ * and touches nothing else, and the one function that does reset them —
+ * esp_http_client_prepare() — is static and runs only when `process_again` is
+ * set, which is the redirect/auth path and not this one. So a second perform()
+ * on the same handle reconnects and then writes NOTHING: first_line_prepared is
+ * still true, header_index is still past the end, and the server sees a TCP
+ * connection that never speaks. Measured on the board — the request never
+ * reached the server and never appeared in its log.
+ *
+ * A calloc'd handle is the only public route back to a clean request. */
+static esp_http_client_handle_t client_new(const char *url) {
+    esp_http_client_config_t cfg = {
+        .url               = url,
+        .event_handler     = on_evt,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms        = 15000,
+        .buffer_size       = 4096,
+        .keep_alive_enable = true,   /* TCP keepalive: detect dead idle sockets */
+#if CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
+        /* Save the negotiated TLS session so a later reconnect to the SAME host
+         * resumes (abbreviated handshake, skips the ECDSA cert verify). Helps a
+         * slow single-host poller whose keep-alive the server drops while idle;
+         * the cert bundle still gates a full handshake.
+         *
+         * Only for https://, because there is no session to save otherwise and
+         * asking for one is not free of consequence: esp_http_client hangs the
+         * request off the transport list's ssl entry regardless of scheme, and
+         * on a plain-HTTP connection that entry's tls context is NULL, so the
+         * save lands in esp_mbedtls_get_client_session(NULL) and the board
+         * logs `esp_tls session context cannot be NULL` once per connection —
+         * an error line, in red, for a board doing exactly what it should.
+         *
+         * The handle outlives one URL, so this is decided by the scheme of the
+         * URL that created it. A later switch from http:// to https:// on the
+         * same task loses session resumption, not correctness. */
+        .save_client_session = (strncmp(url, "https://", 8) == 0),
+#endif
+        .user_agent        = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                             "AppleWebKit/537.36 (KHTML, like Gecko) "
+                             "Chrome/120 Safari/537.36",
+    };
+    return esp_http_client_init(&cfg);
+}
+
+/* Thread-local, like the handle it frees: this releases the CALLING task's
+ * connection and cannot touch another's. See http_port.h for when to call it. */
+void http_port_release(void) {
+    if (t_client) {
+        esp_http_client_cleanup(t_client);
+        t_client = NULL;
+    }
+    t_host[0] = '\0';
+}
+
 char *http_get(const char *url, int *out_status) {
     return (char *)http_get_bin(url, NULL, out_status);
 }
@@ -106,37 +176,7 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
     }
 
     if (!t_client) {
-        esp_http_client_config_t cfg = {
-            .url               = url,
-            .event_handler     = on_evt,
-            .crt_bundle_attach = esp_crt_bundle_attach,
-            .timeout_ms        = 15000,
-            .buffer_size       = 4096,
-            .keep_alive_enable = true,   /* TCP keepalive: detect dead idle sockets */
-#if CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
-            /* Save the negotiated TLS session so a later reconnect to the SAME host
-             * resumes (abbreviated handshake, skips the ECDSA cert verify). Helps a
-             * slow single-host poller whose keep-alive the server drops while idle;
-             * the cert bundle still gates a full handshake.
-             *
-             * Only for https://, because there is no session to save otherwise and
-             * asking for one is not free of consequence: esp_http_client hangs the
-             * request off the transport list's ssl entry regardless of scheme, and
-             * on a plain-HTTP connection that entry's tls context is NULL, so the
-             * save lands in esp_mbedtls_get_client_session(NULL) and the board
-             * logs `esp_tls session context cannot be NULL` once per connection —
-             * an error line, in red, for a board doing exactly what it should.
-             *
-             * The handle outlives one URL, so this is decided by the scheme of the
-             * URL that first created it. A later switch from http:// to https:// on
-             * the same task loses session resumption, not correctness. */
-            .save_client_session = (strncmp(url, "https://", 8) == 0),
-#endif
-            .user_agent        = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                 "Chrome/120 Safari/537.36",
-        };
-        t_client = esp_http_client_init(&cfg);
+        t_client = client_new(url);
         if (!t_client) { free(a.buf); return NULL; }
     }
 
@@ -164,22 +204,33 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
      * closes the connection, the next poll reconnects and succeeds, and the
      * one after that is stale again. Every second edition, silently missed.
      *
-     * So retry once on a fresh connection — the same diagnosis and the same
-     * remedy curl applies. The retry is gated on the connection having been
-     * REUSED: a request that opened its own connection and still failed has a
-     * server-side or network reason, and repeating it would only double every
-     * fifteen-second timeout in front of a board that has five minutes to
-     * wait anyway.
+     * So retry once on a connection that is new all the way down — a new
+     * handle, not just a new socket, for the reason set out over client_new().
+     * The retry is gated on the connection having been REUSED: a request that
+     * opened its own connection and still failed has a server-side or network
+     * reason, and repeating it would only double every fifteen-second timeout
+     * in front of a board that has five minutes to wait anyway.
+     *
+     * The new handle costs the https:// case its saved TLS session, so the
+     * retry pays a full handshake. That is the right way round: this path runs
+     * once per stale socket, and a recovery that is merely cheap is worth
+     * nothing next to one that works.
      */
     if (err != ESP_OK && !will_handshake) {
         ESP_LOGD(TAG, "reused connection failed (%s) — retrying on a fresh one",
                  esp_err_to_name(err));
-        esp_http_client_close(t_client);
+        esp_http_client_cleanup(t_client);   /* closes the socket AND frees the handle */
+        t_client = NULL;
         t_host[0] = '\0';
         /* The dead attempt may have accumulated a partial body before it died,
-         * and the retry appends. Start it empty; user_data still points here. */
+         * and the retry appends. Start it empty. */
         free(a.buf);
         memset(&a, 0, sizeof(a));
+
+        t_client = client_new(url);
+        if (!t_client) return NULL;
+        esp_http_client_set_url(t_client, url);
+        esp_http_client_set_user_data(t_client, &a);
 
         if (s_tls_connect_lock) xSemaphoreTake(s_tls_connect_lock, portMAX_DELAY);
         err = esp_http_client_perform(t_client);
