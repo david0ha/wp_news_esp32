@@ -299,9 +299,19 @@ tools/
   success. Blanking the sheet is the one failure a user actually notices, and a stale front page
   badged `STALE` beats an empty one.
 - **The demo snapshot is a complete front page**, and an unconfigured board is a complete
-  configuration, not a placeholder. `UiTask` puts it on the glass *before* the first poll rather than
-  after it: on a panel this slow, a board that spends its first refresh on "Loading..." has spent
-  twenty-five seconds saying nothing.
+  configuration, not a placeholder — so a board with no URL prints it at once and is finished.
+- **A boot spends exactly one refresh, and the whole boot path is built around choosing which page
+  gets it.** That is the budget: twenty-five seconds each, and the old path spent *five* of them —
+  `epd6_init()` clearing to white, "Connecting to X", "Connected 192.168…", the demo snapshot, then
+  the real page. A hundred and thirty-five seconds, of which about a hundred and ten said nothing a
+  reader wanted. So `epd6_init()` no longer refreshes (the glass keeps the last edition until there
+  is a better one), the two station events are log lines, and `UiTask` holds its refresh open for
+  `FIRST_PAINT_WAIT_MS` so the *real* front page is the one that gets printed. The demo goes up only
+  when nothing better arrives — or immediately, when no URL means nothing better is coming.
+  The instinct this reverses is worth naming, because it is right on every other display: showing
+  *something* finished, fast, normally beats showing nothing. Here the something costs the same
+  twenty-five seconds as the real thing and delays it by that much again, so "fill the screen early"
+  is precisely backwards. Anything added to the boot path should be measured in refreshes first.
 - **`sizeof(news_t)` is 32,932 bytes** — measured, not estimated. That is four times `UiTask`'s whole
   8 KB stack, so all three snapshots in `user_app.cpp` — the state, the UI copy and the fetch buffer —
   are file-scope statics, safe only because the single-owner rule holds: `UiTask` is the only caller

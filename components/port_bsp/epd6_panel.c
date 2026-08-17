@@ -544,7 +544,22 @@ esp_err_t epd6_init(const epd6_pins_t *pins)
     ESP_LOGI(TAG, "Spectra 6 %dx%d up (fb %u B in PSRAM, %u B DMA staging)",
              EPD6_W, EPD6_H, (unsigned)EPD6_FB_SIZE, (unsigned)BLOCK_BYTES);
 
-    epd6_refresh();          /* land on a known-clean white panel */
+    /*
+     * Deliberately no refresh here. Bringing the panel up leaves the framebuffer
+     * white (epd6_clear above) and the glass holding whatever the last edition
+     * left on it, and the next caller renders over the one and refreshes the
+     * other — one flash instead of two.
+     *
+     * The "land on a known-clean white panel" this used to do was never a
+     * requirement of the waveform, and this driver already proves it: every
+     * refresh after the first goes from page N straight to page N+1 with no
+     * white pass between them. A boot is that same transition with the previous
+     * page drawn before the power cycle rather than after it.
+     *
+     * It is also twenty-five seconds off the time to the first real page, on a
+     * board whose whole boot used to spend a hundred and thirty-five seconds
+     * showing things nobody asked for.
+     */
     s_ready = true;
     return ESP_OK;
 }

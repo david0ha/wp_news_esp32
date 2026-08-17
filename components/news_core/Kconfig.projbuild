@@ -12,7 +12,7 @@ config WP_NEWS_TIMEZONE
 
 config WP_NEWS_POLL_SECONDS
     int "News poll interval (seconds)"
-    default 300
+    default 60
     range 30 86400
     help
       How often the device fetches the news snapshot. Polling costs nothing
@@ -20,7 +20,12 @@ config WP_NEWS_POLL_SECONDS
       differs from what is on the glass — so the floor here is about not
       hammering somebody's laptop, not about e-Paper wear.
 
-      A snapshot older than twice this interval is badged "오래됨".
+      It is not free on battery, though, and that is the number to set this by:
+      a wake costs roughly 0.04 mAh, so a minute's cadence is about 58 mAh a day
+      against a quarter-hour's 3.8. On USB it makes no difference at all.
+
+      A snapshot older than twice this interval — or a quarter of an hour,
+      whichever is longer — is badged "오래됨".
 
 config WP_NEWS_FEED_URL
     string "Fallback news URL"

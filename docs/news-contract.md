@@ -51,8 +51,11 @@ is wrong" are different messages in the log (`news_service.c`). The device port 
 
 The poll is also woken early by KEY1, by `POST /api/refresh`, and by a URL change.
 
-A snapshot older than **twice** the poll interval is badged `STALE` (`STALE_AFTER_POLLS` in
-`user_app.cpp`). Polling itself costs nothing visible: `news_hash()` fingerprints everything that
+A snapshot older than **twice the poll interval, or a quarter of an hour, whichever is longer**, is
+badged `STALE` (`STALE_SECONDS` in `user_app.cpp`). The floor is what keeps the badge meaningful at a
+short cadence: it answers a question about the news, not about the poll loop, and at the default
+sixty-second interval "twice" alone would badge a perfectly good front page because somebody's Wi-Fi
+hiccuped for two minutes. Polling itself costs nothing visible: `news_hash()` fingerprints everything that
 reaches the glass and `NewsTask` compares before it notifies `UiTask`, so an unchanged poll does not
 touch the panel. On this panel a refresh is twenty-five to thirty seconds of flashing, so that is
 not an optimisation, it is the difference between a paper on a wall and a nuisance.

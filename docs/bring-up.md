@@ -73,15 +73,19 @@ Then:
 
 ```
 I epd6: Spectra 6 1200x1600 up (fb 960000 B in PSRAM, 19200 B DMA staging)
-I epd6: refresh 2xxxx ms
 ```
 
-That second line is `epd6_init()` landing the panel on a known-clean white sheet, and it is the first
-real refresh — **expect twenty to thirty seconds of nothing before it appears.** A monitor that looks
-hung here is a monitor waiting on the panel.
+**`epd6_init()` does not refresh**, so nothing appears on the glass here and the boot moves straight
+on — the panel keeps whatever image it was last left holding until the first page is ready to print.
+That is deliberate: a refresh is twenty-five seconds, a boot is worth exactly one of them, and
+clearing to white first spends two to show one page. It also means the first `I epd6: refresh` you
+see belongs to a real page, further down.
 
-**If `refresh` never appears** and instead you get `BUSY stuck low for 60000 ms — panel wired and
-powered?`, the driver waited its full timeout and gave up rather than hanging. Two candidates:
+The BUSY probe above still runs during bring-up, and so does the reset wait — a panel that never
+releases the line reports `BUSY stuck low for 2000 ms` here. But the **60-second** one now belongs to
+the first real page rather than to init. Wherever it appears, `BUSY stuck low for N ms — panel wired
+and powered?` means the driver waited its full timeout and gave up rather than hanging. Two
+candidates:
 
 - **GPIO43 is not actually reaching the panel.** The rail is behind a load switch with a pulldown, so
   an unpowered panel is the default state and `epd6_init()` driving the pin HIGH is the only thing
@@ -144,8 +148,19 @@ I buttons: ready: KEY0=GPIO2 KEY1=GPIO3 KEY2=GPIO5 BOOT=GPIO0
 I app: controls: KEY0 = page, KEY1 = refresh, KEY2 = page 1 (5s hold = Wi-Fi setup)
 ```
 
-and one more refresh, which is the demo front page. A board with no URL configured is finished at
-this point: the demo snapshot is a complete front page, not a placeholder.
+and then **one** refresh — the whole boot spends exactly one, and which page gets it depends on
+whether a URL is configured:
+
+- **No URL.** The demo front page, immediately. A board with no URL configured is finished at this
+  point: the demo snapshot is a complete front page, not a placeholder.
+- **A URL.** `UiTask` holds the refresh open for up to fifteen seconds waiting for the first
+  snapshot, so the real front page is what lands on the glass — the demo is never printed at all. If
+  nothing arrives in time you get `W app: no snapshot within 15000 ms — printing the demo page` and
+  the demo goes up instead, with the real one following on the next poll.
+
+Between power-on and that refresh the glass keeps whatever it was last left holding. A board being
+re-flashed therefore shows yesterday's front page for the twenty or so seconds before the new one
+appears, which is correct and not a hang.
 
 ### `net_time`, `device_api` — online
 
