@@ -28,7 +28,7 @@ STA attempt fails and the portal comes back up.
 
 | File | Responsibility |
 |------|----------------|
-| `prov_config.{h,c}` | config model (`ssid` / `password` / `news_url`) + credential and URL validation |
+| `prov_config.{h,c}` | config model (`ssid` / `password` / `news_url` / `sleep_seconds`) + credential and URL validation, and the one clamp every writer of the polling interval goes through |
 | `form_parse.{h,c}`  | `x-www-form-urlencoded` decode + field extraction |
 | `prov_json.{h,c}`   | JSON building + string escaping for the `/api/*` responses |
 
@@ -36,7 +36,7 @@ STA attempt fails and the portal comes back up.
 
 | File | Responsibility |
 |------|----------------|
-| `prov_store.{h,c}`  | NVS load/save/clear (namespace `prov`); `prov_store_save` returns commit status |
+| `prov_store.{h,c}`  | NVS load/save/clear (namespace `prov`); `prov_store_save` returns commit status. Also in the host suite, against the in-memory NVS in `test/fake_idf/` — see below |
 | `prov_wifi.{h,c}`   | STA connect (bounded initial retry → then **persistent** reconnect once online), SoftAP, **non-blocking background scan → cache** |
 | `prov_portal.{h,c}` | HTTP server + DNS hijack captive portal; `/scan` returns the cache (never scans live), rejects over-length / NUL-injected fields |
 | `provisioning.{h,c}`| orchestrator (`provisioning_run`) + public API; only reboots on a confirmed save |
@@ -47,15 +47,16 @@ STA attempt fails and the portal comes back up.
 
 | Method | Path              | Purpose |
 |--------|-------------------|---------|
-| GET    | `/`               | setup page (network list and saved news URL rendered server-side) |
-| POST   | `/save`           | browser form: `ssid=…&password=…&news_url=…` → result page, then reboot |
+| GET    | `/`               | setup page (network list, saved news URL and saved interval rendered server-side) |
+| POST   | `/save`           | browser form: `ssid=…&password=…&news_url=…&sleep_seconds=…` → result page, then reboot |
 | GET    | `/api/info`       | `{"deviceId","model","apSsid"}` |
 | GET    | `/api/scan`       | `{"networks":[{"ssid","rssi","secure"}, …]}` (served from the cache) |
 | POST   | `/api/provision`  | app form body → `202`, then an async connect test |
 | GET    | `/api/status`     | `{"state":"idle\|connecting\|connected\|failed","ssid?","reason?"}` |
 | *      | *(other)*         | 302 → `http://192.168.4.1/` (OS captive-portal detection) |
 
-`POST /api/provision` reads `ssid` / `ssid_manual` / `password` / `news_url` and nothing else, so a
+`POST /api/provision` reads `ssid` / `ssid_manual` / `password` / `news_url` / `sleep_seconds` and
+nothing else, so a
 phone still running the stock-ticker app's build — which POSTs `tickers` / `finnhub_key` / `fmp_key`
 / `econ_url` — has those fields discarded and still completes onboarding. The body allowance stays
 generous for the same reason. See [../../docs/app-control.md](../../docs/app-control.md).
@@ -65,7 +66,14 @@ captive sheet automatically.
 
 ## NVS keys (namespace `prov`)
 
-`ssid` (str) · `pass` (str) · `vurl` (str, the news snapshot URL) · `force_ap` (u8, one-shot).
+`ssid` (str) · `pass` (str) · `vurl` (str, the news snapshot URL) · `sleep_s` (u32, seconds between
+polls; 0 or absent means "use the build-time default") · `force_ap` (u8, one-shot).
+
+Every key but `ssid` is optional **in flash as well as to a user**: a config written by an older
+firmware simply has no `sleep_s`, and `prov_store_load` reads a missing key as its zero value
+without changing its verdict. That verdict is only ever "is there a network to join". Anything
+stricter would send every board already hanging on a wall back into the setup portal on the next
+firmware update.
 
 `prov_store_save` also erases `tickers` / `fh_key` / `fmp_key` / `econ_url` — keys the stock-ticker
 firmware wrote, one of which held a live API secret. A device upgraded from that build drops them on
@@ -79,6 +87,13 @@ The pure logic has a self-contained test harness (no external framework):
 ./test/run.sh
 ```
 
-Compiles `prov_config.c` / `form_parse.c` / `json_build.c` with the tests under `test/`
+Compiles `prov_config.c` / `form_parse.c` / `prov_json.c` with the tests under `test/`
 using UndefinedBehaviorSanitizer and runs them. (AddressSanitizer is intentionally omitted —
 its shadow-memory mmap is blocked in the CI sandbox.)
+
+`prov_store.c` comes in too, which is the one exception to "pure logic only". It is built against
+the in-memory NVS in `test/fake_idf/`, because the behaviour that must never regress is what the
+store does with a key that is **not there** — the state of a board provisioned by an earlier
+firmware — and that state cannot be reached by calling the store's own `save()`. The fake
+reproduces the one thing that matters about the real API: a getter that finds nothing returns an
+error and leaves the caller's buffer untouched.

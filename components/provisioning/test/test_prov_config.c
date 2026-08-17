@@ -1,6 +1,8 @@
 #include "tf.h"
 #include "prov_config.h"
 
+#include <stdint.h>
+
 /* prov_validate_credentials is the whole of prov_config now that the watchlist
  * is gone, and it is the gate the companion app's error codes are derived from
  * (POST /api/provision maps each result to a typed Esp32Error). */
@@ -115,4 +117,88 @@ TEST(news_url_enforces_the_stored_length)
     url[PROV_URL_MAX_LEN] = 'a';
     url[PROV_URL_MAX_LEN + 1] = '\0';
     CHECK(prov_validate_news_url(url) == false);
+}
+
+/* The sleep interval is the one number in the config a user is allowed to be
+ * careless with: it arrives from an optional box on a setup form, from a phone,
+ * or not at all. prov_clamp_sleep_seconds() is where all three meet, and it has
+ * to hold two properties at once — every answered value lands inside a range the
+ * board can actually run on, and *unanswered* survives as unanswered. Zero is
+ * not a short sleep, it is "nobody said", and the board is meant to fall back to
+ * its build-time default. Folding zero into the clamp would make every untouched
+ * board silently adopt the minimum, which is the busiest interval there is. */
+
+TEST(sleep_clamp_passes_unset_straight_through)
+{
+    CHECK_INT(PROV_SLEEP_SECONDS_UNSET, 0);
+    CHECK_INT(prov_clamp_sleep_seconds(PROV_SLEEP_SECONDS_UNSET), PROV_SLEEP_SECONDS_UNSET);
+}
+
+TEST(sleep_clamp_raises_a_value_under_the_floor)
+{
+    CHECK_INT(prov_clamp_sleep_seconds(1), PROV_SLEEP_SECONDS_MIN);
+    CHECK_INT(prov_clamp_sleep_seconds(59), PROV_SLEEP_SECONDS_MIN);
+    CHECK_INT(prov_clamp_sleep_seconds(60), 60);
+    CHECK_INT(PROV_SLEEP_SECONDS_MIN, 60);
+}
+
+TEST(sleep_clamp_leaves_a_usable_interval_alone)
+{
+    CHECK_INT(prov_clamp_sleep_seconds(900), 900);
+    CHECK_INT(prov_clamp_sleep_seconds(1800), 1800);
+    CHECK_INT(prov_clamp_sleep_seconds(PROV_SLEEP_SECONDS_MAX), PROV_SLEEP_SECONDS_MAX);
+    CHECK_INT(PROV_SLEEP_SECONDS_MAX, 86400);
+}
+
+TEST(sleep_clamp_caps_the_ceiling)
+{
+    CHECK_INT(prov_clamp_sleep_seconds(86401), PROV_SLEEP_SECONDS_MAX);
+    CHECK_INT(prov_clamp_sleep_seconds(UINT32_MAX), PROV_SLEEP_SECONDS_MAX);
+}
+
+/* prov_parse_sleep_seconds() is the portal form's half of the same idea. The
+ * field is optional, so the only sane reading of anything that is not a number
+ * is "unanswered" — never an error. A user who fat-fingers a box they did not
+ * have to fill in must still get their Wi-Fi saved; a setup page that throws the
+ * whole form back over a stray letter is a board that never gets on the network. */
+
+TEST(sleep_field_parses_the_number_a_user_typed)
+{
+    CHECK_INT(prov_parse_sleep_seconds("1800"), 1800);
+    CHECK_INT(prov_parse_sleep_seconds("900"), 900);
+    CHECK_INT(prov_parse_sleep_seconds("86400"), 86400);
+}
+
+TEST(sleep_field_reads_an_empty_box_as_unset)
+{
+    CHECK_INT(prov_parse_sleep_seconds(""), PROV_SLEEP_SECONDS_UNSET);
+    CHECK_INT(prov_parse_sleep_seconds(NULL), PROV_SLEEP_SECONDS_UNSET);
+    CHECK_INT(prov_parse_sleep_seconds("   "), PROV_SLEEP_SECONDS_UNSET);
+}
+
+TEST(sleep_field_reads_junk_as_unset_rather_than_as_zero)
+{
+    /* Not "0 seconds", not a rejection of the form — unanswered. */
+    CHECK_INT(prov_parse_sleep_seconds("abc"), PROV_SLEEP_SECONDS_UNSET);
+    CHECK_INT(prov_parse_sleep_seconds("30 minutes"), PROV_SLEEP_SECONDS_UNSET);
+    CHECK_INT(prov_parse_sleep_seconds("-900"), PROV_SLEEP_SECONDS_UNSET);
+    CHECK_INT(prov_parse_sleep_seconds("15.5"), PROV_SLEEP_SECONDS_UNSET);
+    CHECK_INT(prov_parse_sleep_seconds("0"), PROV_SLEEP_SECONDS_UNSET);
+}
+
+TEST(sleep_field_clamps_what_it_parses)
+{
+    /* One gate, not two: whatever route the number took, it lands in range. */
+    CHECK_INT(prov_parse_sleep_seconds("5"), PROV_SLEEP_SECONDS_MIN);
+    CHECK_INT(prov_parse_sleep_seconds("99999"), PROV_SLEEP_SECONDS_MAX);
+    /* Absurd, and long enough to overflow a uint32_t on the way in. It must come
+     * out as the ceiling; a wrap would come out as some short interval instead,
+     * and the board would poll every few seconds for the rest of its life. */
+    CHECK_INT(prov_parse_sleep_seconds("99999999999999999999"), PROV_SLEEP_SECONDS_MAX);
+}
+
+TEST(sleep_field_tolerates_the_spaces_a_text_box_collects)
+{
+    CHECK_INT(prov_parse_sleep_seconds(" 1800 "), 1800);
+    CHECK_INT(prov_parse_sleep_seconds("18 00"), PROV_SLEEP_SECONDS_UNSET);
 }

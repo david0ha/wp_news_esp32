@@ -128,6 +128,18 @@
                inputmode="url" maxlength="128">
         <div class="hint">Leave blank to run the built-in demo screen — the display still works, it just shows sample data.</div>
       </div>
+      <div class="field">
+        <label for="sleepSeconds">Check every (seconds)</label>
+        <!-- Optional, and blank is a real answer: it means "use the interval this
+             firmware was built with". A plain seconds box rather than a menu of
+             intervals, because the firmware clamps whatever arrives into a range
+             of its own and a menu would have to be kept in step with it. -->
+        <input class="input" id="sleepSeconds" name="sleep_seconds" value="{{SLEEP_SECONDS}}"
+               placeholder="Leave blank for the default"
+               autocomplete="off" autocapitalize="none" spellcheck="false"
+               inputmode="numeric" maxlength="5">
+        <div class="hint">How often the display looks for a new edition. 60 to 86400 (a day); anything outside is brought into range. It only reprints when the page has actually changed.</div>
+      </div>
     </div>
   </form>
 </div>
