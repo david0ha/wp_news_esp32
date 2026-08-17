@@ -163,10 +163,21 @@ if that width exceeds the 1140 px measure, or if the two side gaps differ by mor
 is centring stated as "the two margins agree", the same thing said in a way that also says which way
 it drifted.
 
-This is the one measurement in the whole design that can only fail at full size. `S_MASTHEAD` sets
-1012 px solid and is tracked out to about 1102 of the 1140 available; a face regenerated a fraction
-wider, or a longer paper name, and the largest text on the sheet either ellipsizes or stops being
-centred. Both are visible from across a room and neither is visible in any host test.
+This is the one measurement in the whole design that can only fail at full size. The flag — the
+drawn mark, the gap, and `S_MASTHEAD` tracked out — sets 1048 px of the 1140 available; a face
+regenerated a fraction wider, or a longer paper name, and the largest text on the sheet either
+ellipsizes or stops being centred. Both are visible from across a room and neither is visible in any
+host test.
+
+It scans the **band**, not the label, and that is what makes it the right check for a nameplate that
+is a drawn mark with a label beside it. Neither object is centred in the measure and neither could
+be: `build_masthead()` measures the name, adds the mark and the gap, and centres the group, so what
+ends up centred is the combined **ink**. A check that read the label's own coordinates would pass a
+page whose mark had drifted off the end of the paper.
+
+The failure this cannot state is the opposite one — a flag that comes up *short*. `./sim.sh
+--measure` prints the flag's set width and the paper it leaves down each side, which is the number to
+read after renaming the paper; `UI_MAST_TRACK` in `ui_internal.h` is what takes up the slack.
 
 ### Glyph coverage
 

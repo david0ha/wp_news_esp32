@@ -132,7 +132,7 @@ plus a term nobody remembers to include.
 
 | strip / rule | y | h | ends | contents |
 |---|--:|--:|--:|---|
-| masthead | 40 | 112 | 152 | `S_MASTHEAD` on A1; a two-line running head on A2 |
+| masthead | 40 | 112 | 152 | the flag — a drawn mark, a gap, `S_MASTHEAD` — on A1; a two-line running head on A2 |
 | heavy rule | 158 | 3 | 161 | |
 | dateline | 165 | 20 | 185 | the date, the desk, and the subject **or** the state chip |
 | hairline | 191 | 1 | 192 | |
@@ -146,6 +146,41 @@ The well runs to the bottom margin exactly, and that is asserted rather than mer
 The nameplate starts at 40 rather than on the 30 px margin. A broadsheet nameplate has air over it,
 and one sitting exactly on the margin reads as cropped by the frame rather than printed on the sheet.
 The ten pixels come off the well.
+
+### The flag
+
+The nameplate is three things set as one: a **mark** 61 px across, a 28 px gap, and `S_MASTHEAD` in
+`masthead_112` tracked at 13. They come to 1048 px of the 1140 measure, and the group is centred by
+its combined ink rather than each part being centred in the measure — see
+[docs/simulator.md](simulator.md) for why the check is a scan of the band and not a look at the
+label's coordinates.
+
+The mark sits **beside** the name rather than over or under it, because the strip is 112 px and no
+more: it is the skeleton both pages are printed on, so a crest above the name would move every rule
+below it, on one page and not the other. It is where The Times of London puts its royal arms and the
+Chicago Tribune its flag. At 61 px against a 112 px strip it comes in a shade under the blackletter's
+cap height — matching the caps would make it a second nameplate, and label size would make it a stray
+tick on the paper.
+
+It is **geometry, not a picture**. Eleven wedges from a common centre, baked as a table of integer
+vertices in a unit space of radius 1024 and filled as exact scanline spans, in `ui_news.c`. A tile
+would be fixed at the size it was screened at and halftoned to get there — and at 61 px the rays are
+two and three pixels wide, which is the same order as the halftone's own dot, so they would come out
+as dotted lines. Filled as spans every pixel is the ink that was asked for, it takes `wp_quantize()`'s
+identity path like every other hard-pixel mark on the sheet, and it can be set at any size the
+furniture asks for without a second asset. There is no trigonometry at page-build time and no
+`libm` — for the reason `ui_chart.h` gives, a double rounded differently on x86 and on Xtensa moves a
+pixel and fails a screenshot test for a reason that has nothing to do with the drawing.
+
+The mark is **ink**, like everything else on the sheet that is not data. See [Colour](#colour): a
+nameplate crest is identity, not direction and not a series, and the two things colour is allowed to
+mean here are the only two.
+
+Renaming the paper is one `#define` and one number. `S_MASTHEAD` is a single line in `ui_strings.h`
+and the masthead face carries the whole Latin alphabet rather than the letters that string happens to
+use, so a rename cannot blank the largest text on the sheet. What it *does* invalidate is
+`UI_MAST_TRACK`, which is measured: `./sim.sh --measure` prints the flag's set width and the paper it
+leaves down each side.
 
 Three strips came off in the edits that made room for the well, and all three removals are worth
 recording because the obvious instinct is to put them back.
@@ -439,11 +474,16 @@ paper's name in `display_56` tracked caps, and the section — `MARKETS` — und
 
 Three sizes were rendered before it settled, and the two that lost are instructive. At `display_36`
 the flag leaves 80% of the strip bare and A2 reads as a weaker, unrelated publication. At
-`display_56` across the full measure, `THE WASHINGTON POST · MARKETS` sets 1071 px of 1140 — edge to
-edge in a heavy Didone — which reads as a second paper rather than as page two of this one. The name
-alone sets 731 px in a 752 box, at half the nameplate's cap height, and those are the two ratios a
+`display_56` across the full measure, the name and the section as one composed string set edge to
+edge in a heavy Didone, which reads as a second paper rather than as page two of this one. The name
+alone sets 560 px in a 752 box, at half the nameplate's cap height, and those are the two ratios a
 section flag actually has. The pair is on two lines because as one composed string it does not fit the
 measure.
+
+It is **not** tracked out to fill its box, and it does **not** carry the mark — the same decision
+twice. A1's flag fills the measure because it is the paper's nameplate; A2's job is to be
+recognisably the same paper, one size down and one weight quieter. A running head with a crest on it
+is a second nameplate.
 
 ## Under-supply, and the quiet day
 

@@ -423,6 +423,26 @@ static void print_measures(void)
            "nothing.\nprose: mean over a fixed paragraph of English "
            "(SIM_PROSE_SAMPLE in sim/main_sim.c).\nThe character counts are "
            "prose; a Title Case headline sets a little wider.\n");
+
+    /* The two nameplates, because both are set to FILL the measure and neither
+     * failure is one a check can state. Too wide fails check_masthead(); too
+     * narrow is silent, and a flag with two hundred pixels of paper down each
+     * side is a poster with a title on it. Renaming the paper means reading
+     * these two lines and putting the answers in UI_MAST_TRACK and RH_W. */
+    lv_point_t sz;
+
+    lv_text_get_size(&sz, S_MASTHEAD, &ui_font_masthead_112, UI_MAST_TRACK, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    printf("\nA1 flag  mark %d + gap %d + \"%s\" %d at tracking %d = %d of %d"
+           "  (%d px of paper each side)\n",
+           UI_LOGO_W, UI_LOGO_GAP, S_MASTHEAD, (int)sz.x, UI_MAST_TRACK,
+           UI_LOGO_W + UI_LOGO_GAP + (int)sz.x, UI_CONTENT_W,
+           (UI_CONTENT_W - (UI_LOGO_W + UI_LOGO_GAP + (int)sz.x)) / 2);
+
+    lv_text_get_size(&sz, S_RUNNING_HEAD, &ui_font_display_56, 2, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    printf("A2 head  \"%s\" %d of the %d box\n",
+           S_RUNNING_HEAD, (int)sz.x, UI_COL(4));
 }
 
 static void check_fixed_strings(void)
@@ -631,12 +651,18 @@ static void check_margins(const char *pass)
 
 /* The masthead, measured off the glass rather than off the font tables.
  *
- * S_MASTHEAD sets 1012 px solid at 112 and is tracked out to about 1102 of the
- * 1140 available, and this is the one measurement in the whole design that can
- * only fail at full size: a face regenerated a fraction wider, or a longer paper
- * name, and the largest text on the sheet either ellipsizes or stops being
- * centred. Both are visible from across a room and neither is visible in any
- * host test. */
+ * The flag sets 1048 px of the 1140 available, and this is the one measurement
+ * in the whole design that can only fail at full size: a face regenerated a
+ * fraction wider, or a longer paper name, and the largest text on the sheet
+ * either ellipsizes or stops being centred. Both are visible from across a room
+ * and neither is visible in any host test.
+ *
+ * IT SCANS THE BAND AND NOT THE LABEL, which is what makes it the right check
+ * for a flag that is a drawn mark and a label set beside it. Neither object is
+ * centred in the measure and neither could be — build_masthead() centres their
+ * combined INK, which is the thing a reader sees and the thing this measures.
+ * A check that read the label's own coordinates would pass a page whose mark had
+ * drifted off the end of the paper. */
 static void check_masthead(const char *pass)
 {
     int l = -1, r = -1;
