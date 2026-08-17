@@ -38,8 +38,17 @@ news_fetch_result_t news_service_fetch_cond(const char *url,
      * is the server confirming the page on the glass is current, and on a board
      * that polls all day it is the most common outcome there is. Answering it
      * after the range test would file it as a status error and drive the
-     * failure backoff on every healthy poll. */
-    if (resp.status == 304) {
+     * failure backoff on every healthy poll.
+     *
+     * But only as an answer to a question we asked. NewsTask's first poll of
+     * every boot sends no If-None-Match at all, deliberately, so that real
+     * content always arrives — a stored tag would earn a 304 on that first poll
+     * and hand back nothing to print. A 304 to a request that carried no tag is
+     * not confirmation, it is a server (or a proxy sitting in front of one)
+     * answering a question nobody asked, and it must land exactly where every
+     * other status this project did not request lands: on the range check
+     * below, which 304 already fails. */
+    if (resp.status == 304 && if_none_match && if_none_match[0]) {
         free(resp.body);   /* a compliant server sends none; be indifferent */
         return NEWS_FETCH_NOT_MODIFIED;
     }

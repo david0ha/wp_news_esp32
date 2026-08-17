@@ -213,9 +213,14 @@ static void test_the_whole_2xx_range_is_accepted(void)
     /* 304 is a success that is not in the 2xx range, and it is the only one, so
      * it is tested here beside the range rather than left to imply itself. The
      * ordering this pins down is the whole point: 304 is answered before the
-     * 2xx test, and a redirect is answered after it. */
-    expect("304 with no body", NULL, 304, NEWS_FETCH_NOT_MODIFIED);
-    expect("304 with a body anyway", json, 304, NEWS_FETCH_NOT_MODIFIED);
+     * 2xx test, and a redirect is answered after it.
+     *
+     * But a 304 is only a confirmation as an answer to a question we asked, and
+     * expect() goes through the unconditional wrapper — no If-None-Match sent —
+     * so these two are the "nobody asked" case, not the ordinary one. See
+     * test_a_304_answering_no_tag_is_not_confirmation for why. */
+    expect("304 with no body, no tag sent", NULL, 304, NEWS_FETCH_HTTP_STATUS);
+    expect("304 with a body anyway, no tag sent", json, 304, NEWS_FETCH_HTTP_STATUS);
 
     /* A captive portal's redirect sits one integer away from "unchanged" and
      * means the opposite. Mistaking it would leave a board on a hotel network
@@ -274,6 +279,61 @@ static void test_304_leaves_the_snapshot_untouched(void)
      * blanking it here would turn every second poll into a full transfer. */
     CHECK_STR(etag, "\"v1\"");
     g_etag_out = NULL;
+}
+
+static void test_a_304_answering_no_tag_is_not_confirmation(void)
+{
+    /* A 304 only means "the document you named is unchanged" as an answer to a
+     * request that named one. NewsTask's first poll of every boot sends no
+     * If-None-Match at all, deliberately, so real content always arrives (see
+     * user_app.cpp). A misbehaving proxy, or a server that echoes 304 to every
+     * request whatever it was asked, must not be read as confirmation here: a
+     * fetch layer that did would leave *out empty on that first poll forever,
+     * await_first_snapshot() would time out, and the DEMO page would print over
+     * what may be a perfectly healthy live edition — the one wake this design
+     * cannot afford to get wrong, on the one poll where nothing yet exists to
+     * confirm. */
+    port_reset();
+
+    /* The contract this must not disturb: a 304 answering a REAL tag is still
+     * NOT_MODIFIED. Restated here, beside the new rule, so a regression in
+     * either direction is caught in the same place. */
+    CHECK(fetch_cond(NULL, 304, "\"abc\"", NULL, 0) == NEWS_FETCH_NOT_MODIFIED);
+
+    /* No tag sent at all — the exact shape of a first poll. Falls to the same
+     * place every other non-2xx status does. */
+    memset(&g_v, 0, sizeof(g_v));
+    g_v.story_count = 7;                    /* poisoned: must survive untouched */
+    char etag[HTTP_ETAG_MAX];
+    strcpy(etag, "poison");
+    CHECK(fetch_cond(NULL, 304, NULL, etag, sizeof(etag)) == NEWS_FETCH_HTTP_STATUS);
+    CHECK_INT(g_v.story_count, 7);
+    CHECK_STR(etag, "poison");
+
+    /* An empty string is the same request as NULL: "no header sent". */
+    CHECK(fetch_cond(NULL, 304, "", etag, sizeof(etag)) == NEWS_FETCH_HTTP_STATUS);
+    CHECK_INT(g_v.story_count, 7);
+    CHECK_STR(etag, "poison");
+}
+
+static void test_a_2xx_with_no_body_is_a_transport_failure(void)
+{
+    /* The connection answered and then handed back no document — a captive
+     * portal that ate the body but kept the status, or a broken proxy. This is
+     * exactly what a NULL from the transport has always meant here, so it is
+     * folded into the same result rather than reaching news_parse() with a NULL
+     * pointer and zero length. Untested until now: nothing in this file ever
+     * paired a 2xx status with a NULL body. */
+    port_reset();
+    CHECK(fetch_cond(NULL, 200, NULL, NULL, 0) == NEWS_FETCH_TRANSPORT);
+    CHECK(fetch_cond(NULL, 201, NULL, NULL, 0) == NEWS_FETCH_TRANSPORT);
+    CHECK(fetch_cond(NULL, 299, NULL, NULL, 0) == NEWS_FETCH_TRANSPORT);
+
+    /* And it leaves the destination alone, like every other failure. */
+    memset(&g_v, 0, sizeof(g_v));
+    g_v.story_count = 3;
+    CHECK(fetch_cond(NULL, 200, NULL, NULL, 0) == NEWS_FETCH_TRANSPORT);
+    CHECK_INT(g_v.story_count, 3);
 }
 
 static void test_the_stored_etag_is_sent(void)
@@ -467,6 +527,8 @@ int main(void)
     test_a_failure_leaves_the_destination_untouched();
     test_304_is_a_success_not_a_failure();
     test_304_leaves_the_snapshot_untouched();
+    test_a_304_answering_no_tag_is_not_confirmation();
+    test_a_2xx_with_no_body_is_a_transport_failure();
     test_the_stored_etag_is_sent();
     test_a_200_reports_the_new_etag();
     test_the_etag_is_truncated_safely();
