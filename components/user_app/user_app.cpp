@@ -870,7 +870,35 @@ static void UiTask(void *arg)
         } else if (member == s_cmd_queue) {
             app_cmd_t cmd;
             if (xQueueReceive(s_cmd_queue, &cmd, 0) == pdTRUE) {
-                if (deadline_us) deadline_us = esp_timer_get_time() + window_us;
+                /*
+                 * A POLL ARRIVING IS NOT SOMEBODY STANDING THERE.
+                 *
+                 * The two are indistinguishable at the queue — one app_cmd_t
+                 * among others — and that is exactly why this needs saying. The
+                 * window exists for one reason: a person is in front of the
+                 * frame and the companion app cannot win a race against a
+                 * three-second wake. Only a person may extend it. Every other
+                 * command here came from a phone, which is a person; APP_CMD_DATA
+                 * came from NewsTask, which is the board talking to itself.
+                 *
+                 * Letting it extend the window is not a theoretical leak, it is
+                 * the failure tools/edition/PROMPT.md now warns producers about,
+                 * arriving from the other side. A producer that stamps
+                 * generated_at with the moment it filed moves the content
+                 * fingerprint on every poll, so APP_CMD_DATA lands every
+                 * POLL_SECONDS — sixty by default — and resets a hundred-and-
+                 * twenty-second window before it can ever expire. The board
+                 * never sleeps again. It sits at 81 mA refreshing every minute,
+                 * and every log line on both sides reads healthy: the producer
+                 * is filing, the board is printing what it was sent.
+                 *
+                 * There is deliberately no absolute cap on top of this. Someone
+                 * genuinely setting a board up may take ten minutes, and cutting
+                 * them off would be a worse bug than the one this prevents.
+                 */
+                if (deadline_us && cmd.kind != APP_CMD_DATA) {
+                    deadline_us = esp_timer_get_time() + window_us;
+                }
                 handle_cmd(&cmd);
             }
         } else {
