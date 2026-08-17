@@ -64,13 +64,15 @@ Four layers, three of them runnable without hardware. Run them in this order —
 the next and catches a different class of mistake.
 
 ```bash
-# 1) pure logic — nine host tests: the wire format, the demo snapshot, the fetch
+# 1) pure logic — ten host tests: the wire format, the demo snapshot, the fetch
 #    layer, the companion-app JSON, the quantizer, the framebuffer repack,
-#    copyfitting, chart scaling, and the compositor's tiling invariants
+#    copyfitting, chart scaling, the compositor's tiling invariants, and the
+#    wake decision
 cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 /tmp/vt/test_news_parse && /tmp/vt/test_news_mock && /tmp/vt/test_news_service \
   && /tmp/vt/test_api_json && /tmp/vt/test_palette && /tmp/vt/test_epd6_transpose \
-  && /tmp/vt/test_fit && /tmp/vt/test_chart_scale && /tmp/vt/test_compose
+  && /tmp/vt/test_fit && /tmp/vt/test_chart_scale && /tmp/vt/test_compose \
+  && /tmp/vt/test_power_policy
 
 # 2) provisioning pure logic, and the reference producer against its committed fixture
 sh components/provisioning/test/run.sh
@@ -105,7 +107,7 @@ ellipsis in the middle of a sentence.
 | SoC | ESP32-S3 (Xtensa LX7 dual-core), 16 MB Flash / 8 MB Octal PSRAM |
 | Display | 13.3" **Spectra 6** e-Paper, **portrait 1200 × 1600**, six inks, **two UC8179 controllers**, 4-wire SPI + two chip selects + one BUSY |
 | Refresh | one kind, ~20–30 s, whole sheet flashes. **No partial waveform at all.** |
-| RTC | **none** — the clock is SNTP only |
+| RTC | **no external chip** — the clock is SNTP only. The S3's *internal* RTC still times a deep-sleep wake, so this costs the date, not the waking |
 | Wireless | Wi-Fi 802.11 b/g/n |
 | Buttons | KEY0 (GPIO2), KEY1 (GPIO3), KEY2 (GPIO5), BOOT (GPIO0 on the XIAO) |
 | Power | 5 V USB-C, optional battery (JST 2.0 + slide switch) |
@@ -135,7 +137,7 @@ See [docs/pinout.md](docs/pinout.md).
 > that the image on the glass did not flip; `test_epd6_transpose` holds it against an independent
 > reference.
 
-## The three things that make this board different
+## The four things that make this board different
 
 **1. A refresh costs twenty to thirty seconds and there is no partial one.** Spectra 6 has no partial
 waveform, so every partial-refresh entry point from the 5.83" driver is *gone* rather than stubbed —
@@ -175,10 +177,33 @@ impossible rather than something a test has to catch. `ui_compose()` is total �
 drops the lowest-ranked module instead — and pure, because `news_hash()` promises that the same
 fingerprint means the same pixels and the device skips a 25-second refresh on that promise.
 
+**4. A wake is a boot, and the page on the glass is the only thing that survives it.** Deep sleep
+does not resume: RAM is gone, PSRAM is gone, the 960,000-byte framebuffer is gone. `sizeof(news_t)`
+is 32,932 bytes against the 8 KB of RTC retention RAM that crosses a sleep, so the snapshot cannot
+survive and no clever packing will make it. What survives is **the glass**, because Spectra 6 is
+bistable — cut the power entirely and the last edition hangs there indefinitely, drawing nothing.
+That one property is the whole reason this is possible, and it makes the feature narrower than its
+name. It is not "sleep between polls"; it is a **quiet path that never powers the panel, never
+initialises LVGL and never allocates the framebuffer**. Bolting `esp_deep_sleep_start()` onto the old
+boot path would run `epd6_init()`, build 390 LVGL objects and spend a refresh on every wake — about
+2.5 mAh apiece, 240 mAh a day, a flat cell in under three weeks, and nothing new shown to anybody.
+The sleep is not the feature; the quiet path is.
+
+The consequence follows from the same fact and is the part that catches people: **whatever must
+survive a wake has to fit in 8 KB, and whatever does not survive cannot be redrawn.** So a sleeping
+board has no `OFFLINE` badge, and a wake never prints the demo page. Both would need a snapshot, and
+the only snapshot on offer is the one the fetch that just failed did not bring — so yesterday's real
+front page stays up, because it beats a page about a company the board invented. A failed wake
+therefore resolves itself by sleeping again rather than by falling through to the panel; changed
+content is the one thing that earns the full path.
+[docs/specs/2026-08-17-deep-sleep-design.md](docs/specs/2026-08-17-deep-sleep-design.md) has the
+failure table; `main.cpp` carries the one row it settles differently — the `OFFLINE` badge — and says
+why at the point of the decision.
+
 ## Project structure
 
 ```
-main/                     app_main: panel + LVGL bring-up, provisioning, task launch
+main/                     app_main: the two-path boot — quiet wake, or panel + LVGL + task launch
 components/
   port_bsp/               the Spectra 6 port — the only code that talks to the panel
     epd6_panel.c          two UC8179s, two chip selects, one refresh, no partials
@@ -201,11 +226,12 @@ components/
     wp_palette.c          the six inks and the ordered dither — the only quantizer
     device_api_json.c     the JSON the companion app receives
     fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
-    test/host/            the nine host tests
+    test/host/            the ten host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
   device_api/             STA-mode HTTP/JSON control server + mDNS (wpnews.local)
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
+  power/                  the wake decision (pure, host-tested), RTC-retained state, the shutdown
 app/                      React Native companion app — setup + control over the LAN
 sim/                      desktop simulator — renders the real UI to 1200x1600 and asserts on it
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
@@ -320,8 +346,9 @@ tools/
   badged `STALE` beats an empty one.
 - **The demo snapshot is a complete front page**, and an unconfigured board is a complete
   configuration, not a placeholder — so a board with no URL prints it at once and is finished.
-- **A boot spends exactly one refresh, and the whole boot path is built around choosing which page
-  gets it.** That is the budget: twenty-five seconds each, and the old path spent *five* of them —
+- **A boot spends exactly one refresh, a wake that changes nothing spends none, and both paths are
+  built around choosing which page gets one.** That is the budget: twenty-five seconds each, and the
+  old boot path spent *five* of them —
   `epd6_init()` clearing to white, "Connecting to X", "Connected 192.168…", the demo snapshot, then
   the real page. A hundred and thirty-five seconds, of which about a hundred and ten said nothing a
   reader wanted. So `epd6_init()` no longer refreshes (the glass keeps the last edition until there
@@ -331,7 +358,12 @@ tools/
   The instinct this reverses is worth naming, because it is right on every other display: showing
   *something* finished, fast, normally beats showing nothing. Here the something costs the same
   twenty-five seconds as the real thing and delays it by that much again, so "fill the screen early"
-  is precisely backwards. Anything added to the boot path should be measured in refreshes first.
+  is precisely backwards. Deep sleep takes that argument one step further and arrives at zero: a
+  timer wake that finds nothing new spends **no** refresh, and the only way to reach that number is
+  to find out *before* powering the panel, building the UI or allocating the framebuffer — which is
+  what the quiet path is for, and why the decision to take it is a pure function with a host test
+  rather than a condition buried in `app_main`. Anything added to either path should be measured in
+  refreshes first.
 - **`sizeof(news_t)` is 32,932 bytes** — measured, not estimated. That is four times `UiTask`'s whole
   8 KB stack, so all three snapshots in `user_app.cpp` — the state, the UI copy and the fetch buffer —
   are file-scope statics, safe only because the single-owner rule holds: `UiTask` is the only caller
@@ -343,6 +375,10 @@ tools/
   plus `news_parse()`'s heap scratch is about 130 KB at the peak of a poll, which is not what
   constrains this board — the 960 KB framebuffer is — but a snapshot on a stack is still an instant
   overflow. Measure it rather than trusting this line: the number has been wrong twice.
+  There is now a **second ceiling beside the stack one, and it is the same size by coincidence**: the
+  8 KB of RTC retention RAM, which is the only memory that survives a deep sleep. Four times too
+  small again — which is why what crosses a wake is a 32-bit `news_hash()` and an ETag rather than
+  the snapshot they describe, and why a wake that needs the snapshot back has to fetch it.
 - **`sdkconfig` holds per-developer values and is gitignored — never commit it.** Wi-Fi passwords live
   in NVS via the portal, never in Kconfig.
 - The mDNS hostname is `wpnews` and the AP prefix `"WP News"` — deliberately **not** the
@@ -355,6 +391,7 @@ tools/
 
 - [docs/specs/2026-08-15-single-company-broadsheet-design.md](docs/specs/2026-08-15-single-company-broadsheet-design.md) — **the current design**: one company an edition, the guillotine compositor, and why the measure decides the layout
 - [docs/specs/2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md) — what this was built from. Its geometry, colour policy, chart and photo rules still hold; its data model and band table are superseded
+- [docs/specs/2026-08-17-deep-sleep-design.md](docs/specs/2026-08-17-deep-sleep-design.md) — the wake path that never powers the panel: what crosses a sleep, the failure table, and how a board stays reachable
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/pages.md](docs/pages.md) — A1 and A2, the grid, the bands, the font decision
