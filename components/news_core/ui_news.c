@@ -42,6 +42,7 @@
 #include "ui_internal.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -56,12 +57,10 @@
 #define SLOT_R_X        UI_COLX(4)              /*  806 */
 
 /* Franklin's caps were cut to be spaced, and every caps label on this sheet
- * takes the same +2. The masthead's tracking is a different kind of number: it
- * is measured. S_MASTHEAD sets 1012 px solid in masthead_112 and 1102 px at 5,
- * against a measure of 1140 — so at 5 it spans the sheet, which is the whole
- * difference between a newspaper and a poster with a title on it. */
+ * takes the same +2. The masthead's tracking is a different kind of number — it
+ * is measured, and it is measured against the mark beside it — so it lives with
+ * the rest of the flag's geometry in ui_internal.h. */
 #define TRACK_CAPS      2
-#define TRACK_MASTHEAD  5
 
 /* The running head's box: four columns, centred, which is 752 of the 1140
  * measure. Not the full measure, and that is the point — see build_masthead(). */
@@ -137,7 +136,7 @@ _Static_assert(OV_TOP_B < OV_MID_RULE_Y && OV_BOT_Y + OV_REFER_H < UI_WELL_B,
 static lv_obj_t *s_pages[UI_PAGE_COUNT];
 static ui_page_t s_page;
 
-static lv_obj_t *s_masthead, *s_running_head, *s_running_sect;
+static lv_obj_t *s_masthead, *s_logo, *s_running_head, *s_running_sect;
 static lv_obj_t *s_dateline, *s_edition, *s_subject;
 static lv_obj_t *s_chip, *s_chip_txt;
 
@@ -234,17 +233,173 @@ static int strip_y(int y, int h)
     return y + (h - lv_font_get_line_height(UI_F_LABEL)) / 2;
 }
 
+/* --- the mark -------------------------------------------------------------
+ *
+ * The sunburst beside the name: eleven wedges from a common centre, widest
+ * where they meet and coming to a point at the rim.
+ *
+ * IT IS GEOMETRY AND NOT A PICTURE, and that is the whole reason it is fifty
+ * lines of C rather than a tile on the flash. A tile is fixed at the size it
+ * was screened at and is halftoned to get there — and this mark is a hairline
+ * shape at 61 px, where a halftone's own dot is the same order as the thing
+ * being drawn and the rays come out as dotted lines. Filled as exact spans it
+ * is every pixel the ink that was asked for, it takes wp_quantize()'s identity
+ * path like every other hard-pixel mark on this sheet, and it can be set at any
+ * size the furniture wants without a second asset.
+ *
+ * THE RAYS ARE A BAKED TABLE, in a unit space whose radius is 1024, because the
+ * alternative is eleven angles of trigonometry at page-build time. There is no
+ * libm in this file for the reason ui_chart.h gives — a double rounded
+ * differently on x86 and on Xtensa moves a pixel and fails a screenshot test for
+ * a reason that has nothing to do with the drawing — and a mark whose shape is
+ * decided at build time by a table cannot drift between the simulator and the
+ * glass. The table was generated once, looked at at 5x, and pasted here.
+ *
+ * The eleven quads are wound the same way and each is CONVEX, which is what
+ * lets logo_ray() fill one by taking the leftmost and rightmost edge crossing
+ * on each scanline. That is a property of the table and not of the filler: a
+ * ray edited into a bow-tie would fill its own bounding box and nobody would be
+ * told. */
+#define LOGO_RAYS 11
+#define LOGO_UNIT 1024
+
+static const int16_t LOGO_RAY[LOGO_RAYS][4][2] = {
+    { {   118,     0 }, {    30, -1024 }, {   -30, -1024 }, {  -118,     0 } },
+    { {    99,    64 }, {   579,  -845 }, {   528,  -878 }, {   -99,   -64 } },
+    { {    49,   107 }, {   944,  -398 }, {   919,  -453 }, {   -49,  -107 } },
+    { {   -17,   117 }, {  1009,   175 }, {  1018,   116 }, {    17,  -117 } },
+    { {   -77,    89 }, {   754,   693 }, {   794,   648 }, {    77,   -89 } },
+    { {  -113,    33 }, {   260,   991 }, {   317,   974 }, {   113,   -33 } },
+    { {  -113,   -33 }, {  -317,   974 }, {  -260,   991 }, {   113,    33 } },
+    { {   -77,   -89 }, {  -794,   648 }, {  -754,   693 }, {    77,    89 } },
+    { {   -17,  -117 }, { -1018,   116 }, { -1009,   175 }, {    17,   117 } },
+    { {    49,  -107 }, {  -919,  -453 }, {  -944,  -398 }, {   -49,   107 } },
+    { {    99,   -64 }, {  -528,  -878 }, {  -579,  -845 }, {   -99,    64 } },
+};
+
+/* Unit space to pixels, to the nearest, with a half going AWAY FROM ZERO on
+ * both sides of the centre. C's own truncation would pull the left half of the
+ * mark toward the middle and leave the right half where it was, and eleven rays
+ * rounded asymmetrically is a mark that leans. Every ray but the vertical one
+ * has a mirror in the table; this is what keeps the pair identical. */
+static int logo_sc(int v)
+{
+    const int n = v * UI_LOGO_R;
+    return n >= 0 ? (n + LOGO_UNIT / 2) / LOGO_UNIT
+                  : -((-n + LOGO_UNIT / 2) / LOGO_UNIT);
+}
+
+/* Floor division by a positive divisor. C truncates toward zero, which on a
+ * negative numerator rounds an edge the wrong way and opens a one-pixel notch
+ * in the side of a ray. */
+static int logo_floor_div(int a, int b)
+{
+    return a >= 0 ? a / b : -(((-a) + b - 1) / b);
+}
+
+/* One ray, scanline by scanline, as exact spans — ui_draw_tri_abs()'s argument
+ * again, arriving through a shape that is not a triangle. lv_draw_triangle()
+ * would anti-alias both flanks of every wedge, and at the two or three pixels
+ * these are wide the flanks ARE the ray. */
+static void logo_ray(lv_layer_t *L, int cx, int cy, const int16_t (*v)[2])
+{
+    int px[4], py[4];
+    int ymin, ymax;
+
+    for (int i = 0; i < 4; i++) {
+        px[i] = cx + logo_sc(v[i][0]);
+        py[i] = cy + logo_sc(v[i][1]);
+    }
+
+    ymin = ymax = py[0];
+    for (int i = 1; i < 4; i++) {
+        if (py[i] < ymin) ymin = py[i];
+        if (py[i] > ymax) ymax = py[i];
+    }
+
+    for (int y = ymin; y <= ymax; y++) {
+        int lo = 0, hi = 0;
+        bool any = false;
+
+        for (int i = 0; i < 4; i++) {
+            int x0 = px[i],           y0 = py[i];
+            int x1 = px[(i + 1) & 3], y1 = py[(i + 1) & 3];
+
+            if (y0 > y1) {
+                int t;
+                t = x0; x0 = x1; x1 = t;
+                t = y0; y0 = y1; y1 = t;
+            }
+            if (y < y0 || y > y1) continue;
+
+            /* A horizontal edge contributes both its ends; every other edge
+             * contributes where it crosses this row, rounded to the nearest
+             * pixel rather than toward zero. */
+            int a = x0, b = x1;
+            if (y0 != y1) {
+                const int den = y1 - y0;
+                a = b = x0 + logo_floor_div(2 * (x1 - x0) * (y - y0) + den,
+                                            2 * den);
+            }
+            if (!any) { lo = hi = a; any = true; }
+            if (a < lo) lo = a;
+            if (b < lo) lo = b;
+            if (a > hi) hi = a;
+            if (b > hi) hi = b;
+        }
+
+        if (any) ui_draw_rect_c_abs(L, lo, y, hi, y, true, 0, UI_INK);
+    }
+}
+
+static void logo_draw_cb(lv_event_t *e)
+{
+    lv_obj_t   *o = lv_event_get_target_obj(e);
+    lv_layer_t *L = lv_event_get_layer(e);
+    if (!o || !L) return;
+
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    for (int k = 0; k < LOGO_RAYS; k++) {
+        logo_ray(L, a.x1 + UI_LOGO_R, a.y1 + UI_LOGO_R, LOGO_RAY[k]);
+    }
+}
+
 /* --- the masthead --------------------------------------------------------- */
 
 static void build_masthead(lv_obj_t *par)
 {
-    /* The face's line height is 113 and the strip's is 112, and the pixel is the
-     * descender the 'g' of Washington needs. It is a fixed height, so a longer
-     * name ellipsizes across the measure instead of setting a second line on top
-     * of the dateline row. */
-    s_masthead = ui_lab_w(par, UI_CONTENT_X, UI_MAST_Y, UI_CONTENT_W,
-                          UI_F_MASTHEAD, LV_TEXT_ALIGN_CENTER, S_MASTHEAD);
-    ui_track(s_masthead, TRACK_MASTHEAD);
+    /* THE FLAG IS MEASURED AND THEN PLACED, which is the one thing that changed
+     * here when the mark arrived. The name used to be a full-measure label with
+     * LV_TEXT_ALIGN_CENTER doing the centring, and LVGL cannot centre a label
+     * about a mark that is not inside it. So the name is measured, the mark's
+     * width and gap are added, and the whole flag is set from a left edge — the
+     * INK is what ends up centred in the measure, which is what a reader sees
+     * and what the simulator checks. */
+    lv_point_t sz;
+    lv_text_get_size(&sz, S_MASTHEAD, UI_F_MASTHEAD, UI_MAST_TRACK, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+
+    const int name_w = (int)sz.x;
+    const int flag_w = UI_LOGO_W + UI_LOGO_GAP + name_w;
+    int       flag_x = UI_CONTENT_X + (UI_CONTENT_W - flag_w) / 2;
+    if (flag_x < UI_CONTENT_X) flag_x = UI_CONTENT_X;
+
+    const int name_x = flag_x + UI_LOGO_W + UI_LOGO_GAP;
+
+    s_logo = ui_pane(par, flag_x, UI_MAST_Y + UI_LOGO_CY - UI_LOGO_R,
+                     UI_LOGO_W, UI_LOGO_W);
+    lv_obj_add_event_cb(s_logo, logo_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+
+    /* The face's line height is 113 and the strip's is 112, and the pixel is
+     * the descender. The box runs to the right margin rather than to the name's
+     * own width: it is a fixed height, so anything that overruns ellipsizes
+     * across the measure instead of setting a second line on top of the
+     * dateline row — and a box cut to the measured width would ellipsize on a
+     * one-pixel rounding difference between measuring and setting. */
+    s_masthead = ui_lab_w(par, name_x, UI_MAST_Y, UI_CONTENT_R - name_x,
+                          UI_F_MASTHEAD, LV_TEXT_ALIGN_LEFT, S_MASTHEAD);
+    ui_track(s_masthead, UI_MAST_TRACK);
 
     /* Any page that is not A1 wears a running head instead. The strip does not
      * shrink to fit it: the rules under it are the skeleton both pages are
@@ -255,10 +410,18 @@ static void build_masthead(lv_obj_t *par)
      * makes this a running head rather than a second nameplate. Three sizes were
      * rendered before it settled: at display_36 the flag leaves 80% of the strip
      * bare and A2 reads as a weaker, unrelated publication; at display_56 across
-     * the full measure "THE WASHINGTON POST · MARKETS" sets 1071 px of 1140,
-     * edge to edge in a heavy Didone, which reads as a second paper. The name
-     * alone sets 731 px, and 731 in a 752 box at half the nameplate's cap height
-     * are the two ratios a section flag actually has. */
+     * the full measure the name and the section as one composed string set edge
+     * to edge in a heavy Didone, which reads as a second paper. The name alone
+     * sets 560 px in the 752 box, at half the nameplate's cap height, and those
+     * are the two ratios a section flag actually has.
+     *
+     * IT IS NOT TRACKED OUT TO FILL THE BOX and it does not carry the mark,
+     * which is the same decision twice. A1's flag fills the measure because it
+     * IS the paper's nameplate; A2's job is to be recognisably the same paper,
+     * one size down and one weight quieter. Letterspacing 15 caps of a 56 px
+     * Didone across 752 px would take 14 px a letter — a quarter of the type
+     * size — and what that produces is not a section flag, it is a second
+     * masthead competing with the one on the page before it. */
     const int hl = lv_font_get_line_height(UI_F_LEAD);      /* 65 */
     const int sl = lv_font_get_line_height(UI_F_LABEL);     /* 18 */
     const int ht = UI_MAST_Y + (UI_MAST_H - (hl + RH_GAP + sl)) / 2;
@@ -604,6 +767,9 @@ void ui_news_show_page(ui_page_t page)
         ui_show(s_pages[i], i == (int)page);
     }
     ui_show(s_masthead, page == UI_PAGE_FRONT);
+    /* The mark belongs to the nameplate, not to the strip: A2 wears a running
+     * head, and a running head with a crest on it is a second nameplate. */
+    ui_show(s_logo, page == UI_PAGE_FRONT);
     ui_show(s_running_head, page != UI_PAGE_FRONT);
     ui_show(s_running_sect, page != UI_PAGE_FRONT);
     if (page != UI_PAGE_FRONT) {

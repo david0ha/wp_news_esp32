@@ -24,10 +24,11 @@
 
 /* --- the masthead ---------------------------------------------------------
  *
- * "The Washington Post" is a registered trademark of WP Company LLC. This is a
- * personal e-Paper front page, not a publication, and nothing here is served to
- * anyone else — but the name is deliberately a single #define so that pointing
- * the board at a different paper, or at your own, is one line.
+ * The paper this board prints is nobody's masthead but its own, and the name is
+ * deliberately a single #define so that pointing the board at a different paper
+ * is one line. It set "The Washington Post" until the sheet was given a name of
+ * its own; the design that name was drawn against is still a Post front page in
+ * a frame, which is what docs/specs/2026-08-14-front-page-design.md is about.
  *
  * Changing it does NOT require regenerating the fonts: ui_font_masthead_112
  * carries all of A-Z, a-z and the punctuation below, not just the letters this
@@ -35,8 +36,17 @@
  * because the alternative failure is tofu boxes across the largest text on the
  * screen. gen_fonts.py folds in any character this string adds beyond that set,
  * so an accented masthead works too — it just needs the generator re-run.
+ *
+ * ITS LENGTH IS LOAD-BEARING and the constraint is not the one it looks like.
+ * The nameplate is set to FILL the 1140 px measure — a flag that leaves two
+ * hundred pixels of paper either side reads as a poster with a title on it —
+ * and the only thing making up the difference is TRACK_MASTHEAD in ui_news.c,
+ * which is a measured number and not a taste. A name several characters longer
+ * or shorter than this one wants that number re-measured; the simulator fails
+ * the build if the result passes the measure, and says nothing at all if it
+ * comes up short, which is the failure to actually look at sim/shots/ for.
  */
-#define S_MASTHEAD         "The Washington Post"
+#define S_MASTHEAD         "The Claude Post"
 
 /* A2 carries a running head instead of the masthead: the same name, no
  * blackletter, set in display_56 caps. It is a second literal rather than an
@@ -44,7 +54,7 @@
  * the file header) — so the two must be edited together, and that is the whole
  * cost of the second page having a name at the top of it.
  */
-#define S_RUNNING_HEAD     "THE WASHINGTON POST"
+#define S_RUNNING_HEAD     "THE CLAUDE POST"
 
 /* --- chrome ---------------------------------------------------------------
  *

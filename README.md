@@ -250,6 +250,11 @@ descender. The masthead reads `S_MASTHEAD` in `ui_strings.h`; its face carries a
 `.,'-&` rather than only the letters that string happens to use, so renaming the paper cannot
 silently blank the largest text on the sheet.
 
+The nameplate carries a **mark** beside the name, and it is geometry rather than an asset: eleven
+wedges from a common centre, a baked table of integer vertices filled as exact scanline spans. At
+61 px its rays are two and three pixels wide — the same order as a halftone's own dot — so a screened
+tile would print them as dotted lines, where spans put down exactly the ink that was asked for.
+
 The compositor, the copyfitter and the length budget are in [docs/pages.md](docs/pages.md) and, in
 full, in [the design spec](docs/specs/2026-08-15-single-company-broadsheet-design.md).
 

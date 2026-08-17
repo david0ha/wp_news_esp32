@@ -213,10 +213,44 @@ extern "C" {
 #define UI_MAST_RULE_Y       158
 #define UI_MAST_RULE_W       UI_RULE_HEAVY
 
-/* The nameplate is set to fit, not to a size: UnifrakturMaguntia at 112 px sets
- * "The Washington Post" at about 1130 px, and the simulator fails the build if a
- * masthead passes 1140. */
+/* The nameplate is set to fit, not to a size, and the simulator fails the build
+ * if it passes 1140. */
 #define UI_MAST_MAX_W        UI_CONTENT_W
+
+/* --- the flag -------------------------------------------------------------
+ * The nameplate is a MARK, a gap and a NAME, and the three are set as one
+ * object and centred as one. That is why the tracking below is here, in the
+ * grid, rather than next to the label in ui_news.c: the three numbers only mean
+ * anything together, and `sim --measure` prints what they add up to.
+ *
+ * A mark beside the name rather than over it or under it, because this sheet
+ * has 112 px of nameplate and no more — the strip is the skeleton both pages
+ * are printed on and a crest above the name would move every rule below it. It
+ * is where The Times of London puts its royal arms and the Chicago Tribune its
+ * flag, which is the whole of the argument: a nameplate mark sits ON the name's
+ * own line or it is a second piece of furniture.
+ *
+ * THE TRACKING IS MEASURED, NOT CHOSEN. UnifrakturMaguntia at 112 sets
+ * S_MASTHEAD's fifteen characters at 777 px solid; at 13 they set 959, and the
+ * flag comes to 61 + 28 + 959 = 1048 of the 1140 measure, leaving 46 px of paper
+ * down each side. Solid it would leave 151 px a side, which reads as a poster
+ * with a title on it rather than as a newspaper — letterspacing the name is what
+ * a printed masthead has always done with that slack. Change S_MASTHEAD and this
+ * number is wrong: run `cd sim && ./sim.sh --measure`, which prints the flag's
+ * set width and what it leaves, and put the answer here.
+ *
+ * The mark is 61 px across against a 112 px strip, which is a shade under the
+ * blackletter's cap height — a mark that matched the caps would be a second
+ * nameplate, and one at label size would read as a stray tick on the paper. */
+#define UI_MAST_TRACK         13
+#define UI_LOGO_R             30
+#define UI_LOGO_W            (2 * UI_LOGO_R + 1)         /*   61 */
+#define UI_LOGO_GAP           28
+
+/* Where the mark's CENTRE sits inside the masthead strip. Not the strip's own
+ * middle: the blackletter's ascenders and its one descender are not balanced
+ * about it, and a mark centred on the box sits visibly low against the name. */
+#define UI_LOGO_CY            52
 
 #define UI_DATELINE_Y        165
 #define UI_DATELINE_H         20
@@ -361,6 +395,22 @@ _Static_assert(UI_MAST_Y >= UI_CONTENT_Y
                && UI_TAPE_Y + UI_TAPE_H < UI_TAPE_RULE_Y
                && UI_TAPE_RULE_Y + UI_TAPE_RULE_W < UI_WELL_Y,
                "the furniture above the well must stack without overlapping");
+
+/* The mark sits INSIDE the masthead strip, both ends. It is drawn from a table
+ * rather than measured off a font, so nothing else would notice it growing: a
+ * radius one step too large puts ink through the heavy rule under the nameplate
+ * and into the dateline, which the simulator would report as a broken rule
+ * rather than as an oversized mark. */
+_Static_assert(UI_LOGO_CY - UI_LOGO_R >= 0
+               && UI_LOGO_CY + UI_LOGO_R < UI_MAST_H,
+               "the nameplate's mark must sit inside the masthead strip");
+
+/* And it has to leave a name room to set beside it. This is the assertion that
+ * fires on a mark scaled up without a thought for the paper's name; the
+ * simulator catches the other half — a name too long for what the mark leaves —
+ * at full size, on the glass. */
+_Static_assert(UI_LOGO_W + UI_LOGO_GAP < UI_CONTENT_W / 2,
+               "the mark and its gap must leave the measure to the name");
 
 /* The well now runs to the bottom margin itself, because nothing is under it.
  * Equality is the point rather than a coincidence: any slack here is paper the
