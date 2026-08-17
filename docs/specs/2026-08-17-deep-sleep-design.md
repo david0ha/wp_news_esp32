@@ -52,7 +52,8 @@ app_main
 │  ├─ 304, or 200 whose news_hash() equals rtc_state.content_hash
 │  │     → one log line, power_sleep()                    ★ panel never powered
 │  │
-│  └─ anything else → fall through, carrying the parsed snapshot
+│  └─ content changed → free the scratch, fall through, and let NewsTask
+│                        fetch it again (see below)
 │
 └─ FULL PATH   — cold boot, EXT1 (button) wake, content changed, or any
                  failure of the quiet path's preconditions
@@ -88,11 +89,41 @@ reason: **the content changed.**
 | payload rejected by `news_parse()` | count a failure, sleep — the previous snapshot is still on the glass and still correct, per the standing rule that a rejected payload leaves it alone |
 | 304, or `news_hash()` unchanged | sleep, no failure |
 | **content changed** | **fall through** |
-| the failure count first crosses `STALE_SECONDS` | fall through **once**, to badge the sheet `OFFLINE`, then never again for failures |
+| the failure count first crosses `STALE_SECONDS` | **nothing — see below.** This row was specified as "fall through once to badge the sheet `OFFLINE`" and could not be implemented |
 | no URL configured (demo board) | `POWER_STAY_AWAKE` — a board with nothing to poll has no reason to wake, and the demo sheet is a complete configuration, not a placeholder |
 
-Only the last two rows can reach the panel, and only one of them can do it
-repeatedly.
+**Only "content changed" reaches the panel.** That is one row, not two — this
+document originally claimed the `OFFLINE` badge as a second, and it is wrong for
+a reason that follows from §1's opening fact rather than from an implementation
+difficulty.
+
+To badge a sheet you must redraw it, and to redraw it you need a snapshot. A wake
+is a boot, so the snapshot did not survive; the only thing that did is an image
+on glass that cannot be read back. The only snapshot available on that path is
+the one the fetch that just failed did not bring. So what would actually print is
+the **demo page** — `user_app.c`'s documented answer when nothing arrives within
+`FIRST_PAINT_WAIT_MS` — and the row as written spends 2.3 mAh to replace a real,
+correct, merely stale front page with a story about a company the board invented.
+
+Worse, this row is reached exactly when the network is down, and falling through
+with no IP runs `provisioning_run()`, which never returns: one Wi-Fi outage would
+park the board in a captive portal, awake, until the cell died.
+
+The glass is left alone instead. A reader looking at a stale sheet sees its own
+dateline; a reader looking at the demo sheet sees fiction.
+
+### The changed-content wake fetches twice
+
+`QuietFetch()` parses the payload to compute `news_hash()`, discovers the content
+changed, and then frees it — and `NewsTask` fetches the same document again on
+the full path. That is a second round trip for something the board had in hand
+seconds earlier.
+
+It is deliberate. Carrying the snapshot across would mean threading a
+32,932-byte `news_t` from `app_main` through `UserApp_TaskInit` into `NewsTask`'s
+state, and the measured saving is about one 20 KB transfer and a second of awake
+time — roughly 0.02 mAh against the 2.3 mAh refresh that same wake is about to
+spend, or about 1%. The simpler code is worth more than the 1%.
 
 ### Why the quiet path re-parses at all
 
@@ -111,14 +142,32 @@ typedef struct {
     uint32_t magic;              /* WP_RTC_MAGIC ^ build id — see below */
     uint32_t content_hash;       /* news_hash() of what is on the glass NOW */
     char     etag[HTTP_ETAG_MAX];/* the server's tag for that same content */
-    uint16_t sleep_seconds;      /* the interval in force, so a change survives */
+    uint32_t sleep_seconds;      /* the interval in force, so a change survives */
     uint16_t consecutive_fails;
     uint32_t wakes;              /* diagnostics */
     uint32_t awake_ms_total;     /* diagnostics — §9 */
     uint32_t quiet_wakes;        /* wakes that cost no refresh */
-    int64_t  last_sntp_unix;
+    int64_t  last_ok_unix;       /* the last poll that succeeded */
 } wp_rtc_state_t;
 ```
+
+Two of those fields are corrections to an earlier draft of this document, and
+both are worth naming because the draft was wrong in a way that would have
+shipped.
+
+`sleep_seconds` **must be 32 bits.** `PROV_SLEEP_SECONDS_MAX` is 86,400 — a
+legal, API-settable interval — and a `uint16_t` tops out at 65,535. Had the code
+followed this document, every interval between 18.2 and 24 hours would have
+wrapped silently on the way into RTC memory, and a board asked to poll once a day
+would have woken every few hours instead, drawing several times the charge its
+owner had asked for, with nothing anywhere to say so.
+
+The field is `last_ok_unix`, not the `last_sntp_unix` this document first
+sketched. Deep sleep does not lose the system clock — the RTC timer keeps it, so
+once any boot has synced, later wakes know the time without help — so there was
+nothing for a persisted SNTP timestamp to do. What the staleness arithmetic
+actually needs is the last time a *poll* succeeded, which is a different quantity
+the first sketch did not name.
 
 **`magic` must incorporate the firmware build**, and this is not tidiness. If you
 flash new rendering code onto a board holding an old `content_hash`, the first
@@ -144,33 +193,53 @@ typedef enum {
 } power_action_t;
 
 typedef struct {
-    esp_sleep_source_t wake;      /* TIMER / EXT1 / UNDEFINED */
+    power_wake_t  wake;           /* COLD / TIMER / BUTTON */
+    power_fetch_t fetch;          /* NOT_ATTEMPTED / UNCHANGED / CHANGED / FAILED */
     bool     rtc_valid;           /* magic matched */
     bool     sleep_enabled;       /* Kconfig + NVS */
     bool     battery_present;     /* board_io_battery_present() */
     bool     usb_console;         /* a developer is attached */
     bool     url_configured;
-    news_fetch_result_t fetch;    /* incl. the new NEWS_FETCH_NOT_MODIFIED */
-    uint32_t new_hash;
-    uint32_t old_hash;
     uint16_t consecutive_fails;
-    uint16_t base_sleep_seconds;
+    uint32_t base_sleep_seconds;
+    uint32_t stale_seconds;
+    uint32_t seconds_since_ok;
 } power_input_t;
 
 typedef struct {
     power_action_t action;
     uint32_t       sleep_seconds;   /* after backoff */
     uint16_t       next_fails;
-    bool           badge_offline;   /* spend one refresh to say so */
 } power_plan_t;
 
 void power_decide(const power_input_t *in, power_plan_t *out);
 ```
 
-Pure, libm-free, no ESP-IDF types beyond the enum, and therefore the tenth host
-test: **`test_power_policy`**. It pins the backoff curve, the `magic`-mismatch
-force, "no cell means never sleep", "EXT1 always stays awake", and the rule that
-a failing fetch badges the sheet exactly once rather than every hour forever.
+**`power_wake_t` and `power_fetch_t` are hand-written mirrors, not the real
+enums**, and that is the point rather than an inconvenience. An earlier draft of
+this document typed those fields `esp_sleep_source_t` and `news_fetch_result_t`,
+which would have pulled ESP-IDF and the whole of `news_model.h` into the one file
+whose entire value is that it depends on neither. `main.cpp` owns the mapping and
+is the only place that knows the IDF's spellings.
+
+Pure, libm-free, and therefore the tenth host test: **`test_power_policy`**. It
+pins the backoff curve, the `magic`-mismatch force, "no cell means never sleep",
+and "a button wake always stays awake".
+
+### What the pure function does and does not cover
+
+The claim above is worth stating precisely, because a review found it overstated.
+`power_decide()` settles the gates, the wake routing and the backoff. It does not
+see a hash: by the time an outcome reaches it, the poll has already been
+classified into `power_fetch_t`.
+
+That classification is where the money is — it is what decides whether the panel
+spends twenty-five seconds, and it also decides whether the ETag is recorded,
+which is a rule this project has already got wrong once. So it is a second pure
+function, `power_classify_fetch()`, tested beside the first, and `QuietFetch()`
+in `main.cpp` is reduced to mapping `news_fetch_result_t` onto its arguments.
+What remains untested on the device is that mapping and the I/O around it, which
+is as small as it can be made.
 
 ### Backoff
 
@@ -373,7 +442,25 @@ ranges for that reason. If deep-sleep current turns out to be 300 µA rather tha
 | `sdkconfig.defaults` | `CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y` |
 | `tools/mock_news_server.py` | ETag, 304, `--no-etag` |
 | `test/host/test_power_policy.c` **(new)** | the tenth host test |
-| docs | `CLAUDE.md`, `bring-up.md`, `news-contract.md`, `app-control.md` |
+| `provisioning/test/fake_idf/` **(new)** | a fake NVS, which brings `prov_store.c` under host test for the first time — see below |
+| `provisioning/test/test_prov_store.c` **(new)** | what that fake is for, chiefly the backward-compatibility case |
+| docs | `CLAUDE.md`, `bring-up.md`, `news-contract.md`, `app-control.md`, `pinout.md`, `tools/edition/PROMPT.md` |
+
+Two of those rows were not in the first draft of this table and are here because
+the work found them necessary rather than because it was planned.
+
+The fake NVS exists because `prov_store.c` had no host test at all, and this
+change adds a field to a **persisted** struct. The case that had to be provable
+is a board already hanging on a wall: a firmware update that added `sleep_seconds`
+must not push it back into the captive portal to ask for a Wi-Fi password it has
+had for months. That is not a claim worth making without a test, and the test is
+not worth much against a stub — so the fake is a real key/value store, and the
+suite went from 39 tests and 83 checks to 56 and 140.
+
+`tools/edition/PROMPT.md` is the producer's instructions, and it needed the
+`generated_at` warning far more than the firmware documents did: the producing
+agent is the only party that can trigger that failure, and it was documented
+everywhere except where that agent reads.
 
 ## 12. What this deliberately does not do
 

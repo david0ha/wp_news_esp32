@@ -37,12 +37,77 @@ uint32_t power_backoff_seconds(uint32_t base, uint16_t fails)
     return (uint32_t)s;
 }
 
+void power_classify_fetch(bool ok, bool not_modified,
+                          uint32_t new_hash, uint32_t old_hash,
+                          power_classify_t *out)
+{
+    /* 304 first, and the order is load-bearing rather than stylistic.
+     *
+     * A 304 has no body: nothing was parsed, so `new_hash` holds whatever the
+     * caller's scratch buffer happened to contain. Reaching the hash comparison
+     * on this path would be reading uninitialised memory on the real board, and
+     * the value it read would decide whether the panel spent twenty-five
+     * seconds. Testing `not_modified` first is what makes `new_hash` a
+     * don't-care everywhere except the one branch that computed it.
+     *
+     * It also resolves the contradictory `ok && not_modified` — a caller bug,
+     * unreachable from the one caller, which derives both from a single enum —
+     * and it resolves it the safe way. This is the only branch here that cannot
+     * store a tag, and a tag stored for a document that was never parsed is the
+     * one mistake that is permanent: the board would earn 304s forever on
+     * something it has never successfully read. Landing on UNCHANGED instead
+     * costs at most one missed edition, and even that self-corrects on the next
+     * poll, because the tag did not move.
+     *
+     * Nothing is stored: the tag we SENT is still the tag for what is on the
+     * glass, which is precisely what the server just confirmed. */
+    if (not_modified) {
+        out->fetch      = POWER_FETCH_UNCHANGED;
+        out->store_etag = false;
+        return;
+    }
+
+    if (!ok) {
+        /* Transport, a non-2xx, a rejected payload, no URL. The rejected
+         * payload is the one worth naming: it arrived carrying a perfectly good
+         * ETag on a document that is not a front page, and writing that tag
+         * down would make the next poll a 304. The device would never look at
+         * that document again — stuck on yesterday's page indefinitely, with a
+         * log full of successful fetches and nothing anywhere to say why. */
+        out->fetch      = POWER_FETCH_FAILED;
+        out->store_etag = false;
+        return;
+    }
+
+    if (new_hash != old_hash) {
+        /* Something new, and the tag is deliberately NOT recorded yet. This
+         * wake is about to spend twenty-five seconds printing; write the tag
+         * now and a brownout twenty seconds into that refresh leaves a board
+         * whose next wake sends the new tag, receives a 304, and concludes
+         * nothing changed. The edition never prints, for as long as the payload
+         * holds still. The tag is published beside the hash after the refresh,
+         * once the page is actually on the paper. */
+        out->fetch      = POWER_FETCH_CHANGED;
+        out->store_etag = false;
+        return;
+    }
+
+    /* Parsed, and identical to what is already on the glass. The tag names a
+     * document the panel is ALREADY displaying, so there is no refresh in
+     * flight for it to get ahead of — and this is the only place it can be
+     * recorded at all, because a wake that sleeps never reaches the code that
+     * publishes after a refresh. Without this the ETag buys nothing on the
+     * common path: a board would re-transfer and re-parse the whole payload on
+     * every wake, forever. */
+    out->fetch      = POWER_FETCH_UNCHANGED;
+    out->store_etag = true;
+}
+
 void power_decide(const power_input_t *in, power_plan_t *out)
 {
     out->action        = POWER_STAY_AWAKE;
     out->sleep_seconds = in->base_sleep_seconds;
     out->next_fails    = in->consecutive_fails;
-    out->badge_offline = false;
 
     /* The safety gates come first and they are absolute. Each one is a way a
      * board becomes unreachable: sleeping while a developer is watching the
@@ -125,26 +190,23 @@ void power_decide(const power_input_t *in, power_plan_t *out)
         out->sleep_seconds = power_backoff_seconds(in->base_sleep_seconds,
                                                    out->next_fails);
 
-        /* A failure with a snapshot the reader can still trust changes nothing
-         * they can see, so it must not spend a refresh saying so. Once the
-         * snapshot has gone stale it is worth exactly one refresh to badge the
-         * sheet OFFLINE — and exactly one. A reader needs to be told once;
-         * telling them every hour costs 2.3 mAh a time to repeat information
-         * the sheet is already carrying in ink.
+        /* And then it sleeps — however long it has been failing, and however
+         * stale the sheet on the glass has become. That is the design's one
+         * deliberate omission, and this is where somebody will come looking for
+         * it, because the awake firmware badges the sheet OFFLINE as soon as a
+         * poll stops working and a sleeping board never does.
          *
-         * The comparison is strict, so `stale_seconds` names the moment the
-         * sheet stops being trustworthy rather than the last moment it is. And
-         * 0 means "never succeeded", not "succeeded a moment ago": it does not
-         * badge, because a board that has never had a good poll got here
-         * through the cold-boot or stale-RTC force above, both of which already
-         * print. Badging on 0 would put OFFLINE on a sheet that has never
-         * carried an edition. */
-        if (!in->offline_badged && in->seconds_since_ok > in->stale_seconds) {
-            out->action        = POWER_REFRESH_THEN_SLEEP;
-            out->badge_offline = true;
-        } else {
-            out->action = POWER_SLEEP_AGAIN;
-        }
+         * It cannot. A wake is a boot: RAM is gone, and sizeof(news_t) is 32,932
+         * bytes against 8 KB of RTC memory, so the snapshot did not survive.
+         * What did survive is the image on the glass, and it cannot be read
+         * back. To badge a sheet you must redraw it, to redraw it you need a
+         * snapshot, and the only one this arm could offer came from the fetch
+         * that just failed — so what would actually print is the demo page.
+         * Spending 2.3 mAh to replace a real, correct, merely stale front page
+         * with a page about a company the board invented is worse than leaving
+         * the glass alone. See "When the quiet path fails" in
+         * docs/specs/2026-08-17-deep-sleep-design.md. */
+        out->action = POWER_SLEEP_AGAIN;
         break;
     }
 }

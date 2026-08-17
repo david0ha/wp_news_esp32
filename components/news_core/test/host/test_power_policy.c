@@ -13,8 +13,8 @@
  * So every rule that could produce one of those outcomes is asserted here, on a
  * laptop, in a millisecond: the safety gates that keep a board reachable, the
  * cold-boot and stale-RTC forces that get changed rendering onto the glass, the
- * backoff curve, and the rule that a failing fetch tells the reader once rather
- * than every hour forever.
+ * backoff curve, and the rule that a failing fetch never reaches the panel
+ * however long it has been failing.
  *
  * Integer-only and ESP-IDF-free by construction — power_policy.h mirrors the
  * one enum it needs by hand, so this compiles and runs identically on x86 and
@@ -44,11 +44,8 @@ static void baseline(void)
     g_in.battery_present    = true;
     g_in.usb_console        = false;
     g_in.url_configured     = true;
-    g_in.offline_badged     = false;
     g_in.consecutive_fails  = 0;
     g_in.base_sleep_seconds = 900;
-    g_in.stale_seconds      = 3600;
-    g_in.seconds_since_ok   = 60;
 }
 
 static void decide(void)
@@ -188,7 +185,6 @@ static void test_unchanged_content_sleeps_without_a_refresh(void)
     CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
     CHECK_INT(g_out.sleep_seconds, 900);
     CHECK_INT(g_out.next_fails, 0);
-    CHECK(g_out.badge_offline == false);
 
     /* A success clears the counter, so one bad afternoon does not leave the
      * board on an hourly cadence for the rest of the week. */
@@ -210,7 +206,6 @@ static void test_changed_content_earns_the_refresh(void)
     CHECK_INT(g_out.action, POWER_REFRESH_THEN_SLEEP);
     CHECK_INT(g_out.next_fails, 0);
     CHECK_INT(g_out.sleep_seconds, 900);
-    CHECK(g_out.badge_offline == false);
 
     baseline();
     g_in.fetch             = POWER_FETCH_CHANGED;
@@ -222,15 +217,15 @@ static void test_changed_content_earns_the_refresh(void)
 
 static void test_a_failure_sleeps_and_counts(void)
 {
-    /* A failure with a snapshot that is still fresh changes nothing a reader
-     * can see, so it must not spend a refresh saying so. It sleeps, and the
-     * only thing it leaves behind is the count that drives the backoff. */
+    /* A failure never reaches the panel — a wake cannot redraw what it cannot
+     * fetch, so there is nothing it could put on the glass but the demo page.
+     * It sleeps, and the only thing it leaves behind is the count that drives
+     * the backoff. */
     baseline();
     g_in.fetch = POWER_FETCH_FAILED;
     decide();
     CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
     CHECK_INT(g_out.next_fails, 1);
-    CHECK(g_out.badge_offline == false);
     CHECK_INT(g_out.sleep_seconds, 900);
 
     baseline();
@@ -250,53 +245,6 @@ static void test_a_failure_sleeps_and_counts(void)
     decide();
     CHECK_INT(g_out.next_fails, 4);
     CHECK_INT(g_out.sleep_seconds, 3600);
-}
-
-static void test_offline_is_badged_once_and_only_once(void)
-{
-    /* A reader needs to be told once that the sheet in front of them is no
-     * longer live. Telling them every hour costs 2.3 mAh a time to repeat
-     * information the sheet already carries in ink. */
-    baseline();
-    g_in.fetch            = POWER_FETCH_FAILED;
-    g_in.seconds_since_ok = 7200;      /* > stale_seconds */
-    g_in.offline_badged   = false;
-    decide();
-    CHECK_INT(g_out.action, POWER_REFRESH_THEN_SLEEP);
-    CHECK(g_out.badge_offline == true);
-    CHECK_INT(g_out.next_fails, 1);    /* the badge is spent, the failure still
-                                        * counts, or the backoff never starts */
-
-    baseline();
-    g_in.fetch            = POWER_FETCH_FAILED;
-    g_in.seconds_since_ok = 7200;
-    g_in.offline_badged   = true;
-    decide();
-    CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
-    CHECK(g_out.badge_offline == false);
-    CHECK_INT(g_out.next_fails, 1);
-
-    /* Exactly at the threshold is still live. The comparison is strict so that
-     * stale_seconds names the moment the sheet stops being trustworthy rather
-     * than the last moment it is. */
-    baseline();
-    g_in.fetch            = POWER_FETCH_FAILED;
-    g_in.seconds_since_ok = 3600;      /* == stale_seconds */
-    decide();
-    CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
-    CHECK(g_out.badge_offline == false);
-
-    /* seconds_since_ok == 0 means "never succeeded", not "succeeded a moment
-     * ago", and it deliberately does NOT badge: a board that has never had a
-     * good poll reached this wake through the cold-boot or stale-RTC force,
-     * both of which already print. Badging here would put OFFLINE on a sheet
-     * that has never carried an edition at all. */
-    baseline();
-    g_in.fetch            = POWER_FETCH_FAILED;
-    g_in.seconds_since_ok = 0;
-    decide();
-    CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
-    CHECK(g_out.badge_offline == false);
 }
 
 static void test_the_backoff_curve(void)
@@ -395,14 +343,155 @@ static void test_not_attempted_is_treated_as_a_failure(void)
     decide();
     CHECK_INT(g_out.next_fails, 5);
     CHECK_INT(g_out.sleep_seconds, 3600);
+}
 
-    /* And it badges like a failure once the snapshot has gone stale. */
+/* --- classifying a poll --------------------------------------------------- */
+
+/*
+ * The four rules below are the ones that were outside the guarantee this file
+ * exists to make. `power_decide()` was always tested, but it is handed
+ * `power_fetch_t` already classified, and the step that DOES the classifying —
+ * the hash comparison that decides whether the panel spends twenty-five
+ * seconds, and the rule about when the server's ETag may be written down —
+ * lived in main.cpp, where nothing can reach it: it allocates from PSRAM, opens
+ * a socket and reads RTC memory.
+ *
+ * The hash comparison alone might have been left there; a `uint32_t !=` is hard
+ * to get wrong. The ETag rule is not, and we know it is not, because it was
+ * already got wrong once and fixed in e1d57aa. Storing a tag on the wrong
+ * branch is silent, survives every build, and costs an edition that never
+ * prints — which is precisely the class of failure that cannot be found by
+ * looking at the board.
+ */
+
+static power_classify_t g_cl;
+
+static void test_a_304_is_unchanged_and_stores_no_tag(void)
+{
+    /* The server compared the tag for us and said nothing had moved. There is
+     * nothing to parse and nothing to store: the tag we SENT is still the tag
+     * for what is on the glass, so writing it again would at best be a copy of
+     * itself. `new_hash` is deliberately garbage here — nothing was parsed, so
+     * a classifier that looked at it would be reading uninitialised memory on
+     * the real board. */
+    power_classify_fetch(false, true, 0xDEADBEEFu, 0x11111111u, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_UNCHANGED);
+    CHECK(g_cl.store_etag == false);
+}
+
+static void test_changed_content_does_not_store_the_tag_yet(void)
+{
+    /* THE BUG FIXED IN e1d57aa, pinned so it cannot come back.
+     *
+     * This wake is about to spend twenty-five seconds printing. Write the tag
+     * now and the sequence that follows is: store tag, begin the refresh, brown
+     * out twenty seconds in. The next wake sends the new tag, the server answers
+     * 304, the board concludes nothing changed and sleeps — and the new edition
+     * never prints at all, for as long as the payload holds still. The tag is
+     * published beside the hash by present_full(), once the page is on paper. */
+    power_classify_fetch(true, false, 0xAAAAAAAAu, 0xBBBBBBBBu, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_CHANGED);
+    CHECK(g_cl.store_etag == false);
+
+    /* A zero old hash is the ordinary state of a board that has never printed
+     * under this firmware, and it must read as "changed" rather than as a
+     * missing value — otherwise a board with no ETag server never prints. */
+    power_classify_fetch(true, false, 0x00000001u, 0u, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_CHANGED);
+    CHECK(g_cl.store_etag == false);
+}
+
+static void test_unchanged_content_stores_the_tag(void)
+{
+    /* The glass already shows what this tag names, and no refresh is in flight
+     * for the tag to get ahead of — so this is not merely safe, it is the ONLY
+     * place the tag can be recorded. A wake that sleeps never reaches
+     * present_full(). Without this line a board whose server sends tags would
+     * re-transfer and re-parse the whole payload on every wake forever, which
+     * is the entire saving the ETag exists for. */
+    power_classify_fetch(true, false, 0x1234u, 0x1234u, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_UNCHANGED);
+    CHECK(g_cl.store_etag == true);
+
+    /* Including when both are zero, which is two boards that have printed
+     * nothing agreeing about it. */
+    power_classify_fetch(true, false, 0u, 0u, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_UNCHANGED);
+    CHECK(g_cl.store_etag == true);
+}
+
+static void test_a_failure_stores_nothing(void)
+{
+    /* Transport, a non-2xx, a rejected payload, no URL — all failures, and none
+     * of them may leave a tag behind. The rejected payload is the one worth
+     * spelling out: it arrived with a perfectly good ETag on a document that is
+     * not a front page, and storing that tag would make the next poll a 304.
+     * The device would never look at that document again — stuck on yesterday's
+     * page, with a log full of successful fetches. */
+    power_classify_fetch(false, false, 0u, 0u, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_FAILED);
+    CHECK(g_cl.store_etag == false);
+
+    /* And the hashes cannot talk it into anything, in either direction. */
+    power_classify_fetch(false, false, 0x1234u, 0x1234u, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_FAILED);
+    CHECK(g_cl.store_etag == false);
+
+    power_classify_fetch(false, false, 0xAAAAu, 0xBBBBu, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_FAILED);
+    CHECK(g_cl.store_etag == false);
+}
+
+static void test_a_contradictory_result_is_safe(void)
+{
+    /* `ok` and `not_modified` together is a caller bug — a 200 cannot also be a
+     * 304 — and it is unreachable from the one caller, which derives both from
+     * a single enum. It is pinned anyway, because "unreachable" is a property
+     * of today's caller and this function is total.
+     *
+     * not_modified wins, and the choice is made on damage rather than on which
+     * flag looks more authoritative. This branch is the only resolution that
+     * cannot store a tag, and storing a tag for a document that was never
+     * parsed is the one outcome here that is permanent: it would earn 304s
+     * forever on a document the board has never successfully read. Calling it
+     * UNCHANGED costs at worst one missed edition, and even that self-corrects
+     * on the next poll, because the tag was not moved. */
+    power_classify_fetch(true, true, 0xAAAAu, 0xBBBBu, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_UNCHANGED);
+    CHECK(g_cl.store_etag == false);
+
+    /* Same answer whatever the hashes say, so the contradiction resolves one
+     * way rather than two. */
+    power_classify_fetch(true, true, 0x5555u, 0x5555u, &g_cl);
+    CHECK_INT(g_cl.fetch, POWER_FETCH_UNCHANGED);
+    CHECK(g_cl.store_etag == false);
+}
+
+static void test_a_classified_poll_drives_the_decision(void)
+{
+    /* The two halves composed, which is the guarantee the design claims and
+     * which neither half proves alone: a quiet wake that learns nothing new
+     * must sleep without touching the panel, and one that learns something must
+     * spend the refresh. */
     baseline();
-    g_in.fetch            = POWER_FETCH_NOT_ATTEMPTED;
-    g_in.seconds_since_ok = 7200;
+    power_classify_fetch(false, true, 0, 0, &g_cl);      /* a 304 */
+    g_in.fetch = g_cl.fetch;
+    decide();
+    CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
+    CHECK_INT(g_out.sleep_seconds, 900);
+
+    baseline();
+    power_classify_fetch(true, false, 0xAAAAu, 0xBBBBu, &g_cl);  /* new content */
+    g_in.fetch = g_cl.fetch;
     decide();
     CHECK_INT(g_out.action, POWER_REFRESH_THEN_SLEEP);
-    CHECK(g_out.badge_offline == true);
+
+    baseline();
+    power_classify_fetch(false, false, 0, 0, &g_cl);     /* a dead server */
+    g_in.fetch = g_cl.fetch;
+    decide();
+    CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
+    CHECK_INT(g_out.next_fails, 1);
 }
 
 static void test_action_names_are_stable(void)
@@ -425,11 +514,16 @@ int main(void)
     test_unchanged_content_sleeps_without_a_refresh();
     test_changed_content_earns_the_refresh();
     test_a_failure_sleeps_and_counts();
-    test_offline_is_badged_once_and_only_once();
     test_the_backoff_curve();
     test_backoff_never_shortens_a_configured_sleep();
     test_the_fail_counter_saturates();
     test_not_attempted_is_treated_as_a_failure();
+    test_a_304_is_unchanged_and_stores_no_tag();
+    test_changed_content_does_not_store_the_tag_yet();
+    test_unchanged_content_stores_the_tag();
+    test_a_failure_stores_nothing();
+    test_a_contradictory_result_is_safe();
+    test_a_classified_poll_drives_the_decision();
     test_action_names_are_stable();
     TH_REPORT("power_policy");
 }

@@ -45,11 +45,9 @@ typedef struct {
                                  * the API survives without an NVS read on the
                                  * quiet path */
     uint16_t consecutive_fails; /* drives power_backoff_seconds() */
-    bool     offline_badged;    /* the reader has already been told once */
     uint32_t wakes;             /* diagnostics — see below */
     uint32_t quiet_wakes;       /* those that cost no refresh */
     uint32_t awake_ms_total;    /* accumulated on the way into every sleep */
-    int64_t  last_ok_unix;      /* 0 when never; feeds seconds_since_ok */
 } wp_rtc_state_t;
 
 /*

@@ -77,23 +77,53 @@ typedef struct {
     bool     battery_present;
     bool     usb_console;          /* a developer is attached */
     bool     url_configured;
-    bool     offline_badged;       /* the reader has already been told */
     uint16_t consecutive_fails;    /* BEFORE this wake */
     uint32_t base_sleep_seconds;
-    uint32_t stale_seconds;
-    uint32_t seconds_since_ok;     /* 0 when never */
 } power_input_t;
 
 typedef struct {
     power_action_t action;
     uint32_t       sleep_seconds;  /* after backoff */
     uint16_t       next_fails;
-    bool           badge_offline;  /* spend this one refresh saying so */
 } power_plan_t;
+
+/* What a single poll turned out to be, and whether its ETag may be written
+ * down. Two answers rather than one because they are decided together and were
+ * once decided apart — see power_classify_fetch(). */
+typedef struct {
+    power_fetch_t fetch;
+    bool          store_etag;   /* record the tag this poll returned */
+} power_classify_t;
 
 /* One hour. The ceiling on the backoff curve, not on the configured interval —
  * a board asked to poll twice a day keeps polling twice a day. */
 #define POWER_BACKOFF_MAX_SECONDS 3600u
+
+/*
+ * Turn one poll's outcome into the `fetch` power_decide() wants, and decide
+ * whether the server's ETag may be recorded.
+ *
+ * `ok` is a 2xx that parsed; `not_modified` is a 304. They are separate
+ * booleans rather than one enum so that this header needs nothing from
+ * news_service.h — the caller owns the mapping, exactly as main.cpp owns the
+ * mapping from esp_sleep_source_t onto power_wake_t.
+ *
+ * `new_hash` is news_hash() of what was just parsed and is read ONLY when `ok`;
+ * on the other paths nothing was parsed and the caller has no meaningful value
+ * to supply. `old_hash` is what is on the glass now.
+ *
+ * This lives here rather than beside the fetch for one reason: the ETag rule is
+ * subtle, it decides whether an edition ever reaches paper, and it was got
+ * wrong once already. A tag written down before the refresh that would justify
+ * it earns a 304 on the next wake, and the new edition never prints — silently,
+ * for as long as the payload holds still. Rules like that belong where a host
+ * test can hold them.
+ *
+ * Total, integer-only, and *out is always fully written.
+ */
+void     power_classify_fetch(bool ok, bool not_modified,
+                              uint32_t new_hash, uint32_t old_hash,
+                              power_classify_t *out);
 
 /* Total: every input produces a plan, and there is no failure return. *out is
  * always fully written, so a caller cannot forget to initialise it. */

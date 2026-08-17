@@ -193,41 +193,6 @@ static uint32_t EffectiveSleepSeconds(const prov_config_t *cfg, const wp_rtc_sta
 	return power_default_sleep_seconds();
 }
 
-// When the sheet stops being trustworthy. Same shape as user_app's STALE_SECONDS
-// and for the same reason: the badge answers a question about the NEWS, not
-// about the poll loop, so the cadence sets the shape and a floor sets the
-// meaning. A quarter of an hour is the point at which a reader would want to be
-// told, whatever interval the board happens to be running.
-#define STALE_FLOOR_SECONDS 900u
-
-static uint32_t StaleSeconds(uint32_t base_sleep_seconds)
-{
-	uint32_t twice = base_sleep_seconds > (UINT32_MAX / 2)
-	                     ? UINT32_MAX
-	                     : base_sleep_seconds * 2;
-	return twice > STALE_FLOOR_SECONDS ? twice : STALE_FLOOR_SECONDS;
-}
-
-// How long since a poll last worked. Zero means never, which the policy
-// deliberately does not treat as stale — see power_policy.c.
-//
-// This is wall-clock rather than uptime because uptime does not survive a deep
-// sleep and the whole question spans several of them. It works without SNTP on
-// the wake: the RTC counter runs through deep sleep and the IDF carries system
-// time across it, so once any boot has synced, later wakes keep counting.
-static uint32_t SecondsSinceOk(const wp_rtc_state_t *rs)
-{
-	if (rs->last_ok_unix <= 0) {
-		return 0;
-	}
-	const int64_t now = (int64_t)time(NULL);
-	if (now <= rs->last_ok_unix) {
-		return 0;
-	}
-	const int64_t d = now - rs->last_ok_unix;
-	return d > (int64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)d;
-}
-
 // One conditional GET, and the comparison that decides whether the panel moves.
 //
 // Two gates, and they are not redundant. The ETag saves the transfer, the cJSON
@@ -244,39 +209,26 @@ static power_fetch_t QuietFetch(const char *url, news_t *scratch, wp_rtc_state_t
 
 	ESP_LOGI(TAG, "quiet fetch: %s", news_fetch_result_name(r));
 
-	switch (r) {
-	case NEWS_FETCH_NOT_MODIFIED:
-		// The server compared the tag for us. Nothing to parse and nothing to
-		// store: the tag we sent is still the tag for what is on the glass.
-		return POWER_FETCH_UNCHANGED;
+	// Everything this function DECIDES lives next door in power_policy.c, under
+	// test; what is left here is the part that cannot be tested anywhere but on
+	// a board — a socket, a PSRAM allocation and a write into RTC memory. The
+	// mapping is deliberately dull: two booleans and a hash.
+	//
+	// news_hash() is computed ONLY on the OK path. On a 304 nothing was parsed,
+	// so `scratch` holds whatever the allocator left there, and hashing it would
+	// feed uninitialised memory into the comparison that decides whether the
+	// panel spends twenty-five seconds.
+	const bool ok           = (r == NEWS_FETCH_OK);
+	const bool not_modified = (r == NEWS_FETCH_NOT_MODIFIED);
 
-	case NEWS_FETCH_OK: {
-		const uint32_t h = news_hash(scratch);
-		if (h != rs->content_hash) {
-			// CHANGED. The tag is deliberately NOT stored: this wake is about
-			// to spend twenty-five seconds printing, and a tag published
-			// before a refresh that then failed — a brownout twenty seconds
-			// in — would earn a 304 on the next wake and the new edition
-			// would never print at all. The tag is published beside the hash
-			// by present_full(), once the page is actually on the paper.
-			return POWER_FETCH_CHANGED;
-		}
-		// Unchanged, so the glass ALREADY shows what this tag names and there
-		// is no refresh in flight for it to get ahead of. Storing it here is
-		// what makes the next poll a 304 rather than another parse, and it is
-		// the only place it can be stored, because a wake that sleeps never
-		// reaches present_full().
+	power_classify_t cl;
+	power_classify_fetch(ok, not_modified, ok ? news_hash(scratch) : 0u,
+	                     rs->content_hash, &cl);
+
+	if (cl.store_etag) {
 		http_etag_copy(rs->etag, sizeof(rs->etag), etag);
-		return POWER_FETCH_UNCHANGED;
 	}
-
-	default:
-		// NO_URL, TRANSPORT, HTTP_STATUS, BAD_PAYLOAD. All four are failures
-		// that sleep. In particular a rejected payload is NOT a reason to
-		// print: the previous snapshot is still on the glass and still
-		// correct, per the standing rule that a bad poll leaves it alone.
-		return POWER_FETCH_FAILED;
-	}
+	return cl.fetch;
 }
 
 extern "C" void app_main(void)
@@ -327,11 +279,8 @@ extern "C" void app_main(void)
 	in.battery_present    = board_io_battery_present();
 	in.usb_console        = power_usb_console_attached();
 	in.url_configured     = url[0] != '\0';
-	in.offline_badged     = rs->offline_badged;
 	in.consecutive_fails  = rs->consecutive_fails;
 	in.base_sleep_seconds = EffectiveSleepSeconds(&cfg, rs);
-	in.stale_seconds      = StaleSeconds(in.base_sleep_seconds);
-	in.seconds_since_ok   = SecondsSinceOk(rs);
 
 	// --- the quiet path ---------------------------------------------------
 	//
@@ -377,7 +326,7 @@ extern "C" void app_main(void)
 	// --- the decision ------------------------------------------------------
 	power_plan_t plan;
 	power_decide(&in, &plan);
-	ESP_LOGI(TAG, "wake=%s fetch=%s -> %s (sleep %us, fails %u%s)",
+	ESP_LOGI(TAG, "wake=%s fetch=%s -> %s (sleep %us, fails %u)",
 	         wake == POWER_WAKE_TIMER  ? "timer"
 	         : wake == POWER_WAKE_BUTTON ? "button"
 	                                     : "cold",
@@ -386,7 +335,7 @@ extern "C" void app_main(void)
 	         : in.fetch == POWER_FETCH_FAILED  ? "failed"
 	                                           : "not_attempted",
 	         power_action_name(plan.action), (unsigned)plan.sleep_seconds,
-	         (unsigned)plan.next_fails, plan.badge_offline ? ", badging offline" : "");
+	         (unsigned)plan.next_fails);
 
 	// What this wake learned, recorded before anything can go wrong with acting
 	// on it. The one thing deliberately NOT written here is content_hash: it is
@@ -395,44 +344,8 @@ extern "C" void app_main(void)
 	// had printed a page it had not.
 	rs->consecutive_fails = plan.next_fails;
 	rs->sleep_seconds     = in.base_sleep_seconds;
-	if (in.fetch == POWER_FETCH_UNCHANGED || in.fetch == POWER_FETCH_CHANGED) {
-		rs->last_ok_unix   = (int64_t)time(NULL);
-		rs->offline_badged = false;   // back online: the next outage may speak again
-	}
-	bool sleep_now = (plan.action == POWER_SLEEP_AGAIN);
 
-	if (plan.badge_offline) {
-		// The reader is told once and never again, so record it either way.
-		rs->offline_badged = true;
-
-		// AND THEN DO NOT SPEND THE REFRESH. The spec has this row falling
-		// through once to badge the sheet OFFLINE, and on a board that never
-		// slept that is exactly right — the previous snapshot is still in RAM,
-		// so the badge is the same page with two words changed.
-		//
-		// It cannot work here, and the reason is the fact the whole design
-		// rests on. A wake is a boot: RAM is gone, and sizeof(news_t) is 32,932
-		// bytes against 8 KB of RTC memory, so the snapshot did not survive.
-		// The only thing that survived is the image on the glass, which cannot
-		// be read back. To badge a sheet you must redraw it, and to redraw it
-		// you need a snapshot — which on this path can only come from the fetch
-		// that just failed. What user_app would actually print is the DEMO page
-		// (user_app.cpp:516), because that is its documented answer when no
-		// snapshot arrives within FIRST_PAINT_WAIT_MS.
-		//
-		// So the row as written spends 2.3 mAh to replace a real, correct, merely
-		// stale front page with a demo sheet. Leaving the glass alone is strictly
-		// better: the reader sees yesterday's paper instead of a page about a
-		// company the board invented. Worse still, this row is reached precisely
-		// when the network is down, and falling through with no IP would run
-		// provisioning_run(), which never returns — one Wi-Fi outage would park
-		// the board in a captive portal forever, awake, until the cell died.
-		ESP_LOGW(TAG, "snapshot is stale and the poll is failing, but a wake "
-		              "cannot redraw what it cannot fetch — leaving the glass alone");
-		sleep_now = true;
-	}
-
-	if (sleep_now) {
+	if (plan.action == POWER_SLEEP_AGAIN) {
 		rs->quiet_wakes++;
 		rs->awake_ms_total += (uint32_t)(esp_timer_get_time() / 1000);
 		power_sleep(plan.sleep_seconds, btn_gpios, btn_count);   // does not return
