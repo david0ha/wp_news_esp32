@@ -8,6 +8,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CORE   ${CMAKE_CURRENT_SOURCE_DIR}/../..)         # components/news_core
 set(CJSON  ${CORE}/../../third_party/cJSON)           # <root>/third_party/cJSON
 set(PORT   ${CORE}/../port_bsp)                       # components/port_bsp
+set(POWER  ${CORE}/../power)                          # components/power
 
 # Opt-in sanitizer build:  cmake -S . -B build -DSANITIZE=ON
 # (Catches memory-safety regressions like UTF-8 over-reads; some sandboxed
@@ -88,4 +89,15 @@ endif()
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_compose.c AND EXISTS ${CORE}/ui_compose.c)
     add_host_test(test_compose test_compose.c ${CORE}/ui_compose.c)
     add_test(NAME compose COMMAND test_compose)
+endif()
+
+# The wake decision. It lives outside news_core — it is power policy, not
+# newspaper — but it is pure, integer-only and free of every ESP-IDF header, so
+# it belongs in the one place this project can settle a question without
+# hardware. The alternative is a state machine whose failures show up three days
+# later on a wall, in a room, with no serial cable attached.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_power_policy.c AND EXISTS ${POWER}/power_policy.c)
+    add_host_test(test_power_policy test_power_policy.c ${POWER}/power_policy.c)
+    target_include_directories(test_power_policy PRIVATE ${POWER}/include)
+    add_test(NAME power_policy COMMAND test_power_policy)
 endif()
