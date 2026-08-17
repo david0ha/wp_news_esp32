@@ -697,6 +697,22 @@ static void NewsTask(void *arg)
                      * cost a panel refresh. */
                     ESP_LOGD(TAG, "news: unchanged, panel untouched");
                 }
+            } else if (r == NEWS_FETCH_NOT_MODIFIED) {
+                /* The server confirmed the document has not changed. That is a
+                 * successful poll, not an outage: the tag matched, so the page
+                 * already on the glass is the current one. It belongs here
+                 * rather than in the failure arm below because everything there
+                 * is wrong about it — s_last_ok_us would age until the sheet
+                 * badged itself STALE while the board was working perfectly,
+                 * and the log would carry a warning a reader would go looking
+                 * for a cause of. The panel is untouched, as on any unchanged
+                 * poll: news_hash() remains the sole authority on a refresh and
+                 * there is nothing new to hash. */
+                state_lock();
+                s_last_ok_us = esp_timer_get_time();
+                s_online     = true;
+                state_unlock();
+                ESP_LOGD(TAG, "news: 304 not modified, panel untouched");
             } else {
                 state_lock();
                 s_online = (r != NEWS_FETCH_TRANSPORT);

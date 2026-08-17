@@ -1,9 +1,10 @@
 /*
  * http_port_esp.c — device HTTP port (esp_http_client + TLS cert bundle).
  *
- * Implements http_get() for the firmware. Mirrors the simulator's libcurl
- * port. The response body is accumulated into PSRAM because a forecast
- * metric=all payload is ~240KB — far too large for internal RAM.
+ * Implements http_get_cond() for the firmware, with http_get() and
+ * http_get_bin() written on top of it. Mirrors the simulator's libcurl port.
+ * The response body is accumulated into PSRAM because a forecast metric=all
+ * payload is ~240KB — far too large for internal RAM.
  *
  * Connection reuse: instead of init/perform/cleanup per request (a fresh TLS
  * handshake + cert-bundle validation every time), each worker task keeps ONE
@@ -14,6 +15,11 @@
  * connection (keeping the handle) and let the next perform reconnect. The
  * handle is never shared between tasks (esp_http_client is not thread-safe), so
  * the two fetch workers each own their own connection.
+ *
+ * That reuse extends to the REQUEST HEADERS, which is the one trap in here: a
+ * header set on the handle for one GET is still set for the next. Every request
+ * therefore states its If-None-Match — by setting it or by deleting it — rather
+ * than only when it has one.
  */
 #include "http_port.h"
 
@@ -27,6 +33,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>   /* strcasecmp: header field names are case-insensitive */
 #include <stdbool.h>
 
 #define HTTP_MAX_RESP (320 * 1024)   /* hard cap; metric=all is ~240KB */
@@ -44,12 +51,31 @@ void http_port_init(void) {
     if (!s_tls_connect_lock) s_tls_connect_lock = xSemaphoreCreateMutex();
 }
 
-typedef struct { char *buf; size_t len; size_t cap; bool oom; } acc_t;
+typedef struct {
+    char  *buf; size_t len; size_t cap; bool oom;
+    char   etag[HTTP_ETAG_MAX];   /* "" unless the server sent one */
+} acc_t;
 
 static esp_err_t on_evt(esp_http_client_event_t *e) {
-    if (e->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
     acc_t *a = (acc_t *)e->user_data;
-    if (!a || a->oom) return ESP_OK;
+    if (!a) return ESP_OK;
+
+    if (e->event_id == HTTP_EVENT_ON_HEADER) {
+        /* RFC 9110 §5.1: field names are case-insensitive, and servers really do
+         * vary — "ETag", "Etag", "etag" are all in the wild. Matching only the
+         * canonical spelling would fail silently in the worst direction: the
+         * device would store no tag, send no If-None-Match, and get a full 200
+         * every poll forever. The page would still be right and the battery
+         * would quietly not last. */
+        if (e->header_key && e->header_value &&
+            strcasecmp(e->header_key, "ETag") == 0) {
+            http_etag_copy(a->etag, sizeof(a->etag), e->header_value);
+        }
+        return ESP_OK;
+    }
+
+    if (e->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
+    if (a->oom) return ESP_OK;
 
     if (a->len + e->data_len + 1 > a->cap) {
         size_t ncap = a->cap ? a->cap : 8192;
@@ -85,9 +111,21 @@ char *http_get(const char *url, int *out_status) {
     return (char *)http_get_bin(url, NULL, out_status);
 }
 
+/* Both of the old entry points are this one call with pieces thrown away, so
+ * there is a single transport per platform. A photograph fetched through
+ * http_get_bin() sends no If-None-Match and is byte-for-byte the request it
+ * always was. */
 void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
-    if (out_status) *out_status = 0;
-    if (out_len) *out_len = 0;
+    http_resp_t r;
+    (void)http_get_cond(url, NULL, &r);
+    if (out_status) *out_status = r.status;
+    if (out_len)    *out_len    = r.len;
+    return r.body;
+}
+
+bool http_get_cond(const char *url, const http_req_t *req, http_resp_t *out) {
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
 
     acc_t a = {0};
     char host[sizeof(t_host)];
@@ -125,7 +163,7 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
                                  "Chrome/120 Safari/537.36",
         };
         t_client = esp_http_client_init(&cfg);
-        if (!t_client) { free(a.buf); return NULL; }
+        if (!t_client) { free(a.buf); return false; }
     }
 
     /* Point the (reused) handle at this request. user_data carries our
@@ -133,13 +171,24 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
     esp_http_client_set_url(t_client, url);
     esp_http_client_set_user_data(t_client, &a);
 
+    /* The handle is reused across calls (see the file header), and so are the
+     * headers set on it. Setting If-None-Match when there is a tag and DELETING
+     * it when there is not is the whole of the correctness here: a tag left
+     * standing would make every later unconditional GET conditional, and the
+     * next photograph fetch would come back 304 with no body — a front page
+     * with holes where its pictures are, from a request that never asked a
+     * question about them. */
+    const char *inm = (req && req->if_none_match && req->if_none_match[0])
+                    ? req->if_none_match : NULL;
+    if (inm) esp_http_client_set_header(t_client, "If-None-Match", inm);
+    else     esp_http_client_delete_header(t_client, "If-None-Match");
+
     /* Serialize only the (re)connect+handshake; same-host reuse runs lock-free. */
     if (will_handshake && s_tls_connect_lock) xSemaphoreTake(s_tls_connect_lock, portMAX_DELAY);
     esp_err_t err = esp_http_client_perform(t_client);
     int code = esp_http_client_get_status_code(t_client);
     if (will_handshake && s_tls_connect_lock) xSemaphoreGive(s_tls_connect_lock);
 
-    if (out_status) *out_status = code;
     if (err != ESP_OK || a.oom) {
         if (err != ESP_OK) ESP_LOGW(TAG, "GET failed: %s", esp_err_to_name(err));
         /* The connection may be poisoned; close it so the next call reconnects
@@ -147,12 +196,22 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
         esp_http_client_close(t_client);
         t_host[0] = '\0';
         free(a.buf);
-        return NULL;
+        /* Status stays 0. A perform that failed leaves the reused handle
+         * reporting whatever the PREVIOUS request got, and handing that back
+         * would let a stale 200 outlive the request that earned it — with the
+         * conditional GET that is the difference between "the network is down"
+         * and "the content is unchanged". Nothing regresses: http_get_bin()'s
+         * one caller reads the status only when the body is non-NULL. */
+        return false;
     }
 
     /* Success: remember the host so same-host follow-ups skip the handshake. */
     strncpy(t_host, host, sizeof(t_host) - 1);
     t_host[sizeof(t_host) - 1] = '\0';
-    if (out_len) *out_len = a.len;
-    return a.buf;   /* caller frees */
+
+    out->status = code;
+    out->body   = a.buf;   /* caller frees; NULL on a 304, which carries none */
+    out->len    = a.len;
+    http_etag_copy(out->etag, sizeof(out->etag), a.etag);
+    return true;
 }
