@@ -38,9 +38,26 @@ static adc_channel_t             s_chan;
 static bool                      s_ready;
 static bool                      s_present;
 
+/* Remembered from init so board_io_sleep() can take no arguments: the pin is
+ * still named in exactly one place (main/user_config.h), it is just named once
+ * per boot rather than once per call. */
+static int                       s_enable_gpio = -1;
+
 void board_io_init(int adc_gpio, int enable_gpio)
 {
+    s_enable_gpio = enable_gpio;
+
     if (enable_gpio >= 0) {
+        /* Release the hold board_io_sleep() left on this pad. It survives the
+         * wake — that is the whole point of it — so without this the first boot
+         * after any deep sleep would configure the pin, drive it high, and have
+         * the pad quietly ignore both: the divider would stay disconnected and
+         * every battery reading for the rest of the board's life would be 0 V,
+         * reported as "no cell fitted", which in turn disables deep sleep. One
+         * missing line, and the feature switches itself off permanently after
+         * its first successful sleep. */
+        gpio_hold_dis((gpio_num_t)enable_gpio);
+
         gpio_config_t en = {
             .pin_bit_mask = 1ULL << enable_gpio,
             .mode         = GPIO_MODE_OUTPUT,
@@ -134,4 +151,27 @@ int board_io_battery_percent(void)
 bool board_io_battery_present(void)
 {
     return s_present;
+}
+
+void board_io_sleep(void)
+{
+    if (s_enable_gpio < 0) {
+        return;
+    }
+
+    gpio_set_level((gpio_num_t)s_enable_gpio, 0);
+
+    /* Driving it low is not enough on its own. Deep sleep disconnects the
+     * digital pad from the GPIO matrix, so an un-held pin floats and a floating
+     * load-switch enable is whatever the switch's own input leakage decides.
+     * The hold latches the level into the RTC domain, which is powered through
+     * the sleep — so this is the difference between a fix and the appearance of
+     * one. board_io_init() releases it on the way back up. */
+    gpio_hold_en((gpio_num_t)s_enable_gpio);
+    gpio_deep_sleep_hold_en();
+
+    /* Nothing can be measured through a disconnected divider, and a stale
+     * "present" would tell the next caller there is a cell when the ADC can no
+     * longer see one. */
+    s_present = false;
 }

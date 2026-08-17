@@ -118,6 +118,61 @@ static void ensure_nvs(void)
     ESP_ERROR_CHECK(err);
 }
 
+// prov_wifi_init() is emphatically NOT idempotent — it runs
+// esp_event_loop_create_default() and esp_wifi_init() under ESP_ERROR_CHECK, and
+// the second call to either returns ESP_ERR_INVALID_STATE and aborts the board.
+// That never mattered while provisioning_run() was the only entry point and ran
+// once. It matters now: a boot whose quiet path connects, fetches, and decides
+// to fall through goes on to call provisioning_run(), and without this guard the
+// board would panic on precisely the path the deep-sleep work exists to add.
+// This file is the only caller of prov_wifi_init() anywhere in the project, so
+// the guard is complete where it stands.
+static bool s_wifi_inited;
+
+static void ensure_wifi_init(void)
+{
+    if (!s_wifi_inited) {
+        prov_wifi_init();
+        s_wifi_inited = true;
+    }
+}
+
+// The station join both entry points share, so there is one connect rather than
+// two that can drift. It announces nothing: whether an attempt is worth an event
+// (and therefore, on this board, possibly a twenty-five second refresh) is the
+// caller's decision, not this function's.
+static bool try_stored_network(const prov_config_t *cfg, uint32_t timeout_ms)
+{
+    ESP_LOGI(TAG, "stored network '%s' — attempting to connect", cfg->ssid);
+    return prov_wifi_connect(cfg->ssid, cfg->password, timeout_ms);
+}
+
+bool provisioning_load_config(prov_config_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    ensure_nvs();
+    return prov_store_load(out);
+}
+
+bool provisioning_connect_only(prov_config_t *out, uint32_t timeout_ms)
+{
+    if (!provisioning_load_config(out)) {
+        // No stored SSID. Deliberately NOT a reason to start the portal here:
+        // an unprovisioned board reaches that through provisioning_run() on the
+        // full path, where there is a panel to display the instructions on.
+        return false;
+    }
+
+    // The force-portal flag is NOT consumed here. It is a one-shot, and taking
+    // it on a path that cannot show a portal would swallow the user's only
+    // escape hatch — they would hold KEY2 for five seconds, watch the board
+    // restart, and land back on the same unreachable network with the flag
+    // already spent. provisioning_run() is the only consumer.
+
+    ensure_wifi_init();
+    return try_stored_network(out, timeout_ms);
+}
+
 void provisioning_default_options(prov_options_t *opts)
 {
     memset(opts, 0, sizeof(*opts));
@@ -139,12 +194,11 @@ bool provisioning_run(const prov_options_t *opts, prov_config_t *out)
     // portal, but keep the saved config so the portal pre-fills (the user only re-enters Wi-Fi).
     bool forced = prov_store_take_force_portal();
 
-    prov_wifi_init();
+    ensure_wifi_init();
 
     if (have_config && !forced) {
-        ESP_LOGI(TAG, "stored network '%s' — attempting to connect", cfg.ssid);
         emit(PROV_EVENT_STA_CONNECTING, cfg.ssid);
-        if (prov_wifi_connect(cfg.ssid, cfg.password, opts->sta_connect_timeout_ms)) {
+        if (try_stored_network(&cfg, opts->sta_connect_timeout_ms)) {
             emit(PROV_EVENT_STA_CONNECTED, cfg.ssid);
             *out = cfg;
             return true;
