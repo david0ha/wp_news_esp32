@@ -21,6 +21,26 @@ Activate the ESP-IDF environment — **once per new shell session**:
 . ~/esp/v5.4.3/esp-idf/export.sh      # v5.4.3 is what is installed here
 ```
 
+There is a **second** IDF at `~/esp/esp-idf` (v5.4.1) and it exports a different cross-compiler.
+Either builds this project, but a `build/` tree records the absolute path of the compiler that
+configured it, so mixing them over one tree fails with `Tool doesn't match supported version from
+list [...]` — a message that reads like a broken install and means two IDFs over one build
+directory. Pick one per checkout; switching needs `idf.py fullclean` first.
+
+If `export.sh` is unavailable (some sandboxes refuse to source it), `idf.py` runs directly:
+
+```bash
+IDF_PATH="$HOME/esp/v5.4.3/esp-idf" \
+IDF_PYTHON_ENV_PATH="$HOME/.espressif/python_env/idf5.4_py3.14_env" \
+"$HOME/.espressif/python_env/idf5.4_py3.14_env/bin/python" \
+"$HOME/esp/v5.4.3/esp-idf/tools/idf.py" build
+```
+
+Choose that venv deliberately: `idf.py` refuses to start on an out-of-date `idf-component-manager`,
+and of the three environments in `~/.espressif/python_env/` the **middle** one — `idf5.4_py3.13_env`,
+carrying 2.1.2 against a required `~=2.2` — is the poisoned one. `idf5.4_py3.9_env` and
+`idf5.4_py3.14_env` both work.
+
 Standard workflow after activation, run from the **repository root** (the root *is* the IDF project):
 
 ```bash
