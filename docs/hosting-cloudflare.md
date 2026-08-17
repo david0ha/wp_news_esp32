@@ -164,25 +164,31 @@ Keep the plist file. It is the way back if the domain is ever the thing that is 
 Two things are worth deciding rather than inheriting.
 
 **Every poll now pays a full TLS handshake.** `http_port_release()` drops the connection at the end
-of each poll cycle, which is right — no server holds an idle socket for five minutes — but the
-handle it destroys is also where the saved TLS session lives, so the session ticket goes with it.
-Over plain HTTP on a LAN that cost nothing. Against Cloudflare it is an ECDSA verify per poll:
-seconds, on a core, 288 times a day. The task watchdog is at 60 s and this is nowhere near it, so
-nothing breaks — but it is real work being done to no purpose.
+of each poll cycle, which is right — no server holds an idle socket for a minute, and the mock
+server closes at thirty seconds — but the handle it destroys is also where the saved TLS session
+lives, so the session ticket goes with it. Over plain HTTP on a LAN that cost nothing. Against
+Cloudflare it is an ECDSA verify per poll: seconds, on a core, and at the default minute's cadence
+1,440 times a day. The task watchdog is at 60 s and this is nowhere near it, so nothing breaks —
+but it is real work being done to no purpose.
 
 Which leads to the second:
 
-**`CONFIG_WP_NEWS_POLL_SECONDS` is 300, and 300 was a LAN number.** The edition is filed twice a
-day. Five-minute polling against a local Python server cost nothing and bought a fast response to a
-hand-filed edition; against a public endpoint it is 288 handshakes a day for two changes. 900 or
-1800 is the honest number, and the range allows up to 86400. Little is lost by widening it: the
+**`CONFIG_WP_NEWS_POLL_SECONDS` is 60, and 60 is a LAN number.** It was lowered from 300 to make the
+first sheet of a boot land quickly, which is a LAN concern; the edition itself is filed twice a day.
+A minute's polling against a local Python server costs nothing and buys a fast response to a
+hand-filed edition; against a public endpoint it is 1,440 handshakes a day for two changes — and, on
+battery, roughly 58 mAh a day against a quarter-hour's 3.8. 900 or 1800 is the honest number for
+this deployment, and the range allows up to 86400. Little is lost by widening it: the
 device fingerprints every snapshot and skips the panel refresh when nothing it draws has changed, so
 a poll that finds the same edition already costs nothing visible — and `KEY1` and
 `POST /api/refresh` both still force one immediately.
 
-Note the one thing widening it *does* touch: a snapshot older than `STALE_AFTER_POLLS` (2) poll
-intervals gets the `STALE` badge. At 1800 s that becomes an hour rather than ten minutes, which is
-the right meaning for a paper filed twice a day and the wrong one for a five-minute tape.
+Note the one thing widening it *does* touch: a snapshot gets the `STALE` badge once it is older than
+two poll intervals **or** `STALE_FLOOR_SECONDS` (900), whichever is longer. At the 60 s default the
+floor is what governs, so the badge means a quarter of an hour; at 1800 s the interval takes over
+again and it becomes an hour, which is the right meaning for a paper filed twice a day and the wrong
+one for a minute-by-minute tape. The floor is there so that lowering the cadence cannot make the
+badge twitchy — it answers a question about the news, not about the poll loop.
 
 ## Cloudflare settings that will actually bite
 

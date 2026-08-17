@@ -40,7 +40,7 @@ rejection like any other, which keeps the rule true on that path too.
 ## The request
 
 ```
-GET <news_url>          every CONFIG_WP_NEWS_POLL_SECONDS, default 300, range 30..86400
+GET <news_url>          every CONFIG_WP_NEWS_POLL_SECONDS, default 60, range 30..86400
 ```
 
 No headers are required and none are checked. The response must carry a **2xx status** — checked

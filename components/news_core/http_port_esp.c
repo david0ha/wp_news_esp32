@@ -194,8 +194,8 @@ void *http_get_bin(const char *url, size_t *out_len, int *out_status) {
      * A reused connection that fails is the price of keep-alive, not a fault.
      * The peer is entitled to close an idle socket and does not ask first:
      * tools/mock_news_server.py is a Python ThreadingHTTPServer with
-     * `timeout = 30`, and this board polls every 300 seconds, so the server's
-     * FIN lands 270 seconds before the GET that discovers it. The socket sits
+     * `timeout = 30`, and this board polls every 60 seconds, so the server's
+     * FIN lands 30 seconds before the GET that discovers it. The socket sits
      * in CLOSE_WAIT until we write, which is why the failure arrives at the
      * WRITE and not at the connect — ECONNRESET, ESP_ERR_HTTP_WRITE_DATA.
      *
