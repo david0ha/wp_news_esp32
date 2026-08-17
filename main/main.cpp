@@ -252,13 +252,22 @@ static power_fetch_t QuietFetch(const char *url, news_t *scratch, wp_rtc_state_t
 
 	case NEWS_FETCH_OK: {
 		const uint32_t h = news_hash(scratch);
-		// The tag named a document that parsed, so it is worth keeping — but
-		// only here, on OK. Storing the tag of a payload that was rejected
-		// would make the next poll a 304 and the device would never look at
-		// that document again: stuck on yesterday's page with a log full of
-		// successful fetches.
+		if (h != rs->content_hash) {
+			// CHANGED. The tag is deliberately NOT stored: this wake is about
+			// to spend twenty-five seconds printing, and a tag published
+			// before a refresh that then failed — a brownout twenty seconds
+			// in — would earn a 304 on the next wake and the new edition
+			// would never print at all. The tag is published beside the hash
+			// by present_full(), once the page is actually on the paper.
+			return POWER_FETCH_CHANGED;
+		}
+		// Unchanged, so the glass ALREADY shows what this tag names and there
+		// is no refresh in flight for it to get ahead of. Storing it here is
+		// what makes the next poll a 304 rather than another parse, and it is
+		// the only place it can be stored, because a wake that sleeps never
+		// reaches present_full().
 		http_etag_copy(rs->etag, sizeof(rs->etag), etag);
-		return h == rs->content_hash ? POWER_FETCH_UNCHANGED : POWER_FETCH_CHANGED;
+		return POWER_FETCH_UNCHANGED;
 	}
 
 	default:
@@ -431,6 +440,15 @@ extern "C" void app_main(void)
 
 	// --- the full path -----------------------------------------------------
 	//
+	// The escape hatch first, before the panel, the UI and the network. It has
+	// to be here rather than in UiTask: a board that wakes, finds nothing
+	// changed and sleeps again never builds a UI at all, so the documented way
+	// back into one stuck on an unreachable network would die the day deep
+	// sleep ships. It costs one poll interval when the button is not held, and
+	// it runs before provisioning_run() consumes the flag, so the portal comes
+	// up on this boot rather than after a restart.
+	user_app_check_force_ap_at_boot(btn_gpios, btn_count);
+
 	// Everything from here costs the refresh. Two chip selects, because the
 	// panel is two UC8179s: GPIO44 drives the left 600 columns of the portrait
 	// page and GPIO41 the right 600. A blank right-hand half of the sheet is
