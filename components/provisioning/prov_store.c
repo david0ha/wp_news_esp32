@@ -66,10 +66,14 @@ bool prov_store_save(const prov_config_t *cfg)
         return false;
     }
 
+    // Clamped once, so the line logged below is the value that went into flash
+    // rather than a second opinion about it.
+    const uint32_t sleep_s = prov_clamp_sleep_seconds(cfg->sleep_seconds);
+
     nvs_set_str(h, "ssid", cfg->ssid);
     nvs_set_str(h, "pass", cfg->password);
     nvs_set_str(h, "vurl", cfg->news_url);
-    nvs_set_u32(h, "sleep_s", prov_clamp_sleep_seconds(cfg->sleep_seconds));
+    nvs_set_u32(h, "sleep_s", sleep_s);
 
     for (size_t i = 0; i < sizeof(kObsoleteKeys) / sizeof(kObsoleteKeys[0]); i++) {
         nvs_erase_key(h, kObsoleteKeys[i]);   // ESP_ERR_NVS_NOT_FOUND is fine
@@ -82,7 +86,7 @@ bool prov_store_save(const prov_config_t *cfg)
         return false;
     }
     ESP_LOGI(TAG, "saved ssid='%s' news_url='%s' sleep_s=%u", cfg->ssid, cfg->news_url,
-             (unsigned)prov_clamp_sleep_seconds(cfg->sleep_seconds));
+             (unsigned)sleep_s);
     return true;
 }
 
