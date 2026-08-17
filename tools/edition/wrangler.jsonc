@@ -1,0 +1,54 @@
+// Cloudflare deployment for the edition. See docs/hosting-cloudflare.md.
+//
+// This file is committed and is meant to work UNMODIFIED for anyone with a
+// Cloudflare account. There is nothing personal in it: no domain, no account
+// id, no token. Those are either discovered by wrangler at deploy time or read
+// from the environment.
+//
+// There is deliberately no `main`. This Worker is nothing but the two paths the
+// board fetches, so the assets ARE the application and no code runs per request
+// — which is also why the requests are free and unlimited.
+{
+  // Also the DNS label of the workers.dev URL below, so: alphanumeric and
+  // dashes, 63 characters or less, no leading or trailing dash. Unique within
+  // YOUR account, not globally — nobody else's deployment collides with it.
+  "name": "wpnews-edition",
+
+  "compatibility_date": "2026-08-17",
+
+  // A public URL without owning a domain. Every Cloudflare account gets one
+  // subdomain, and the Worker is served at
+  //
+  //     https://wpnews-edition.<your-account-subdomain>.workers.dev/news.json
+  //
+  // `wrangler deploy` prints the exact URL. That is the whole domain story for
+  // anyone who does not want to buy a name — which is why it is the default
+  // here rather than a custom domain nobody else can use.
+  "workers_dev": true,
+
+  // If you already have a zone on Cloudflare, uncomment this and put your own
+  // hostname in it: wrangler creates the DNS record and provisions the
+  // certificate. A subdomain of a zone you already own costs nothing.
+  //
+  // Custom domains need an ACTIVE zone on the account, and the hostname must
+  // not already have a CNAME record.
+  //
+  // "routes": [
+  //   { "pattern": "wpnews.example.com", "custom_domain": true }
+  // ],
+
+  "assets": {
+    // Built by publish.sh, and never $EDITION_DIR itself — the edition
+    // directory also holds the watchlist and a week of agent transcripts.
+    // The publish directory IS the allowlist. Do not point this at anything
+    // that was not assembled for publication.
+    "directory": "./public",
+
+    // A 404 has to stay a 404. A missing tile is an ordinary front-page
+    // condition — ui_tile.c drops it and the module reflows — whereas an
+    // SPA-style fallback would return an HTML page with the wrong byte count,
+    // which the device refuses anyway, only later and with nothing in the log
+    // to say why.
+    "not_found_handling": "none"
+  }
+}

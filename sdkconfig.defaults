@@ -45,12 +45,44 @@ CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 
-# Task Watchdog: bump from the 5s default to 10s. Two things here legitimately
-# hold a core for seconds — an ECDSA cert verify on an https:// news URL
-# (mbedtls_mpi_mul_mpi busy-polls the MPI peripheral with no interrupt path),
-# and a full 648x480 e-Paper refresh. Neither is a hung task (PANIC stays off),
-# so widen the window rather than mask it.
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# Task Watchdog. The 10s this used to carry was reasoned about a 648x480 panel;
+# this one is 1200x1600 and the work is an order of magnitude bigger, so the
+# number is re-derived here from what the board actually does. Measured, on the
+# device, from the boot log:
+#
+#   ui_news_create()   builds ~390 widgets in PSRAM     15.4 s
+#   LVGL layout pass   inside lv_refr_now()             10.4 s on a page swap
+#   wp_quantize565()   1.92 M px into the PSRAM fb       3.9 s per sheet
+#
+# None of those is a hung task — a refresh of the glass alone is 27 s — so the
+# window is widened rather than the check masked (PANIC stays off either way).
+# 60s is four times the worst measured stall and still catches a real wedge
+# inside one refresh cycle.
+#
+# The trap, if this ever looks too generous: the TWDT watches the IDLE tasks,
+# and IDLE runs at priority 0, so it is starved by ANY runnable task on its
+# core. main is priority 1 and pinned to CPU0. That is why the vTaskDelay(1) in
+# Lvgl_FlushCallback does not help — the millisecond it gives up goes to main,
+# never to IDLE0 — and why no amount of yielding inside the render can feed
+# this. A task cannot reset another task's TWDT entry, and the idle entry is
+# the one that fails.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
+
+# -O2 rather than the IDF default of -Og, and 240 MHz rather than 160.
+#
+# This board spends its time in two loops that are pure arithmetic over large
+# arrays — wp_quantize565() across 1.92 million pixels, and LVGL's layout pass
+# across ~390 objects that live in PSRAM — and both were being compiled for
+# debuggability. The flush measured 2033 ns/px, about 325 cycles for six
+# palette distances and a Bayer offset, which is what -Og over PSRAM costs.
+#
+# The `flush N ms for N px (N ns/px)` line in main.cpp is the instrument for
+# this; docs/bring-up.md asks for the number, and it is the one to compare
+# before and after rather than trusting the reasoning here. Assertions are
+# untouched (-O2 does not remove them), and the app partition is 81% free, so
+# the size the optimizer trades for speed is not contended.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # app_main renders the full LVGL screen (provisioning drives the setup overlay
 # with Lvgl_RenderNow + epd_refresh_full on the main task) — the IDF default of

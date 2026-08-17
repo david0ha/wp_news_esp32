@@ -29,6 +29,10 @@ shots/
 # host test/sim run logs
 *.log
 
+# Assembled by tools/edition/publish.sh from the current edition, and rebuilt
+# from empty every run. A build product of the desk, not source.
+tools/edition/public/
+
 # local secrets — never commit
 .env
 .env.*

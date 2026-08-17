@@ -107,11 +107,14 @@ idf.py openocd gdbgui
 See [pinout.md](pinout.md) for the pin map. Components are fetched from the ESP Component Registry
 (`idf.py add-dependency "<name>"`).
 
-### Display (UC8179 e-Paper, SPI, 648×480 monochrome)
+### Display (two UC8179 controllers, SPI, 1200 × 1600 portrait, six inks)
 
-Written in-house at `components/port_bsp/epd_panel.c`. There is no official `esp_lcd` component for
-the UC8179 — do not go looking for one. It uses `esp_lcd`'s SPI panel IO for transport and owns its
-own 38,880-byte framebuffer and refresh policy.
+Written in-house at `components/port_bsp/epd6_panel.c`. There is no official `esp_lcd` component for
+the UC8179 — do not go looking for one, and note that this driver does not use `esp_lcd`'s panel IO
+either: it drives `spi_master` directly with `spics_io_num = -1`, because the init sequence has
+commands that both controllers must receive, which means both chip selects low at once, and
+`esp_lcd`'s panel IO owns exactly one CS and queues asynchronously. It owns its own 960,000-byte
+framebuffer (in PSRAM) and its refresh policy.
 
 Full rationale, the command sequence's provenance, and the refresh rules are in
 [epaper-13in3.md](epaper-13in3.md). Read that before touching the driver, and note the one thing
@@ -120,9 +123,9 @@ SSD1680 this code started as, and getting it backwards fails silently rather tha
 
 ### Not present on this build
 
-No touch controller, audio codec, SD card or RTC. There is also **no I2C bus**: on the EE04 the two
-pins the previous carrier routed to an I2C header are KEY2 and the battery divider's enable. Adding
-an I2C device means finding two free pins first — see [pinout.md](pinout.md).
+No touch controller, audio codec, SD card or RTC. There is also **no I2C bus**: the two pins an
+earlier carrier in this family routed to an I2C header are KEY2 and the battery divider's enable
+here. Adding an I2C device means finding two free pins first — see [pinout.md](pinout.md).
 
 ## 8. Summary of frequently used commands
 
@@ -142,5 +145,5 @@ Before claiming a change works, also run the host tests and the simulator — se
 
 ## References
 
-- [references.md](references.md) — the e-Paper driver's upstream source, the EE04's pin routing as
-  published by Seeed, and the font licence.
+- [references.md](references.md) — the e-Paper driver's upstream source, the carrier's pin routing as
+  published by Seeed, where the second chip select came from, and the font licences.
