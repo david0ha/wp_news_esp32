@@ -296,13 +296,27 @@ extern "C" void app_main(void)
 
 		// news_t is 32,932 bytes — four times the main task's whole stack — so
 		// it goes to PSRAM and is freed before the full path could want the
-		// room. A failed allocation is not a fetch failure; it is a boot that
-		// cannot tell what is on the glass, which is exactly what rtc_valid
-		// answers, so it takes the full path rather than sleeping on a guess.
+		// room.
+		//
+		// A failed allocation is a poll that did not happen, and it is recorded
+		// as one. The obvious reading — "this boot cannot tell what is on the
+		// glass, so clear rtc_valid and take the full path" — is wrong, and
+		// wrong in the direction that costs a cell. rtc_valid answers whether
+		// the RTC state was written by THIS firmware, and it was: content_hash
+		// is still trustworthy and the glass still holds what it names. Nothing
+		// about a full heap changes that.
+		//
+		// What clearing it would do is send this wake down the cold-boot force,
+		// which reaches the full path with have_ip false and therefore reaches
+		// provisioning_run() — and that never returns. A board whose PSRAM was
+		// briefly full while its network happened to be down would park in a
+		// captive portal, awake at 81 mA, until the cell died. Counting it as a
+		// failed poll sleeps with backoff and tries again, which is what every
+		// other way of not getting a snapshot does.
 		news_t *scratch = (news_t *)heap_caps_malloc(sizeof(news_t), MALLOC_CAP_SPIRAM);
 		if (!scratch) {
-			ESP_LOGW(TAG, "no PSRAM for a scratch snapshot — taking the full path");
-			in.rtc_valid = false;
+			ESP_LOGW(TAG, "no PSRAM for a scratch snapshot — counting a failure");
+			in.fetch = POWER_FETCH_FAILED;
 		} else {
 			prov_config_t connected_cfg;
 			have_ip = provisioning_connect_only(&connected_cfg, 15000);
