@@ -78,6 +78,9 @@ typedef struct {
     bool     usb_console;          /* a developer is attached */
     bool     url_configured;
     uint16_t consecutive_fails;    /* BEFORE this wake */
+    /* The interval this wake will sleep for if it sleeps — power_cadence()'s
+     * answer, ALREADY FINAL. The backoff curve has been applied to it there;
+     * power_decide() takes it as given and does not multiply it again. */
     uint32_t base_sleep_seconds;
 } power_input_t;
 
@@ -209,8 +212,9 @@ void     power_classify_fetch(bool ok, bool not_modified,
  * always fully written, so a caller cannot forget to initialise it. */
 void     power_decide(const power_input_t *in, power_plan_t *out);
 
-/* The curve, separately callable so the test can pin it without building a
- * whole input. Integer-only and monotonic in `fails`. */
+/* The curve. Called by power_cadence() — which is the ONLY caller that applies
+ * it — and public so the test can pin it without building a whole input.
+ * Integer-only and monotonic in `fails`. */
 uint32_t power_backoff_seconds(uint32_t base, uint16_t fails);
 
 /* For the one log line a sleeping board emits per wake. Never NULL. */

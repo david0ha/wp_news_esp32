@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <assert.h>    /* static_assert: the C11 macro, the C++11 keyword */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -48,7 +49,27 @@ typedef struct {
     uint32_t wakes;             /* diagnostics — see below */
     uint32_t quiet_wakes;       /* those that cost no refresh */
     uint32_t awake_ms_total;    /* accumulated on the way into every sleep */
+
+    /* The desk's cadence, as last adopted, so a quiet wake that gets a 304 —
+     * no body, therefore no policy block — still sleeps by what the desk last
+     * said rather than falling back to the local interval every other wake.
+     *
+     * LAST, and for the reason news_t puts its own `policy` block last:
+     * `next_change` is the first member of this struct wider than four bytes,
+     * so it is what makes the whole thing 8-aligned. Adding it anywhere else
+     * would move every field after it. */
+    uint32_t poll_seconds;      /* the cadence last adopted; 0 = none      */
+    int64_t  next_change;       /* the desk's next transition; 0 = none    */
 } wp_rtc_state_t;
+
+/* A CEILING, not a transcription — see CLAUDE.md on sizeof(news_t), a number
+ * that has been wrong twice because it was written down rather than measured.
+ * What matters about this struct is that it fits in RTC slow memory with room
+ * to spare, and 8 KB is the whole of that: at a hundred-odd bytes this has two
+ * orders of magnitude of headroom, and the assert exists to catch somebody
+ * putting a snapshot, a URL or a framebuffer in here, not to pin the padding. */
+static_assert(sizeof(wp_rtc_state_t) <= 1024,
+              "wp_rtc_state_t must stay a small corner of the 8 KB RTC slow memory");
 
 /*
  * The three diagnostics are not decoration. Both numbers this design rests on

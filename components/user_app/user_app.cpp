@@ -89,18 +89,6 @@ static int s_btn_count;
  * often to come back, so the live figure is `s_poll_seconds` below. */
 #define POLL_SECONDS_DEFAULT  CONFIG_CLAUDEPOST_POLL_SECONDS
 
-/* Before this instant — 2024-01-01T00:00:00Z — `time(NULL)` is the epoch plus
- * however long the board has been up, which is not a date.
- *
- * This board has no RTC: the clock is SNTP or nothing, and SNTP lands some
- * seconds after the network does. `policy.next_change` is an ABSOLUTE instant,
- * so subtracting an unsynced clock from it yields a wait of roughly fifty-five
- * years, and the min() would silently keep the configured interval — which is
- * the right answer, but arrived at by accident. Testing for it says so, and
- * makes the one case where it matters (a board whose SNTP never succeeds)
- * behave the same as one that was never sent a policy at all. */
-#define CLOCK_SYNCED_EPOCH  1704067200
-
 /* How often UiTask wakes to move the clock on IN THE FRAMEBUFFER. It does not
  * reach the glass on its own.
  *
@@ -488,6 +476,13 @@ static void action_set_url(const char *url)
     s_next_change      = 0;
     s_poll_from_policy = false;
 
+    /* Including the copy that crosses a sleep. Without this the board would be
+     * pointed at a new desk and then go to sleep on the old desk's cadence —
+     * and on the old desk's `next_change`, which is an instant in a schedule
+     * this board no longer reads. */
+    power_state()->poll_seconds = 0;
+    power_state()->next_change  = 0;
+
     /* Clearing the URL means "go back to the demo screen", and it has to happen
      * here rather than by waiting for a poll — with no URL there is no poll, so
      * the board would otherwise sit on the last real snapshot indefinitely and
@@ -803,7 +798,38 @@ static bool await_first_snapshot(void)
     }
 }
 
-/* --- the awake window (UiTask only) --------------------------------------- */
+/* --- the awake window ----------------------------------------------------- */
+
+/*
+ * How long this board will sleep for, and who decided it.
+ *
+ * One call, two callers — enter_sleep(), which acts on it, and
+ * user_app_snapshot(), which reports it to the companion app. They must agree:
+ * a phone told "900 s, from config" by a board that is about to sleep for 120
+ * because its desk named a transition is a phone showing a number nobody can
+ * act on. So the inputs are assembled here rather than twice.
+ *
+ * Takes no lock. Everything it reads is RTC memory, which s_mtx does not guard
+ * — see the note in user_app_snapshot() — and power_cadence() is pure.
+ */
+static void effective_cadence(power_cadence_t *out)
+{
+    const wp_rtc_state_t *rs = power_state();
+
+    power_cadence_in_t in = {};
+    in.policy.poll_seconds = rs->poll_seconds;
+    in.policy.next_change  = rs->next_change;
+    /* The local layer, resolved the way EffectiveSleepSeconds() in main.cpp
+     * resolves it: the value carried across the sleep, else the build-time
+     * default. NVS is already folded into the first of those by
+     * action_set_sleep_seconds() and by the boot path. */
+    in.local_seconds       = rs->sleep_seconds ? rs->sleep_seconds
+                                               : power_default_sleep_seconds();
+    in.now                 = (int64_t)time(NULL);
+    in.consecutive_fails   = rs->consecutive_fails;
+
+    power_cadence(&in, out);
+}
 
 /*
  * Whether this board is allowed to sleep at all: the same four safety gates
@@ -868,11 +894,19 @@ static void enter_sleep(void)
         rs->consecutive_fails++;
     }
 
-    const uint32_t seconds =
-        rs->sleep_seconds ? rs->sleep_seconds : power_default_sleep_seconds();
-    ESP_LOGI(TAG, "awake window closed — sleeping (printed %s, fails %u)",
+    /* And the cadence, computed AFTER the accounting above, because the fail
+     * count is one of its inputs — a wake that printed nothing has just earned
+     * the longer sleep the curve gives it. */
+    power_cadence_t cad;
+    effective_cadence(&cad);
+
+    ESP_LOGI(TAG, "awake window closed — sleeping %us from %s (printed %s, fails %u)",
+             (unsigned)cad.seconds,
+             cad.source == POWER_CADENCE_POLICY        ? "policy"
+             : cad.source == POWER_CADENCE_NEXT_CHANGE ? "next_change"
+                                                       : "local",
              s_printed ? "yes" : "no", (unsigned)rs->consecutive_fails);
-    power_sleep(seconds, s_btn_gpios, s_btn_count);
+    power_sleep(cad.seconds, s_btn_gpios, s_btn_count);
 }
 
 /*
@@ -1141,6 +1175,17 @@ static void NewsTask(void *arg)
                     s_poll_from_policy = true;
                 }
                 s_next_change = s_fetched.policy.next_change;
+
+                /* And into RTC memory, by the same rule, so a board that sleeps
+                 * after this boot sleeps on what the desk said rather than on
+                 * the local interval. The quiet path publishes it too — this is
+                 * the other adoption site, for a full boot, whose fetch the
+                 * quiet path never made. */
+                power_state()->next_change = s_fetched.policy.next_change;
+                if (s_fetched.policy.poll_seconds != 0) {
+                    power_state()->poll_seconds =
+                        (uint32_t)s_fetched.policy.poll_seconds;
+                }
                 state_unlock();
 
                 if (changed) {
@@ -1219,34 +1264,34 @@ static void NewsTask(void *arg)
          * would guarantee it times out and prints the demo page for a server
          * that was about to answer. Past that window a retry can no longer
          * change which page got printed, so there is nothing left to buy. */
+        /* How long until the next poll — the same function a sleeping board
+         * asks, and that is the point of it being a function. An awake board
+         * and a sleeping one obeying two different readings of one policy block
+         * is a fault nobody would ever look for, because both of them work.
+         *
+         * `poll_seconds` is passed only when the desk actually said it:
+         * s_poll_seconds falls back to the compiled-in default, which is the
+         * LOCAL layer here and must not masquerade as the desk's answer, or
+         * `sleepSource` on the companion app would read "policy" for a board no
+         * desk has ever spoken to.
+         *
+         * And no backoff: `fails` is zero because the awake path badges the
+         * sheet STALE and OFFLINE rather than slowing down. Someone is looking
+         * at this board; slowing its recovery is the opposite of what they
+         * want, and the badge is what tells them. */
+        power_cadence_in_t pc = {};
         state_lock();
-        int     wait_s       = s_poll_seconds;
-        int64_t next_change  = s_next_change;
-        bool    never_fetched = (s_last_ok_us == 0);
+        pc.policy.poll_seconds = s_poll_from_policy ? (uint32_t)s_poll_seconds : 0u;
+        pc.policy.next_change  = s_next_change;
+        bool never_fetched     = (s_last_ok_us == 0);
         state_unlock();
+        pc.local_seconds       = POLL_SECONDS_DEFAULT;
+        pc.now                 = (int64_t)time(NULL);
+        pc.consecutive_fails   = 0;
 
-        /* Wake for the instant the desk said its answer would change, when that
-         * lands sooner than the next ordinary poll. A board on an hourly
-         * overnight cadence still catches the 06:00 edition at 06:00 rather than
-         * at 06:47, which is the whole reason `next_change` is on the wire.
-         *
-         * Only when it is still in the FUTURE, and that is not what "min(poll,
-         * next_change - now)" literally says. An instant that has already passed
-         * would floor at NEWS_POLL_MIN and keep flooring there — a static
-         * payload with a baked `next_change`, or a cached copy of a live one,
-         * would pin the board at a poll every thirty seconds for as long as it
-         * stayed up. Having arrived at the instant, the ordinary cadence is the
-         * correct behaviour: whatever was going to change has changed, and this
-         * fetch is the one that collected it.
-         *
-         * And only when the clock is synced. See CLOCK_SYNCED_EPOCH. */
-        int64_t now = (int64_t)time(NULL);
-        if (next_change > 0 && now >= (int64_t)CLOCK_SYNCED_EPOCH) {
-            int64_t until = next_change - now;
-            if (until > 0 && until < (int64_t)wait_s) {
-                wait_s = until > NEWS_POLL_MIN ? (int)until : NEWS_POLL_MIN;
-            }
-        }
+        power_cadence_t pcad;
+        power_cadence(&pc, &pcad);
+        int wait_s = (int)pcad.seconds;
 
         if (never_fetched && fast_retries < FIRST_RETRY_MAX) {
             fast_retries++;
@@ -1468,8 +1513,17 @@ void user_app_snapshot(device_state_t *out)
      *    memory, not this lock. */
     const wp_rtc_state_t *rs = power_state();
     out->deep_sleep     = power_deep_sleep_enabled();
-    out->sleep_seconds  = (int)(rs->sleep_seconds ? rs->sleep_seconds
-                                                  : power_default_sleep_seconds());
+
+    /* The EFFECTIVE interval — what this board will actually do when the window
+     * closes — and not the local setting it was built or configured with. The
+     * two differ whenever the desk has said anything, which on a board reading
+     * a desk is most of the time. Reporting the setting instead would have a
+     * phone show 900 s beside a board sleeping for 3,600 because its desk is in
+     * its quiet window, which is a number the reader cannot act on and cannot
+     * tell is wrong. */
+    power_cadence_t cad;
+    effective_cadence(&cad);
+    out->sleep_seconds  = (int)cad.seconds;
     out->wakes          = (int)rs->wakes;
     out->quiet_wakes    = (int)rs->quiet_wakes;
     out->awake_ms_total = (int)rs->awake_ms_total;

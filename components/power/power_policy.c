@@ -279,8 +279,16 @@ void power_decide(const power_input_t *in, power_plan_t *out)
         if (out->next_fails < UINT16_MAX) {
             out->next_fails++;
         }
-        out->sleep_seconds = power_backoff_seconds(in->base_sleep_seconds,
-                                                   out->next_fails);
+
+        /* And the sleep is `base_sleep_seconds` unchanged, because the backoff
+         * has already been applied to it. power_cadence() owns the curve now —
+         * it has to, since it is the only thing that knows the base the curve
+         * should multiply (the desk's cadence, or a shortened targeted wake, or
+         * the local interval). Multiplying again here would square it: at
+         * fifteen minutes and five failures, 4,500 seconds becoming 22,500. The
+         * cap hides that at an hour and stops hiding it the moment somebody
+         * configures a two-hour interval, which is precisely the configuration
+         * that cannot afford it. */
 
         /* And then it sleeps — however long it has been failing, and however
          * stale the sheet on the glass has become. That is the design's one

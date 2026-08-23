@@ -21,9 +21,10 @@
  * the desktop isn't crypto-starved. Defined so both ports satisfy the seam. */
 void http_port_init(void) { }
 
-/* Nothing to release: each http_get_bin() below opens and cleans up its own easy
- * handle, so this port never holds a connection between calls in the first
- * place. Defined so both ports satisfy the seam. */
+/* Nothing to release: each http_get_cond() below opens and cleans up its own
+ * easy handle — and http_get()/http_get_bin() are reimplemented on it — so this
+ * port never holds a connection between calls in the first place. Defined so
+ * both ports satisfy the seam. */
 void http_port_release(void) { }
 
 typedef struct {

@@ -107,9 +107,9 @@ typedef struct {
  * correctly said nothing had changed — lengthening the retry backoff on a
  * sleeping board, badging the sheet OFFLINE on an awake one: a board that works
  * worse the better the server behaves, and nothing in the log to say so.
- * http_get() and
- * http_get_bin() keep their exact previous behaviour and are reimplemented on
- * top of this, so the photograph path in ui_tile.c is untouched.
+ * http_get() and http_get_bin() keep their exact previous behaviour and are
+ * reimplemented on top of this, so the photograph path in ui_tile.c is
+ * untouched.
  */
 bool http_get_cond(const char *url, const http_req_t *req, http_resp_t *out);
 

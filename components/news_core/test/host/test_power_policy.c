@@ -287,15 +287,44 @@ static void test_a_failure_sleeps_and_counts(void)
     CHECK_INT(g_out.next_fails, 3);
     CHECK_INT(g_out.sleep_seconds, 900);
 
-    /* The fourth failure is where the curve bends, and the plan says the sleep
-     * is the count AFTER this wake — so consecutive_fails = 3 is the wake that
-     * first backs off. */
+    /* The count still moves at the fourth failure — but the SLEEP does not
+     * change here, because this function no longer owns the curve. It is
+     * handed `base_sleep_seconds` by power_cadence(), which has already applied
+     * the backoff to it; applying it a second time would multiply a 900-second
+     * interval by twenty-five. One place, and the other does not. */
     baseline();
     g_in.fetch             = POWER_FETCH_FAILED;
     g_in.consecutive_fails = 3;
     decide();
     CHECK_INT(g_out.next_fails, 4);
-    CHECK_INT(g_out.sleep_seconds, 3600);
+    CHECK_INT(g_out.sleep_seconds, 900);
+}
+
+static void test_the_decision_takes_the_cadence_as_final(void)
+{
+    /* WHO APPLIES THE BACKOFF, asserted rather than left to two files to agree
+     * about. power_cadence() computes the whole interval — desk policy, a
+     * targeted wake, and the curve — and hands it here as
+     * `base_sleep_seconds`. So every arm that sleeps sleeps for exactly that,
+     * and a failing board is slowed once instead of squared: at fifteen
+     * minutes and five failures the two-place version would have asked for
+     * 4,500 seconds and then 22,500, which the cap hides at 900 s and does not
+     * hide at all past an hour.
+     *
+     * The curve itself stays public: power_cadence() calls it, and the table
+     * below pins it. */
+    static const power_fetch_t all[] = {
+        POWER_FETCH_NOT_ATTEMPTED, POWER_FETCH_UNCHANGED,
+        POWER_FETCH_CHANGED,       POWER_FETCH_FAILED,
+    };
+    for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+        baseline();
+        g_in.fetch              = all[i];
+        g_in.consecutive_fails  = 9;
+        g_in.base_sleep_seconds = 4321;   /* whatever the cadence decided */
+        decide();
+        CHECK_INT(g_out.sleep_seconds, 4321);
+    }
 }
 
 static void test_the_backoff_curve(void)
@@ -366,7 +395,7 @@ static void test_the_fail_counter_saturates(void)
     decide();
     CHECK_INT(g_out.next_fails, 65535);
     CHECK_INT(g_out.action, POWER_SLEEP_AGAIN);
-    CHECK_INT(g_out.sleep_seconds, 3600);
+    CHECK_INT(g_out.sleep_seconds, 900);   /* the cadence's answer, unmultiplied */
 
     baseline();
     g_in.fetch             = POWER_FETCH_FAILED;
@@ -393,7 +422,7 @@ static void test_not_attempted_is_treated_as_a_failure(void)
     g_in.consecutive_fails = 4;
     decide();
     CHECK_INT(g_out.next_fails, 5);
-    CHECK_INT(g_out.sleep_seconds, 3600);
+    CHECK_INT(g_out.sleep_seconds, 900);   /* the cadence's answer, unmultiplied */
 }
 
 /* --- the effective cadence ------------------------------------------------ */
@@ -720,6 +749,7 @@ int main(void)
     test_changed_content_earns_the_refresh();
     test_a_changed_wake_carries_the_fail_count();
     test_a_failure_sleeps_and_counts();
+    test_the_decision_takes_the_cadence_as_final();
     test_the_backoff_curve();
     test_backoff_never_shortens_a_configured_sleep();
     test_the_fail_counter_saturates();

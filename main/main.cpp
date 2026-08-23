@@ -239,6 +239,31 @@ static power_fetch_t QuietFetch(const char *url, news_t *scratch, wp_rtc_state_t
 	if (cl.store_etag) {
 		http_etag_copy(rs->etag, sizeof(rs->etag), etag);
 	}
+
+	// The desk's cadence, carried across the sleep beside the tag.
+	//
+	// On EVERY 200, whether or not the hash moved. The policy block is not part
+	// of the page — news_hash() deliberately cannot see it — so "the content
+	// changed" says nothing at all about whether the cadence did, and a board
+	// that only read the block on the polls that happened to bring a new
+	// edition would miss every quiet window that began on a quiet day. Which is
+	// exactly the case the block exists for. Same rule as NewsTask's adoption
+	// block, deliberately: two places read this and they must read it the same.
+	//
+	// Not on a 304: there is no body, so there is no policy, and what is in RTC
+	// memory is still the last thing the desk actually said.
+	//
+	// A zero `poll_seconds` is ABSENT and leaves the last cadence standing
+	// rather than reverting to the local one — a caching layer that stripped
+	// the block would otherwise multiply this board's request rate by sixty.
+	// `next_change` is written unconditionally, because it is an instant and a
+	// stale instant is worse than none.
+	if (r == NEWS_FETCH_OK) {
+		if (scratch->policy.poll_seconds > 0) {
+			rs->poll_seconds = (uint32_t)scratch->policy.poll_seconds;
+		}
+		rs->next_change = scratch->policy.next_change;
+	}
 	return cl.fetch;
 }
 
@@ -291,7 +316,9 @@ extern "C" void app_main(void)
 	in.usb_console        = power_usb_console_attached();
 	in.url_configured     = url[0] != '\0';
 	in.consecutive_fails  = rs->consecutive_fails;
-	in.base_sleep_seconds = EffectiveSleepSeconds(&cfg, rs);
+	// base_sleep_seconds is deliberately NOT filled here. It is the cadence,
+	// and the cadence is partly the desk's — which this boot has not asked yet.
+	// See below the quiet path.
 
 	// --- the quiet path ---------------------------------------------------
 	//
@@ -344,14 +371,48 @@ extern "C" void app_main(void)
 				ESP_LOGW(TAG, "quiet path: no network — counting a failure");
 				in.fetch = POWER_FETCH_NOT_ATTEMPTED;
 			}
+
+			// Close the connection this wake opened, before anything can
+			// decide not to come back. On POWER_SLEEP_AGAIN below,
+			// power_sleep() does not return: without this the socket is
+			// abandoned with no FIN, and the desk holds that connection open
+			// until its own 120-second timeout — on every quiet wake, which is
+			// ninety-six dead connections a day from one board. On the CHANGED
+			// path app_main returns and the thread-local handle simply leaks
+			// until the next sleep reclaims it.
+			//
+			// Outside the have_ip branch on purpose, so the no-network arm is
+			// covered too; it is a documented no-op when nothing is open. Safe
+			// here even though the quiet path never calls http_port_init() —
+			// this touches only the thread-local handle, not the TLS lock.
+			http_port_release();
 			free(scratch);
 		}
 	}
 
+	// --- how long until the next wake --------------------------------------
+	//
+	// AFTER the fetch, and that ordering is what makes one cadence real. The
+	// desk's `policy.poll_seconds` is the cadence to use now; the board learns
+	// it from the poll it has just made, so computing this before the poll
+	// would sleep on what the desk said an interval ago — or, on the first wake
+	// after a URL change, on nothing at all. The local interval is the
+	// fallback, for static hosting and for a mock with no policy block.
+	power_cadence_in_t c = {};
+	c.policy.poll_seconds = rs->poll_seconds;
+	c.policy.next_change  = rs->next_change;
+	c.local_seconds       = EffectiveSleepSeconds(&cfg, rs);
+	c.now                 = (int64_t)time(NULL);
+	c.consecutive_fails   = rs->consecutive_fails;
+
+	power_cadence_t cad;
+	power_cadence(&c, &cad);
+	in.base_sleep_seconds = cad.seconds;
+
 	// --- the decision ------------------------------------------------------
 	power_plan_t plan;
 	power_decide(&in, &plan);
-	ESP_LOGI(TAG, "wake=%s fetch=%s -> %s (sleep %us, fails %u)",
+	ESP_LOGI(TAG, "wake=%s fetch=%s -> %s (cadence %us from %s, fails %u)",
 	         wake == POWER_WAKE_TIMER  ? "timer"
 	         : wake == POWER_WAKE_BUTTON ? "button"
 	                                     : "cold",
@@ -360,6 +421,9 @@ extern "C" void app_main(void)
 	         : in.fetch == POWER_FETCH_FAILED  ? "failed"
 	                                           : "not_attempted",
 	         power_action_name(plan.action), (unsigned)plan.sleep_seconds,
+	         cad.source == POWER_CADENCE_POLICY      ? "policy"
+	         : cad.source == POWER_CADENCE_NEXT_CHANGE ? "next_change"
+	                                                   : "local",
 	         (unsigned)plan.next_fails);
 
 	// What this wake learned, recorded before anything can go wrong with acting
@@ -368,7 +432,18 @@ extern "C" void app_main(void)
 	// and then browned out mid-refresh would spend the next month convinced it
 	// had printed a page it had not.
 	rs->consecutive_fails = plan.next_fails;
-	rs->sleep_seconds     = in.base_sleep_seconds;
+
+	// THE LOCAL LAYER, not the cadence — and the difference is a flat cell.
+	//
+	// `sleep_seconds` is what POST /api/sleep and the setup form set, carried
+	// across the sleep so the quiet path need not read NVS. EffectiveSleepSeconds()
+	// reads it FIRST, ahead of NVS and Kconfig. So writing the cadence here
+	// would take a 120-second targeted wake — a wake shortened once, for one
+	// transition — and make it this board's local interval permanently: 720
+	// wakes a day instead of 96, with every log line agreeing, until somebody
+	// reflashed it. The cadence is a per-wake answer and lives only in
+	// `plan.sleep_seconds`; this field is a setting.
+	rs->sleep_seconds     = EffectiveSleepSeconds(&cfg, rs);
 
 	if (plan.action == POWER_SLEEP_AGAIN) {
 		rs->quiet_wakes++;
