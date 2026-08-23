@@ -2,7 +2,7 @@ menu "Claude Post power"
 
 config CLAUDEPOST_DEEP_SLEEP
     bool "Sleep between polls (battery mode)"
-    default n
+    default y
     help
       Turn the board into a picture frame that wakes, polls, and goes back to
       sleep without ever powering the panel. Spectra 6 is bistable, so the last
@@ -23,13 +23,23 @@ config CLAUDEPOST_DEEP_SLEEP
       ranges — GET /api/state reports what this board actually does after a day
       on the wall.
 
-      It is OFF by default because a sleeping board is a board you cannot reach.
-      Three further gates disable it at runtime whatever this says: no cell
-      fitted, a USB console attached, or no news URL configured. So enabling it
-      changes nothing on a bench and everything on a wall, which is the intended
-      asymmetry — but read "Getting back in" in the design document before
-      hanging one up, because the escape hatch is KEY2 held for five seconds and
-      it is worth knowing that before you need it.
+      It is ON by default, and what makes that safe is that this switch is not
+      what decides. Three runtime gates disable sleep whatever this says: no
+      cell fitted, a USB console attached, or no news URL configured. A board on
+      a bench satisfies at least one of them permanently — it is on USB, and
+      usually has no battery — so it never sleeps, `idf.py monitor` keeps
+      working, and this option changes nothing about developing on one. A board
+      on a wall satisfies none of them, and sleeps.
+
+      That asymmetry is the whole argument for the default. The alternative is
+      an option somebody has to find and turn on before the feature they
+      actually wanted exists, and a frame that runs flat in two days until they
+      do. Off-by-default protects the case the gates already protect.
+
+      Read "Getting back in" in docs/specs/2026-08-17-deep-sleep-design.md
+      before hanging one up, though: a sleeping board is a board you cannot
+      reach between wakes, and the escape hatch is KEY2 held for five seconds.
+      That is worth knowing before you need it.
 
 config CLAUDEPOST_SLEEP_SECONDS
     int "Sleep between polls (seconds)"
