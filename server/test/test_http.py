@@ -41,12 +41,22 @@ TILE = bytes(range(256)) * 4          # 1,024 bytes; the desk does not inspect c
 
 
 def write_tokens(path: str) -> dict:
-    """Two tokens, one of each scope, in the file the desk reads."""
-    doc = {"tokens": [{"name": "agent", "scope": "producer", "token": "prod-token-aaa"},
-                      {"name": "me", "scope": "operator", "token": "oper-token-bbb"}]}
+    """Two tokens, one of each scope, in the file the desk reads.
+
+    Both are padded past ``auth.MIN_TOKEN_CHARS``. A shorter one is refused as
+    the file is read, which is a refusal in the desk's constructor and
+    therefore an error in every test in this module at once -- so the padding
+    is load-bearing rather than decorative.
+    """
+    doc = {"tokens": [{"name": "agent", "scope": "producer",
+                       "token": "prod-token-aaaaaaaa"},
+                      {"name": "me", "scope": "operator",
+                       "token": "oper-token-bbbbbbbb"}]}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(doc, f)
-    return {"producer": "prod-token-aaa", "operator": "oper-token-bbb"}
+    # Read back off the document rather than repeated, so the map a test
+    # authenticates with cannot drift from the file the desk parsed.
+    return {t["scope"]: t["token"] for t in doc["tokens"]}
 
 
 class DeskTestCase(unittest.TestCase):
@@ -78,6 +88,24 @@ class DeskTestCase(unittest.TestCase):
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self.server.shutdown)
+
+        # The publish policy this module runs on, and the reason it is set at
+        # all: DEFAULT_SCHEDULE is `on_wake`, under which a commit at nine in
+        # the morning stages and waits for the 12:40 wake. Every test here that
+        # files an edition and then reads /news.json was asking for a publish
+        # the calendar forbids -- which is a fault in the fixture, not in the
+        # desk, and `test_editions.OnWakeTest` holds the desk to the other
+        # behaviour.
+        #
+        # Through the API rather than onto `desk.schedule`, because the desk
+        # re-reads its schedule whenever the file behind it changes, and the
+        # first tick writes a default one -- so an attribute would be reverted
+        # under exactly the tests that tick. The classes that are about the
+        # calendar PUT their own schedule over this one.
+        doc = S.schedule_to_dict(S.DEFAULT_SCHEDULE)
+        doc["publish"] = {"policy": "immediate", "min_gap_minutes": 0}
+        status, body = self.api("PUT", "/api/schedule", doc)
+        self.assertEqual(status, 200, body)
 
     # -- a tiny client ----------------------------------------------------
     def call(self, method, path, body=None, token=None, ctype="application/json"):
