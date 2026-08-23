@@ -5,7 +5,7 @@ agents anywhere, decides *when* a new page may reach the glass, and typesets
 every candidate before it does.
 
 The board polls one URL and nothing in the firmware knows what answers it.
-[`tools/edition/`](../tools/edition/README.md) answers it from a Mac on the LAN
+[`agent/standalone/`](../agent/standalone/README.md) answers it from a Mac on the LAN
 and [`publish.sh`](../docs/hosting-cloudflare.md) answers it from a Cloudflare
 Worker. Both are *publishing* mechanisms — something files an edition, something
 else copies it somewhere — and neither can be **told** anything. This is the

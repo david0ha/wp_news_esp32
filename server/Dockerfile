@@ -61,7 +61,6 @@ COPY --chown=desk:desk components/ components/
 COPY --chown=desk:desk third_party/ third_party/
 COPY --chown=desk:desk docs/news-contract.md docs/news-contract.md
 COPY --chown=desk:desk server/wpdesk/ /app/wpdesk/
-COPY --chown=desk:desk server/agent/ /app/agent/
 
 # The prebuilt simulator, at the path render-check.sh looks for it.
 COPY --from=builder --chown=desk:desk /src/sim/build/sim /repo/sim/build/sim

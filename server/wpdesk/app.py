@@ -32,7 +32,7 @@ LOG = logging.getLogger("wpdesk.app")
 
 #: How late a missed wake may still fire. launchd runs a missed
 #: StartCalendarInterval as soon as the machine wakes, and
-#: tools/edition/README.md names that as the thing that saves a board which
+#: agent/standalone/README.md names that as the thing that saves a board which
 #: would otherwise show yesterday's paper because a lid was shut overnight. The
 #: same argument applies to a desk that was down at 06:00 and came up at 06:04.
 #: Half an hour is long enough to cover a restart and short enough that a desk

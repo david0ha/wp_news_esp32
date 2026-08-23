@@ -26,8 +26,8 @@ shots/
 # The React Native companion app: a different product with a different toolchain.
 app/
 
-# Assembled by tools/edition/publish.sh from a live edition.
-tools/edition/public/
+# Assembled by agent/standalone/publish.sh from a live edition.
+agent/standalone/public/
 
 # Local server state and secrets.
 server/.env

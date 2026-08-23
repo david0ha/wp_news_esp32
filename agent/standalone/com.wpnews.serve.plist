@@ -9,7 +9,7 @@
   the firmware is designed to survive and badge — into no paper at all.
 
   Install:
-      cp tools/edition/com.wpnews.serve.plist ~/Library/LaunchAgents/
+      cp agent/standalone/com.wpnews.serve.plist ~/Library/LaunchAgents/
       launchctl load ~/Library/LaunchAgents/com.wpnews.serve.plist
 
   Then point the board at it, once:
@@ -26,7 +26,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ggrrm/Documents/wp_news_esp32/tools/edition/file-edition.sh</string>
+        <string>/Users/ggrrm/Documents/wp_news_esp32/agent/standalone/file-edition.sh</string>
         <string>--serve-only</string>
     </array>
 

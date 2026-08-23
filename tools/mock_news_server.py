@@ -44,7 +44,7 @@ Usage
     python3 tools/mock_news_server.py --validate <fixture> --tiles sim/tiles
 
 `--validate` looks for `<id>.bin` in a `tiles/` directory beside the payload, which is how
-tools/edition/file-edition.sh files an edition. `--tiles` overrides that base, and the committed
+agent/standalone/file-edition.sh files an edition. `--tiles` overrides that base, and the committed
 fixture is the one payload that needs it: its pictures live in `sim/tiles/` because that is where
 the simulator reads them from.
 
@@ -1019,7 +1019,7 @@ class Handler(BaseHTTPRequestHandler):
 # --- validating somebody else’s edition ------------------------------------
 #
 # This file is the reference PRODUCER, so it is also the only place that knows the contract well
-# enough to say whether an arbitrary payload satisfies it. The scheduled agent in tools/edition/
+# enough to say whether an arbitrary payload satisfies it. The scheduled agent in agent/standalone/
 # calls this before it files: a page that the firmware would reject is a wasted cycle, and the
 # failure would show up hours later as a STALE badge with nothing to explain it.
 #
@@ -1607,7 +1607,7 @@ def validate_payload(d, tiles_dir):
 def default_tiles_dir(path):
     """Where a real edition keeps its pictures: beside the payload it filed.
 
-    tools/edition/file-edition.sh writes news.json and tiles/ into one directory
+    agent/standalone/file-edition.sh writes news.json and tiles/ into one directory
     and serves that directory, so this is the layout the device actually sees.
     The committed fixture is the exception and passes --tiles explicitly.
     """

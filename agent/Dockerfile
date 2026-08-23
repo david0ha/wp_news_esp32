@@ -6,7 +6,7 @@
 # a few times a day and is allowed to fail. Putting them in one container makes
 # a failed filing take the served page down with it, which converts a stale
 # paper (the failure the firmware is designed to survive and badge) into no
-# paper at all. That is the same argument tools/edition/README.md makes for
+# paper at all. That is the same argument agent/standalone/README.md makes for
 # splitting com.wpnews.edition from com.wpnews.serve, and it does not stop being
 # true inside Docker.
 #
@@ -14,7 +14,7 @@
 # holds neither, and is the only one of the two exposed through the tunnel.
 #
 # Build context is the REPOSITORY ROOT:
-#     docker build -f server/Dockerfile.agent -t wpnews-agent .
+#     docker build -f agent/Dockerfile -t wpnews-agent .
 
 FROM node:22-slim
 
@@ -33,7 +33,7 @@ RUN useradd --create-home --uid 10001 --shell /bin/bash worker
 
 WORKDIR /repo
 COPY --chown=worker:worker tools/ tools/
-COPY --chown=worker:worker server/agent/ /app/agent/
+COPY --chown=worker:worker agent/ /app/agent/
 
 ENV PYTHONUNBUFFERED=1 \
     WPNEWS_DESK=http://desk:8080 \

@@ -1,7 +1,7 @@
 # The desk server
 
 The board polls one URL and nothing in the firmware knows what answers it.
-[`tools/edition/`](../tools/edition/README.md) answers it from a Mac on the LAN;
+[`agent/standalone/`](../agent/standalone/README.md) answers it from a Mac on the LAN;
 [`publish.sh`](hosting-cloudflare.md) answers it from a Cloudflare Worker. Both
 are *publishing* mechanisms — something files an edition, something else copies
 it somewhere — and **neither can be told anything.**
@@ -87,7 +87,7 @@ a directory allowlist only holds while somebody keeps assembling the directory �
 `publish.sh` rebuilds `public/` from empty on every run precisely because a list
 of exclusions drifts. A routing table holds because **there is no code that can
 serve a fourth path.** A test asserts it directly, which is the
-`find tools/edition/public -type f` check made executable.
+`find agent/standalone/public -type f` check made executable.
 
 The control plane is `/api/*` behind `Authorization: Bearer`, with two scopes:
 `producer` may push editions and claim commands, `operator` may also change the
@@ -265,7 +265,7 @@ gets its own spec if measured battery numbers justify the re-render.
 ## The worker
 
 A separate container from the desk, and separate for the reason
-[`tools/edition/README.md`](../tools/edition/README.md) gives for splitting
+[`agent/standalone/README.md`](../agent/standalone/README.md) gives for splitting
 filing from serving: **filing is an event that can fail, serving is a condition
 that must hold.** One container means a failed filing takes the served page down
 with it, which converts a stale paper — the failure the firmware is designed to
@@ -313,7 +313,7 @@ back.
   journalism about one company; the board holds no credential and could not
   present one. What is protected is everything that is *not* the edition, and it
   is protected by not being routable.
-- **It does not replace `tools/edition/`.** `file-edition.sh --serve` still
+- **It does not replace `agent/standalone/`.** `file-edition.sh --serve` still
   files and serves on a LAN with no Docker and no domain, and stays the way back.
 - **It does not let the device choose anything.** The server decides what is
   important, the device decides what fits, and now the server also decides when.

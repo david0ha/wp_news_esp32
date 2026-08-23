@@ -15,7 +15,7 @@
   filing more often costs nothing but rarely buys anything either.
 
   Install:
-      cp tools/edition/com.wpnews.edition.plist ~/Library/LaunchAgents/
+      cp agent/standalone/com.wpnews.edition.plist ~/Library/LaunchAgents/
       launchctl load  ~/Library/LaunchAgents/com.wpnews.edition.plist
       launchctl start com.wpnews.edition            # file one now, to check it works
 
@@ -30,7 +30,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ggrrm/Documents/wp_news_esp32/tools/edition/file-edition.sh</string>
+        <string>/Users/ggrrm/Documents/wp_news_esp32/agent/standalone/file-edition.sh</string>
     </array>
 
     <key>EnvironmentVariables</key>

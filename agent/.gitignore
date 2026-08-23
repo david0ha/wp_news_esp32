@@ -1,0 +1,6 @@
+# The worker's own credential, mounted in by hand — never the one a container commits.
+.env
+__pycache__/
+
+# Assembled by standalone/publish.sh from a live edition; a build product, not source.
+standalone/public/

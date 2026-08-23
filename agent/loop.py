@@ -3,7 +3,7 @@
 
 This is the half of the system that holds the owner's credentials and reads the
 owner's vault, and it is a separate container from the desk for the reason
-``tools/edition/README.md`` gives for splitting the filing job from the serving
+``agent/standalone/README.md`` gives for splitting the filing job from the serving
 job: filing is an event that can fail, serving is a condition that must hold.
 A failed filing must not take the served page down with it, because that turns
 a stale paper -- which the firmware is designed to survive and badge -- into no
@@ -63,7 +63,7 @@ MAX_REVISIONS = 2
 #: not fix.
 CLAUDE_TIMEOUT = 45 * 60
 
-#: The same narrow allowlist tools/edition/file-edition.sh uses, and narrow for
+#: The same narrow allowlist agent/standalone/file-edition.sh uses, and narrow for
 #: the same reason: the desk needs reads and writes, search, the market data
 #: MCPs, and exactly one script. It does NOT get render-check.sh -- in this
 #: arrangement the desk owns the typesetter and hands the sheets back, so a

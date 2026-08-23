@@ -7,7 +7,7 @@ allowlist only holds while somebody keeps assembling the directory --
 ``publish.sh`` rebuilds ``public/`` from empty on every run precisely because a
 list of exclusions drifts. A routing table holds because there is no code that
 can serve a fourth path. ``test_http.py`` asserts exactly that, which is the
-``find tools/edition/public -type f`` check made executable.
+``find agent/standalone/public -type f`` check made executable.
 
 The control plane is everything under ``/api/`` and every route on it is behind
 a bearer token. The split is by prefix and it is checked once, at the top of

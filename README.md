@@ -52,7 +52,7 @@ There is no server-side application. The producer is an agent with a market-data
 directory, and the whole contract between it and the firmware is one JSON file plus some tiles:
 
 ```bash
-./tools/edition/file-edition.sh --serve
+./agent/standalone/file-edition.sh --serve
 ```
 
 That wakes Claude Code headless with the standing instructions in
@@ -291,7 +291,7 @@ components/
   buttons/                KEY0/1/2 + BOOT edge events
 sim/                      desktop simulator — the real UI at 1200x1600, and its assertions
 tools/
-  edition/                the producer: PROMPT.md, file-edition.sh, two launchd agents
+  edition/                the typesetting gate: PROMPT.md, render-check.sh
   mock_news_server.py     the reference producer, the fixture writer, --check and --validate
   make_tile.py            a photograph -> a 4bpp Spectra 6 tile
   gen_fonts.py            regenerates components/news_core/fonts/

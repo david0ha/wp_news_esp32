@@ -6,7 +6,7 @@ not. So this is a choice about your own circumstances, not about the device:
 
 | | What answers the URL | Good when |
 |---|---|---|
-| **Local** — [tools/edition/README.md](../tools/edition/README.md) | `python3 -m http.server` on the machine that files the edition, under `com.wpnews.serve.plist` | the board and that machine are on the same network, and the machine is awake whenever the board polls |
+| **Local** — [agent/standalone/README.md](../agent/standalone/README.md) | `python3 -m http.server` on the machine that files the edition, under `com.wpnews.serve.plist` | the board and that machine are on the same network, and the machine is awake whenever the board polls |
 | **Cloudflare Worker** — this document | a Worker serving two static files | they are not, or the machine sleeps, or you would rather not run a server on your LAN at all |
 | **The desk server** — [desk-server.md](desk-server.md) | a container behind a Cloudflare **tunnel**, answering live | you want to *tell* it things: a queue agents push instructions into from anywhere, a schedule, and a typesetting gate on every candidate page |
 
@@ -56,7 +56,7 @@ prints. Worth knowing before you spend an evening on why one `.bin` 404s.
 
 ## The thing that changes character the moment you leave the LAN
 
-`tools/edition/README.md` ends with a warning that is easy to read as boilerplate and is not:
+`agent/standalone/README.md` ends with a warning that is easy to read as boilerplate and is not:
 
 > `--serve-only` is `python3 -m http.server` bound to `0.0.0.0`, serving `$EDITION_DIR` **read-only
 > over plain HTTP with no authentication**. Everything in that directory is reachable, not just
@@ -74,7 +74,7 @@ On a home network that is a considered posture. On a public URL it is a disclosu
 ```
 
 So the rule everything here is built on: **the publish directory is the allowlist.** `publish.sh`
-assembles `tools/edition/public/` from those two things and `wrangler.jsonc` deploys *that*, never
+assembles `agent/standalone/public/` from those two things and `wrangler.jsonc` deploys *that*, never
 `$EDITION_DIR`. An allowlist that is a directory listing cannot drift out of sync with itself the
 way a list of exclusions can, which is the whole reason to do it this way round.
 
@@ -83,7 +83,7 @@ in the same motion. It is gitignored.
 
 ## The shape: a Worker serving static assets
 
-`tools/edition/wrangler.jsonc` — committed, and meant to work **unmodified**. There is no `main`;
+`agent/standalone/wrangler.jsonc` — committed, and meant to work **unmodified**. There is no `main`;
 the assets are the whole application, no code runs per request, and
 [requests to static assets are free and unlimited](https://developers.cloudflare.com/workers/platform/pricing/)
 at any poll interval the board supports.
@@ -100,7 +100,7 @@ stated preference is that the least machinery that can produce the URL wins.
 
 ```sh
 npx wrangler login                  # once, interactively
-./tools/edition/publish.sh
+./agent/standalone/publish.sh
 ```
 
 `publish.sh` validates the payload, sets the type, assembles `public/`, and deploys. It prints the
@@ -238,8 +238,8 @@ python3 tools/mock_news_server.py --validate ~/.wpnews/edition/news.json
 tools/edition/render-check.sh   ~/.wpnews/edition/news.json
 
 # 2) what is about to go public, without publishing it
-./tools/edition/publish.sh --dry-run
-find tools/edition/public -type f          # news.json and tiles/*.bin. Nothing else.
+./agent/standalone/publish.sh --dry-run
+find agent/standalone/public -type f          # news.json and tiles/*.bin. Nothing else.
 
 # 3) the SITE serves the contract — both paths
 BASE=https://wpnews-edition.YOURS.workers.dev

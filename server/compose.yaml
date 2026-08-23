@@ -51,7 +51,7 @@ services:
   agent:
     build:
       context: ..
-      dockerfile: server/Dockerfile.agent
+      dockerfile: agent/Dockerfile
     image: wpnews-agent:latest
     restart: unless-stopped
     depends_on:
