@@ -944,7 +944,8 @@ static void enter_sleep(void)
     power_cadence_t cad;
     effective_cadence(&cad);
 
-    ESP_LOGI(TAG, "awake window closed — sleeping %us from %s (printed %s, fails %u)",
+    ESP_LOGI(TAG, "awake window closed — sleeping %us from %s "
+                  "(fetched page printed %s, fails %u)",
              (unsigned)cad.seconds,
              cad.source == POWER_CADENCE_POLICY        ? "policy"
              : cad.source == POWER_CADENCE_NEXT_CHANGE ? "next_change"

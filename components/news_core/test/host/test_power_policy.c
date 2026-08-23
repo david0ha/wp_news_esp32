@@ -580,12 +580,13 @@ static void test_the_curve_bends_between_the_third_and_fourth_failure(void)
      *
      * This is the boundary where the disagreement becomes a real number: the
      * fourth consecutive failure sleeps for the base if the curve sees three,
-     * and for five times the base if it sees four. main.cpp recomputes the
-     * cadence with plan.next_fails so that it sees four, which is what
-     * enter_sleep() has always done. That ORDERING is in main.cpp and no host
-     * test can reach it; what this pins is the fact that the ordering matters
-     * at all, so a future edit that flattens the curve here does not quietly
-     * make the comment in main.cpp untrue. */
+     * and for five times it if it sees four — 900 x 5 is 4,500, which the cap
+     * brings back to the 3,600 asserted below. main.cpp recomputes the cadence
+     * with plan.next_fails so that it sees four, which is what enter_sleep()
+     * has always done. That ORDERING is in main.cpp and no host test can reach
+     * it; what this pins is the fact that the ordering matters at all, so a
+     * future edit that flattens the curve here does not quietly make the
+     * comment in main.cpp untrue. */
     power_cadence_t before, after;
 
     cad(0, 0, NOW_SYNCED, 900, 3);
@@ -594,7 +595,7 @@ static void test_the_curve_bends_between_the_third_and_fourth_failure(void)
     after = g_cout;
 
     CHECK_INT(before.seconds, 900);
-    CHECK_INT(after.seconds, 3600);
+    CHECK_INT(after.seconds, 3600);            /* 900 x 5 = 4500, capped */
     CHECK(before.seconds != after.seconds);
 }
 

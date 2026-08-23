@@ -4,8 +4,8 @@
 # suite (components/news_core/test/host/CMakeLists.txt), which is the point of
 # it: the decision is pure, integer-only and includes no ESP-IDF header, so the
 # same source that runs on the board is the source `test_power_policy` holds to
-# every case in test_power_policy.c, on a laptop. power.c is the opposite — nothing but silicon —
-# and has no test anywhere. Keep the boundary where it is.
+# every case in that file, on a laptop. power.c is the opposite — nothing but
+# silicon — and has no test anywhere. Keep the boundary where it is.
 idf_component_register(
     SRCS
         "power_policy.c"
