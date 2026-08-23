@@ -34,7 +34,8 @@ config CLAUDEPOST_DEEP_SLEEP
       That asymmetry is the whole argument for the default. The alternative is
       an option somebody has to find and turn on before the feature they
       actually wanted exists, and a frame that runs flat in two days until they
-      do. Off-by-default protects the case the gates already protect.
+      do. Off by default would only have protected the case the gates already
+      protect.
 
       Read "Getting back in" in docs/specs/2026-08-17-deep-sleep-design.md
       before hanging one up, though: a sleeping board is a board you cannot
