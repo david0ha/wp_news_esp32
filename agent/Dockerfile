@@ -10,34 +10,37 @@
 # splitting com.wpnews.edition from com.wpnews.serve, and it does not stop being
 # true inside Docker.
 #
-# The worker holds the owner's credentials and reads the owner's vault. The desk
-# holds neither, and is the only one of the two exposed through the tunnel.
+# The worker holds the operator's credentials and, if one is mounted, reads a
+# directory of their own notes. The desk holds neither, and is the only one of
+# the two exposed through the tunnel.
 #
 # Build context is the REPOSITORY ROOT:
 #     docker build -f agent/Dockerfile -t wpnews-agent .
 
 FROM node:22-slim
 
-# python3 runs the loop and the two repo tools the desk's prompt names; curl is
-# for the health check and for a human debugging inside the container. git is
-# absent deliberately -- the worker has no business pushing anything.
+# python3 runs the loop and the two repo tools the prompt names; curl is for a
+# human debugging inside the container. git is absent deliberately -- the worker
+# has no business pushing anything.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 curl ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force
 
-# The same uid as the desk, so the bind-mounted vault has one owner rather than
-# two that disagree.
+# The same uid as the desk, so a directory bind-mounted into both has one owner
+# rather than two that disagree.
 RUN useradd --create-home --uid 10001 --shell /bin/bash worker
 
 WORKDIR /repo
 COPY --chown=worker:worker tools/ tools/
-COPY --chown=worker:worker agent/loop.py /app/agent/loop.py
+# The three modules the loop is, and nothing else. Not agent/ wholesale:
+# standalone/ is a different program that runs on a Mac with launchd, and test/
+# is the harness -- neither belongs in an image whose job is to run one script.
+COPY --chown=worker:worker agent/*.py /app/agent/
 
 ENV PYTHONUNBUFFERED=1 \
     WPNEWS_DESK=http://desk:8080 \
-    WPNEWS_VAULT=/vault \
     WPNEWS_SECRETS=/run/secrets \
     WPNEWS_REPO=/repo \
     WPNEWS_SCRATCH=/scratch \
