@@ -19,15 +19,17 @@ import shutil
 import socket
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 from wpdesk import schedule as S
 from wpdesk.app import Config, Desk
 from wpdesk.clock import FixedClock
 from wpdesk.gates import GateResult, StubGates
-from wpdesk.http import MAX_CONTROL_BODY, make_server
+from wpdesk.http import MAX_CONTROL_BODY, DeskHTTPRequestHandler, make_server
 
 from test_schedule import at
 
@@ -39,6 +41,11 @@ PAYLOAD = json.dumps({
 }).encode()
 
 TILE = bytes(range(256)) * 4          # 1,024 bytes; the desk does not inspect content
+
+#: A full sheet, which is the largest response this desk can be asked for. Its
+#: size is the point: it is more than the kernel will hold for a client that
+#: has stopped reading, so a write to one really does block.
+BIG_TILE = bytes(range(256)) * 3750   # 960,000 bytes == tiles.MAX_TILE_BYTES
 
 
 def write_tokens(path: str) -> dict:
@@ -88,6 +95,14 @@ class DeskTestCase(unittest.TestCase):
     #: sheets on disk rather than a gate that touches none.
     GATES = StubGates
 
+    #: The socket timeout the server under test runs on, or ``None`` for the
+    #: one the desk ships with -- which is what every case here wants, because
+    #: a test pinned to a constant stops testing the number in production the
+    #: day somebody changes it. ``SocketTimeoutTest`` sets a short one, so that
+    #: asserting a stalled connection is released costs half a second rather
+    #: than two minutes.
+    TIMEOUT = None
+
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root, True)
@@ -104,7 +119,8 @@ class DeskTestCase(unittest.TestCase):
         self.desk = Desk(self.cfg, clock=self.clock, gates=self.gates)
         self.addCleanup(self.desk.close)
 
-        self.server = make_server(self.desk, "127.0.0.1", 0)
+        override = {} if self.TIMEOUT is None else {"timeout": self.TIMEOUT}
+        self.server = make_server(self.desk, "127.0.0.1", 0, **override)
         self.addCleanup(self.server.server_close)
         self.base = "http://127.0.0.1:%d" % self.server.server_address[1]
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -147,7 +163,7 @@ class DeskTestCase(unittest.TestCase):
         status, raw, _ = self.call(method, path, body, self.tokens[scope])
         return status, (json.loads(raw) if raw else None)
 
-    def file_edition(self, payload=PAYLOAD, tile_id="pic", scope="producer"):
+    def file_edition(self, payload=PAYLOAD, tile_id="pic", scope="producer", tile=TILE):
         """Push one edition all the way through, returning the commit document."""
         status, doc = self.api("POST", "/api/drafts", {}, scope)
         self.assertEqual(status, 200, doc)
@@ -158,7 +174,7 @@ class DeskTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         if tile_id:
             status, _, _ = self.call("PUT", "/api/drafts/%s/tiles/%s.bin" % (draft, tile_id),
-                                     TILE, self.tokens[scope], "application/octet-stream")
+                                     tile, self.tokens[scope], "application/octet-stream")
             self.assertEqual(status, 200)
 
         status, report = self.api("POST", "/api/drafts/%s/proof" % draft, {}, scope)
@@ -626,9 +642,14 @@ class RawConnection:
         except (TimeoutError, OSError):
             return b""
 
-    def is_closed(self) -> bool:
-        """True when the server hung up, False when it is holding the socket open."""
-        self.sock.settimeout(2)
+    def is_closed(self, within: float = 2) -> bool:
+        """True when the server hung up, False when it is holding the socket open.
+
+        The window is a parameter because the two things that close a
+        connection here run on different clocks: a refusal decided from a
+        header closes at once, and a socket timeout closes when it runs out.
+        """
+        self.sock.settimeout(within)
         try:
             return self.fp.read(1) == b""
         except (TimeoutError, OSError):
@@ -639,7 +660,16 @@ class RawConnection:
         self.sock.close()
 
 
-class KeepAliveTest(DeskTestCase):
+class RawTestCase(DeskTestCase):
+    """A desk, plus sockets the test drives by hand and the suite closes for it."""
+
+    def connect(self) -> RawConnection:
+        conn = RawConnection(self.base)
+        self.addCleanup(conn.close)
+        return conn
+
+
+class KeepAliveTest(RawTestCase):
     """One response per request, on a connection that gets reused.
 
     ``protocol_version = "HTTP/1.1"`` makes every connection keep-alive, and a
@@ -666,11 +696,6 @@ class KeepAliveTest(DeskTestCase):
                 b"Authorization: Bearer " + self.tokens[scope].encode() + b"\r\n"
                 b"Content-Type: application/json\r\n"
                 b"Content-Length: %d\r\n\r\n" % len(self.HOLD)) + self.HOLD
-
-    def connect(self) -> RawConnection:
-        conn = RawConnection(self.base)
-        self.addCleanup(conn.close)
-        return conn
 
     def assert_is_healthz(self, answer) -> None:
         self.assertIsNotNone(answer, "the connection was closed with a request unanswered")
@@ -766,6 +791,219 @@ class KeepAliveTest(DeskTestCase):
         conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
         self.assert_is_healthz(conn.response())
         self.assertEqual(conn.spare(), b"")
+
+
+class SocketTimeoutTest(RawTestCase):
+    """A stranger who stops talking does not get to keep a thread.
+
+    ``StreamRequestHandler`` starts with no socket timeout at all, so a client
+    that opens a connection and then goes quiet -- mid-header, mid-body, or
+    idle on a keep-alive socket it will never use again -- parks one of the
+    desk's threads for as long as it likes, and none of it looks like an
+    error from inside. Behind a tunnel that client is anybody, and the thread
+    it is holding is one the board is not being served by.
+
+    The server here runs on half a second, so that these assertions cost that
+    rather than the two minutes the desk ships with. Every wait on the client
+    side is many times longer, so a regression fails this class rather than
+    parking the suite behind a thread that is never coming back.
+    """
+
+    TIMEOUT = 0.5
+
+    #: Long enough that the server has certainly given up, short enough that
+    #: five of these are not the slowest thing in the suite.
+    PATIENCE = 5
+
+    def test_a_request_that_never_finishes_its_headers_is_let_go(self):
+        # The request LINE arrives and the blank line after the headers never
+        # does, so the handler is parked inside `parse_request` with nothing
+        # to answer and no way to know whether more is coming. This is the
+        # cheapest way there is to hold a thread: one line and then silence.
+        conn = self.connect()
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n")
+        self.assertTrue(conn.is_closed(within=self.PATIENCE),
+                        "the desk held a thread for a request that never arrived")
+
+    def test_a_body_that_stops_short_takes_the_connection_and_nothing_else(self):
+        # The header promised ten bytes and three came, so `_body` is parked
+        # in `rfile.read`. A socket that stopped is not the desk breaking:
+        # it costs the connection, it is not worth a traceback, and there is
+        # nobody left to send a 500 to.
+        conn = self.connect()
+        with self.assertNoLogs("wpdesk.http", level="ERROR"):
+            conn.send(b"POST /api/hold HTTP/1.1\r\nHost: desk\r\n"
+                      b"Authorization: Bearer " + self.tokens["operator"].encode() + b"\r\n"
+                      b"Content-Type: application/json\r\n"
+                      b"Content-Length: 10\r\n\r\nabc")
+            self.assertTrue(conn.is_closed(within=self.PATIENCE),
+                            "the desk waited forever for seven bytes")
+        self.assertIsNone(self.desk.store.get_hold(),
+                          "a body that never finished arriving took effect anyway")
+
+    def test_an_idle_keep_alive_connection_is_released(self):
+        # The ordinary case, and the reason this is a number rather than a
+        # refusal: a client that finished its business and kept the socket is
+        # behaving correctly right up until it is holding the last thread. The
+        # board's own port retries once on a fresh connection when it finds
+        # one closed, so this costs it nothing.
+        conn = self.connect()
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 200, body)
+        self.assertTrue(conn.is_closed(within=self.PATIENCE),
+                        "an idle connection kept its thread")
+
+    def test_a_long_poll_outlives_the_socket_timeout(self):
+        # The claim parks on the queue's condition, not on the socket, so the
+        # timeout must not touch it. Otherwise the number chosen to release
+        # strangers would quietly become a cap on how long a worker may ask
+        # for work -- a different decision, made by accident, and visible only
+        # as a worker that polls in a tight loop.
+        #
+        # The deadline is measured on the desk's clock, which this suite moves
+        # by hand and nothing else moves while the poll is parked.
+        answered = threading.Event()
+        self.addCleanup(answered.set)
+
+        def run_down_the_deadline():
+            while not answered.wait(0.2):
+                self.clock.advance(1)
+
+        ticker = threading.Thread(target=run_down_the_deadline, daemon=True)
+        ticker.start()
+
+        started = time.monotonic()
+        status, doc = self.api("GET", "/api/commands/next?wait=2", scope="producer")
+        elapsed = time.monotonic() - started
+        answered.set()
+        ticker.join(self.PATIENCE)
+
+        self.assertEqual(status, 204, doc)
+        self.assertGreater(elapsed, self.TIMEOUT * 2,
+                           "the poll came back inside the timeout it must outlive")
+
+    def test_a_reader_that_stops_reading_is_not_an_error(self):
+        # The same failure from the other end: the request was fine and the
+        # client stopped taking the answer, so it is the WRITE that times out.
+        # That lands wherever the response is being sent from, which is inside
+        # the handler -- and a broad `except` there would report a socket the
+        # desk cannot do anything about as the desk breaking, with a traceback
+        # per abandoned curl and a second exception from the 500 nobody can
+        # receive either.
+        self.file_edition(tile_id="big", tile=BIG_TILE)
+
+        # The receive buffer is set before the connect, which is the only time
+        # it can be: the window this advertises is what makes the desk's write
+        # block rather than disappearing into the kernel.
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)
+        self.addCleanup(sock.close)
+        sock.settimeout(self.PATIENCE)
+        sock.connect(("127.0.0.1", self.server.server_address[1]))
+
+        with self.assertNoLogs("wpdesk.http", level="ERROR"):
+            sock.sendall(b"GET /tiles/big.bin HTTP/1.1\r\nHost: desk\r\n\r\n")
+            threading.Event().wait(self.TIMEOUT * 4)     # let the write give up
+
+            # Only now open the window, so what comes back is what the desk
+            # had managed to send before it did.
+            received = 0
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                received += len(chunk)
+
+        if received >= len(BIG_TILE):
+            # Not a failure and not a pass either: with SO_RCVBUF already at
+            # the floor and the tile already at the largest this desk serves,
+            # there is nothing left to widen the margin with, so a machine
+            # whose buffers swallow the whole sheet simply cannot run this.
+            self.skipTest("the whole sheet fit in this machine's socket buffers; "
+                          "nothing stalled, so there was nothing to observe")
+
+
+class LostConnectionTest(RawTestCase):
+    """Writing an answer to somebody who has already gone.
+
+    The commonest dead socket this desk writes to is not a stalled reader, it
+    is a REFUSAL: a 401 to a scanner that hung up the moment it learned a
+    token was wanted, a 413 to a client that gave up on its own upload. Those
+    are written from inside :meth:`_dispatch`'s ``except`` clauses, and an
+    exception raised in there replaces the one being handled and escapes the
+    whole method -- past ``handle_one_request``, which absorbs only
+    ``TimeoutError``, and into ``socketserver``'s ``handle_error``, which puts
+    a traceback on stderr for a socket that simply went.
+    """
+
+    def refuse_to_write(self) -> None:
+        """Make every refusal this desk writes find a broken pipe.
+
+        Patched at the one place all of them funnel through, so that the test
+        does not have to arrange a real client that hangs up inside the
+        microsecond between the header being decided and the answer being
+        written.
+        """
+        real = DeskHTTPRequestHandler._send_bytes
+
+        def _send_bytes(handler, status, body, content_type, head=False):
+            if status >= 400:
+                raise BrokenPipeError("the client is not there any more")
+            return real(handler, status, body, content_type, head=head)
+
+        patch = mock.patch.object(DeskHTTPRequestHandler, "_send_bytes", _send_bytes)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def watch_for_tracebacks(self) -> list:
+        """Every ``handle_error`` the server makes -- which is the traceback.
+
+        It runs in ``process_request_thread`` when ``finish_request`` raises,
+        and BEFORE ``shutdown_request`` closes the socket, so a client that has
+        read to EOF has already seen everything this list will ever hold.
+        """
+        seen = []
+        self.server.handle_error = lambda request, address: seen.append(address)
+        return seen
+
+    def test_a_refusal_nobody_can_receive_does_not_become_a_traceback(self):
+        # The 401 is decided from the header and written straight away, which
+        # is exactly the window in which a scanner has already gone.
+        self.refuse_to_write()
+        tracebacks = self.watch_for_tracebacks()
+
+        conn = self.connect()
+        with self.assertNoLogs("wpdesk.http", level="ERROR"):
+            conn.send(b"GET /api/state HTTP/1.1\r\nHost: desk\r\n\r\n")
+            self.assertTrue(conn.is_closed(), "the handler never let the connection go")
+
+        self.assertEqual(tracebacks, [],
+                         "a broken pipe on a 401 reached socketserver.handle_error")
+
+    def test_a_500_nobody_can_receive_does_not_become_a_second_failure(self):
+        # The genuine fault is worth a traceback and keeps it. The broken pipe
+        # on the 500 that follows is not a second fault, and must not escape
+        # from inside the `except` that is already reporting the first.
+        self.refuse_to_write()
+        tracebacks = self.watch_for_tracebacks()
+
+        def explode():
+            raise ValueError("something the desk did not expect")
+
+        patch = mock.patch.object(self.desk.editions, "current_id", explode)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+        conn = self.connect()
+        with self.assertLogs("wpdesk.http", level="ERROR") as logged:
+            conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+            self.assertTrue(conn.is_closed(), "the handler never let the connection go")
+
+        self.assertEqual(len(logged.records), 1, logged.output)
+        self.assertIn("unhandled error on GET /news.json", logged.output[0])
+        self.assertEqual(tracebacks, [],
+                         "a broken pipe on the 500 reached socketserver.handle_error")
 
 
 if __name__ == "__main__":

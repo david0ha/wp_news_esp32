@@ -301,6 +301,14 @@ second hostname later without the application changing.
 board has no JavaScript engine, so a challenge is a hard failure that arrives as
 `STALE` with nothing in the log to explain it.
 
+**The desk closes a silent socket after two minutes** (`SOCKET_TIMEOUT_SECONDS`
+in `server/wpdesk/http.py`), and that number must stay *above* the tunnel's idle
+keep-alive — cloudflared's `--proxy-keepalive-timeout`, 90 s by default — so that
+the tunnel is always the side that lets go first. Raise the tunnel's figure past
+the desk's and the desk starts closing origin connections cloudflared still means
+to reuse, which costs a retry per closed socket and, for anything the tunnel will
+not retry, a failed request with nothing in either log that says why.
+
 The tunnel means the board and the Mac no longer have to be on the same network.
 `wpnews.local`, the device API and the LAN path are untouched and remain the way
 back.

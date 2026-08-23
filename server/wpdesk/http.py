@@ -29,6 +29,13 @@ that next request is somebody else's and the smuggled one runs with their
 bearer token. :meth:`_settle_body` closes that at the transport, on every path
 including the exceptional ones, because a route that forgets to read its body
 must not be a way in.
+
+And a connection that stops talking stops costing. ``StreamRequestHandler``
+begins with no socket timeout at all, so a client that opens a socket and goes
+quiet -- mid-header, mid-body, or idle on a keep-alive connection it will never
+use again -- parks one of these threads for as long as it likes, and none of it
+looks like an error from in here. Behind a tunnel that client is anybody, so
+:data:`SOCKET_TIMEOUT_SECONDS` puts a bound on it.
 """
 
 from __future__ import annotations
@@ -66,6 +73,28 @@ MAX_DRAIN_BYTES = max(MAX_CONTROL_BODY, tiles.MAX_PAYLOAD_BYTES, tiles.MAX_TILE_
 #: noticed rather than held forever.
 MAX_CLAIM_WAIT = 90
 
+#: How long a socket may make no progress before the desk takes its thread
+#: back. Two bounds decide the figure, and it has to clear the first before it
+#: can be judged against the second.
+#:
+#: The FLOOR is cloudflared's own idle keep-alive to an origin --
+#: ``--proxy-keepalive-timeout``, ninety seconds by default -- which this must
+#: stay above so that the tunnel is always the side that lets go first. Under
+#: it, the desk would be closing connections the tunnel still means to reuse.
+#: The CEILING is patience: a stranger who connects and then goes quiet should
+#: free its thread in minutes rather than never, and behind a tunnel that
+#: stranger is anybody on the internet.
+#:
+#: "No progress" is exact for a read and generous for a write: CPython's
+#: ``sendall`` measures the whole call against one deadline rather than
+#: restarting it per chunk, so this is also the longest a response may take to
+#: leave -- 960,000 bytes, the largest tile, needs about 8 KB/s end to end.
+#:
+#: The board pays nothing for any of it: ``http_port_esp.c`` retries once on a
+#: fresh connection when it finds a keep-alive socket closed, which is what it
+#: already does against ``tools/mock_news_server.py`` and its thirty.
+SOCKET_TIMEOUT_SECONDS = 120.0
+
 #: A proof sheet's type, by the suffix ``editions.SHEET_RE`` has already
 #: allowed -- these two are that regex's two. The *name* rule comes from the
 #: module that writes the files rather than from a copy here: the copy was
@@ -99,6 +128,18 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     @property
     def desk(self) -> Desk:
         return self.server.desk                                    # type: ignore[attr-defined]
+
+    def setup(self) -> None:
+        """Take the socket timeout from the server before the socket is wrapped.
+
+        ``StreamRequestHandler.setup()`` reads ``self.timeout`` and applies it
+        to the connection, so this has to happen first. The number lives on
+        the server rather than on this class because it is configuration and a
+        handler is one request: a test hands its server a short one, and there
+        is nowhere here for a second opinion about it to live.
+        """
+        self.timeout = self.server.socket_timeout                  # type: ignore[attr-defined]
+        super().setup()
 
     def log_message(self, fmt: str, *args) -> None:
         """Requests go to the logger at DEBUG, not to stderr at INFO.
@@ -137,19 +178,56 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             else:
                 self._device(method, path)
         except DeskError as e:
-            self._send_json(e.status, e.to_json())
-        except BrokenPipeError:
-            # A board that gave up mid-response, or a curl that was Ctrl-C'd.
-            # Nothing to report and nothing to do.
-            pass
+            self._try_send_json(e.status, e.to_json())
+        except (TimeoutError, ConnectionError) as e:
+            # The socket went, which is not the desk breaking. A board that
+            # gave up mid-response, a curl that was Ctrl-C'd, a stranger who
+            # stopped sending the body they declared, a reader who stopped
+            # reading until the write timed out: one case, because there is
+            # one thing to do about all of them. Answering is not it -- the
+            # 500 would go to the same dead socket and raise from inside the
+            # handler for it -- and neither is a traceback, which would make
+            # this log noisiest exactly when the desk is fine.
+            self._lost(e)
         except Exception:                                          # noqa: BLE001
             LOG.exception("unhandled error on %s %s", method, path)
             # The board's envelope for this one too: a client that can parse
             # every refusal this desk gives can parse the desk breaking.
             fault = Internal()
-            self._send_json(fault.status, fault.to_json())
+            self._try_send_json(fault.status, fault.to_json())
         finally:
             self._settle_body()
+
+    def _lost(self, e: BaseException) -> None:
+        """A socket that went. One line, at DEBUG, and the connection ends.
+
+        Both classes reach here on purpose: ``BrokenPipeError`` and
+        ``ConnectionResetError`` are both ``ConnectionError``, and since 3.10
+        a socket timeout IS ``TimeoutError``.
+        """
+        self.close_connection = True
+        LOG.debug("%s %s: connection lost (%s)", self.command, self.path, type(e).__name__)
+
+    def _try_send_json(self, status: int, doc: dict) -> None:
+        """Answer, unless there is nobody left to answer.
+
+        Every caller of this is already inside an ``except``, and that is the
+        whole reason it exists: an exception raised in there replaces the one
+        being handled and escapes :meth:`_dispatch` entirely -- past
+        ``handle_one_request``, which absorbs only ``TimeoutError``, and into
+        ``socketserver``'s ``handle_error``, which prints a traceback to
+        stderr for a socket that simply went.
+
+        And a refusal is the commonest thing this desk ever writes to a client
+        that has stopped listening: a 401 to a scanner that hung up as soon as
+        it learned a token was wanted, a 413 to a client that gave up on its
+        own upload. The ordinary path does not need this -- a handler's own
+        response is inside the ``try`` and lands on the branch above.
+        """
+        try:
+            self._send_json(status, doc)
+        except (TimeoutError, ConnectionError) as e:
+            self._lost(e)
 
     def _declared_length(self) -> int:
         """How long this request says its body is, or ``-1`` for uncountable.
@@ -656,14 +734,19 @@ class DeskServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, handler, desk: Desk) -> None:
+    def __init__(self, address, handler, desk: Desk,
+                 timeout: float = SOCKET_TIMEOUT_SECONDS) -> None:
         self.desk = desk
+        # Not `timeout`: `BaseServer` already owns that name, for how long
+        # `handle_request` waits for a caller. This one is the socket's.
+        self.socket_timeout = timeout
         super().__init__(address, handler)
 
 
-def make_server(desk: Desk, host: str, port: int) -> DeskServer:
+def make_server(desk: Desk, host: str, port: int,
+                timeout: float = SOCKET_TIMEOUT_SECONDS) -> DeskServer:
     """Build the server without starting it. Port 0 picks one, which tests use."""
-    return DeskServer((host, port), DeskHTTPRequestHandler, desk)
+    return DeskServer((host, port), DeskHTTPRequestHandler, desk, timeout=timeout)
 
 
 def serve_forever(desk: Desk, tick_seconds: float = 5.0) -> None:
