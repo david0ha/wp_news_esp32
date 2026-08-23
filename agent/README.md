@@ -42,7 +42,7 @@ docker network create claudepost
 repository** — because the repository is public and git history is permanent:
 
 ```sh
-ANTHROPIC_API_KEY=sk-ant-...      # or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
+ANTHROPIC_API_KEY=sk-ant-...          # or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
 CLAUDEPOST_TOKEN=<a producer token>   # server/tools/mint-token.sh producer agent
 ```
 

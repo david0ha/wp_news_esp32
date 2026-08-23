@@ -7,8 +7,8 @@
 # a failed filing take the served page down with it, which converts a stale
 # paper (the failure the firmware is designed to survive and badge) into no
 # paper at all. That is the same argument agent/standalone/README.md makes for
-# splitting com.claudepost.edition from com.claudepost.serve, and it does not stop being
-# true inside Docker.
+# splitting com.claudepost.edition from com.claudepost.serve, and it does not
+# stop being true inside Docker.
 #
 # The worker holds the operator's credentials and, if one is mounted, reads a
 # directory of their own notes. The desk holds neither, and is the only one of

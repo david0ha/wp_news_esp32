@@ -34,7 +34,8 @@ def atomic_write(path: str, data: bytes) -> None:
     mid-write should not be a directory full of ``.claudepost-*.tmp``.
     """
     directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".claudepost-", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(
+        dir=directory, prefix=".claudepost-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)

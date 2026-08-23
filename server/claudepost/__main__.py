@@ -1,10 +1,11 @@
 """Start the desk: read the environment, open the door, serve until told to stop.
 
 Everything interesting is elsewhere. What lives here is the three things a
-container entry point owns and nothing else owns: turning the environment into a
-:class:`~claudepost.app.Config`, arranging for SIGTERM to be a clean shutdown rather
-than a killed process holding a half-written pointer file, and saying enough at
-startup that a log tail answers "is it configured the way I think it is".
+container entry point owns and nothing else owns: turning the environment
+into a :class:`~claudepost.app.Config`, arranging for SIGTERM to be a clean
+shutdown rather than a killed process holding a half-written pointer file,
+and saying enough at startup that a log tail answers "is it configured the
+way I think it is".
 
     python3 -m claudepost
 """

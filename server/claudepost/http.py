@@ -793,7 +793,8 @@ def _epoch_field(doc: dict, key: str) -> float | None:
     """One instant out of a JSON body, by the rule ``errors.py`` owns.
 
     The rule itself is shared with the store, which is handed the same instants
-    through a keyword instead of a body -- see :func:`~claudepost.errors.epoch_seconds`.
+    through a keyword instead of a body -- see
+    :func:`~claudepost.errors.epoch_seconds`.
     """
     return epoch_seconds(doc.get(key), key)
 

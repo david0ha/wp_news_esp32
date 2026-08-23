@@ -1,6 +1,6 @@
 # The worker.
 #
-#   docker network create claudepost            # once; the desk joins it too
+#   docker network create claudepost        # once; the desk joins it too
 #   cp agent/.env.example agent/.env        # then fill it in
 #   docker compose -f agent/compose.yaml up -d
 #

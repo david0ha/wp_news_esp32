@@ -155,9 +155,9 @@ class EditionStore:
     staged.
 
     Construction is deliberately cheap: two ``makedirs`` and a look at the
-    pointers. :class:`~claudepost.app.Desk` builds one before its first tick, and a
-    constructor that swept directories would put a filesystem walk between the
-    process starting and the board's next poll being answered.
+    pointers. :class:`~claudepost.app.Desk` builds one before its first tick,
+    and a constructor that swept directories would put a filesystem walk
+    between the process starting and the board's next poll being answered.
     """
 
     def __init__(self, root: str, gates: Gates, store: Store, clock: Clock,

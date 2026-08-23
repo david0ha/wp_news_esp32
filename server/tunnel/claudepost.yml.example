@@ -1,5 +1,5 @@
-# Copy to ~/.cloudflared/claudepost.yml and fill in. It is NOT copied into the repo,
-# and compose mounts ~/.cloudflared read-only.
+# Copy to ~/.cloudflared/claudepost.yml and fill in. It is NOT copied into the
+# repo, and compose mounts ~/.cloudflared read-only.
 #
 # One hostname, one service. The control plane lives at /api/* behind a bearer
 # token rather than on a hostname of its own -- two hostnames would let

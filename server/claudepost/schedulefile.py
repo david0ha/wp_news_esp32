@@ -2,11 +2,11 @@
 
 ``PUT /api/schedule`` is the only thing that writes ``<data>/schedule.json``,
 and this is the only module that touches it. Two files could have owned this
-and neither should: :mod:`~claudepost.app`'s docstring says two things live there
-and nothing else, and :mod:`~claudepost.schedule` is pure arithmetic that reads no
-clock and opens no file -- which is what makes every boundary in it testable by
-naming an instant. So the I/O lives here, in about ninety lines, and both of
-those stay true.
+and neither should: :mod:`~claudepost.app`'s docstring says two things live
+there and nothing else, and :mod:`~claudepost.schedule` is pure arithmetic
+that reads no clock and opens no file -- which is what makes every boundary
+in it testable by naming an instant. So the I/O lives here, in about ninety
+lines, and both of those stay true.
 
 The asymmetry between the two functions is the whole design:
 
@@ -46,9 +46,9 @@ def load(path: str) -> tuple[Schedule, str]:
         ``(schedule, source)`` with source ``"file"`` or ``"default"``.
         ``"default"`` covers both a desk nobody has configured yet and a file
         that will not parse, because in both cases the arithmetic downstream
-        runs on :data:`~claudepost.schedule.DEFAULT_SCHEDULE` and a caller that had
-        to tell them apart would be reporting a distinction it cannot act on.
-        The warning in the log is where the difference is.
+        runs on :data:`~claudepost.schedule.DEFAULT_SCHEDULE` and a caller
+        that had to tell them apart would be reporting a distinction it
+        cannot act on. The warning in the log is where the difference is.
 
     Never raises.
     """

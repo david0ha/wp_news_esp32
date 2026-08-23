@@ -209,8 +209,8 @@ been filed since dawn.
 
 Putting both in one job means a failed filing takes the served page down with it — which converts a
 stale paper, the failure the firmware is designed to survive and badge, into no paper at all. So
-`com.claudepost.serve` runs `--serve-only` forever under `KeepAlive`, and `com.claudepost.edition` comes and
-goes on its schedule beside it.
+`com.claudepost.serve` runs `--serve-only` forever under `KeepAlive`, and `com.claudepost.edition`
+comes and goes on its schedule beside it.
 
 ## Why twice, and why those two times
 
@@ -234,10 +234,11 @@ last received. `PROMPT.md` tells the desk to file the week's story instead and s
 
 ## What this exposes
 
-`--serve-only` is `python3 -m http.server` bound to `0.0.0.0`, serving `$EDITION_DIR` **read-only
-over plain HTTP with no authentication**. Everything in that directory is reachable, not just
-`news.json` — the watchlist naming the owner's positions, the tiles, and `log/`, which holds a week
-of filed editions and the agent's own transcripts.
+`--serve-only` is `python3 -m http.server` bound to `0.0.0.0` on `CLAUDEPOST_PORT` (default `8123`
+— this standalone server's own port, not the desk's), serving `$EDITION_DIR` **read-only over
+plain HTTP with no authentication**. Everything in that directory is reachable, not just
+`news.json` — the watchlist naming the owner's positions, the tiles, and `log/`, which holds a
+week of filed editions and the agent's own transcripts.
 
 That is the same posture as the rest of this project's LAN services and the same one the firmware
 expects. It suits a home network and nothing else. Do not put it on a network you do not control, and

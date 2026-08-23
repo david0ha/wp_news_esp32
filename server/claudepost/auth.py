@@ -27,12 +27,13 @@ whatever it likes at three in the morning, which is exactly the authority this
 split exists to withhold.
 
 **Why the file holds tokens rather than hashes.** The posture is a 0600 file in
-``~/.claudepost/`` on a machine whose owner is its only user, mounted read-only into
-the container. An attacker who can read that file can also read the database the
-desk writes and everything else in that home directory, so hashing the tokens
-would move no boundary -- it would only add a rotation story and a work-factor
-decision to maintain. If the day comes when the token file lives somewhere the desk's data
-does not, hash them then, and the reason will be a real one.
+``~/.claudepost/`` on a machine whose owner is its only user, mounted read-only
+into the container. An attacker who can read that file can also read the
+database the desk writes and everything else in that home directory, so hashing
+the tokens would move no boundary -- it would only add a rotation story and a
+work-factor decision to maintain. If the day comes when the token file lives
+somewhere the desk's data does not, hash them then, and the reason will be a
+real one.
 
 The file, ``~/.claudepost/tokens.json``::
 
@@ -105,10 +106,10 @@ class Tokens:
     def reload_if_changed(self) -> None:
         """Re-read the file if its identity, size or mtime moved.
 
-        Raises :class:`~claudepost.errors.DeskError` when the file is present but
-        unusable, having first cleared the table -- so a caller that swallows
-        the exception is left authorising nobody rather than authorising
-        whoever the last good file said.
+        Raises :class:`~claudepost.errors.DeskError` when the file is present
+        but unusable, having first cleared the table -- so a caller that
+        swallows the exception is left authorising nobody rather than
+        authorising whoever the last good file said.
         """
         if self._stat() != self._stamp:
             self._load()
@@ -239,7 +240,8 @@ def scope_from_header(tokens: Tokens, header: str | None) -> tuple[str, str]:
 
 
 def require(needed: str, have: str) -> None:
-    """Raise :class:`~claudepost.errors.Forbidden` unless ``have`` covers ``needed``.
+    """Raise :class:`~claudepost.errors.Forbidden` unless ``have`` covers
+    ``needed``.
 
     Ranked rather than enumerated: ``operator`` satisfies ``producer`` because
     the owner's own tooling must be able to do everything an agent can without

@@ -2,8 +2,8 @@
 <!--
   com.claudepost.serve — hold the edition directory open on the LAN, always.
 
-  Separate from com.claudepost.edition on purpose. Filing is an event that happens twice a day and can
-  fail; serving is a condition that must hold continuously, because the board polls every five
+  Separate from com.claudepost.edition on purpose. Filing is an event that happens twice a day and
+  can fail; serving is a condition that must hold continuously, because the board polls every five
   minutes and does not care that nothing new has been filed since dawn. Putting both in one job
   means a failed filing takes the served page down with it, which turns a stale paper — the failure
   the firmware is designed to survive and badge — into no paper at all.
@@ -13,7 +13,8 @@
       launchctl load ~/Library/LaunchAgents/com.claudepost.serve.plist
 
   Then point the board at it, once:
-      curl -X POST http://claudepost.local/api/news -d '{"url":"http://<this mac>.local:8123/news.json"}'
+      curl -X POST http://claudepost.local/api/news \
+           -d '{"url":"http://<this mac>.local:8123/news.json"}'
 
   This serves a directory read-only over plain HTTP on a home network, with no authentication. That
   is the same posture as the rest of this project's LAN services and the same one the firmware
