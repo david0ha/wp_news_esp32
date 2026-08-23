@@ -345,6 +345,18 @@ class FingerprintTest(EditionTestCase):
         with self.assertRaises(BadRequest):
             self.es.fingerprint(self.es.open_draft())
 
+    def test_a_policy_block_the_producer_filed_does_not_change_it(self):
+        # The desk strips the block and splices its own at serve time, and the
+        # firmware's news_hash() never sees it. An edition differing only by a
+        # cadence its producer does not own is the same edition, and calling it
+        # a different one would spend twenty-five seconds of the whole sheet
+        # flashing to say so.
+        plain = self.es.open_draft()
+        self.es.put_payload(plain, payload(1))
+        blocked = self.es.open_draft()
+        self.es.put_payload(blocked, payload(1, policy={"poll_seconds": 31}))
+        self.assertEqual(self.es.fingerprint(plain), self.es.fingerprint(blocked))
+
 
 # --------------------------------------------------------------------------
 # Gate 5 — the swap, and what a failure must not touch
@@ -451,6 +463,48 @@ class CommitTest(EditionTestCase):
         r = self.file(1, now=self.jump(T0))
         self.assertEqual(self.store.get_edition(r.edition_id)["id"], r.edition_id)
         self.assertEqual(self.store.last_publish_at(), T0)
+
+    def test_what_is_stored_carries_no_policy_block(self):
+        # The cadence is the owner's schedule and the desk splices it per
+        # request, so a producer's own block is dropped rather than served.
+        d = self.es.open_draft()
+        self.es.put_payload(d, payload(1, policy={"poll_seconds": 31}))
+        r = self.es.commit(d, IMMEDIATE, self.clock.now())
+
+        served = json.loads(self.es.read_payload(r.edition_id))
+        self.assertNotIn("policy", served)
+        self.assertEqual(served["serial"], 1)
+
+    def test_a_temp_file_left_among_the_tiles_is_not_a_tile(self):
+        # A crash mid-write leaves one of these. It is not a picture, and a
+        # fingerprint or a count that took it for one would make an edition
+        # that differs from itself. Both shapes are here on purpose: the suffix
+        # is one filter and the id is the other, and either alone lets one of
+        # these through.
+        d = self.draft()
+        tiles_dir = os.path.join(self.root, "drafts", d, "tiles")
+        for leftover in (".wpdesk-half.tmp", ".wpdesk-half.bin"):
+            with open(os.path.join(tiles_dir, leftover), "wb") as f:
+                f.write(b"\x00\x01\x02\x03")
+
+        self.assertEqual(self.es.draft_info(d)["tiles"], ["pic"])
+        r = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertEqual(self.es.edition_meta(r.edition_id)["tile_count"], 1)
+        self.assertIsNotNone(self.es.read_tile(r.edition_id, "pic"))
+
+    def test_an_edition_filed_again_reuses_the_directory_it_already_has(self):
+        # The id is the content, so there is nothing a rebuild could add -- and
+        # the directory it would rewrite is one a reader may be inside.
+        first = self.file(1)
+        self.file(2, now=self.jump(T0 + 60))
+        news = os.path.join(self.root, "editions", first.edition_id, "news.json")
+        stamp = os.stat(news).st_mtime_ns
+
+        again = self.es.commit(self.draft(1), IMMEDIATE, self.jump(T0 + 120))
+        self.assertEqual(again.edition_id, first.edition_id)
+        self.assertEqual(again.state, "published")
+        self.assertEqual(os.stat(news).st_mtime_ns, stamp)
+        self.assertEqual(self.es.read_payload(first.edition_id), payload(1))
 
 
 # --------------------------------------------------------------------------
@@ -577,6 +631,20 @@ class PublishDueTest(EditionTestCase):
         self.file(1)
         self.assertIsNone(self.es.publish_due(IMMEDIATE, self.clock.now()))
 
+    def test_what_is_already_current_is_not_published_a_second_time(self):
+        # A crash between the two pointer writes leaves both naming the same
+        # edition. The page is already up; publishing it again would be
+        # twenty-five seconds of the whole sheet flashing to change nothing,
+        # and it would restart the floor between publishes on top.
+        r = self.file(1)
+        with open(os.path.join(self.root, "staged"), "w") as f:
+            f.write(r.edition_id + "\n")
+
+        self.assertIsNone(self.es.publish_due(IMMEDIATE, self.jump(T0 + 3600)))
+        self.assertIsNone(self.es.staged_id())
+        self.assertEqual(self.es.current_id(), r.edition_id)
+        self.assertEqual(self.store.last_publish_at(), T0)
+
 
 # --------------------------------------------------------------------------
 # Promotion, retention
@@ -605,6 +673,28 @@ class PromoteTest(EditionTestCase):
             with self.assertRaises(NotFound, msg=bad):
                 self.es.promote(bad)
 
+    def test_promoting_the_staged_edition_is_what_clears_it(self):
+        # Promoting something else must leave the staged edition waiting -- the
+        # operator put yesterday's paper back up, they did not cancel tonight's.
+        # Promoting the staged one is the same act as publishing it, so the
+        # pointer that says it is still waiting has to go.
+        manual = sched(quiet=[], wake=[],
+                       publish={"policy": "manual", "min_gap_minutes": 0})
+        older = self.es.commit(self.draft(1), IMMEDIATE, self.jump(T0))
+        self.es.commit(self.draft(2), IMMEDIATE, self.jump(T0 + 60))
+        staged = self.es.commit(self.draft(3), manual, self.jump(T0 + 120))
+        self.assertEqual(staged.state, "staged")
+
+        # A real promotion -- `older` is not what is current -- so this goes
+        # through the same pointer write that a publish does.
+        self.assertEqual(self.es.promote(older.edition_id).state, "published")
+        self.assertEqual(self.es.staged_id(), staged.edition_id)
+
+        out = self.es.promote(staged.edition_id)
+        self.assertEqual(out.state, "published")
+        self.assertEqual(self.es.current_id(), staged.edition_id)
+        self.assertIsNone(self.es.staged_id())
+
 
 class PruneTest(EditionTestCase):
     def test_it_keeps_the_current_and_the_staged_edition_however_old(self):
@@ -628,6 +718,23 @@ class PruneTest(EditionTestCase):
             self.es.commit(self.draft(n), IMMEDIATE, self.jump(T0 + n * 60))
         self.assertEqual(self.es.prune(keep=2), 3)
         self.assertEqual(self.es.prune(keep=2), 0)
+
+    def test_a_half_built_edition_is_swept_and_never_counted(self):
+        # A build interrupted by a crash. It cannot match an edition id, so it
+        # is invisible to every reader rather than something each of them has
+        # to filter -- and it is rubbish, not history, so it is not in the
+        # number prune reports.
+        r = self.file(1)
+        partial = os.path.join(self.root, "editions", ".build-abcd1234")
+        os.makedirs(os.path.join(partial, "tiles"))
+        with open(os.path.join(partial, "news.json"), "wb") as f:
+            f.write(payload(9))
+
+        self.assertIsNone(self.es.read_payload(".build-abcd1234"))
+        self.assertEqual(self.es.prune(keep=5), 0)
+        self.assertFalse(os.path.exists(partial))
+        self.assertEqual(self.es.current_id(), r.edition_id)
+        self.assertEqual(self.es.read_payload(r.edition_id), payload(1))
 
     def test_the_constructor_sets_the_default_depth(self):
         es = EditionStore(self.root, self.gates, self.store, self.clock, keep=1)
@@ -673,6 +780,15 @@ class ReadTest(EditionTestCase):
             f.write("../../etc\n")
         self.assertIsNone(self.es.current_id())
 
+    def test_a_pointer_naming_a_half_built_edition_reads_nothing(self):
+        # The build prefix cannot be an edition id, which is the whole reason
+        # it was chosen: a pointer that somehow named one is a pointer to
+        # nothing rather than a way into a directory mid-assembly.
+        self.file(1)
+        with open(os.path.join(self.root, "current"), "w") as f:
+            f.write(".build-abc\n")
+        self.assertIsNone(self.es.current_id())
+
     def test_a_pointer_naming_an_edition_that_is_gone_serves_nothing(self):
         r = self.file(1)
         import shutil
@@ -689,6 +805,85 @@ class ReopenTest(EditionTestCase):
         again = EditionStore(self.root, StubGates(), self.store, self.clock)
         self.assertEqual(again.current_id(), r.edition_id)
         self.assertEqual(again.read_payload(r.edition_id), payload(1))
+
+
+# --------------------------------------------------------------------------
+# Crashes, and a gate that takes ten minutes
+# --------------------------------------------------------------------------
+
+class BlockingGates(StubGates):
+    """Gates that park inside gate 2 until the test lets them out.
+
+    A real render shells out to CMake and can take ten minutes. This is that
+    ten minutes, made instant and controllable, so a test can ask what the rest
+    of the desk is able to do while one is running.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def render(self, draft_dir: str, out_dir: str) -> GateResult:
+        self.entered.set()
+        self.release.wait(10)
+        return super().render(draft_dir, out_dir)
+
+
+class CrashTest(EditionTestCase):
+    def test_a_crash_between_the_build_and_the_pointer_leaves_the_old_page_up(self):
+        # The window the whole build-and-rename dance is arranged around: the
+        # edition is on disk and the pointer has not moved. What is on the wall
+        # must be the page that was on the wall, and the next commit must be
+        # able to finish the job rather than trip over a directory it half
+        # remembers building.
+        first = self.file(1)
+
+        def refuse(_name, _edition_id):
+            raise OSError("the disk went away")
+
+        self.es._write_pointer = refuse          # the crash, made deterministic
+        with self.assertRaises(OSError):
+            self.es.commit(self.draft(2), IMMEDIATE, self.jump(T0 + 60))
+
+        self.assertEqual(self.es.current_id(), first.edition_id)
+        self.assertEqual(self.es.read_payload(first.edition_id), payload(1))
+        self.assertIsNone(self.es.staged_id())
+
+        del self.es._write_pointer               # the desk comes back up
+        again = self.es.commit(self.draft(2), IMMEDIATE, self.jump(T0 + 120))
+        self.assertEqual(again.state, "published")
+        self.assertEqual(self.es.read_payload(self.es.current_id()), payload(2))
+        self.assertEqual(self.es.read_tile(self.es.current_id(), "pic"),
+                         b"\x01\x02\x03\x04")
+
+
+class SweepDuringCommitTest(EditionTestCase):
+    GATES = BlockingGates
+
+    def test_a_draft_inside_a_commit_is_not_swept_however_old_it_looks(self):
+        # Gate 2 can outlive the draft's own TTL, and the sweeper runs on the
+        # tick. Deleting the directory a render is reading would fail the
+        # commit for a reason nobody could reconstruct afterwards.
+        #
+        # That the sweep answers at all is the second half of this: the gates
+        # run outside the lock, so a ten-minute render does not stop the desk.
+        d = self.draft()
+        done: list = []
+        commit = threading.Thread(
+            target=lambda: done.append(self.es.commit(d, IMMEDIATE, T0)),
+            daemon=True)
+        commit.start()
+
+        self.assertTrue(self.gates.entered.wait(10), "gate 2 never started")
+        self.clock.advance(3601)
+        self.assertEqual(self.es.sweep_drafts(), 0)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "drafts", d)))
+
+        self.gates.release.set()
+        commit.join(timeout=10)
+        self.assertEqual(done[0].state, "published")
+        self.assertEqual(self.es.read_payload(self.es.current_id()), payload(1))
 
 
 # --------------------------------------------------------------------------
