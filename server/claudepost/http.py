@@ -143,6 +143,13 @@ def _if_none_match(header: str | None, tag: str) -> bool:
     that sent one tag gets a string back that a cache may return as a list, and
     a desk that compared the whole string would answer 200 to every one of
     those -- correct, silent, and exactly the saving this exists for, lost.
+
+    The split on commas is a simplification and worth naming as one: an
+    entity-tag is a quoted string, so a foreign tag may legally contain a comma
+    and a strict parser would have to track quoting to see it. This desk's own
+    tags are sixteen hex digits and cannot, and a foreign tag mis-split here
+    simply fails to match and earns a 200 -- wasteful, never wrong. The mock's
+    ``_requested_tags()`` has the same shape.
     """
     if not header:
         return False
@@ -332,7 +339,12 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
     # -- the device plane -------------------------------------------------
     def _device(self, method: str, path: str) -> None:
-        """Three paths, ``GET`` and ``HEAD`` only, no token, no cache headers.
+        """Three paths, ``GET`` and ``HEAD`` only, no token, no freshness lifetime.
+
+        The edition carries a validator and ``Cache-Control: no-cache``; a tile
+        carries neither, being immutable by id. What no response on this plane
+        may ever carry is an ``Expires`` or a ``max-age`` -- see
+        :meth:`_send_bytes`.
 
         The 405 for other methods comes before the 404 for other paths on
         purpose: a ``POST /news.json`` is a client that has misunderstood this
@@ -386,7 +398,10 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         # sleeping board's cadence rests on: a 304 across a transition would
         # leave it polling at the wrong rate until something else changed.
         tag = _etag(body)
-        if _if_none_match(self.headers.get("If-None-Match"), tag):
+        # get_all(), not get(): a repeated field may arrive as several lines
+        # (RFC 9110 5.3) and `Message.get` returns only the first, so a proxy
+        # that split the list would cost the board a full edition per poll.
+        if _if_none_match(", ".join(self.headers.get_all("If-None-Match") or []), tag):
             self._send_not_modified(tag)
             return
         self._send_bytes(200, body, "application/json", head=head, etag=tag)
@@ -687,15 +702,16 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         for a HEAD -- which is why this takes no ``head`` flag rather than
         taking one and ignoring it.
 
-        ``Content-Length: 0`` is explicit. A 304 may not carry a body and a
-        client that knows the rule needs no telling, but framing is what the
-        socket is actually reading: the board polls on a keep-alive connection
-        it holds for hours, and the response it will see most often in its life
-        is this one. A client left to infer the length is one bug away from
-        waiting for bytes that are not coming, and the failure lands on the
-        request AFTER this one -- somebody else's, behind a tunnel that pools
-        connections. It is also what ``tools/test_mock_etag.py`` asserts of the
-        mock, so the two servers frame a 304 the same way.
+        ``Content-Length: 0`` is a deliberate deviation. RFC 9110 8.6 says a
+        304 may carry a length only if it is the length the 200 would have
+        carried, and that value is a trap on this wire: ``esp_http_client``
+        frames a response from the header, so a board told twenty kilobytes on
+        a body it is not allowed to be sent waits out its own timeout, once per
+        poll, forever. Zero is the only framing nothing can wait on, and the
+        board holds this connection for hours with this as the response it sees
+        most often in its life. ``tools/mock_news_server.py:1060`` makes the
+        same call for the same reason, and ``tools/test_mock_etag.py`` asserts
+        it, so the two servers frame a 304 identically.
         """
         self._send_status(304)
         self.send_header("ETag", tag)

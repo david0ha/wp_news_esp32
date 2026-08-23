@@ -930,6 +930,23 @@ class KeepAliveTest(RawTestCase):
         self.assert_is_healthz(conn.response())
         self.assertEqual(conn.spare(), b"", "the 304 wrote something after its headers")
 
+    def test_two_if_none_match_field_lines_are_one_list(self):
+        # A proxy is entitled to split a repeated field across lines. A desk
+        # that read only the first would answer 200 to a board that asked
+        # correctly -- silently, and once every poll. Raw, because
+        # `urllib.request.Request.add_header` de-duplicates by name and
+        # `DeskTestCase.call(headers=)` cannot express two field lines at all.
+        self.file_edition()
+        conn = self.connect()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+        _status, headers, _body = conn.response()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n"
+                  b'If-None-Match: "0000000000000000"\r\n'
+                  b"If-None-Match: " + headers["etag"].encode() + b"\r\n\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 304)
+        self.assertEqual(body, b"")
+
     def test_a_refused_requests_body_never_becomes_the_next_request(self):
         # Variant A of the finding: the attacker holds no token at all. The
         # 401 is decided from the header, before anything reads the body -- so
