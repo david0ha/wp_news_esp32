@@ -49,7 +49,7 @@ export default function TurnOn() {
     case 'checking':
       ctaLabel = 'CHECKING…'
       title = 'Looking for your board'
-      body = <>Looking for WP News on its setup Wi-Fi…</>
+      body = <>Looking for Claude Post on its setup Wi-Fi…</>
       break
     case 'found':
       ctaLabel = 'NEXT'
@@ -67,7 +67,7 @@ export default function TurnOn() {
       body = (
         <>
           Power the board with USB-C, then in your phone’s Wi-Fi settings join the network named{' '}
-          <Text style={heroBold}>‘WP News-XXXX’</Text>. Come back and tap CHECK AGAIN.
+          <Text style={heroBold}>‘Claude Post-XXXX’</Text>. Come back and tap CHECK AGAIN.
         </>
       )
       break

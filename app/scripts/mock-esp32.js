@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mock WP News — exercises BOTH firmware HTTP APIs without hardware, so the full app flow
+// Mock Claude Post — exercises BOTH firmware HTTP APIs without hardware, so the full app flow
 // (onboarding + the live dashboard) runs in a simulator/emulator.
 //
 // Implements the contract in docs/app-control.md:
@@ -53,7 +53,7 @@ const PAGE_TITLES = ['볼트 통계', '링크 그래프', '에이전트', '최�
 
 // ---- Provisioning state ----
 const prov = { state: 'idle', ssid: undefined, reason: undefined }
-const INFO_AP = { deviceId: '9F3A', model: 'WP News', apSsid: 'WP News-9F3A' }
+const INFO_AP = { deviceId: '9F3A', model: 'Claude Post', apSsid: 'Claude Post-9F3A' }
 const NETWORKS = [
   { ssid: 'Home 5G', rssi: -48, secure: true },
   { ssid: 'Home 2.4G', rssi: -60, secure: true },
@@ -204,7 +204,7 @@ function fakeRefresh(kind) {
 function state() {
   return {
     deviceId: '9F3A',
-    model: 'WP News',
+    model: 'Claude Post',
     fw: '0.1.0',
     ip: `127.0.0.1:${PORT}`,
     page: board.page,
@@ -368,7 +368,7 @@ setInterval(() => {
 }, POLL_SECONDS * 1000)
 
 server.listen(PORT, () => {
-  console.log(`mock WP News listening on http://localhost:${PORT}`)
+  console.log(`mock Claude Post listening on http://localhost:${PORT}`)
   console.log(`  EXPO_PUBLIC_ESP32_BASE_URL=http://localhost:${PORT} npx expo start`)
   console.log('  no news URL set yet — serving the built-in demo snapshot')
   console.log('  set one with:  curl -X POST http://localhost:%d/api/news -d \'{"url":"..."}\'', PORT)

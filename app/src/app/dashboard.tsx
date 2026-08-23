@@ -331,7 +331,7 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
   return (
     <View style={styles.header}>
       <View style={styles.headerText}>
-        <Text style={styles.headerTitle}>WP News</Text>
+        <Text style={styles.headerTitle}>Claude Post</Text>
         <Text style={styles.headerSub} numberOfLines={1}>
           {baseUrl ?? ''}
         </Text>

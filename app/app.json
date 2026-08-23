@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "WP News",
-    "slug": "wp_news-board",
-    "scheme": "wpnews",
+    "name": "Claude Post",
+    "slug": "claudepost-companion",
+    "scheme": "claudepost",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.wpnews.app",
+      "bundleIdentifier": "com.claudepost.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "WP News connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
+        "NSLocalNetworkUsageDescription": "Claude Post connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
         "NSBonjourServices": ["_http._tcp"],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
@@ -19,7 +19,7 @@
     },
     "android": {
       "predictiveBackGestureEnabled": false,
-      "package": "com.wpnews.app",
+      "package": "com.claudepost.app",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"

@@ -50,14 +50,14 @@ function client(replies: Reply[], extra: Record<string, unknown> = {}) {
 describe('esp32 client — getInfo', () => {
   it('parses device identity and trims the base URL', async () => {
     const { fetchImpl, calls } = fakeFetch([
-      { body: { deviceId: '9F3A', model: 'WP News', apSsid: 'WP News-AB12' } },
+      { body: { deviceId: '9F3A', model: 'Claude Post', apSsid: 'Claude Post-AB12' } },
     ])
     const c = createEsp32Client({ baseUrl: 'http://192.168.4.1/', fetchImpl })
     const info = await c.getInfo()
     expect(info).toEqual({
       deviceId: '9F3A',
-      model: 'WP News',
-      apSsid: 'WP News-AB12',
+      model: 'Claude Post',
+      apSsid: 'Claude Post-AB12',
       fw: '',
       ip: '',
     })
@@ -66,11 +66,11 @@ describe('esp32 client — getInfo', () => {
 
   it('parses the STA-mode info (fw + ip present, apSsid empty)', async () => {
     const { client: c } = client([
-      { body: { deviceId: '9F3A', model: 'WP News', fw: '0.1.0', ip: '192.168.0.42' } },
+      { body: { deviceId: '9F3A', model: 'Claude Post', fw: '0.1.0', ip: '192.168.0.42' } },
     ])
     expect(await c.getInfo()).toEqual({
       deviceId: '9F3A',
-      model: 'WP News',
+      model: 'Claude Post',
       apSsid: '',
       fw: '0.1.0',
       ip: '192.168.0.42',
@@ -263,7 +263,7 @@ describe('esp32 client — getState', () => {
   // The documented payload from docs/app-control.md, verbatim.
   const FULL = {
     deviceId: '1A2B',
-    model: 'WP News',
+    model: 'Claude Post',
     fw: '0.1.0',
     ip: '192.168.0.42',
     page: 2,

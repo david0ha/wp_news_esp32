@@ -1,4 +1,4 @@
-// Design tokens for the WP News companion app. Dark, terminal-flavored palette —
+// Design tokens for the Claude Post companion app. Dark, terminal-flavored palette —
 // monochrome surfaces with a single accent, plus a green/red/amber status triad.
 
 export const colors = {
