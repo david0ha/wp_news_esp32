@@ -6,7 +6,7 @@ not. So this is a choice about your own circumstances, not about the device:
 
 | | What answers the URL | Good when |
 |---|---|---|
-| **Local** — [agent/standalone/README.md](../agent/standalone/README.md) | `python3 -m http.server` on the machine that files the edition, under `com.wpnews.serve.plist` | the board and that machine are on the same network, and the machine is awake whenever the board polls |
+| **Local** — [agent/standalone/README.md](../agent/standalone/README.md) | `python3 -m http.server` on the machine that files the edition, under `com.claudepost.serve.plist` | the board and that machine are on the same network, and the machine is awake whenever the board polls |
 | **Cloudflare Worker** — this document | a Worker serving two static files | they are not, or the machine sleeps, or you would rather not run a server on your LAN at all |
 | **The desk server** — [desk-server.md](desk-server.md) | a container behind a Cloudflare **tunnel**, answering live | you want to *tell* it things: a queue agents push instructions into from anywhere, a schedule, and a typesetting gate on every candidate page |
 
@@ -37,8 +37,8 @@ The second is derived, not entered. `derive_base()` in `components/news_core/ui_
 news URL, cuts the query and fragment, walks back to the last `/`, and appends `tiles/`:
 
 ```
-https://host/news.json            ->  https://host/tiles/<id>.bin
-https://host/wpnews/news.json     ->  https://host/wpnews/tiles/<id>.bin
+https://host/news.json             ->  https://host/tiles/<id>.bin
+https://host/claudepost/news.json  ->  https://host/claudepost/tiles/<id>.bin
 ```
 
 There is no setting for the tile base and there should not be: a payload names its pictures by id,
@@ -66,7 +66,7 @@ prints. Worth knowing before you spend an evening on why one `.bin` 404s.
 On a home network that is a considered posture. On a public URL it is a disclosure:
 
 ```
-~/.wpnews/edition/
+~/.claudepost/edition/
   watchlist.json     the symbols you follow, and which one is next   <- yours
   news.json          the edition                                     <- publish
   tiles/<id>.bin     the pictures                                    <- publish
@@ -107,7 +107,7 @@ npx wrangler login                  # once, interactively
 URL. With no domain configured that URL is
 
 ```
-https://wpnews-edition.<your-account-subdomain>.workers.dev/news.json
+https://claudepost-edition.<your-account-subdomain>.workers.dev/news.json
 ```
 
 because [every Cloudflare account gets a `workers.dev` subdomain](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)
@@ -126,8 +126,8 @@ subdomain of a zone you already own costs nothing.
 **4. Point the board.**
 
 ```sh
-curl -X POST http://wpnews.local/api/news \
-     -d '{"url":"https://wpnews-edition.YOURS.workers.dev/news.json"}'
+curl -X POST http://claudepost.local/api/news \
+     -d '{"url":"https://claudepost-edition.YOURS.workers.dev/news.json"}'
 ```
 
 or the same URL through the captive portal. `prov_validate_news_url()` already accepts `https://`
@@ -135,12 +135,12 @@ or the same URL through the captive portal. `prov_validate_news_url()` already a
 workers.dev URL is nowhere near.
 
 **5. Publish on a schedule.** Publishing is an **event**, like filing, and unlike serving. Call
-`publish.sh` at the end of `file-edition.sh`, or add it to `com.wpnews.edition.plist` after the
+`publish.sh` at the end of `file-edition.sh`, or add it to `com.claudepost.edition.plist` after the
 filing job.
 
 Under launchd there is no browser for `wrangler login`, so give it a token instead: Cloudflare
 dashboard → My Profile → API Tokens → the *Edit Cloudflare Workers* template, scoped to the one
-account. `publish.sh` reads `~/.wpnews/cloudflare.env` (`chmod 600`) if it exists:
+account. `publish.sh` reads `~/.claudepost/cloudflare.env` (`chmod 600`) if it exists:
 
 ```
 CLOUDFLARE_API_TOKEN=...
@@ -149,11 +149,11 @@ CLOUDFLARE_ACCOUNT_ID=...
 
 That file is outside the repo on purpose. Nothing personal belongs in `wrangler.jsonc`.
 
-**6. The serving job becomes optional.** `com.wpnews.serve.plist` exists because the board polls
+**6. The serving job becomes optional.** `com.claudepost.serve.plist` exists because the board polls
 continuously and something must always be listening. Cloudflare is that something now:
 
 ```sh
-launchctl unload ~/Library/LaunchAgents/com.wpnews.serve.plist
+launchctl unload ~/Library/LaunchAgents/com.claudepost.serve.plist
 ```
 
 Keep the plist file. It is the way back if the domain is ever the thing that is broken.
@@ -181,7 +181,7 @@ but it is real work being done to no purpose.
 
 Which leads to the second:
 
-**`CONFIG_WP_NEWS_POLL_SECONDS` is 60, and 60 is a LAN number.** It was lowered from 300 to make the
+**`CONFIG_CLAUDEPOST_POLL_SECONDS` is 60, and 60 is a LAN number.** It was lowered from 300 to make the
 first sheet of a boot land quickly, which is a LAN concern; the edition itself is filed twice a day.
 A minute's polling against a local Python server costs nothing and buys a fast response to a
 hand-filed edition; against a public endpoint it is 1,440 handshakes a day for two changes — and, on
@@ -234,25 +234,25 @@ producer and the board.
 # 1) the payload is a legal edition and sets as type.
 #    publish.sh runs both of these before it copies anything, so this is only
 #    for checking by hand.
-python3 tools/mock_news_server.py --validate ~/.wpnews/edition/news.json
-tools/edition/render-check.sh   ~/.wpnews/edition/news.json
+python3 tools/mock_news_server.py --validate ~/.claudepost/edition/news.json
+tools/edition/render-check.sh   ~/.claudepost/edition/news.json
 
 # 2) what is about to go public, without publishing it
 ./agent/standalone/publish.sh --dry-run
 find agent/standalone/public -type f          # news.json and tiles/*.bin. Nothing else.
 
 # 3) the SITE serves the contract — both paths
-BASE=https://wpnews-edition.YOURS.workers.dev
+BASE=https://claudepost-edition.YOURS.workers.dev
 curl -sS -o /dev/null -w '%{http_code} %{size_download}\n' "$BASE/news.json"
 curl -sS -o /dev/null -w '%{http_code} %{size_download}\n' "$BASE/tiles/<id>.bin"
 
 # 4) the payload the SITE serves is the one that validated
 curl -sS "$BASE/news.json" > /tmp/served.json
-python3 tools/mock_news_server.py --validate /tmp/served.json --tiles ~/.wpnews/edition/tiles
+python3 tools/mock_news_server.py --validate /tmp/served.json --tiles ~/.claudepost/edition/tiles
 
 # 5) the board agrees
-curl -X POST http://wpnews.local/api/refresh
-curl -sS http://wpnews.local/api/state    # last_result, age_seconds, stale
+curl -X POST http://claudepost.local/api/refresh
+curl -sS http://claudepost.local/api/state    # last_result, age_seconds, stale
 ```
 
 Step 2 is the one that proves the disclosure problem is handled, and it is a `find`, so do it once
@@ -276,8 +276,8 @@ awake at the same time, and agreeing about ARP.
 ## Going back to the LAN
 
 ```sh
-launchctl load ~/Library/LaunchAgents/com.wpnews.serve.plist
-curl -X POST http://wpnews.local/api/news -d '{"url":"http://mymac.local:8123/news.json"}'
+launchctl load ~/Library/LaunchAgents/com.claudepost.serve.plist
+curl -X POST http://claudepost.local/api/news -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
 Both paths can stay installed indefinitely. The board reads exactly one URL; which one is the only

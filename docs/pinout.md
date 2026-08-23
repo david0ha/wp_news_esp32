@@ -102,7 +102,7 @@ see [bring-up.md](bring-up.md#4-record-the-numbers).
 The EE05 the ancestry of this code came from routed GPIO5/GPIO6 to an I2C side header. Here **those
 same two pins are KEY2 and the battery divider's enable**, and the board has no RTC of its own. The
 I2C bus and the PCF85063A driver are therefore gone entirely, and the clock comes from SNTP alone —
-which is also why `CONFIG_WP_NEWS_TIMEZONE` is the only thing standing between UTC and the dateline
+which is also why `CONFIG_CLAUDEPOST_TIMEZONE` is the only thing standing between UTC and the dateline
 the sheet prints.
 
 ## Unused

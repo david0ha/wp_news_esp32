@@ -1,7 +1,7 @@
 # The device HTTP API
 
 A JSON control server on port 80, up once Wi-Fi is connected, advertised over mDNS as
-**`wpnews.local`**.
+**`claudepost.local`**.
 
 Local-network only: no auth, no TLS, no cloud. That is a scope decision, not an oversight — the
 device holds no credentials worth stealing, and the only actions are "show the other page" and
@@ -39,7 +39,7 @@ the panel is only refreshed if what comes back differs from what is already on t
 ## `GET /api/info`
 
 ```json
-{"deviceId":"1A2B","model":"WP News","fw":"0.1.0","ip":"192.168.0.42"}
+{"deviceId":"1A2B","model":"Claude Post","fw":"0.1.0","ip":"192.168.0.42"}
 ```
 
 Four fields, fixed shape: a discovery probe fetches this from every candidate host on the LAN and
@@ -53,7 +53,7 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
 
 ```json
 {
-  "deviceId": "1A2B", "model": "WP News", "fw": "0.1.0", "ip": "192.168.0.42",
+  "deviceId": "1A2B", "model": "Claude Post", "fw": "0.1.0", "ip": "192.168.0.42",
   "page": 0, "pageTitle": "FRONT PAGE",
 
   "news": {
@@ -169,7 +169,7 @@ page. Those three point at three different mistakes, which is why they are not o
 seconds ago". A client that treats it as a number draws a board that just synced when it never has.
 
 `source.pollSeconds` is the cadence **in force**, not the one compiled in, and `source.pollSource`
-says where it came from — `"config"` for `CONFIG_WP_NEWS_POLL_SECONDS`, `"policy"` for a `policy`
+says where it came from — `"config"` for `CONFIG_CLAUDEPOST_POLL_SECONDS`, `"policy"` for a `policy`
 block in the payload (see [news-contract.md](news-contract.md)). The pair exists because a number
 that can come from two places says nothing on its own: an hourly poll the server asked for ends when
 its quiet window does, and an hourly poll built into the image does not. A client that wants to show
@@ -197,24 +197,24 @@ this server is answering, the number is a real measurement and not a zero.
 ## Examples
 
 ```bash
-curl -s http://wpnews.local/api/state | jq
+curl -s http://claudepost.local/api/state | jq
 
-curl -X POST http://wpnews.local/api/page -d '{"page":1}'     # A2, the accounts
-curl -X POST http://wpnews.local/api/refresh
-curl -X POST http://wpnews.local/api/news \
+curl -X POST http://claudepost.local/api/page -d '{"page":1}'     # A2, the accounts
+curl -X POST http://claudepost.local/api/refresh
+curl -X POST http://claudepost.local/api/news \
      -d '{"url":"http://mymac.local:8123/news.json"}'
 
 # back to the built-in demo front page
-curl -X POST http://wpnews.local/api/news -d '{"url":""}'
+curl -X POST http://claudepost.local/api/news -d '{"url":""}'
 
 # what a refresh actually costs on this board
-curl -s http://wpnews.local/api/state | jq .panel
+curl -s http://claudepost.local/api/state | jq .panel
 
 # which company is on the glass — the cheapest "did the edition change" check there is
-curl -s http://wpnews.local/api/state | jq '.news.subject.symbol, .news.generatedAt'
+curl -s http://claudepost.local/api/state | jq '.news.subject.symbol, .news.generatedAt'
 
 # what the board received against what the producer thinks it filed
-curl -s http://wpnews.local/api/state | jq .news.counts
+curl -s http://claudepost.local/api/state | jq .news.counts
 ```
 
 ## Where the contract is defined

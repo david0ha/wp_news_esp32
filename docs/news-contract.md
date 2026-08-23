@@ -40,7 +40,7 @@ rejection like any other, which keeps the rule true on that path too.
 ## The request
 
 ```
-GET <news_url>          every CONFIG_WP_NEWS_POLL_SECONDS, default 60, range 30..86400
+GET <news_url>          every CONFIG_CLAUDEPOST_POLL_SECONDS, default 60, range 30..86400
                         — unless a payload's `policy` block says otherwise
 ```
 
@@ -64,7 +64,7 @@ reaches the glass and `NewsTask` compares before it notifies `UiTask`, so an unc
 touch the panel. On this panel a refresh is twenty-five to thirty seconds of flashing, so that is
 not an optimisation, it is the difference between a paper on a wall and a nuisance.
 
-**An empty URL is a complete configuration.** With no URL set — and no `CONFIG_WP_NEWS_FEED_URL`
+**An empty URL is a complete configuration.** With no URL set — and no `CONFIG_CLAUDEPOST_FEED_URL`
 fallback — the board renders `news_mock()`, the built-in demo snapshot, badged `DEMO`. That snapshot
 is a complete, plausible front page about one company. Clearing the URL over the API puts it back.
 The board works with no PC running at all.
@@ -170,7 +170,7 @@ plus the terminator.
 
 | key | type | buffer / capacity | on the page |
 |---|---|---|---|
-| `edition` | string | 32 | the furniture, in tracked caps. Falls back to `WP NEWS` when empty |
+| `edition` | string | 32 | the furniture, in tracked caps. Falls back to `CLAUDE POST` when empty |
 | `dateline` | string | 40 | the dateline row under the masthead, caps. Empty here and the board sets it from its own clock |
 | `session` | string | 48 | the tape's left end, caps |
 | `as_of` | string | 24 | the tape's right end, caps |
@@ -973,9 +973,9 @@ well enough to judge an arbitrary payload. It checks what the device checks, plu
 and the tiles on disk.
 
 ```console
-$ python3 tools/mock_news_server.py --validate ~/.wpnews/edition/news.json
-validate: /Users/you/.wpnews/edition/news.json — ok (4 stories, 22 figures, 6 briefs,
-          tiles from /Users/you/.wpnews/edition/tiles, 0 warning(s))
+$ python3 tools/mock_news_server.py --validate ~/.claudepost/edition/news.json
+validate: /Users/you/.claudepost/edition/news.json — ok (4 stories, 22 figures, 6 briefs,
+          tiles from /Users/you/.claudepost/edition/tiles, 0 warning(s))
 ```
 
 The summary names the tile directory it used, because "which pictures did it check" is the question
@@ -985,9 +985,9 @@ than from an empty slot half an hour later.
 A failure names the slot and what it will do:
 
 ```console
-$ python3 tools/mock_news_server.py --validate ~/.wpnews/edition/news.json
+$ python3 tools/mock_news_server.py --validate ~/.claudepost/edition/news.json
   FAIL  stories[0].photo: …/edition/tiles/sndk_fab.bin is missing — the slot renders empty
-validate: /Users/you/.wpnews/edition/news.json — 1 problem(s)
+validate: /Users/you/.claudepost/edition/news.json — 1 problem(s)
 ```
 
 `FAIL` lines go to stderr and set the exit status; `warn` lines go to stdout and do not.
@@ -1024,7 +1024,7 @@ poll costs no refresh.
 Then point the board at it, from the captive portal or over the network:
 
 ```bash
-curl -X POST http://wpnews.local/api/news -d '{"url":"http://mymac.local:8123/news.json"}'
+curl -X POST http://claudepost.local/api/news -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
 Serving the edition directory read-only over plain HTTP with no authentication is the posture the

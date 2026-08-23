@@ -1,4 +1,4 @@
-# WP News
+# The Claude Post
 
 An ESP32-S3 driving a 13.3" six-colour e-Paper panel that prints a newspaper front page about the
 stocks you name. A scheduled agent researches them twice a day and files one JSON file onto your
@@ -39,8 +39,8 @@ idf.py build
 ./tools/flash.sh                    # finds the port, flashes, monitors
 ```
 
-Then join the `WP News-XXXX` Wi-Fi network the board raises and give it your Wi-Fi credentials and,
-optionally, a page URL.
+Then join the `Claude Post-XXXX` Wi-Fi network the board raises and give it your Wi-Fi credentials
+and, optionally, a page URL.
 
 Doing this for the **first** time on a given board, follow [docs/bring-up.md](docs/bring-up.md)
 instead. On this panel the three things most likely to be wrong on a first power-on all look
@@ -57,7 +57,7 @@ directory, and the whole contract between it and the firmware is one JSON file p
 
 That wakes Claude Code headless with the standing instructions in
 [`tools/edition/PROMPT.md`](tools/edition/PROMPT.md) — a market desk that has to fit a broadsheet
-front page — pulls quotes and bars over the Alpaca MCP, writes `~/.wpnews/edition/news.json`
+front page — pulls quotes and bars over the Alpaca MCP, writes `~/.claudepost/edition/news.json`
 atomically, validates it against the contract, and serves the directory on `:8123`. Install the two
 launchd agents next to it and the paper files at 06:00 and 22:00 KST: the first moment a complete
 US session exists to report on, and half an hour before the next open.
@@ -67,7 +67,7 @@ Twice a day, not more, and that is arithmetic rather than restraint — see belo
 Point the board at whatever serves it, from the portal or over the network:
 
 ```bash
-curl -X POST http://wpnews.local/api/news \
+curl -X POST http://claudepost.local/api/news \
      -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
@@ -77,7 +77,7 @@ Anything that serves that JSON works; the device cannot tell what wrote it. The 
 ```bash
 python3 tools/mock_news_server.py            # serve the canonical payload on :8123
 python3 tools/mock_news_server.py --live     # ... and nudge the prices every request
-python3 tools/mock_news_server.py --validate ~/.wpnews/edition/news.json
+python3 tools/mock_news_server.py --validate ~/.claudepost/edition/news.json
 ```
 
 `--validate` is the one that saves a cycle. It checks what the device checks, plus the length
@@ -286,7 +286,7 @@ components/
     fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
     test/host/            the nine host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP onboarding
-  device_api/             STA-mode HTTP/JSON control server + mDNS (wpnews.local)
+  device_api/             STA-mode HTTP/JSON control server + mDNS (claudepost.local)
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
 sim/                      desktop simulator — the real UI at 1200x1600, and its assertions
@@ -325,9 +325,10 @@ dashboard. What survived both moves is the structure — the draw-and-present sp
 captive-portal provisioning, the device API, the simulator, and the habit of writing a host test
 before believing anything. What did not survive is every line of content code, twice.
 
-It deliberately keeps neither ancestor's mDNS name nor AP prefix: the hostname is `wpnews` and the
-AP is `WP News-XXXX`, not the `tickerboard` / `Ticker Board` whose shipped app still resolves those
-names. Two devices answering one discovery probe on the same LAN is a fault nobody can diagnose.
+It deliberately keeps neither ancestor's mDNS name nor AP prefix: the hostname is `claudepost` and
+the AP is `Claude Post-XXXX`, not the `tickerboard` / `Ticker Board` whose shipped app still
+resolves those names. Two devices answering one discovery probe on the same LAN is a fault nobody
+can diagnose.
 
 ## License
 
