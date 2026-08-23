@@ -27,14 +27,14 @@ whatever it likes at three in the morning, which is exactly the authority this
 split exists to withhold.
 
 **Why the file holds tokens rather than hashes.** The posture is a 0600 file in
-``~/.wpnews/`` on a machine whose owner is its only user, mounted read-only into
+``~/.claudepost/`` on a machine whose owner is its only user, mounted read-only into
 the container. An attacker who can read that file can also read the database the
 desk writes and everything else in that home directory, so hashing the tokens
 would move no boundary -- it would only add a rotation story and a work-factor
 decision to maintain. If the day comes when the token file lives somewhere the desk's data
 does not, hash them then, and the reason will be a real one.
 
-The file, ``~/.wpnews/tokens.json``::
+The file, ``~/.claudepost/tokens.json``::
 
     {"tokens": [{"name": "agent", "scope": "producer", "token": "..."},
                 {"name": "me",    "scope": "operator", "token": "..."}]}
@@ -105,7 +105,7 @@ class Tokens:
     def reload_if_changed(self) -> None:
         """Re-read the file if its identity, size or mtime moved.
 
-        Raises :class:`~wpdesk.errors.DeskError` when the file is present but
+        Raises :class:`~claudepost.errors.DeskError` when the file is present but
         unusable, having first cleared the table -- so a caller that swallows
         the exception is left authorising nobody rather than authorising
         whoever the last good file said.
@@ -220,7 +220,7 @@ def _parse(doc: object, path: str) -> tuple[_Entry, ...]:
 def scope_from_header(tokens: Tokens, header: str | None) -> tuple[str, str]:
     """Turn an ``Authorization`` header into ``(holder name, scope)``.
 
-    Raises :class:`~wpdesk.errors.Unauthorized` for every way of not being
+    Raises :class:`~claudepost.errors.Unauthorized` for every way of not being
     known: no header, a scheme that is not Bearer, an empty credential, a
     token that is not in the file. They are one status on purpose -- the
     difference between "malformed" and "wrong" is information about the file,
@@ -239,7 +239,7 @@ def scope_from_header(tokens: Tokens, header: str | None) -> tuple[str, str]:
 
 
 def require(needed: str, have: str) -> None:
-    """Raise :class:`~wpdesk.errors.Forbidden` unless ``have`` covers ``needed``.
+    """Raise :class:`~claudepost.errors.Forbidden` unless ``have`` covers ``needed``.
 
     Ranked rather than enumerated: ``operator`` satisfies ``producer`` because
     the owner's own tooling must be able to do everything an agent can without

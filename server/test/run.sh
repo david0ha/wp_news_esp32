@@ -14,7 +14,7 @@ set -eu
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 cd "$here/.."
 
-# The package is imported as `wpdesk`, so the server directory is the root and
+# The package is imported as `claudepost`, so the server directory is the root and
 # the tests live beside it rather than inside it. Adding `test` to the path is
 # what lets test_policy.py reuse test_schedule.py's date helper instead of
 # keeping a second copy of it.

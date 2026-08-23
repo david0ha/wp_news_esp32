@@ -2,11 +2,11 @@
 
 Everything interesting is elsewhere. What lives here is the three things a
 container entry point owns and nothing else owns: turning the environment into a
-:class:`~wpdesk.app.Config`, arranging for SIGTERM to be a clean shutdown rather
+:class:`~claudepost.app.Config`, arranging for SIGTERM to be a clean shutdown rather
 than a killed process holding a half-written pointer file, and saying enough at
 startup that a log tail answers "is it configured the way I think it is".
 
-    python3 -m wpdesk
+    python3 -m claudepost
 """
 
 from __future__ import annotations
@@ -29,14 +29,14 @@ def _configure_logging() -> None:
     minutes forever is a great many lines saying that nothing happened.
     """
     logging.basicConfig(
-        level=os.environ.get("WPDESK_LOG_LEVEL", "INFO").upper(),
+        level=os.environ.get("CLAUDEPOST_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)-7s %(name)s  %(message)s",
         stream=sys.stdout)
 
 
 def main() -> int:
     _configure_logging()
-    log = logging.getLogger("wpdesk")
+    log = logging.getLogger("claudepost")
 
     cfg = Config.from_env(os.environ)
     desk = Desk(cfg)

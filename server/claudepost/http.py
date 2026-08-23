@@ -54,7 +54,7 @@ from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
 from .errors import BadRequest, DeskError, Internal, NotFound, TooLarge, epoch_seconds
 
-LOG = logging.getLogger("wpdesk.http")
+LOG = logging.getLogger("claudepost.http")
 
 #: A control-plane request body. Editions come in through the draft endpoints,
 #: which have their own limits; everything else here is a small JSON document
@@ -113,7 +113,7 @@ _TILE_PATH_RE = re.compile(r"^/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID)
 class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     """One request. The desk hangs off ``self.server.desk``."""
 
-    server_version = "wpdesk"
+    server_version = "claudepost"
     sys_version = ""
     protocol_version = "HTTP/1.1"
 
@@ -307,7 +307,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _serve_healthz(self, _match, head: bool) -> None:
         """That the process is up and answering. No token, and no state read."""
-        self._send_json(200, {"ok": True, "service": "wpdesk"}, head=head)
+        self._send_json(200, {"ok": True, "service": "claudepost"}, head=head)
 
     def _serve_edition(self, _match, head: bool) -> None:
         """The current edition, with the policy block spliced in at serve time.
@@ -767,7 +767,7 @@ def serve_forever(desk: Desk, tick_seconds: float = 5.0) -> None:
                 LOG.exception("scheduler tick failed")
             stop.wait(tick_seconds)
 
-    thread = threading.Thread(target=ticker, name="wpdesk-tick", daemon=True)
+    thread = threading.Thread(target=ticker, name="claudepost-tick", daemon=True)
     thread.start()
 
     server = make_server(desk, desk.cfg.host, desk.cfg.port)
@@ -793,7 +793,7 @@ def _epoch_field(doc: dict, key: str) -> float | None:
     """One instant out of a JSON body, by the rule ``errors.py`` owns.
 
     The rule itself is shared with the store, which is handed the same instants
-    through a keyword instead of a body -- see :func:`~wpdesk.errors.epoch_seconds`.
+    through a keyword instead of a body -- see :func:`~claudepost.errors.epoch_seconds`.
     """
     return epoch_seconds(doc.get(key), key)
 

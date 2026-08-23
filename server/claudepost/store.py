@@ -30,7 +30,7 @@ first and writes second can fail with ``SQLITE_BUSY_SNAPSHOT``, which the busy
 handler does *not* retry. Taking the write lock up front is what makes
 ``busy_timeout`` mean what it says.
 
-Times are epoch seconds as REAL, taken from the injected :class:`~wpdesk.clock.Clock`
+Times are epoch seconds as REAL, taken from the injected :class:`~claudepost.clock.Clock`
 rather than from SQLite's own ``strftime``, so a test can move a lease boundary
 without waiting half an hour to cross it.
 """

@@ -15,9 +15,9 @@ import unittest
 
 from test_schedule import at
 
-from wpdesk.clock import Clock, FixedClock
-from wpdesk.errors import BadRequest
-from wpdesk.store import Store
+from claudepost.clock import Clock, FixedClock
+from claudepost.errors import BadRequest
+from claudepost.store import Store
 
 #: 2026-08-19 09:00 KST, an ordinary Wednesday morning. Through the same helper
 #: test_editions.py and test_http.py use, rather than as an epoch second with a
@@ -87,7 +87,7 @@ class AddCommandTest(StoreTestCase):
             self.store.add_command("rm -rf", "anything")
 
     def test_text_over_the_cap_is_refused(self):
-        from wpdesk import store as S
+        from claudepost import store as S
         self.file_edition(text="x" * S.MAX_COMMAND_TEXT)
         with self.assertRaises(BadRequest):
             self.file_edition(text="x" * (S.MAX_COMMAND_TEXT + 1))
@@ -195,7 +195,7 @@ class ExactlyOnceTest(unittest.TestCase):
 
 class LeaseTest(StoreTestCase):
     def test_a_claim_past_its_lease_returns_to_pending(self):
-        from wpdesk import store as S
+        from claudepost import store as S
         cid = self.file_edition()["id"]
         self.store.claim_command("w1")
         self.clock.advance(S.LEASE_SECONDS + 1)
@@ -206,7 +206,7 @@ class LeaseTest(StoreTestCase):
         self.assertIsNone(c["claimed_by"])
 
     def test_a_lease_that_has_not_run_out_is_left_alone(self):
-        from wpdesk import store as S
+        from claudepost import store as S
         cid = self.file_edition()["id"]
         self.store.claim_command("w1")
         self.clock.advance(S.LEASE_SECONDS - 1)
@@ -214,7 +214,7 @@ class LeaseTest(StoreTestCase):
         self.assertEqual(self.store.get_command(cid)["status"], "claimed")
 
     def test_the_third_attempt_fails_it_rather_than_returning_it(self):
-        from wpdesk import store as S
+        from claudepost import store as S
         cid = self.file_edition()["id"]
         for attempt in range(1, S.MAX_ATTEMPTS + 1):
             self.assertIsNotNone(self.store.claim_command(f"w{attempt}"),
@@ -266,7 +266,7 @@ class FinishTest(StoreTestCase):
                 self.store.finish_command(cid, bad)
 
     def test_finishing_something_already_finished_is_refused(self):
-        from wpdesk.errors import Conflict
+        from claudepost.errors import Conflict
         cid = self.file_edition()["id"]
         self.store.claim_command("w")
         self.store.finish_command(cid, "done")
@@ -274,7 +274,7 @@ class FinishTest(StoreTestCase):
             self.store.finish_command(cid, "failed", "no it wasn't")
 
     def test_finishing_a_command_nobody_filed_is_not_found(self):
-        from wpdesk.errors import NotFound
+        from claudepost.errors import NotFound
         with self.assertRaises(NotFound):
             self.store.finish_command("no-such-id", "done")
 
@@ -350,7 +350,7 @@ class DirectiveTest(StoreTestCase):
             self.store.add_directive("x", scope="sometimes")
 
     def test_a_rule_over_the_cap_or_under_a_word_is_refused(self):
-        from wpdesk import store as S
+        from claudepost import store as S
         self.store.add_directive("r" * S.MAX_DIRECTIVE_RULE)
         with self.assertRaises(BadRequest):
             self.store.add_directive("r" * (S.MAX_DIRECTIVE_RULE + 1))

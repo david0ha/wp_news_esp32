@@ -27,7 +27,7 @@ from .editions import EditionStore
 from .gates import Gates, SubprocessGates
 from .store import Store
 
-LOG = logging.getLogger("wpdesk.app")
+LOG = logging.getLogger("claudepost.app")
 
 #: How late a missed wake may still fire. launchd runs a missed
 #: StartCalendarInterval as soon as the machine wakes, and
@@ -59,14 +59,14 @@ class Config:
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Config":
         """Build a config from the container's environment, with the image's defaults."""
-        secrets = env.get("WPDESK_SECRETS", "/run/secrets")
+        secrets = env.get("CLAUDEPOST_SECRETS", "/run/secrets")
         return Config(
-            data_dir=env.get("WPDESK_DATA", "/data"),
+            data_dir=env.get("CLAUDEPOST_DATA", "/data"),
             tokens_path=os.path.join(secrets, "tokens.json"),
-            repo_dir=env.get("WPDESK_REPO", "/repo"),
-            host=env.get("WPDESK_HOST", "0.0.0.0"),
-            port=int(env.get("WPDESK_PORT", "8080")),
-            keep_editions=int(env.get("WPDESK_KEEP_EDITIONS", "30")),
+            repo_dir=env.get("CLAUDEPOST_REPO", "/repo"),
+            host=env.get("CLAUDEPOST_HOST", "0.0.0.0"),
+            port=int(env.get("CLAUDEPOST_PORT", "8080")),
+            keep_editions=int(env.get("CLAUDEPOST_KEEP_EDITIONS", "30")),
         )
 
 

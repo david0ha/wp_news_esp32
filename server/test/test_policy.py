@@ -8,8 +8,8 @@ number is a firmware date parser this design exists to avoid.
 import json
 import unittest
 
-from wpdesk import policy, schedule as S
-from wpdesk.errors import DeskError
+from claudepost import policy, schedule as S
+from claudepost.errors import DeskError
 from test_schedule import at            # reuse the helper
 
 
@@ -64,7 +64,7 @@ class SpliceTest(unittest.TestCase):
         self.assertFalse(policy.dropped_producer_policy(b'{"stories":[]}'))
 
     def test_the_spliced_payload_is_still_under_the_device_cap(self):
-        from wpdesk import tiles
+        from claudepost import tiles
         src = b'{"stories":[]}'
         out = policy.splice_policy(src, S.DEFAULT_SCHEDULE, at(2026, 8, 19, 9, 0))
         self.assertLess(len(out), tiles.MAX_PAYLOAD_BYTES)

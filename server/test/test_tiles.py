@@ -2,8 +2,8 @@
 
 import unittest
 
-from wpdesk import tiles
-from wpdesk.errors import BadRequest, TooLarge
+from claudepost import tiles
+from claudepost.errors import BadRequest, TooLarge
 
 
 class TileIdTest(unittest.TestCase):
@@ -70,7 +70,7 @@ class ErrorEnvelopeTest(unittest.TestCase):
         self.assertEqual(BadRequest(message="why").to_json()["detail"], "why")
 
     def test_each_class_carries_its_own_status(self):
-        from wpdesk import errors
+        from claudepost import errors
         self.assertEqual(
             [errors.BadRequest().status, errors.Unauthorized().status,
              errors.Forbidden().status, errors.NotFound().status,

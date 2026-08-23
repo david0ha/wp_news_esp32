@@ -8,8 +8,8 @@ import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from wpdesk import schedule as S
-from wpdesk.errors import DeskError
+from claudepost import schedule as S
+from claudepost.errors import DeskError
 
 KST = ZoneInfo("Asia/Seoul")
 

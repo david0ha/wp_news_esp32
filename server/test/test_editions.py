@@ -15,8 +15,8 @@ counter written into both is what makes that observable -- a mismatch is a
 half-published edition caught in the act, where "no exception was raised" would
 have proved nothing.
 
-Everything runs on :class:`~wpdesk.gates.StubGates` and
-:class:`~wpdesk.clock.FixedClock`: no CMake, no network, no waiting for six in
+Everything runs on :class:`~claudepost.gates.StubGates` and
+:class:`~claudepost.clock.FixedClock`: no CMake, no network, no waiting for six in
 the morning.
 """
 
@@ -33,14 +33,14 @@ from unittest import mock
 
 from test_schedule import at
 
-from wpdesk import editions as E
-from wpdesk import schedule as S
-from wpdesk import tiles
-from wpdesk.clock import FixedClock
-from wpdesk.editions import EditionStore
-from wpdesk.errors import BadRequest, Conflict, Internal, NotFound, TooLarge
-from wpdesk.gates import GateResult, StubGates
-from wpdesk.store import Store
+from claudepost import editions as E
+from claudepost import schedule as S
+from claudepost import tiles
+from claudepost.clock import FixedClock
+from claudepost.editions import EditionStore
+from claudepost.errors import BadRequest, Conflict, Internal, NotFound, TooLarge
+from claudepost.gates import GateResult, StubGates
+from claudepost.store import Store
 
 #: 2026-08-19 is an ordinary Wednesday. Nine in the morning is outside the
 #: default quiet window and not a wake instant, so a schedule that publishes at
@@ -198,7 +198,7 @@ class DraftTest(EditionTestCase):
         with mock.patch.object(E.uuid, "uuid4", return_value=fake):
             # A bug in the desk must reach somebody who can fix it, not just
             # whoever happened to be making the request.
-            with self.assertLogs("wpdesk.editions", level="ERROR"):
+            with self.assertLogs("claudepost.editions", level="ERROR"):
                 with self.assertRaises(Internal):
                     self.es.open_draft()
 
@@ -517,7 +517,7 @@ class CommitTest(EditionTestCase):
         # these through.
         d = self.draft()
         tiles_dir = os.path.join(self.root, "drafts", d, "tiles")
-        for leftover in (".wpdesk-half.tmp", ".wpdesk-half.bin"):
+        for leftover in (".claudepost-half.tmp", ".claudepost-half.bin"):
             with open(os.path.join(tiles_dir, leftover), "wb") as f:
                 f.write(b"\x00\x01\x02\x03")
 
@@ -736,7 +736,7 @@ class PublishDueTest(EditionTestCase):
         self.assertEqual(r.state, "staged")
         shutil.rmtree(os.path.join(self.root, "editions", r.edition_id))
 
-        with self.assertLogs("wpdesk.editions", "WARNING") as caught:
+        with self.assertLogs("claudepost.editions", "WARNING") as caught:
             self.assertIsNone(self.es.publish_due(IMMEDIATE, self.jump(T0 + 3601)))
             self.assertIsNone(self.es.publish_due(IMMEDIATE, self.jump(T0 + 3602)))
         self.assertEqual(len(caught.output), 1, caught.output)

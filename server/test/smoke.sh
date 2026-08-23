@@ -31,9 +31,9 @@ TILES="$repo/sim/tiles"
 [ -f "$FIXTURE" ] || { echo "smoke: no fixture at $FIXTURE" >&2; exit 2; }
 [ -d "$TILES" ]   || { echo "smoke: no tiles at $TILES" >&2; exit 2; }
 
-TOKEN="${WPNEWS_TOKEN:-}"
+TOKEN="${CLAUDEPOST_TOKEN:-}"
 if [ -z "$TOKEN" ]; then
-    TOKEN=$(python3 - "$HOME/.wpnews/tokens.json" <<'PY'
+    TOKEN=$(python3 - "$HOME/.claudepost/tokens.json" <<'PY'
 import json
 import sys
 
@@ -41,7 +41,7 @@ try:
     with open(sys.argv[1], encoding="utf-8") as f:
         doc = json.load(f)
 except OSError:
-    sys.exit("smoke: no ~/.wpnews/tokens.json — run server/tools/mint-token.sh")
+    sys.exit("smoke: no ~/.claudepost/tokens.json — run server/tools/mint-token.sh")
 
 for entry in doc.get("tokens", []):
     if entry.get("scope") in ("producer", "operator"):

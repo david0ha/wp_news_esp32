@@ -12,7 +12,7 @@
 # time anybody is watching.
 #
 # Build context is the REPOSITORY ROOT, not this directory:
-#     docker build -f server/Dockerfile -t wpnews-desk .
+#     docker build -f server/Dockerfile -t claudepost-desk .
 # Compose does that for you.
 
 # ---------------------------------------------------------------- builder ---
@@ -61,18 +61,18 @@ COPY --chown=desk:desk sim/ sim/
 COPY --chown=desk:desk components/ components/
 COPY --chown=desk:desk third_party/ third_party/
 COPY --chown=desk:desk docs/news-contract.md docs/news-contract.md
-COPY --chown=desk:desk server/wpdesk/ /app/wpdesk/
+COPY --chown=desk:desk server/claudepost/ /app/claudepost/
 
 # The prebuilt simulator, at the path render-check.sh looks for it.
 COPY --from=builder --chown=desk:desk /src/sim/build/sim /repo/sim/build/sim
 
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
-    WPDESK_DATA=/data \
-    WPDESK_SECRETS=/run/secrets \
-    WPDESK_REPO=/repo \
-    WPDESK_HOST=0.0.0.0 \
-    WPDESK_PORT=8080
+    CLAUDEPOST_DATA=/data \
+    CLAUDEPOST_SECRETS=/run/secrets \
+    CLAUDEPOST_REPO=/repo \
+    CLAUDEPOST_HOST=0.0.0.0 \
+    CLAUDEPOST_PORT=8080
 
 RUN mkdir -p /data && chown desk:desk /data
 VOLUME ["/data"]
@@ -86,4 +86,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4).status == 200 else 1)"
 
-CMD ["python3", "-m", "wpdesk"]
+CMD ["python3", "-m", "claudepost"]

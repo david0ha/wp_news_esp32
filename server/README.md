@@ -60,15 +60,15 @@ server/tools/mint-token.sh operator me
 server/tools/mint-token.sh producer agent
 ```
 
-Both land in `~/.wpnews/tokens.json`, mode 0600, **outside the repository,
+Both land in `~/.claudepost/tokens.json`, mode 0600, **outside the repository,
 which is public, and outside any directory you sync** — git history is
 permanent, and a private repository is one setting away from a public one.
 
-**2. The agent's own credential.** `~/.wpnews/agent.env`, also 0600:
+**2. The agent's own credential.** `~/.claudepost/agent.env`, also 0600:
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-...        # or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
-WPNEWS_TOKEN=<the producer token from step 1>
+CLAUDEPOST_TOKEN=<the producer token from step 1>
 ```
 
 Headless Claude Code in a container will not find a desktop login session.
@@ -79,16 +79,16 @@ if neither is set.
 **3. The tunnel.**
 
 ```sh
-cloudflared tunnel create wpnews
-cloudflared tunnel route dns wpnews wpnews.example.dev
-cp server/tunnel/wpnews.yml.example ~/.cloudflared/wpnews.yml
+cloudflared tunnel create claudepost
+cloudflared tunnel route dns claudepost claudepost.example.dev
+cp server/tunnel/claudepost.yml.example ~/.cloudflared/claudepost.yml
 # put the uuid it printed into both fields, and your hostname into the ingress
 ```
 
 **4. Up.**
 
 ```sh
-docker network create wpnews        # once; the worker joins this too
+docker network create claudepost    # once; the worker joins this too
 cp server/.env.example server/.env  # then fill it in
 docker compose -f server/compose.yaml up -d
 docker compose -f server/compose.yaml logs -f desk
@@ -97,14 +97,14 @@ docker compose -f server/compose.yaml logs -f desk
 **5. Point the board at it, once.**
 
 ```sh
-curl -X POST http://wpnews.local/api/news \
-     -d '{"url":"https://wpnews.example.dev/news.json"}'
+curl -X POST http://claudepost.local/api/news \
+     -d '{"url":"https://claudepost.example.dev/news.json"}'
 ```
 
 ## Driving it
 
 ```sh
-DESK=https://wpnews.example.dev
+DESK=https://claudepost.example.dev
 TOKEN=$(…)                                   # the operator token
 
 # ask for something
