@@ -443,6 +443,13 @@ class ConditionalGetTest(DeskTestCase):
             self.assertNotIn(header, headers)
             self.assertNotIn(header, on_304)
 
+        # And nothing else on this plane grew one along with it: the validator
+        # is the edition's, passed by its handler, not something `_send_bytes`
+        # hangs on everything it writes.
+        _status, _raw, healthz = self.call("GET", "/healthz")
+        for header in ("ETag", "Cache-Control"):
+            self.assertNotIn(header, healthz)
+
     def test_tiles_are_unconditional(self):
         # A tile is immutable by id -- a new picture is a new id in a new
         # edition -- so there is nothing for a validator to validate, and the
@@ -783,6 +790,14 @@ def read_response(fp):
     line = fp.readline()
     if not line:
         return None                                  # the server hung up first
+    # The status line is where a desync surfaces, and it surfaces as junk in
+    # front of it rather than as a missing response: a body written past a
+    # Content-Length has no newline of its own, so `int(line.split()[1])` would
+    # read `b'oopsHTTP/1.1 200 OK'` as a perfectly good 200 and swallow the
+    # bug. `http.client` refuses that line; so does this.
+    if not line.startswith(b"HTTP/"):
+        raise AssertionError(
+            "the previous response wrote past its Content-Length: %r" % line[:80])
     status = int(line.split(b" ")[1])
     headers = {}
     while True:
