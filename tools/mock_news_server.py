@@ -1306,6 +1306,75 @@ def _tile_problems(d, tiles_dir):
     return problems
 
 
+# The clamp news_parse.c applies to `policy.poll_seconds`, and the firmware's own polling range.
+POLL_SECONDS_MIN, POLL_SECONDS_MAX = 30, 86400
+
+# What the device reads out of `policy`. Everything else under it is ignored, exactly as an unknown
+# key anywhere else on this wire is — but here it is worth SAYING, because a producer that wrote
+# `quiet_until` or `poll_interval` has a schedule it believes is in force and is not.
+POLICY_KEYS = ("poll_seconds", "next_change")
+
+
+def _policy_issues(d):
+    """Check the `policy` block. Returns (problems, warnings).
+
+    This is the one object on the wire that is not about the paper: how often the board should come
+    back, and when the server's answer will next change. See docs/news-contract.md.
+
+    The device CLAMPS everything here rather than rejecting — the block is not allowed to cost a
+    page — so nothing below changes whether the edition prints. That is exactly why it is checked:
+    a clamp is silent, and the symptom of a `poll_seconds` of 5 is a board that polls twelve times
+    a minute for as long as it stays powered, with nothing anywhere to say it was asked to.
+
+    `next_change` is EPOCH SECONDS as a JSON number and never an ISO-8601 string. That is this
+    wire's standing rule — a number the device reasons about is an integer — and it keeps a date
+    parser out of the firmware. A string here is the mistake worth catching loudest, because it
+    looks more correct than the thing that works.
+    """
+    problems, warnings = [], []
+
+    if "policy" not in d:
+        return problems, warnings          # absent is the normal case, not a thin one
+
+    p = d["policy"]
+    if not isinstance(p, dict):
+        problems.append(f"policy is {type(p).__name__}, not an object — the device reads it as "
+                        f"absent and polls at its compiled-in interval")
+        return problems, warnings
+
+    def _int(key):
+        """The value under `key` when it is a JSON integer, else None with the reason recorded."""
+        if key not in p:
+            return None
+        v = p[key]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            problems.append(f"policy.{key} is {v!r} — it must be a JSON number; the device reads "
+                            f"anything else as absent and this block silently does nothing")
+            return None
+        if v != int(v):
+            warnings.append(f"policy.{key} is {v} — the device rounds it to an integer, because "
+                            f"nothing on this wire that it reasons about is fractional")
+        return int(v)
+
+    poll = _int("poll_seconds")
+    if poll is not None and not POLL_SECONDS_MIN <= poll <= POLL_SECONDS_MAX:
+        problems.append(f"policy.poll_seconds is {poll} — the range is "
+                        f"{POLL_SECONDS_MIN}..{POLL_SECONDS_MAX} and the device clamps into it, "
+                        f"so the board will poll at a cadence you did not choose")
+
+    when = _int("next_change")
+    if when is not None and when < 0:
+        problems.append(f"policy.next_change is {when} — it is epoch seconds, so a negative one is "
+                        f"not an instant; the device reads it as absent")
+
+    for key in p:
+        if key not in POLICY_KEYS:
+            warnings.append(f"policy.{key} is not a field the device reads — it knows "
+                            f"{' and '.join(POLICY_KEYS)} and ignores everything else")
+
+    return problems, warnings
+
+
 def check_caps_against_header():
     """Hold the cap table above against the #defines it is a transcription of.
 
@@ -1518,6 +1587,10 @@ def validate_payload(d, tiles_dir):
         if c.get("kind", "none") != "none" and not (c.get("close") or []):
             warnings.append(f"charts[{i}]: kind {c.get('kind')!r} with no close series "
                             f"— the device drops it and any story naming it loses its chart")
+
+    policy_problems, policy_warnings = _policy_issues(d)
+    problems += policy_problems
+    warnings += policy_warnings
 
     found = []
     _walk_strings(d, "", found)

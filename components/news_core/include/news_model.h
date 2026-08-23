@@ -398,6 +398,57 @@ typedef struct {
     int32_t wk52_hi_c, wk52_lo_c;          /* 0 = unknown, drawn as absent  */
 } news_subject_t;
 
+/* --- how often to come back ----------------------------------------------
+ *
+ * The one part of this wire that is not about the paper. Everything else in
+ * news_t is something a reader looks at; this is the server telling the device
+ * when to ask again, and it reaches no pixel.
+ *
+ * It exists because the server is the only party that knows what time it is
+ * where the reader lives. A quiet window from 00:30 to 06:00 is not a firmware
+ * feature and never becomes one — the board carries no calendar, no timezone
+ * database and no RTC — it is the server declining to change its answer, and
+ * saying so here so the board stops asking sixty times an hour while it does.
+ *
+ * `poll_seconds` is the cadence to use NOW. The server has already decided
+ * whether now is inside a quiet window; the device does not need to know that
+ * it is. Zero means the block was absent, and the compiled-in interval stands.
+ *
+ * `next_change` is EPOCH SECONDS: the instant at which the server's answer will
+ * change. The device waits min(poll_seconds, next_change - now), floored at
+ * NEWS_POLL_MIN, so a board on an hourly cadence still catches a 06:00 edition
+ * at 06:00 rather than at 06:59. Zero means no scheduled change is known.
+ *
+ * A NUMBER, not an ISO-8601 string, and that is the same rule the rest of this
+ * header states about money and percentages: a number the device REASONS about
+ * is an integer. It also keeps a date parser out of the firmware, which is a
+ * whole class of bug bought for nothing.
+ *
+ * Three properties this block has, none of them optional:
+ *
+ *   - news_hash() does not see it. `next_change` moves several times a day, and
+ *     a fingerprint that covered it would spend twenty-five seconds of flashing
+ *     to report that a timestamp advanced. See the comment in news_model.c.
+ *   - It clamps, never rejects. Absent behaves exactly as a board built before
+ *     this field existed. This block cannot cost a page.
+ *   - It does not survive a reboot. Nothing writes it to NVS, so a policy that
+ *     is wrong is wrong until the next power cycle rather than forever.
+ *
+ * And it is honoured only when the clock is synced, because `next_change` is
+ * absolute and this board has no RTC — SNTP or nothing. user_app.cpp owns that
+ * test; the model just carries the number. */
+typedef struct {
+    int32_t poll_seconds;   /* 0 = absent. Otherwise NEWS_POLL_MIN..NEWS_POLL_MAX */
+    int64_t next_change;    /* epoch seconds, 0 = absent                          */
+} news_policy_t;
+
+/* The range the firmware already polled in, restated as the clamp this block
+ * gets. The floor is what stops a server's arithmetic error turning into a
+ * request every two seconds; the ceiling is a day, past which a board is not
+ * polling, it is asleep. */
+#define NEWS_POLL_MIN       30
+#define NEWS_POLL_MAX    86400
+
 /* --- the snapshot --------------------------------------------------------- */
 
 typedef struct {
@@ -419,6 +470,13 @@ typedef struct {
     news_chart_t  charts[NEWS_CHARTS_MAX];   int chart_count;
     news_quote_t  indices[NEWS_INDEX_MAX];   int index_count;
     news_photo_t  thumbs[NEWS_THUMBS_MAX];   int thumb_count;
+
+    /* Last, and outside every count above, because it is the one member of this
+     * struct that no page reads. It is also the only member wider than four
+     * bytes, so it goes at the end where its eight-byte alignment costs four
+     * bytes of tail padding instead of splitting the struct somewhere a reader
+     * would have to think about. */
+    news_policy_t policy;
 } news_t;
 
 /* --- helpers (pure, shared by the UI, the API and the tests) -------------- */

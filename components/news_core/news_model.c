@@ -20,11 +20,16 @@
  * point of the assert rather than a defect in it: a capacity that grew wants
  * the four places that quote the old number brought with it.
  *
- * Every member is a char array, an int32_t, an int, a bool, a uint8_t, an
- * int16_t or an enum, so the widest alignment in the struct is four and the
- * layout is the same on x86-64 and on Xtensa. That is why one number can serve
- * the host tests, the simulator and the firmware. */
-_Static_assert(sizeof(news_t) == 32932,
+ * One number serves the host tests, the simulator and the firmware because the
+ * layout is the same on x86-64 and on Xtensa. That used to hold for a simple
+ * reason — every member was four bytes or narrower, so nothing could be aligned
+ * differently — and news_policy_t::next_change ends it: an int64_t wants eight,
+ * on both, which is why it sits last in the struct with its four bytes of tail
+ * padding rather than in the middle of a run of counts. The claim is now a
+ * measurement on each target rather than an argument from the member types, and
+ * this assert is what takes it: the firmware build fails here if Xtensa ever
+ * disagrees with the host. */
+_Static_assert(sizeof(news_t) == 32952,
                "sizeof(news_t) moved. Measure it, then update the figure in "
                "CLAUDE.md, in user_app.cpp and in the design spec — they all "
                "quote it, and they are all wrong now.");
@@ -402,6 +407,28 @@ uint32_t news_hash(const news_t *v)
     for (int i = 0; i < v->thumb_count && i < NEWS_THUMBS_MAX; i++) {
         h_photo(&h, &v->thumbs[i]);
     }
+
+    /* `policy` IS DELIBERATELY NOT IN HERE, AND IT MUST STAY OUT.
+     *
+     * This is an omission, and an omission is invisible: everything else on this
+     * wire is fed to the hash, so the next reader to audit this function against
+     * news_model.h will find one member missing and be right to wonder. So it is
+     * written down.
+     *
+     * The rule this function implements is "two snapshots with the same
+     * fingerprint produce the same pixels". The policy produces NO pixels. It is
+     * the server saying when to ask again, and `next_change` moves at every
+     * transition of the server's schedule — several times a day, every day,
+     * forever. Fingerprinted, it would notify UiTask each time, and UiTask would
+     * spend twenty-five seconds flashing the whole sheet to report that a
+     * timestamp advanced. That is the exact failure this function exists to
+     * prevent, arriving through the one field that was added to prevent it.
+     *
+     * The comparison it must not break is in NewsTask: hash the fetch, compare,
+     * and touch the panel only when they differ. Adding `policy` here would not
+     * fail a test that reads like a policy test — it would show up as a board
+     * that repaints on a timer, weeks later, with nothing in the log to say why.
+     * test_policy_is_not_fingerprinted() in test_news_parse.c is the guard. */
 
     return h;
 }

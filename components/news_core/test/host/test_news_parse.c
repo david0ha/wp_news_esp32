@@ -18,7 +18,7 @@
 
 #define PARSE(json, out) news_parse((json), strlen(json), (out))
 
-/* news_t is ~24 KB. One of these is fine on a host stack, but a test that
+/* news_t is ~33 KB. One of these is fine on a host stack, but a test that
  * declares four in a frame is a test that will one day be run somewhere
  * smaller, so they are file-static. */
 static news_t g_a, g_b;
@@ -1167,6 +1167,130 @@ static void test_prose_copy_curls_the_apostrophe(void)
     CHECK_STR(g_a.stories[0].headline, "Sandisk’s day");
 }
 
+/* --- the policy block ------------------------------------------------------
+ *
+ * The one object on this wire that is not about the paper. It says how often to
+ * come back and when the server's answer will next change, and it reaches no
+ * pixel. Everything below follows from that: it clamps rather than rejecting,
+ * because a cadence a producer got wrong must never cost an edition, and the
+ * fingerprint cannot see it, because `next_change` moves every day and a
+ * refresh on this panel is twenty-five seconds of flashing.
+ */
+
+/* A payload with no policy leaves the struct zeroed, which is what every
+ * payload filed before this field existed does — and a zeroed policy is exactly
+ * what makes the compiled-in interval stand. Absent is the normal case: the
+ * demo edition and the committed fixture both carry none. */
+static void test_policy_absent(void)
+{
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"}}", &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, 0);
+    CHECK_INT(g_a.policy.next_change, 0);
+
+    /* And an empty object is the same as no object at all. */
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"policy\":{}}", &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, 0);
+    CHECK_INT(g_a.policy.next_change, 0);
+}
+
+/* Out of range goes to the bound rather than to a rejection. This block cannot
+ * be allowed to cost a page: a server that computes a cadence of two seconds
+ * has a scheduling bug, and the right answer to it is a board that polls at the
+ * floor, not a board showing yesterday's front page. */
+static void test_policy_clamps(void)
+{
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"policy\":{\"poll_seconds\":29}}",
+                &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, NEWS_POLL_MIN);
+
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"policy\":{\"poll_seconds\":86401}}",
+                &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, NEWS_POLL_MAX);
+
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"policy\":{\"poll_seconds\":-5}}",
+                &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, NEWS_POLL_MIN);
+
+    /* Inside the range it is carried through, rounded the way every other
+     * number on this wire is: half away from zero. */
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"policy\":{\"poll_seconds\":900.5}}",
+                &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, 901);
+
+    /* An instant before the epoch is not an instant. It goes to zero — absent —
+     * rather than to a bound, because there is no nearest legal instant a
+     * negative one was trying to name. */
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},"
+                "\"policy\":{\"next_change\":-1755561000}}", &g_a) == true);
+    CHECK_INT(g_a.policy.next_change, 0);
+
+    /* An ordinary one survives as the integer it arrived as. It is past 2038,
+     * so this also asserts the field is not an int32 pretending to be a date. */
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},"
+                "\"policy\":{\"next_change\":4102444800}}", &g_a) == true);
+    CHECK_INT(g_a.policy.next_change, 4102444800LL);
+}
+
+/* A string where a number belongs is the same as absent, like every other field
+ * on this wire — and `next_change` is where a producer will reach for one, since
+ * an instant is naturally written as an ISO-8601 string. It is a JSON NUMBER
+ * here on purpose: it is a number the device reasons about, and this wire's rule
+ * is that those are integers. Accepting the string form would put a date parser
+ * in the firmware, which is a class of bug bought for nothing. */
+static void test_policy_wrong_type(void)
+{
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},"
+                "\"policy\":{\"poll_seconds\":\"900\","
+                "            \"next_change\":\"2026-08-19T00:30:00Z\"}}", &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, 0);
+    CHECK_INT(g_a.policy.next_change, 0);
+
+    /* And a policy that is not an object at all is a policy that is not there.
+     * The page still prints — this is a clamp, not a rejection. */
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"policy\":\"hourly\"}", &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, 0);
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"policy\":[900]}", &g_a) == true);
+    CHECK_INT(g_a.policy.poll_seconds, 0);
+    CHECK_STR(g_a.subject.symbol, "S");
+}
+
+/* THE test. news_hash() fingerprints what reaches the glass and the policy
+ * reaches nothing, so a payload that differs only here must not spend
+ * twenty-five seconds of flashing to report that a timestamp advanced.
+ *
+ * This is not a micro-optimisation. `next_change` moves at every transition of
+ * the server's schedule, several times a day, forever; fingerprinted, it would
+ * turn a quiet board into one that flashes at nobody on a timer — which is the
+ * exact failure news_hash() exists to prevent, arriving through the one field
+ * that was added to prevent it. */
+static void test_policy_is_not_fingerprinted(void)
+{
+    const char *a =
+        "{\"subject\":{\"symbol\":\"SNDK\",\"last\":1631.47},"
+        " \"stories\":[{\"rank\":0,\"headline\":\"h\",\"body\":\"words\"}],"
+        " \"policy\":{\"poll_seconds\":900,\"next_change\":1755561000}}";
+    const char *b =
+        "{\"subject\":{\"symbol\":\"SNDK\",\"last\":1631.47},"
+        " \"stories\":[{\"rank\":0,\"headline\":\"h\",\"body\":\"words\"}],"
+        " \"policy\":{\"poll_seconds\":3600,\"next_change\":1755582000}}";
+
+    CHECK(PARSE(a, &g_a) == true);
+    CHECK(PARSE(b, &g_b) == true);
+    CHECK(g_a.policy.poll_seconds != g_b.policy.poll_seconds);
+    CHECK(g_a.policy.next_change != g_b.policy.next_change);
+    CHECK_INT(news_hash(&g_a), news_hash(&g_b));
+
+    /* And the block being there at all must not move it either, or the first
+     * payload a server splices a policy into costs a refresh that says nothing.
+     * The same page without the block hashes the same as the two with it. */
+    const char *none =
+        "{\"subject\":{\"symbol\":\"SNDK\",\"last\":1631.47},"
+        " \"stories\":[{\"rank\":0,\"headline\":\"h\",\"body\":\"words\"}]}";
+    CHECK(PARSE(none, &g_b) == true);
+    CHECK_INT(g_b.policy.poll_seconds, 0);
+    CHECK_INT(news_hash(&g_a), news_hash(&g_b));
+}
+
 /* --- the fingerprint ------------------------------------------------------ */
 
 static void test_hash_is_content_addressed(void)
@@ -1372,6 +1496,10 @@ int main(void)
     test_a_multibyte_glyph_straddling_a_field_boundary();
     test_str_copy();
     test_prose_copy_curls_the_apostrophe();
+    test_policy_absent();
+    test_policy_clamps();
+    test_policy_wrong_type();
+    test_policy_is_not_fingerprinted();
     test_hash_is_content_addressed();
     test_hash_separates_adjacent_strings();
     TH_REPORT("news_parse");

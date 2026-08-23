@@ -90,6 +90,7 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
     "url": "http://mac.local:8123/news.json",
     "lastResult": "ok",
     "pollSeconds": 300,
+    "pollSource": "config",
     "ageSeconds": 42,
     "stale": false
   },
@@ -166,6 +167,17 @@ page. Those three point at three different mistakes, which is why they are not o
 
 `source.ageSeconds` is **`-1` when no fetch has ever succeeded**, which is different from "zero
 seconds ago". A client that treats it as a number draws a board that just synced when it never has.
+
+`source.pollSeconds` is the cadence **in force**, not the one compiled in, and `source.pollSource`
+says where it came from — `"config"` for `CONFIG_WP_NEWS_POLL_SECONDS`, `"policy"` for a `policy`
+block in the payload (see [news-contract.md](news-contract.md)). The pair exists because a number
+that can come from two places says nothing on its own: an hourly poll the server asked for ends when
+its quiet window does, and an hourly poll built into the image does not. A client that wants to show
+"next check in an hour" needs to know which of those it is looking at.
+
+Policy is **not persisted**, so a board that has just rebooted reports `"config"` until its first
+successful fetch — which is the design, not a gap: a bad policy must not be able to leave a board
+polling once a day forever.
 
 `news.demo` is not an error state. A board with no URL renders the built-in demo edition, which is a
 complete and intentional configuration; `POST /api/news` with `{"url":""}` puts it back there

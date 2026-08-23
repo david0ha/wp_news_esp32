@@ -242,7 +242,14 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put(&s, ",\"source\":{");
     put_str_field(&s, "url", st->news_url, true);
     put_str_field(&s, "lastResult", st->last_result, false);
+    /* The cadence in force, and who set it. `pollSeconds` is the effective
+     * figure — a payload's `policy` block can move it — and a number that can
+     * come from two places says nothing on its own: an hourly poll set by the
+     * desk ends at 06:00, and an hourly poll compiled into the image does not.
+     * A word rather than a boolean because it is going on a screen, and the two
+     * are the same length so nothing about the buffer depends on which. */
     put_int_field(&s, "pollSeconds", st->poll_seconds, false);
+    put_str_field(&s, "pollSource", st->poll_from_policy ? "policy" : "config", false);
     put_int_field(&s, "ageSeconds", st->age_seconds, false);
     put_bool_field(&s, "stale", st->stale, false);
     put(&s, "}");

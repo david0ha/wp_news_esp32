@@ -13,7 +13,7 @@
  * previous front page exactly as it was, which is why the folio can honestly
  * badge it STALE rather than going blank.
  *
- * The scratch is on the heap because news_t is ~24 KB and NewsTask's stack is
+ * The scratch is on the heap because news_t is ~33 KB and NewsTask's stack is
  * 16 KB. An allocation failure is a rejection like any other, which keeps the
  * "*out is written only on success" rule true on that path too.
  *
@@ -111,6 +111,69 @@ static const cJSON *jobj(const cJSON *o, const char *key)
 {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
     return cJSON_IsObject(v) ? v : NULL;
+}
+
+/* --- the policy ----------------------------------------------------------
+ *
+ * The only object on this wire that is not about the paper: how often to come
+ * back, and when the server's answer will next change. See news_model.h for the
+ * argument; what happens HERE is that every way of getting it wrong lands on
+ * "absent", and absent is exactly what a board built before this field existed
+ * does with every payload it ever sees.
+ *
+ * That is the whole error policy, and it is stricter than it looks. This block
+ * governs when the device asks again, so a garbage value that was *clamped into
+ * range* rather than dropped would leave a board quietly polling at a cadence
+ * nobody chose. A string, a null, a policy that is an array — all of them mean
+ * the producer did not send one. */
+
+/* The furthest instant a calendar can name: 9999-12-31T23:59:59Z. It is a bound
+ * and not a judgement — the device only ever computes `next_change - now`, so a
+ * value past the end of time behaves exactly like an absent one — but casting a
+ * double that large to int64_t is undefined rather than merely wrong, and this
+ * is where that is prevented. */
+#define NEXT_CHANGE_MAX 253402300799LL
+
+static void parse_policy(const cJSON *root, news_policy_t *p)
+{
+    const cJSON *o = jobj(root, "policy");
+    if (!o) return;
+
+    /* Present but out of range CLAMPS. A server that computed a cadence of two
+     * seconds has a scheduling bug, and the right answer to it is a board
+     * polling at the floor rather than a board that rejected the edition and is
+     * still showing yesterday's front page. Rounded half away from zero like
+     * every other number that crosses this wire. */
+    const cJSON *poll = cJSON_GetObjectItemCaseSensitive(o, "poll_seconds");
+    if (cJSON_IsNumber(poll)) {
+        int32_t s = sround(cJSON_GetNumberValue(poll), 1);
+        if (s < NEWS_POLL_MIN) s = NEWS_POLL_MIN;
+        if (s > NEWS_POLL_MAX) s = NEWS_POLL_MAX;
+        p->poll_seconds = s;
+    }
+
+    /* An instant, so it does not go through sround(): that saturates at about
+     * 2.1e9, which is January 2038, and a field whose whole point is to survive
+     * being a date must not be clamped to the year an int32 runs out.
+     *
+     * Negative goes to zero rather than to a bound, and that is not the same
+     * decision the cadence gets. A cadence of -5 is a number a server meant to
+     * be positive and the nearest legal one says what it meant; an instant
+     * before the epoch is not an instant at all, and "absent" is the only honest
+     * reading of it. */
+    const cJSON *when = cJSON_GetObjectItemCaseSensitive(o, "next_change");
+    if (cJSON_IsNumber(when)) {
+        double d = cJSON_GetNumberValue(when);
+        /* Negated so a NaN takes the first branch: casting one to int64_t is
+         * undefined, exactly as it is in sround(). */
+        if (!(d > 0.0)) {
+            p->next_change = 0;
+        } else if (!(d < (double)NEXT_CHANGE_MAX)) {
+            p->next_change = NEXT_CHANGE_MAX;
+        } else {
+            p->next_change = (int64_t)(d + 0.5);
+        }
+    }
 }
 
 /* --- the subject ---------------------------------------------------------- */
@@ -716,6 +779,7 @@ bool news_parse(const char *json, size_t len, news_t *out)
     parse_tables(root, v);
     parse_indices(root, v);
     parse_thumbs(root, v);
+    parse_policy(root, &v->policy);
 
     cJSON_Delete(root);
 

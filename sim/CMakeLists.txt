@@ -18,8 +18,24 @@ set(CORE  ${EX}/components/news_core)
 set(BSP   ${EX}/components/port_bsp)
 set(CJSON ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/cJSON)
 
-# Reuse the IDF project's LVGL source (fetched into managed_components/).
-add_subdirectory(${EX}/managed_components/lvgl__lvgl ${CMAKE_BINARY_DIR}/lvgl)
+# LVGL comes from the IDF component manager on a machine that has run
+# `idf.py build`. In a container there is no IDF and no managed_components/,
+# and on a fresh checkout there is not one yet either — so fall back to
+# fetching the same version the firmware pins. The tag matches
+# main/idf_component.yml's `lvgl/lvgl: ^9.4.0`; pinning it here rather than
+# tracking the range is deliberate, because a simulator that is a test must
+# not change what it asserts when an upstream release lands.
+set(LVGL_DIR ${EX}/managed_components/lvgl__lvgl)
+if(EXISTS ${LVGL_DIR}/CMakeLists.txt)
+    add_subdirectory(${LVGL_DIR} ${CMAKE_BINARY_DIR}/lvgl)
+else()
+    include(FetchContent)
+    FetchContent_Declare(lvgl
+        GIT_REPOSITORY https://github.com/lvgl/lvgl.git
+        GIT_TAG        v9.4.0
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(lvgl)
+endif()
 
 # The news core is compiled verbatim — same UI, same fonts, same logic as the
 # firmware. Only the HTTP port is host-specific.

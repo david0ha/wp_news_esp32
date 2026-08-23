@@ -260,6 +260,10 @@ static void test_state_shape(void)
     check_str(s, "url", "http://mac.local:8123/news.json");
     check_str(s, "lastResult", "ok");
     check_int(s, "pollSeconds", 300);
+    /* The cadence and its provenance travel together. 300 seconds set by the
+     * desk for the night and 300 seconds compiled into the image are the same
+     * number and different facts, and only one of them ends on its own. */
+    check_str(s, "pollSource", "config");
     check_int(s, "ageSeconds", 42);
     check_bool(s, "stale", false);
 
@@ -445,6 +449,9 @@ static void fill_worst_case(device_state_t *st)
     st->figure_count = st->brief_count = st->peer_count = 999999999;
     st->table_count = st->chart_count = st->thumb_count = 999999999;
     st->poll_seconds = st->age_seconds = 999999999;
+    /* Both spellings of pollSource are six characters, so this picks one rather
+     * than the longer one — there is no longer one. */
+    st->poll_from_policy = true;
     st->battery_pct = st->battery_mv = 999999999;
     st->refresh_ms = 999999999;
 }
