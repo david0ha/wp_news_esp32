@@ -105,7 +105,7 @@ class DeskClient:
         return RuntimeError(self._redact("%s: %s %s" % (what, status, detail)))
 
     # -- the queue --------------------------------------------------------
-    def claim(self):
+    def claim(self) -> dict | None:
         """Long-poll for one instruction. ``None`` when the wait expired.
 
         Only a 204 -- or a 200 with nothing in it, which is what a proxy makes
@@ -114,13 +114,31 @@ class DeskClient:
         204, and reading it as "nothing to do" would send the worker round to
         re-claim as fast as the socket allows, forever. Raising puts it on the
         loop's backoff instead.
+
+        A 200 that is not an instruction raises for the same reason. This is
+        the one caller for which :meth:`_json`'s ``not_json`` envelope -- and a
+        200 carrying a JSON array, which arrives as a list -- is not an answer:
+        neither has an id, and the caller's next move is ``command["id"]``,
+        outside every try in :func:`loop.main`. A worker that exits there is a
+        container ``restart: unless-stopped`` brings up and kills once a minute
+        for as long as nobody is watching, rather than one backing off from a
+        second to five minutes. Every other method keeps the envelope, because
+        for those "the desk answered HTML" is a report and not a crash.
+
+        Returns:
+            The instruction, or ``None`` when there was nothing to claim.
+
+        Raises:
+            RuntimeError: every other answer, redacted and short.
         """
         status, doc = self._json(
             "GET", "/api/commands/next?wait=%d" % CLAIM_WAIT, timeout=CLAIM_WAIT + 30)
-        if status == 204:
+        if status == 204 or (status == 200 and doc is None):
             return None
         if status != 200:
             raise self._fail("claim failed", status, doc)
+        if not isinstance(doc, dict) or "id" not in doc:
+            raise self._fail("claim answered with no instruction", status, doc)
         return doc
 
     def finish(self, cid: str, ok: bool, result: str) -> None:
@@ -212,12 +230,9 @@ def read_token(secrets: str) -> str:
         SystemExit: with code 2, when there is no producer token to be had.
     """
     env_path = os.path.join(secrets, "agent.env")
-    if os.path.exists(env_path):
-        with open(env_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("WPNEWS_TOKEN="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    token = _read_env_file(env_path).get("WPNEWS_TOKEN")
+    if token:
+        return token
 
     tokens_path = os.path.join(secrets, "tokens.json")
     if os.path.exists(tokens_path):
@@ -253,8 +268,24 @@ def load_agent_env(secrets: str) -> dict:
     the child is a model with a shell, and it has no use for the token and every
     reason not to see it.
     """
+    env = _read_env_file(os.path.join(secrets, "agent.env"))
+    env.pop("WPNEWS_TOKEN", None)
+    return env
+
+
+def _read_env_file(path: str) -> dict:
+    """The ``KEY=value`` pairs in a file, or ``{}`` when there is no such file.
+
+    Blank lines, ``#`` comments and anything without an ``=`` are skipped, and
+    one layer of quotes comes off each value -- ``agent.env`` is a file a human
+    edits, not a shell this parses.
+
+    The FIRST spelling of a key wins, which is how :func:`read_token` has always
+    read this file: top down, taking the first answer it finds. A file somebody
+    appended to twice therefore reads the same way to both callers, and neither
+    is the one that decides.
+    """
     env: dict = {}
-    path = os.path.join(secrets, "agent.env")
     if not os.path.exists(path):
         return env
     with open(path, encoding="utf-8") as f:
@@ -263,8 +294,5 @@ def load_agent_env(secrets: str) -> dict:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, value = line.split("=", 1)
-            key = key.strip()
-            if key == "WPNEWS_TOKEN":
-                continue
-            env[key] = value.strip().strip('"').strip("'")
+            env.setdefault(key.strip(), value.strip().strip('"').strip("'"))
     return env

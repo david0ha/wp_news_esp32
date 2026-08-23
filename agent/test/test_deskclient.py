@@ -71,7 +71,14 @@ def client(*answers) -> tuple[deskclient.DeskClient, StubOpener]:
 
 
 class ClaimTest(unittest.TestCase):
-    """The long poll: three ways of being told nothing happened."""
+    """The long poll: what is an instruction, and what only looks like one.
+
+    Two answers mean nothing to do and everything else raises, because the
+    caller is a loop whose only two moves are "run this" and "back off". An
+    answer it cannot run and did not raise on would reach ``command["id"]``
+    outside every try in :func:`loop.main`, and a worker that exits is a
+    container ``restart: unless-stopped`` brings up and kills once a minute.
+    """
 
     def test_a_204_is_nothing_to_do(self):
         desk, _ = client((204, b""))
@@ -87,14 +94,43 @@ class ClaimTest(unittest.TestCase):
         desk, _ = client((200, json.dumps({"id": "abc", "text": "NVDA"}).encode()))
         self.assertEqual(desk.claim()["id"], "abc")
 
-    def test_a_200_that_is_not_json_is_reported_rather_than_raised(self):
-        # A control endpoint answering HTML is a bug on the desk. Reporting the
-        # first bytes is the only way anybody finds out which endpoint did it.
+    def test_a_200_that_is_not_json_raises_so_the_loop_backs_off(self):
+        # A proxy in front of the tunnel serving an HTML error page. It reaches
+        # here as the `not_json` envelope, which has no id -- so it is not an
+        # instruction, and the loop must treat it as an unreachable desk. The
+        # first bytes go into the message, because "which endpoint answered
+        # HTML" is the only question anybody has once this starts.
         desk, _ = client((200, b"<html>gateway</html>"))
-        doc = desk.claim()
-        self.assertEqual(doc["ok"], False)
-        self.assertEqual(doc["error"], "not_json")
-        self.assertIn("gateway", doc["detail"])
+        with self.assertRaises(RuntimeError) as caught:
+            desk.claim()
+        self.assertIn("gateway", str(caught.exception))
+
+    def test_a_200_carrying_a_json_array_raises(self):
+        # Worth its own case because it fails differently: `command["id"]` on a
+        # list is a TypeError where the not_json dict is a KeyError, and a
+        # check that only rejected the dict would still exit the worker.
+        for body in (b"[]", b'[{"id":"abc"}]'):
+            desk, _ = client((200, body))
+            with self.assertRaises(RuntimeError, msg=repr(body)):
+                desk.claim()
+
+    def test_a_200_dict_without_an_id_raises(self):
+        # The id is what `finish` reports against. Without one there is nothing
+        # to run and nothing to report having failed to run.
+        desk, _ = client((200, b'{"text":"NVDA"}'))
+        with self.assertRaises(RuntimeError):
+            desk.claim()
+
+    def test_the_not_json_envelope_still_reaches_the_other_callers(self):
+        # Only the claim insists on an instruction. Everywhere else a 200 that
+        # is not JSON is reported rather than raised, which is how a proxy
+        # answering HTML gets named instead of swallowed -- `handle()` reads
+        # `ok` off this and goes round for a revision.
+        desk, _ = client((200, b"<html>gateway</html>"))
+        report = desk.proof("d")
+        self.assertEqual(report["ok"], False)
+        self.assertEqual(report["error"], "not_json")
+        self.assertIn("gateway", report["detail"])
 
     def test_a_5xx_on_the_claim_raises_so_the_loop_backs_off(self):
         desk, _ = client((503, b'{"ok":false,"error":"unavailable"}'))
@@ -163,6 +199,15 @@ class ErrorTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             desk.put_tile("d", "hero", b"\x01")
         self.assertIn("hero", str(caught.exception))
+
+    def test_the_token_never_reaches_the_message_of_an_unrunnable_claim(self):
+        # The claim's own raise path, not the 4xx one below: a proxy that
+        # echoed the request back would put the bearer token in the message,
+        # and from there into POST /api/commands/<id>/fail and its audit log.
+        desk, _ = client((200, b"<html>Bearer " + TOKEN.encode() + b"</html>"))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.claim()
+        self.assertNotIn(TOKEN, str(caught.exception))
 
     def test_the_token_never_reaches_an_exception_message(self):
         # A desk that echoed the Authorization header into its error body would

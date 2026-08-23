@@ -74,6 +74,11 @@ DEFAULT_TOOLS = (
     "Bash(python3 {repo}/tools/mock_news_server.py:*)"
 )
 
+#: The ceiling on the claim backoff. Five minutes is long enough that a desk
+#: down overnight costs a handful of log lines rather than thousands, and short
+#: enough that a worker is filing again within one poll of it coming back.
+MAX_BACKOFF = 300
+
 #: What ``AGENT_WRITE_BRIEFS`` accepts as yes. Anything else -- including the
 #: default -- is no.
 _TRUTHY = ("1", "true", "yes", "on")
@@ -232,6 +237,20 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     shutil.rmtree(workdir, ignore_errors=True)
     os.makedirs(os.path.join(workdir, "tiles"), exist_ok=True)
 
+    def file_and_proof(fetch_back: bool = True):
+        """Put what is on disk in front of the gates. Returns (draft, report, sheets).
+
+        ``fetch_back`` is False only for the pass after the model has already
+        looked at the paper: the sheets are brought back so that the *next*
+        turn can see them, and after the last turn there is no next one.
+        """
+        draft = upload(desk, workdir)
+        report = desk.proof(draft)
+        sheets = (fetch_sheets(desk, draft, report.get("sheets", []),
+                               os.path.join(workdir, "proof"))
+                  if fetch_back else [])
+        return draft, report, sheets
+
     text = prompt.build_prompt(
         read_contract(cfg.repo),
         prompt.read_context_dir(cfg.context_dir),
@@ -242,10 +261,7 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         desk.finish(cid, False, "claude exited %d" % status)
         return
 
-    draft = upload(desk, workdir)
-    report = desk.proof(draft)
-    sheets = fetch_sheets(desk, draft, report.get("sheets", []),
-                          os.path.join(workdir, "proof"))
+    draft, report, sheets = file_and_proof()
 
     revisions = 0
     while not report.get("ok") and revisions < MAX_REVISIONS:
@@ -256,10 +272,7 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         if status != 0:
             desk.finish(cid, False, "revision %d: claude exited %d" % (revisions, status))
             return
-        draft = upload(desk, workdir)
-        report = desk.proof(draft)
-        sheets = fetch_sheets(desk, draft, report.get("sheets", []),
-                              os.path.join(workdir, "proof"))
+        draft, report, sheets = file_and_proof()
 
     if not report.get("ok"):
         desk.finish(cid, False, "the edition does not typeset after %d revisions:\n%s\n%s"
@@ -272,8 +285,7 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         run_claude(cfg, prompt.look_prompt(sheets), workdir, agent_env)
         # A revision may have rewritten the files; re-upload and re-proof so the
         # thing committed is the thing that was judged.
-        draft = upload(desk, workdir)
-        report = desk.proof(draft)
+        draft, report, _ = file_and_proof(fetch_back=False)
         if not report.get("ok"):
             desk.finish(cid, False, "the revision after looking at the sheets does not "
                                     "typeset:\n%s" % report.get("render", ""))
@@ -284,24 +296,6 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     write_brief(cfg, time.strftime("%Y-%m-%d"), command, result,
                 report.get("validate", ""))
     desk.finish(cid, True, "%s %s" % (result.get("state"), result.get("edition_id")))
-
-
-def is_command(doc: object) -> bool:
-    """Whether what the desk answered a claim with is an instruction to run.
-
-    A 200 is not enough. :meth:`deskclient.DeskClient._json` deliberately does
-    not raise on a 200 whose body is not JSON -- it answers ``{"ok": False,
-    "error": "not_json", ...}`` so that a proxy in front of the tunnel serving
-    an HTML error page gets *reported* rather than swallowed -- and a 200
-    carrying a JSON array comes through as a list. Neither has an id, and
-    reading one off them raises where :func:`main` has nothing to catch it.
-
-    Which is the whole point of asking: a worker that raises out of its loop
-    exits, and ``restart: unless-stopped`` restarts it, so a desk answering
-    rubbish would replace the backoff below with a container that comes up and
-    dies once a minute for as long as nobody is watching.
-    """
-    return isinstance(doc, dict) and "id" in doc
 
 
 def main() -> int:
@@ -336,26 +330,22 @@ def main() -> int:
             # is a worker that has to be restarted by hand. This is also why the
             # compose files carry no `depends_on`: the backoff already covers a
             # desk that is not up yet.
+            #
+            # An answer the desk should never give arrives here too, by
+            # :meth:`deskclient.DeskClient.claim`'s own promise: a proxy's HTML
+            # error page and a JSON array are not instructions, and reading an
+            # id off one would raise below, outside every try. The message
+            # carries what was answered, because "which endpoint returned HTML"
+            # is the only question anybody has once this starts.
             LOG.warning("claim failed (%s); retrying in %.0fs", e, backoff)
             time.sleep(backoff)
-            backoff = min(backoff * 2, 300)
+            backoff = min(backoff * 2, MAX_BACKOFF)
             continue
 
         if command is None:
             # The long poll expired with nothing queued: the healthy idle
             # answer, and an answer, so the backoff resets with it.
             backoff = 1.0
-            continue
-
-        if not is_command(command):
-            # An answer the desk should never give, and the same medicine as an
-            # unreachable one for the same reason -- see :func:`is_command` for
-            # what exiting here would cost. Logged with the answer itself
-            # because "which endpoint returned HTML" is the only question
-            # anybody has once this starts.
-            LOG.warning("the desk answered a claim with %.120r; backing off", command)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 300)
             continue
 
         backoff = 1.0
