@@ -44,7 +44,10 @@ GET <news_url>          every CONFIG_CLAUDEPOST_POLL_SECONDS, default 60, range 
                         — unless a payload's `policy` block says otherwise
 ```
 
-No headers are required and none are checked. The response must carry a **2xx status** — checked
+The device sends at most one request header — `If-None-Match` — and reads at most one response
+header — `ETag`. Both are optional on both sides, and a server that implements neither is fully
+supported; see [Asking again](#asking-again-etag-and-304). Nothing else is sent, required or
+checked. The response must carry a **2xx status** — checked
 before the body is parsed, not after, because a 404 page and a captive-portal redirect are both
 perfectly good documents that happen not to be a front page, and "your URL is wrong" and "your JSON
 is wrong" are different messages in the log (`news_service.c`). The device port caps a response at
@@ -70,6 +73,160 @@ is a complete, plausible front page about one company. Clearing the URL over the
 The board works with no PC running at all.
 
 Tiles are fetched from beside the snapshot; see [Photographs](#photographs).
+
+## Asking again: ETag and 304
+
+**A server that has never heard of any of this is a fully supported server.** It costs one transfer
+and one parse per poll and nothing else — no warning, no error state, no badge, no degraded page,
+nothing in the log. Everything in this section is an optimisation a producer may opt into, and the
+reference producer carries `--no-etag` so that the path without it can be exercised on purpose
+rather than discovered on somebody's static file host.
+
+What it buys, for a producer that does implement it: the transfer, the cJSON tree and the 32 KB
+struct fill, on every poll where the document has not changed — which on a board that polls all day
+is nearly all of them.
+
+What it does not buy is a panel refresh, because it was never allowed to decide one.
+
+### Two gates, and only the second one moves the panel
+
+| gate | lives | decides | saves |
+|---|---|---|---|
+| `ETag` / `304` | the server | whether a body is sent at all | the transfer and the parse |
+| `news_hash()` | the device | **whether the panel is reprinted** | twenty-five seconds of flashing |
+
+`news_hash()` is the sole authority on whether the sheet is reprinted, and the ETag is layered
+*under* it rather than in front of it. That ordering is the whole design, and it is what makes the
+feature safe to get wrong: a server with a broken tag — one that changes on every poll, or one that
+never changes at all — costs a wasted transfer or a wasted parse. It cannot cost a wrong page and it
+cannot cost a refresh, because the device fingerprints what it actually parsed and compares that
+before it touches the glass. **A producer cannot break the panel with a bad ETag.** That is a design
+property worth relying on, and it is why this half of the contract can be optional.
+
+### The two fingerprints are meant to disagree
+
+They are taken over different things. The ETag fingerprints the **document**; `news_hash()`
+fingerprints the **parsed and clamped model** — what actually reaches the glass. So a producer can
+change the document without changing the page, and on those polls the tag moves and the sheet does
+not:
+
+- **a key the parser does not read.** Unknown keys are ignored, so a producer's own `run_id`,
+  `sources[]` or debug envelope moves the tag and cannot move the page.
+- **a value that clamps onto the one already there.** A `bar` of 1,400 and a `bar` of 1,000 are the
+  same 1,000; a `spark` sample of 12,000 and one of 1,000 are the same 1,000.
+- **anything past a capacity.** The twenty-ninth figure, the ninth brief, the seventh column of a
+  table, the sixth story that loses on rank.
+- **formatting**, for a producer whose tag is computed over its own serialized bytes rather than
+  over the payload object — see below.
+
+On every one of those the server sends 200, the device parses, `news_hash()` matches, and **the
+panel stays still.** That is the correct outcome and not a wasted poll. The parse cost a few
+milliseconds of a board that was awake anyway; the refresh it declined to spend would have cost
+twenty-five seconds of a sheet flashing at a room with nothing new on it. When the two gates
+disagree, the cheap one is the one that lost.
+
+### The one field that is not free: `generated_at`
+
+`generated_at` is **not drawn** — nothing on either sheet prints a clock — and it is nonetheless
+**fingerprinted**, along with every other field the parser keeps (`news_hash()`, in
+`components/news_core/news_model.c`). Not drawn and not fingerprinted are different properties, and
+this is the field where they come apart.
+
+So a producer that stamps a fresh `generated_at` on every poll changes the model on every poll, and
+the board reprints the entire sheet on every poll, forever. The ETag does not save it and is not
+supposed to: the document genuinely did change, and the tag is correctly reporting so. The gate that
+would have caught it is the one that has been handed a model that moved.
+
+**Move `generated_at` when the edition moves, not when the clock does.** A dateline is a date, not a
+timestamp, and `as_of` is the line a reader actually gets. The reference producer serves a fixed
+`generated_at` for exactly this reason, and `--live` moves it deliberately — moving it is how you
+watch a board refresh on demand.
+
+### The exchange
+
+```
+GET /news.json                              ->  200  ETag: "7fda0cb0d182c1d4"
+GET /news.json                              ->  200  (a server that sends no tag: also correct)
+    If-None-Match: "7fda0cb0d182c1d4"       ->  304  no body
+```
+
+- **The tag is opaque.** The device compares it and never parses it. Any quoted string will do; it
+  carries no meaning the firmware can read, and no version of it will ever be interpreted.
+- **It is bounded at 64 bytes**, quotes and terminator included (`HTTP_ETAG_MAX`, `http_port.h`). A
+  longer one is **truncated rather than rejected**, and a truncated tag simply never matches again —
+  so a server that sends four kilobytes of ETag costs one pointless conditional GET per poll and
+  nothing worse.
+- **A 304 must carry no body.** The reference producer sends `Content-Length: 0` and
+  `Connection: keep-alive`. A body on a 304 desynchronises a keep-alive connection and surfaces one
+  poll later as a parse failure, which is the most misleading symptom on this wire: the payload that
+  gets blamed is the next one, and it is fine.
+- **The device stores a tag only from a 200 it successfully parsed.** A tag recorded against a
+  document that failed to parse would make the next poll a 304 and the device would never look at
+  that document again — stuck on yesterday's page with a log full of successful polls. A 200 from a
+  server that sent no tag clears the stored one for the same reason.
+- **301 and 302 are not 304.** A captive portal's redirect sits next door to "unchanged" in the
+  number space and means very nearly the opposite; it is a status error, and it is checked as one.
+
+### Compute the tag from the payload, never from the response bytes
+
+The reference producer's rule, in `tools/mock_news_server.py`:
+
+```python
+canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+etag = '"' + hashlib.sha1(canonical).hexdigest()[:16] + '"'
+```
+
+Hashed over the payload **object**, not over the bytes about to be written, because key order,
+`ensure_ascii` and whitespace are *formatting* and formatting is not content. A tag taken over the
+bytes tracks the serializer instead of the edition: reorder a dict, upgrade a JSON library, turn on
+pretty-printing, and every board on the wire is told its edition changed.
+
+What that costs is worth stating precisely, because the honest number is the argument. It is **not**
+a refresh — `news_hash()` still holds the panel still, exactly as it does for every other document
+change that is not a page change. It is that the ETag stops saving anything at all: every poll
+transfers the full payload and parses it, which is precisely the position of a server that never
+implemented the feature. **A formatting-derived tag is not dangerous, it is merely useless**, and it
+is useless intermittently and invisibly, which is worse than not having it. The dangerous version of
+this mistake is the one above — a field that reaches the model.
+
+Sixteen hex digits of SHA-1 is what the reference producer sends. The length is not a contract term;
+it is a change detector and not a security boundary, and any producer is free to send something else.
+
+### A 304 is a success
+
+It reaches the fetch layer as `NEWS_FETCH_NOT_MODIFIED` (`news_service.h`), and every rule that
+applies to a successful poll applies to it:
+
+- it does **not** clear `online` and does not badge the sheet `OFFLINE`;
+- it does **not** age the snapshot toward `STALE`. The page on the glass was just confirmed current,
+  which is the opposite of stale;
+- it does **not** count as a failure or lengthen any retry backoff;
+- it writes nothing — not the snapshot, not the stored tag.
+
+A producer whose server answers 304 correctly should therefore see a board that looks completely
+healthy and never refreshes, indefinitely. That combination is the feature working, not a board that
+has hung. **If a board badges itself `STALE` or `OFFLINE` while its server is answering 304s, the
+fault is on the device and not in the payload** — which is worth knowing, because every other
+symptom this document describes points the other way.
+
+### Why the device is not simply sent `news_hash()`
+
+The obvious simplification is for the server to compute `news_hash()` itself and send that as the
+tag, collapsing the two gates into one. It is the wrong trade twice.
+
+`news_hash()` fingerprints a C struct **after** parsing and clamping — after `news_str_copy()`
+truncated on a UTF-8 boundary, after the apostrophe transform, after ranks sorted and arrays
+overflowed, after every out-of-range value went to its bound. Reproducing it in Python means
+reproducing all of that exactly, field order included, forever. This project already carries one
+coupling of that kind — `news_mock.c` against `tools/mock_news_server.py`, held by `test_news_mock`
+— and one is the budget. That one is enforceable because a single committed fixture pins it; a
+second copy of a field-ordered hash, in a language with different integer and string semantics, has
+no such anchor and would drift silently.
+
+And it would put the device's own gate in the server's hands. The value of `news_hash()` is that the
+device computes it, over what the device actually parsed, on its own terms. A hash the server merely
+asserts is a hash the device has to trust, and a producer bug would then arrive as a page that never
+updates — the one failure on this wire with no visible symptom at all.
 
 ## The payload
 
@@ -174,7 +331,7 @@ plus the terminator.
 | `dateline` | string | 40 | the dateline row under the masthead, caps. Empty here and the board sets it from its own clock |
 | `session` | string | 48 | the tape's left end, caps |
 | `as_of` | string | 24 | the tape's right end, caps |
-| `generated_at` | string | 24 | **not drawn.** Reaches the companion app as `generatedAt`. `as_of` is the line a reader gets, and nothing on the sheet prints a clock |
+| `generated_at` | string | 24 | **not drawn, but fingerprinted** — moving it every poll reprints the sheet every poll, see [above](#the-one-field-that-is-not-free-generated_at). Reaches the companion app as `generatedAt`. `as_of` is the line a reader gets, and nothing on the sheet prints a clock |
 | `subject` | object | one | the whole edition. See below |
 | `stories[]` | array of story | 5 | the lead and up to four more |
 | `figures[]` | array of figure | 28 | the dossier rail |
@@ -1015,11 +1172,18 @@ cannot tell the difference. To try the plumbing without one:
 ```bash
 python3 tools/mock_news_server.py            # http://<you>:8123/news.json
 python3 tools/mock_news_server.py --live     # prices drift each poll
+python3 tools/mock_news_server.py --no-etag  # no ETag, and If-None-Match ignored
 ```
 
 `--live` exists to exercise the one behaviour a static payload cannot: watching the numbers move
 confirms the board is polling, and watching it stay still between changes confirms that an unchanged
 poll costs no refresh.
+
+`--no-etag` is the server most producers write by accident — a directory served by anything that
+does not do conditional GETs — and it is a supported configuration rather than a degraded one. The
+board polls, transfers and parses every time, and `news_hash()` still keeps the panel still. It is
+here so that path can be tested deliberately, since the failure it would otherwise expose is one
+nobody goes looking for: everything works, slightly more expensively, forever.
 
 Then point the board at it, from the captive portal or over the network:
 

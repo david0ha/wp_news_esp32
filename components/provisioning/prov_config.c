@@ -45,3 +45,56 @@ bool prov_validate_news_url(const char *url)
     // with an error the user cannot act on.
     return rest[0] != '\0' && rest[0] != '/';
 }
+
+uint32_t prov_clamp_sleep_seconds(uint32_t seconds)
+{
+    if (seconds == PROV_SLEEP_SECONDS_UNSET) {
+        return PROV_SLEEP_SECONDS_UNSET;   // "nobody said" — see prov_config.h
+    }
+    if (seconds < PROV_SLEEP_SECONDS_MIN) {
+        return PROV_SLEEP_SECONDS_MIN;
+    }
+    if (seconds > PROV_SLEEP_SECONDS_MAX) {
+        return PROV_SLEEP_SECONDS_MAX;
+    }
+    return seconds;
+}
+
+uint32_t prov_parse_sleep_seconds(const char *text)
+{
+    if (text == NULL) {
+        return PROV_SLEEP_SECONDS_UNSET;
+    }
+
+    // A text box collects the spaces around what was typed; the digits are the
+    // answer. Anything between them is not, so " 1800 " is 1800 and "18 00" is
+    // not a number at all.
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+    size_t len = strlen(text);
+    while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == '\t')) {
+        len--;
+    }
+    if (len == 0) {
+        return PROV_SLEEP_SECONDS_UNSET;
+    }
+
+    uint32_t value = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (text[i] < '0' || text[i] > '9') {
+            return PROV_SLEEP_SECONDS_UNSET;
+        }
+        // Saturate rather than wrap. A wrapped absurd number comes out as some
+        // small interval, and the board would then poll every few seconds
+        // forever — the failure the whole feature exists to avoid. Keep reading
+        // the rest so trailing junk is still caught.
+        if (value > PROV_SLEEP_SECONDS_MAX) {
+            value = PROV_SLEEP_SECONDS_MAX + 1;
+            continue;
+        }
+        value = value * 10u + (uint32_t)(text[i] - '0');
+    }
+
+    return prov_clamp_sleep_seconds(value);
+}

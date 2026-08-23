@@ -20,10 +20,11 @@ device holds no credentials worth stealing, and the only actions are "show the o
 | POST | `/api/refresh` | — | poll the news source now |
 | POST | `/api/page` | `{"page":0\|1}` | switch page — **a full refresh, twenty to thirty seconds** |
 | POST | `/api/news` | `{"url":"http://..."}` | change the snapshot URL (persisted, live) |
+| POST | `/api/sleep` | `{"seconds":1800}` | change the deep-sleep interval (persisted, live) |
 | POST | `/api/display/test` | — | run the panel self-test sweep |
 
 Writes reply `{"ok":true}` or `{"ok":false,"error":"<code>"}` with a 400. Error codes: `bad_json`,
-`too_large`, `read_error`, `page_range`, `news_url_invalid`, `busy`.
+`too_large`, `read_error`, `page_range`, `news_url_invalid`, `sleep_seconds_invalid`, `busy`.
 
 Every write posts a command onto the app's queue and returns immediately; the UI task applies it
 through the same code path as a button press. Nothing here touches LVGL or the panel directly —
@@ -97,7 +98,13 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
 
   "battery": { "present": true, "percent": 84, "millivolts": 4012 },
 
-  "panel": { "refreshMs": 24810 }
+  "panel": { "refreshMs": 24810 },
+
+  "power": {
+    "deepSleep": true, "sleepSeconds": 900,
+    "wakes": 96, "quietWakes": 94,
+    "meanAwakeMs": 3140, "estMahPerDay": 6
+  }
 }
 ```
 
@@ -160,10 +167,16 @@ there is one number.
 
 ### The fields with a trap in them
 
-`source.lastResult` is one of `ok`, `no_url`, `transport`, `http_status`, `bad_payload` — the same
-strings the serial log uses. `transport` means DNS/connect/TLS/timeout; `http_status` means the server
-answered but not with a 2xx; `bad_payload` means it answered 2xx with something that is not a front
-page. Those three point at three different mistakes, which is why they are not one code.
+`source.lastResult` is one of `ok`, `no_url`, `transport`, `http_status`, `bad_payload`,
+`not_modified` — the same strings the serial log uses. `transport` means DNS/connect/TLS/timeout;
+`http_status` means the server answered but not with a 2xx; `bad_payload` means it answered 2xx with
+something that is not a front page. Those three point at three different mistakes, which is why they
+are not one code.
+
+**`not_modified` is a success.** It is a `304`: the board sent the ETag of the document it last
+parsed and the server confirmed nothing had changed. On a board polling all day it is the *most
+common* outcome, so a client that colours it as an error paints a healthy board red for most of its
+life. `ageSeconds` restarts on it, exactly as it does on `ok`.
 
 `source.ageSeconds` is **`-1` when no fetch has ever succeeded**, which is different from "zero
 seconds ago". A client that treats it as a number draws a board that just synced when it never has.
@@ -194,6 +207,81 @@ actually cost on this panel. Serving it means reading it off a phone instead of 
 to a board on a shelf. `epd6_init()` lands one refresh before anything else starts, so by the time
 this server is answering, the number is a real measurement and not a zero.
 
+### `power`, and the thing a client must be told before it files a bug
+
+```json
+"power": { "deepSleep": true, "sleepSeconds": 900,
+           "wakes": 96, "quietWakes": 94,
+           "meanAwakeMs": 3140, "estMahPerDay": 6 }
+```
+
+**This board can only answer you while it is awake, and once `deepSleep` is `true` it usually is
+not.** A board on a wall wakes about every `sleepSeconds`, brings up Wi-Fi, asks the news server one
+conditional question, and — if the answer is "nothing changed" — goes back to sleep without ever
+powering the panel. That whole wake is about three seconds, and no HTTP server runs during it. There
+is no bug here to find: a request that times out against a sleeping board is the feature working.
+
+To reach it, **press a button on the board**. A button wake keeps this server and mDNS up for
+`CONFIG_CLAUDEPOST_AWAKE_WINDOW_SECONDS` (120 by default), and every request restarts that window, so an
+app that is being used holds the board awake for as long as it is being used. A board on USB with no
+cell fitted, or with a serial console attached, or with `deepSleep` false, never sleeps at all and
+behaves exactly as it always did — which is why this is invisible during development and arrives the
+first time somebody hangs one on a wall.
+
+The counters exist because the two numbers the sleep design rests on — the standing deep-sleep
+current, and how long a Wi-Fi connect actually takes — have never been measured on this board.
+Estimating them gave a battery life stated as *190 to 260 days*, and a range that wide is not a
+prediction. So the board counts instead, and after a day on a wall the estimate becomes a
+measurement, with no instruments and no serial cable.
+
+- `wakes` counts every boot since the last **cold** one. RTC memory does not survive a power-on
+  reset, so unplugging the board resets these to zero; that is correct rather than lossy, because the
+  averages they feed describe one continuous run.
+- `quietWakes` are the ones that cost no refresh. `wakes - quietWakes` is how many editions actually
+  reached the paper.
+- `meanAwakeMs` is the mean length of a **completed** wake. The wake serving this request has not
+  finished, so it is not in the total but its boot *is* in `wakes` — the mean is therefore low by a
+  factor of `(wakes-1)/wakes`, which is under 1% once a board has been up a day and is 50% on the
+  second wake of its life. Read it after a day, not after a minute.
+- `estMahPerDay` is `meanAwakeMs` × the wakes a day at this interval × 0.023 mAh per awake second,
+  and it is **the awake-time term only**. It does not include the 2.3 mAh a refresh costs, and it
+  does not include the standing deep-sleep current, because nobody has measured that on this board —
+  which is the very thing these counters exist to fix. A total that silently contained a guess would
+  defeat the purpose of reporting counters at all. Expect the real figure to be higher; how much
+  higher is what a day on a wall is for.
+- Both are `0` until the board has slept at least once, because both divide by something that is
+  legitimately zero before then. Not an error, and not a real figure either.
+- `sleepSeconds` is the interval **in force**, which is the last of the three layers to have spoken:
+  the Kconfig default, then the setup form's NVS value, then `POST /api/sleep`.
+
+## `POST /api/sleep`
+
+```json
+{"seconds": 1800}
+```
+
+Changes how long the board sleeps between polls. Persisted to NVS **and** written into RTC memory, so
+it takes effect from the very next wake without a reboot — a wake that changes nothing never reads
+NVS at all, which is most of the point of it.
+
+`seconds` is clamped rather than rejected: `0` means "use the build-time default", and anything else
+lands in **[60, 86400]**. Those bounds are what the board can actually run on rather than a matter of
+taste — under a minute the wake's own cost is most of the duty cycle, and over a day a board is not
+polling, it is asleep. So `{"seconds":5}` succeeds and yields 60, and a client should re-read
+`power.sleepSeconds` rather than assume it got what it asked for.
+
+The only rejections are a missing or non-numeric `seconds` (`bad_json`) and a negative one
+(`sleep_seconds_invalid`). A negative is named rather than folded into `0`, because `0` already means
+something specific and granting it to somebody who asked for `-1` is the board doing what nobody
+requested.
+
+**The knee is 15 to 30 minutes.** Past it, the standing deep-sleep current and the refreshes dominate
+and a longer interval buys progressively less; below about five minutes the cell drains steeply. This
+is a newspaper, and a fifteen-minute worst case on one is not a problem worth a flat battery.
+
+This endpoint does **not** change the poll cadence of a board that is awake — that is
+`source.pollSeconds`, a build-time setting, and on USB it costs nothing.
+
 ## Examples
 
 ```bash
@@ -206,6 +294,13 @@ curl -X POST http://claudepost.local/api/news \
 
 # back to the built-in demo front page
 curl -X POST http://claudepost.local/api/news -d '{"url":""}'
+
+# half an hour between polls; then read back what was actually applied
+curl -X POST http://claudepost.local/api/sleep -d '{"seconds":1800}'
+curl -s http://claudepost.local/api/state | jq .power
+
+# back to the build-time default interval
+curl -X POST http://claudepost.local/api/sleep -d '{"seconds":0}'
 
 # what a refresh actually costs on this board
 curl -s http://claudepost.local/api/state | jq .panel

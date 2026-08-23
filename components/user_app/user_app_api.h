@@ -21,6 +21,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "device_api_model.h"
 
@@ -56,6 +57,17 @@ bool user_app_set_news_url(const char *url);
 /* Run the e-Paper self-test pattern sweep. Blocks the UI task for tens of
  * seconds once it starts, so this only enqueues it. */
 bool user_app_display_test(void);
+
+/* Set how long the board sleeps between polls. Clamped by
+ * prov_clamp_sleep_seconds() — 0 means "use the build-time default", anything
+ * else lands in [60, 86400] — then persisted to NVS and copied into the
+ * RTC-retained state so the next wake honours it without an NVS read.
+ *
+ * Never rejects a value: every number that is a number is a legal request for
+ * SOME interval, and the clamp decides which. False means the queue was full.
+ * The interval this changes is the DEEP SLEEP interval, not the poll cadence of
+ * a board that is awake — see docs/app-control.md. */
+bool user_app_set_sleep_seconds(uint32_t seconds);
 
 #ifdef __cplusplus
 }

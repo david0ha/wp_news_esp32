@@ -174,19 +174,37 @@ static void emit_saved_news_url(httpd_req_t *req)
     httpd_resp_sendstr_chunk(req, esc);
 }
 
+// Fill the {{SLEEP_SECONDS}} slot with the saved polling interval. An unset
+// interval leaves the box empty rather than printing a 0, because an empty box
+// is how this form spells "use the built-in default" — a 0 in it would read as a
+// number the user chose, and saving the page back would look like a change.
+static void emit_saved_sleep_seconds(httpd_req_t *req)
+{
+    if (!s_have_current || s_current.sleep_seconds == PROV_SLEEP_SECONDS_UNSET) {
+        return;
+    }
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u", (unsigned)s_current.sleep_seconds);
+    httpd_resp_sendstr_chunk(req, buf);
+}
+
 static esp_err_t index_get(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "GET %s (serving portal page)", req->uri);
     no_keepalive(req);
     httpd_resp_set_type(req, "text/html");
 
-    // Stream the template, substituting the server-rendered network list and the
-    // saved news URL at their markers. No client-side fetch is required to populate the form.
+    // Stream the template, substituting the server-rendered network list, the saved
+    // news URL and the saved interval at their markers, in the order they appear in
+    // the file — emit_until only scans forward. No client-side fetch is required to
+    // populate the form.
     const char *p = portal_html_start;
     p = emit_until(req, p, "{{OPTIONS}}");
     emit_options(req);
     p = emit_until(req, p, "{{NEWS_URL}}");
     emit_saved_news_url(req);
+    p = emit_until(req, p, "{{SLEEP_SECONDS}}");
+    emit_saved_sleep_seconds(req);
     if (p != NULL) {
         httpd_resp_sendstr_chunk(req, p);
     }
@@ -220,6 +238,27 @@ static esp_err_t send_result_page(httpd_req_t *req, const char *title, const cha
     httpd_resp_sendstr_chunk(req, "</div></body></html>");
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
+}
+
+// Read the optional polling interval out of a submitted form body.
+//
+// Absent and blank are different answers here, and the difference is the
+// companion app. A browser submitting the setup page always sends the field, so
+// an empty box means "use the built-in default" and clears a stored interval.
+// The shipped app POSTs /api/provision without the field at all, and that must
+// not silently reset an interval its user set from somewhere else — so an absent
+// field keeps whatever is already stored.
+//
+// Nothing in here can fail the form. An unparseable value is UNSET, because the
+// field is optional and throwing a whole submission back over a stray character
+// in it would cost the user their Wi-Fi over a box they need not have filled in.
+static uint32_t sleep_seconds_from_form(const char *body)
+{
+    char field[32] = {0};
+    if (!prov_form_get_field(body, "sleep_seconds", field, sizeof(field))) {
+        return s_have_current ? s_current.sleep_seconds : PROV_SLEEP_SECONDS_UNSET;
+    }
+    return prov_parse_sleep_seconds(field);
 }
 
 static esp_err_t save_post(httpd_req_t *req)
@@ -283,8 +322,10 @@ static esp_err_t save_post(httpd_req_t *req)
     strlcpy(cfg.ssid, ssid, sizeof(cfg.ssid));
     strlcpy(cfg.password, password, sizeof(cfg.password));
     strlcpy(cfg.news_url, news_url, sizeof(cfg.news_url));
+    cfg.sleep_seconds = sleep_seconds_from_form(body);
 
-    ESP_LOGI(TAG, "config submitted: ssid='%s', news_url='%s'", cfg.ssid, cfg.news_url);
+    ESP_LOGI(TAG, "config submitted: ssid='%s', news_url='%s', sleep_s=%u",
+             cfg.ssid, cfg.news_url, (unsigned)cfg.sleep_seconds);
 
     char esc[PROV_SSID_MAX_LEN * 6 + 1];
     html_escape(cfg.ssid, esc, sizeof(esc));
@@ -421,6 +462,7 @@ static esp_err_t api_provision_post(httpd_req_t *req)
     strlcpy(cfg.ssid, ssid, sizeof(cfg.ssid));
     strlcpy(cfg.password, password, sizeof(cfg.password));
     strlcpy(cfg.news_url, news_url, sizeof(cfg.news_url));
+    cfg.sleep_seconds = sleep_seconds_from_form(body);
 
     ESP_LOGI(TAG, "POST /api/provision: ssid='%s' — starting connect test", cfg.ssid);
     // NOTE: status is moved to CONNECTING inside on_app_provision, only after its duplicate guard

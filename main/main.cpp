@@ -1,8 +1,11 @@
 
 #include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
 #include <freertos/FreeRTOS.h>
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <esp_log.h>
 
@@ -17,6 +20,11 @@
 #include "net_time.h"
 #include "board_io.h"
 #include "device_api.h"
+#include "http_port.h"
+#include "news_model.h"
+#include "news_service.h"
+#include "power.h"
+#include "power_policy.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "main";
@@ -157,6 +165,83 @@ static void OnProvisioningEvent(prov_event_t event, const char *info, void *user
 	}
 }
 
+// --- the quiet path ------------------------------------------------------
+//
+// A wake that changes nothing must not power the panel, must not initialise
+// LVGL, and must not allocate the 960,000-byte framebuffer. That is the whole
+// feature: the sleep on its own would still run epd6_init(), build 390 LVGL
+// objects and spend a refresh on every wake — about 2.5 mAh, ninety-six times a
+// day, and the cell flat in under three weeks having shown the reader nothing
+// new.
+//
+// So everything below the decision is arranged around resolving a wake WITHOUT
+// touching GPIO43, SPI3, either UC8179, LVGL, device_api, mDNS or SNTP.
+
+#ifndef CONFIG_CLAUDEPOST_FEED_URL
+#define CONFIG_CLAUDEPOST_FEED_URL ""
+#endif
+
+// The same choice user_app's current_url() makes. It is static there and this is
+// the boot path, so the two are written twice; they must agree, because a quiet
+// path polling a different URL from the one the app polls would compare hashes
+// of two different documents and refresh forever.
+static const char *EffectiveUrl(const prov_config_t *cfg)
+{
+	return cfg->news_url[0] ? cfg->news_url : CONFIG_CLAUDEPOST_FEED_URL;
+}
+
+// The interval in force, of the three layers that can set it: the value carried
+// across the sleep (which is what POST /api/sleep changed), else NVS from the
+// setup form, else the build-time default.
+static uint32_t EffectiveSleepSeconds(const prov_config_t *cfg, const wp_rtc_state_t *rs)
+{
+	if (rs->sleep_seconds) {
+		return rs->sleep_seconds;
+	}
+	if (cfg->sleep_seconds != PROV_SLEEP_SECONDS_UNSET) {
+		return prov_clamp_sleep_seconds(cfg->sleep_seconds);
+	}
+	return power_default_sleep_seconds();
+}
+
+// One conditional GET, and the comparison that decides whether the panel moves.
+//
+// Two gates, and they are not redundant. The ETag saves the transfer, the cJSON
+// tree and the 32 KB struct fill; news_hash() saves the twenty-five second
+// refresh and remains the SOLE authority on it. They disagree exactly when the
+// producer changes a field the sheet does not render — a generated_at that moves
+// every poll would shift the tag and not the hash — and on that poll the server
+// sends 200, this parses, the hash says nothing moved, and the glass stays still.
+static power_fetch_t QuietFetch(const char *url, news_t *scratch, wp_rtc_state_t *rs)
+{
+	char etag[HTTP_ETAG_MAX] = "";
+	const news_fetch_result_t r =
+	    news_service_fetch_cond(url, rs->etag, scratch, etag, sizeof(etag));
+
+	ESP_LOGI(TAG, "quiet fetch: %s", news_fetch_result_name(r));
+
+	// Everything this function DECIDES lives next door in power_policy.c, under
+	// test; what is left here is the part that cannot be tested anywhere but on
+	// a board — a socket, a PSRAM allocation and a write into RTC memory. The
+	// mapping is deliberately dull: two booleans and a hash.
+	//
+	// news_hash() is computed ONLY on the OK path. On a 304 nothing was parsed,
+	// so `scratch` holds whatever the allocator left there, and hashing it would
+	// feed uninitialised memory into the comparison that decides whether the
+	// panel spends twenty-five seconds.
+	const bool ok           = (r == NEWS_FETCH_OK);
+	const bool not_modified = (r == NEWS_FETCH_NOT_MODIFIED);
+
+	power_classify_t cl;
+	power_classify_fetch(ok, not_modified, ok ? news_hash(scratch) : 0u,
+	                     rs->content_hash, &cl);
+
+	if (cl.store_etag) {
+		http_etag_copy(rs->etag, sizeof(rs->etag), etag);
+	}
+	return cl.fetch;
+}
+
 extern "C" void app_main(void)
 {
 	UserApp_AppInit();
@@ -171,9 +256,141 @@ extern "C" void app_main(void)
 
 	board_io_init(BATT_ADC_PIN, BATT_ENABLE_PIN);
 
-	// Two chip selects, because the panel is two UC8179s: GPIO44 drives the left
-	// 600 columns of the portrait page and GPIO41 the right 600. A blank
-	// right-hand half of the sheet is that pin.
+	// The pinout lives here and nowhere else; power_sleep and user_app both take
+	// the buttons as data for the same reason epd6_init takes the panel's pins.
+	// These are also the ext1 wake sources — all four are RTC GPIOs on the S3.
+	static const int btn_gpios[] = {
+		BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
+	};
+	const int btn_count = (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0]));
+
+	// --- what this boot is ------------------------------------------------
+	const power_wake_t wake      = power_wake_cause();
+	wp_rtc_state_t    *rs        = power_state();
+	const bool         rtc_valid = power_state_valid();
+	if (!rtc_valid) {
+		// Either a cold boot (RTC memory does not survive a power-on reset) or
+		// new firmware (the magic carries the build id). Both mean nothing is
+		// known about what is hanging on the glass. Stamp the state now so this
+		// boot's results are recorded against this build.
+		power_state_reset();
+	}
+	rs->wakes++;
+
+	prov_config_t cfg;
+	provisioning_load_config(&cfg);   // NVS only — no radio, no timeout
+
+	const char *url = EffectiveUrl(&cfg);
+
+	power_input_t in = {};
+	in.wake               = wake;
+	in.fetch              = POWER_FETCH_NOT_ATTEMPTED;
+	in.rtc_valid          = rtc_valid;
+	in.sleep_enabled      = power_deep_sleep_enabled();
+	in.battery_present    = board_io_battery_present();
+	in.usb_console        = power_usb_console_attached();
+	in.url_configured     = url[0] != '\0';
+	in.consecutive_fails  = rs->consecutive_fails;
+	in.base_sleep_seconds = EffectiveSleepSeconds(&cfg, rs);
+
+	// --- the quiet path ---------------------------------------------------
+	//
+	// Guarded so that ANY doubt takes the full path. It is attempted only on a
+	// timer wake whose RTC state this firmware wrote, on a board that is allowed
+	// to sleep and has something to poll — every one of those is also a gate
+	// inside power_decide(), which remains the single authority; these are here
+	// so a board that was never going to sleep does not pay for a connect it
+	// cannot use.
+	bool have_ip = false;
+	if (wake == POWER_WAKE_TIMER && rtc_valid && in.sleep_enabled &&
+	    in.battery_present && !in.usb_console && in.url_configured) {
+
+		// news_t is 32,952 bytes — four times the main task's whole stack — so
+		// it goes to PSRAM and is freed before the full path could want the
+		// room.
+		//
+		// A failed allocation is a poll that did not happen, and it is recorded
+		// as one. The obvious reading — "this boot cannot tell what is on the
+		// glass, so clear rtc_valid and take the full path" — is wrong, and
+		// wrong in the direction that costs a cell. rtc_valid answers whether
+		// the RTC state was written by THIS firmware, and it was: content_hash
+		// is still trustworthy and the glass still holds what it names. Nothing
+		// about a full heap changes that.
+		//
+		// What clearing it would do is send this wake down the cold-boot force,
+		// which reaches the full path with have_ip false and therefore reaches
+		// provisioning_run() — and that never returns. A board whose PSRAM was
+		// briefly full while its network happened to be down would park in a
+		// captive portal, awake at 81 mA, until the cell died. Counting it as a
+		// failed poll sleeps with backoff and tries again, which is what every
+		// other way of not getting a snapshot does.
+		news_t *scratch = (news_t *)heap_caps_malloc(sizeof(news_t), MALLOC_CAP_SPIRAM);
+		if (!scratch) {
+			ESP_LOGW(TAG, "no PSRAM for a scratch snapshot — counting a failure");
+			in.fetch = POWER_FETCH_FAILED;
+		} else {
+			prov_config_t connected_cfg;
+			have_ip = provisioning_connect_only(&connected_cfg, 15000);
+			if (have_ip) {
+				cfg = connected_cfg;
+				in.fetch = QuietFetch(EffectiveUrl(&cfg), scratch, rs);
+			} else {
+				// Wi-Fi did not come up. This counts a failure and sleeps — it
+				// must NOT fall through to the portal. A board whose network
+				// has gone away would otherwise spend a refresh saying so on
+				// every wake: 2.3 mAh every fifteen minutes, about 220 mAh a
+				// day, flat in under three weeks while displaying a setup
+				// screen nobody is looking at.
+				ESP_LOGW(TAG, "quiet path: no network — counting a failure");
+				in.fetch = POWER_FETCH_NOT_ATTEMPTED;
+			}
+			free(scratch);
+		}
+	}
+
+	// --- the decision ------------------------------------------------------
+	power_plan_t plan;
+	power_decide(&in, &plan);
+	ESP_LOGI(TAG, "wake=%s fetch=%s -> %s (sleep %us, fails %u)",
+	         wake == POWER_WAKE_TIMER  ? "timer"
+	         : wake == POWER_WAKE_BUTTON ? "button"
+	                                     : "cold",
+	         in.fetch == POWER_FETCH_UNCHANGED ? "unchanged"
+	         : in.fetch == POWER_FETCH_CHANGED ? "changed"
+	         : in.fetch == POWER_FETCH_FAILED  ? "failed"
+	                                           : "not_attempted",
+	         power_action_name(plan.action), (unsigned)plan.sleep_seconds,
+	         (unsigned)plan.next_fails);
+
+	// What this wake learned, recorded before anything can go wrong with acting
+	// on it. The one thing deliberately NOT written here is content_hash: it is
+	// published after a refresh, not before, or a board that recorded the hash
+	// and then browned out mid-refresh would spend the next month convinced it
+	// had printed a page it had not.
+	rs->consecutive_fails = plan.next_fails;
+	rs->sleep_seconds     = in.base_sleep_seconds;
+
+	if (plan.action == POWER_SLEEP_AGAIN) {
+		rs->quiet_wakes++;
+		rs->awake_ms_total += (uint32_t)(esp_timer_get_time() / 1000);
+		power_sleep(plan.sleep_seconds, btn_gpios, btn_count);   // does not return
+	}
+
+	// --- the full path -----------------------------------------------------
+	//
+	// The escape hatch first, before the panel, the UI and the network. It has
+	// to be here rather than in UiTask: a board that wakes, finds nothing
+	// changed and sleeps again never builds a UI at all, so the documented way
+	// back into one stuck on an unreachable network would die the day deep
+	// sleep ships. It costs one poll interval when the button is not held, and
+	// it runs before provisioning_run() consumes the flag, so the portal comes
+	// up on this boot rather than after a restart.
+	user_app_check_force_ap_at_boot(btn_gpios, btn_count);
+
+	// Everything from here costs the refresh. Two chip selects, because the
+	// panel is two UC8179s: GPIO44 drives the left 600 columns of the portrait
+	// page and GPIO41 the right 600. A blank right-hand half of the sheet is
+	// that pin.
 	const epd6_pins_t pins = {
 		.sck       = EPD_SCK_PIN,
 		.mosi      = EPD_MOSI_PIN,
@@ -195,12 +412,20 @@ extern "C" void app_main(void)
 		Lvgl_unlock();
 	}
 
-	prov_options_t opts;
-	provisioning_default_options(&opts);   // AP prefix "Claude Post", 15s timeout
-	opts.event_cb = OnProvisioningEvent;
-
-	prov_config_t cfg;
-	bool connected = provisioning_run(&opts, &cfg);  // blocks (and reboots) until configured
+	bool connected = have_ip;
+	if (!connected) {
+		prov_options_t opts;
+		provisioning_default_options(&opts);   // AP prefix "Claude Post", 15s timeout
+		opts.event_cb = OnProvisioningEvent;
+		connected = provisioning_run(&opts, &cfg);  // blocks (and reboots) until configured
+	} else {
+		// The quiet path already has an IP and the saved config, so the connect
+		// is not repeated. Nor is the force-portal flag consumed, and it cannot
+		// be missed by skipping this: setting it restarts the board, a restart
+		// is a cold wake, and a cold wake never reaches the quiet path — so
+		// provisioning_run() always runs on the boot that has to honour it.
+		ESP_LOGI(TAG, "content changed — printing without a second connect");
+	}
 
 	if (connected) {
 		ESP_LOGI(TAG, "online — news URL '%s'",
@@ -215,16 +440,19 @@ extern "C" void app_main(void)
 			ui_news_set_overlay(NULL, NULL, NULL);   // dismiss the setup overlay
 			Lvgl_unlock();
 		}
-		// The pinout lives here and nowhere else; user_app takes the buttons
-		// as data for the same reason epd_init takes the panel's pins.
-		const int btn_gpios[] = {
-			BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
-		};
-		UserApp_TaskInit(&cfg, btn_gpios, (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
+		UserApp_TaskInit(&cfg, btn_gpios, btn_count);
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
 		// "claudepost.local"), reading and driving the app through the
 		// user_app_api bridge.
 		device_api_start();
 	}
+
+	// The full path does NOT sleep here. It has only started the tasks; the page
+	// has not been composed, let alone printed, and sleeping now would cut the
+	// refresh off mid-flight. Closing the window belongs to whoever knows the
+	// render finished, which is UiTask — it publishes news_hash() into
+	// power_state() after the refresh and calls power_sleep() then, holding a
+	// button wake open for CONFIG_CLAUDEPOST_AWAKE_WINDOW_SECONDS first so the
+	// companion app can win the race against a three-second wake.
 }
