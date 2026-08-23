@@ -1034,6 +1034,91 @@ class KeepAliveTest(RawTestCase):
         self.assertEqual(conn.spare(), b"")
 
 
+class ValidatorFloodTest(RawTestCase):
+    """A validator list far longer than any honest one is a miss, not work.
+
+    ``If-None-Match`` is the one header the device plane parses, and the device
+    plane takes no token: ``GET /news.json`` is open by design, because a board
+    on a wall cannot hold a credential the operator has not typed into it. So
+    everything this desk does with that header is done for anybody who can
+    reach the port.
+
+    ``http.client`` will hand a handler a hundred header lines of 64 KB each,
+    and splitting six megabytes on commas builds a list of millions of strings
+    -- hundreds of megabytes of interned Python objects, per request, on a
+    threading server with no connection cap. The desk does not die loudly; it
+    swaps, and the board on the wall stops receiving editions.
+
+    Raw sockets rather than ``call()`` because the amplification needs REPEATED
+    header lines and a dict cannot hold two of one key -- which is also how it
+    gets past the 64 KB per-line limit that would otherwise bound it.
+    """
+
+    def flood(self, tag: bytes, lines: int = 2, per_line: int = 35000) -> bytes:
+        """`lines` header lines of junk validators, with the real tag last.
+
+        The real tag is genuinely in there, so a desk that parsed the whole
+        thing would find it and answer 304. That is what makes the assertion
+        below about the CAP and not about the tag being absent.
+        """
+        junk = b'"' + b"a" * 14 + b'",'
+        filler = junk * (per_line // len(junk))
+        out = b""
+        for i in range(lines):
+            out += b"If-None-Match: " + filler
+            out += (tag + b"\r\n") if i == lines - 1 else b'"deadbeefdeadbeef"\r\n'
+        return out
+
+    def test_a_validator_list_past_the_cap_is_a_miss(self):
+        self.file_edition()
+        conn = self.connect()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, headers, body = conn.response()
+        self.assertEqual(status, 200)
+        self.assertTrue(body)
+        tag = headers["etag"].encode()
+
+        # The same tag, in a list nothing honest would send. Past the cap the
+        # answer is a full 200: wasteful, never wrong, and the same answer a
+        # tag the desk does not recognise gets.
+        flood = self.flood(tag)
+        self.assertGreater(len(flood), 65536)
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n" + flood + b"\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 200)
+        self.assertTrue(body)
+
+        # And the connection is still usable, so the cap is a decision rather
+        # than a way of falling over.
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 200, body)
+
+    def test_a_list_inside_the_cap_still_matches(self):
+        """The cap must not break the case it exists to protect.
+
+        A board behind a cache can legitimately be handed a short list, and
+        test_a_comma_separated_list_matches covers that on the ordinary path.
+        This is the same question asked right up against the boundary, so a cap
+        that was accidentally off by a decimal place fails here.
+        """
+        self.file_edition()
+        conn = self.connect()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, headers, _body = conn.response()
+        self.assertEqual(status, 200)
+        tag = headers["etag"].encode()
+
+        junk = b'"' + b"b" * 14 + b'",'
+        header = junk * ((4096 - len(tag) - 8) // len(junk)) + tag
+        self.assertLessEqual(len(header), 4096)
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n"
+                  b"If-None-Match: " + header + b"\r\n\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 304)
+        self.assertEqual(body, b"")
+
+
 class SocketTimeoutTest(RawTestCase):
     """A stranger who stops talking does not get to keep a thread.
 

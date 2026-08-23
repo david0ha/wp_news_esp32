@@ -1094,9 +1094,20 @@ class Handler(BaseHTTPRequestHandler):
         whole field answers 200 to a perfectly good conditional request. `*` is
         not handled, and falls through to a full 200, which is always a correct
         answer and merely a wasteful one.
+
+        Capped before the split, for the reason server/claudepost/http.py's
+        `_if_none_match()` caps: splitting a header the transport will happily
+        make megabytes long builds a list of millions of strings, and this
+        server is the one people point at a board on their own LAN. `.get()`
+        returns one line rather than all of them, so the ceiling here is 64 KB
+        rather than 6 MB — two orders of magnitude smaller and still no reason
+        to do it. Past the cap the answer is a full 200, which is what an
+        unrecognised tag gets anyway.
         """
-        return [t.strip() for t in
-                self.headers.get("If-None-Match", "").split(",") if t.strip()]
+        header = self.headers.get("If-None-Match", "")
+        if len(header) > 4096:
+            return []
+        return [t.strip() for t in header.split(",") if t.strip()]
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))

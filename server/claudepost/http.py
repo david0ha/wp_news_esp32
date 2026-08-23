@@ -128,6 +128,12 @@ def _etag(body: bytes) -> str:
     return '"%s"' % hashlib.sha256(body).hexdigest()[:16]
 
 
+#: The longest ``If-None-Match`` this desk will parse. Four kilobytes is two
+#: orders of magnitude past any honest list and two orders short of what the
+#: transport will deliver -- see _if_none_match().
+_IF_NONE_MATCH_MAX = 4096
+
+
 def _if_none_match(header: str | None, tag: str) -> bool:
     """Whether the client already holds the representation this tag is for.
 
@@ -152,6 +158,20 @@ def _if_none_match(header: str | None, tag: str) -> bool:
     ``_requested_tags()`` has the same shape.
     """
     if not header:
+        return False
+    # A validator list from anything honest is a few hundred bytes: one tag
+    # from a board, or a handful from a cache that has seen a few editions.
+    # `http.client` will hand this handler a hundred header lines of 64 KB
+    # each, and splitting six megabytes on commas builds a list of millions of
+    # strings -- hundreds of megabytes, per request, on a threading server with
+    # no connection cap, reached through the device plane, which takes no token
+    # because a board on a wall cannot hold one. The desk does not fall over
+    # loudly; it swaps, and the frame stops receiving editions.
+    #
+    # Past this length the answer is a full 200: wasteful, never wrong, and the
+    # same answer a tag we do not recognise gets. Before the split, because the
+    # split is the amplification.
+    if len(header) > _IF_NONE_MATCH_MAX:
         return False
     for candidate in header.split(","):
         candidate = candidate.strip()
