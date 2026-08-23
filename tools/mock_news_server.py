@@ -1307,6 +1307,9 @@ def _tile_problems(d, tiles_dir):
 
 
 # The clamp news_parse.c applies to `policy.poll_seconds`, and the firmware's own polling range.
+# Transcribed from NEWS_POLL_MIN and NEWS_POLL_MAX, and held against them by
+# check_caps_against_header() — which used to look at the byte caps only, so these two were the
+# transcription with nothing behind it.
 POLL_SECONDS_MIN, POLL_SECONDS_MAX = 30, 86400
 
 # What the device reads out of `policy`. Everything else under it is ignored, exactly as an unknown
@@ -1376,12 +1379,16 @@ def _policy_issues(d):
 
 
 def check_caps_against_header():
-    """Hold the cap table above against the #defines it is a transcription of.
+    """Hold the numbers above against the #defines they are a transcription of.
 
     Every cap in fields_with_caps() is a byte count copied out of news_model.h,
     and the docstring there says that where they disagree this file is the one
     that is wrong. This is what turns that from a statement into a test: it
-    parses the header's `#define NEWS_*_MAX` lines and compares.
+    parses the header's `#define NEWS_*_MAX` and `NEWS_*_MIN` lines and
+    compares. POLL_SECONDS_MIN and POLL_SECONDS_MAX are transcribed from the
+    same header and go through the same comparison -- they are a range in
+    seconds rather than a byte count, which is the only reason they need their
+    own two lines below rather than a row in the table.
 
     NOT a replacement for the transcription. The table stays written out, because
     a reader auditing a budget needs the number in front of them rather than a
@@ -1401,7 +1408,8 @@ def check_caps_against_header():
         return 0
 
     defines = {m.group(1): int(m.group(2)) for m in
-               re.finditer(r"^#define\s+(NEWS_[A-Z0-9_]*MAX)\s+(\d+)", text, re.M)}
+               re.finditer(r"^#define\s+(NEWS_[A-Z0-9_]*(?:MAX|MIN))\s+(\d+)",
+                           text, re.M)}
 
     # cap in the table above -> the #define it was copied from
     expect = {
@@ -1444,12 +1452,25 @@ def check_caps_against_header():
             seen.add(row)
             uniq.append(row)
 
+    # The poll bounds are not in `sample`, because nothing measures them: they
+    # are a clamp on a number the producer sends, not a length. They are the
+    # same transcription and drift the same way -- which is what this function
+    # exists to catch -- so they are compared here rather than not at all.
+    bounds = (("POLL_SECONDS_MIN", POLL_SECONDS_MIN, "NEWS_POLL_MIN"),
+              ("POLL_SECONDS_MAX", POLL_SECONDS_MAX, "NEWS_POLL_MAX"))
+    drifted = [(name, value, define, defines[define])
+               for name, value, define in bounds
+               if define in defines and defines[define] != value]
+
     for path, cap, name, want in uniq:
         print(f"  FAIL  cap table says {path} is {cap} bytes; news_model.h says "
               f"{name} is {want}. Fix this file, not the header.", file=sys.stderr)
-    if uniq:
-        print(f"the cap table has drifted from news_model.h in {len(uniq)} field(s)",
-              file=sys.stderr)
+    for name, value, define, want in drifted:
+        print(f"  FAIL  {name} is {value}; news_model.h says {define} is {want}. "
+              f"Fix this file, not the header.", file=sys.stderr)
+    if uniq or drifted:
+        print(f"this file has drifted from news_model.h in "
+              f"{len(uniq) + len(drifted)} place(s)", file=sys.stderr)
         return 1
     return 0
 
