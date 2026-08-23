@@ -10,10 +10,9 @@
 #   operator   all of that, plus the schedule and forcing a publish. What the
 #              owner's own tooling gets.
 #
-# The file is created 0600 and lives OUTSIDE the repository and OUTSIDE the
-# vault. Outside the repository because the repository is public; outside the
-# vault because the vault is a git repository and git history is permanent, and
-# a private repository is one setting away from a public one.
+# The file is created 0600 and lives OUTSIDE the repository, because the
+# repository is public, git history is permanent, and a private repository is
+# one setting away from a public one.
 #
 # The token is printed once. It is not recoverable from anywhere else in a
 # convenient form, which is deliberate -- if it were, the convenient form would

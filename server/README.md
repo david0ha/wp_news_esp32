@@ -57,10 +57,9 @@ server/tools/mint-token.sh operator me
 server/tools/mint-token.sh producer agent
 ```
 
-Both land in `~/.wpnews/tokens.json`, mode 0600, **outside the repository and
-outside the vault**. Outside the repository because the repository is public;
-outside the vault because the vault is a git repository and git history is
-permanent.
+Both land in `~/.wpnews/tokens.json`, mode 0600, **outside the repository** —
+because the repository is public and git history is permanent, and a private
+repository is one setting away from a public one.
 
 **2. The agent's own credential.** `~/.wpnews/agent.env`, also 0600:
 
@@ -86,6 +85,7 @@ cp server/tunnel/wpnews.yml.example ~/.cloudflared/wpnews.yml
 **4. Up.**
 
 ```sh
+docker network create wpnews        # once; the worker joins this too
 docker compose -f server/compose.yaml up -d
 docker compose -f server/compose.yaml logs -f desk
 ```
@@ -162,9 +162,10 @@ the sheet badges `STALE` with nothing in the board's log to say why. On the Free
 plan you cannot carve out an exception — Bot Fight Mode does not run on the
 Ruleset Engine, so WAF *Skip* rules have no effect on it.
 
-**Pulling the SSD does not blank the newspaper, and that is on purpose.**
-Serving state is a Docker volume; the vault is the source and the archive. With
-the vault gone the worker cannot file and `GET /api/state` reports
-`vault: "unavailable"`, but the board keeps receiving the last edition. This is
-the infrastructure form of the rule the parser already follows: a rejected
-payload leaves the previous snapshot byte-for-byte alone.
+**A worker that cannot run does not blank the newspaper, and that is on
+purpose.** Serving state is a Docker volume the desk owns by itself. With the
+worker stopped — its machine asleep, its API key expired — nothing new is
+filed, `GET /api/state` goes on reporting the same `current`, and the board
+keeps receiving the last edition. This is the infrastructure form of the rule
+the parser already follows: a rejected payload leaves the previous snapshot
+byte-for-byte alone.

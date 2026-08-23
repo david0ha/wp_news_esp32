@@ -1,4 +1,4 @@
-# The filled-in copy of .env.example. It names one person's vault path.
+# The filled-in copy of .env.example. It names one person's hostname.
 .env
 
 # A real tunnel config names a hostname and a credentials file that belong to

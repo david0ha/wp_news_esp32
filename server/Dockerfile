@@ -46,8 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4 tzdata ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# A fixed uid so the bind-mounted vault and the named data volume have stable
-# ownership across rebuilds. The desk never needs root: it binds 8080, not 80.
+# A fixed uid so the named data volume has stable ownership across rebuilds.
+# The desk never needs root: it binds 8080, not 80.
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin desk
 
 WORKDIR /repo
@@ -68,7 +68,6 @@ COPY --from=builder --chown=desk:desk /src/sim/build/sim /repo/sim/build/sim
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     WPDESK_DATA=/data \
-    WPDESK_VAULT=/vault \
     WPDESK_SECRETS=/run/secrets \
     WPDESK_REPO=/repo \
     WPDESK_HOST=0.0.0.0 \
