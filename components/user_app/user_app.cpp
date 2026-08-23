@@ -27,6 +27,7 @@
  * that mostly sits still, that is the difference between a front page hanging
  * quietly in its frame and one that flashes at nobody all day.
  */
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -56,14 +57,23 @@
 #include "http_port.h"
 #include "buttons.h"
 #include "board_io.h"
+#include "power.h"             /* the RTC state this task publishes into      */
 #include "prov_store.h"
 #include "prov_config.h"
+
+#include <driver/gpio.h>
+#include <driver/rtc_io.h>
 
 static const char *TAG = "app";
 static lv_obj_t   *s_screen;
 
 /* The provisioned config, copied so it outlives app_main's stack. */
 static prov_config_t s_cfg;
+
+/* The board's button pins, copied for the same reason. UiTask needs them to arm
+ * the ext1 wake on its way into a sleep, and it is the only reader. */
+static int s_btn_gpios[BUTTON_COUNT];
+static int s_btn_count;
 
 /* --- cadences ------------------------------------------------------------ */
 
@@ -78,18 +88,6 @@ static prov_config_t s_cfg;
  * and no longer the answer: the payload may carry a `policy` block that says how
  * often to come back, so the live figure is `s_poll_seconds` below. */
 #define POLL_SECONDS_DEFAULT  CONFIG_CLAUDEPOST_POLL_SECONDS
-
-/* Before this instant — 2024-01-01T00:00:00Z — `time(NULL)` is the epoch plus
- * however long the board has been up, which is not a date.
- *
- * This board has no RTC: the clock is SNTP or nothing, and SNTP lands some
- * seconds after the network does. `policy.next_change` is an ABSOLUTE instant,
- * so subtracting an unsynced clock from it yields a wait of roughly fifty-five
- * years, and the min() would silently keep the configured interval — which is
- * the right answer, but arrived at by accident. Testing for it says so, and
- * makes the one case where it matters (a board whose SNTP never succeeds)
- * behave the same as one that was never sent a policy at all. */
-#define CLOCK_SYNCED_EPOCH  1704067200
 
 /* How often UiTask wakes to move the clock on IN THE FRAMEBUFFER. It does not
  * reach the glass on its own.
@@ -152,9 +150,68 @@ static prov_config_t s_cfg;
  * milliamp-hours of them. Four attempts covers the twelve seconds inside
  * FIRST_PAINT_WAIT_MS where a retry can still change which page gets printed,
  * which is the entire benefit; after that the normal interval is the correct
- * behaviour for a server that is not there. */
+ * behaviour for a server that is not there.
+ *
+ * Both numbers now have a second job: they decide WHEN the first fetch of a
+ * boot is declared over, because APP_CMD_FETCH_FAILED is posted the moment
+ * they are spent — and FIRST_PAINT_WAIT_TIMER_MS below is derived against
+ * them. That derivation is why they are not just a pair of tuning knobs any
+ * more: raise either one without the backstop following, and a timer wake
+ * starts reporting the failure by timing out instead of by being told, which
+ * is the shape of the bug that discarded editions in silence. Deriving it
+ * rather than restating it is what makes "raise them" safe. */
 #define FIRST_RETRY_SECONDS 3
 #define FIRST_RETRY_MAX     4
+
+/* The same first-paint wait on a TIMER wake, where it is a BACKSTOP rather
+ * than a budget — and where it is DERIVED rather than picked.
+ *
+ * A timer wake reaches the full path only because the quiet path found new
+ * content, so it is here to print exactly one page and then sleep, and the
+ * moment it may sleep is when the first fetch has RESOLVED. NewsTask says
+ * which way: APP_CMD_DATA when it has a page, APP_CMD_FETCH_FAILED when it has
+ * given up. Either ends the wait, so on every ordinary wake this number is
+ * never reached at all.
+ *
+ * What it must outlast is the longest a boot can honestly take to reach one of
+ * those two answers, and that is a sum of things named elsewhere rather than a
+ * round number:
+ *
+ *   (FIRST_RETRY_MAX + 1) x HTTP_TIMEOUT_MS   every attempt the fast-retry
+ *                                             budget allows, each able to time
+ *                                             out; the last of them is the one
+ *                                             that may instead succeed
+ *   FIRST_RETRY_MAX x FIRST_RETRY_SECONDS     the waits between them
+ *   (NEWS_STORIES_MAX + NEWS_THUMBS_MAX)      every photograph an edition can
+ *     x HTTP_TIMEOUT_MS                       carry, fetched before UiTask is
+ *                                             notified, on a cache that did not
+ *                                             survive the sleep
+ *
+ * The three terms add rather than compete, because the worst case really is
+ * all of them: four attempts time out, the fifth succeeds, and then seven
+ * tiles time out one after another before the page is posted. Fifteen seconds
+ * cannot be the answer here and neither can two minutes — at 120,000 ms a
+ * board whose tiles all time out posts its page at 192 s, after the backstop
+ * fired, and the edition is discarded exactly as it was before this constant
+ * existed: never printed, counted a failure, refetched next wake, hourly,
+ * forever, with every log line reading `fetch=changed -> refresh`.
+ *
+ * Past this, NewsTask is not slow, it is stuck, and a board that printed
+ * nothing is better than a board that never sleeps again. */
+#define FIRST_PAINT_WAIT_TIMER_MS                                              \
+    ((FIRST_RETRY_MAX + 1) * HTTP_TIMEOUT_MS +                                 \
+     FIRST_RETRY_MAX * FIRST_RETRY_SECONDS * 1000 +                            \
+     (NEWS_STORIES_MAX + NEWS_THUMBS_MAX) * HTTP_TIMEOUT_MS)
+
+/* The one thing the derivation must never stop being true of: the backstop
+ * outlasts the retry budget, so a definitively failed fetch is always reported
+ * by NewsTask rather than discovered by a stopwatch. It cannot fail while the
+ * expression above is written in terms of the same constants — which is the
+ * point of writing it that way, and of asserting it anyway. */
+static_assert(FIRST_PAINT_WAIT_TIMER_MS >
+                  (FIRST_RETRY_MAX + 1) * HTTP_TIMEOUT_MS +
+                      FIRST_RETRY_MAX * FIRST_RETRY_SECONDS * 1000,
+              "a timer wake's backstop must outlast its own fast-retry budget");
 
 /* KEY2 held this long forces Wi-Fi setup mode — the escape hatch when the board
  * is stuck on a network the user can no longer reach. */
@@ -169,6 +226,9 @@ typedef enum {
     APP_CMD_SET_URL,         /* text = the new snapshot URL          */
     APP_CMD_DISPLAY_TEST,    /* run epd6_selftest()                  */
     APP_CMD_DATA,            /* NewsTask published a new snapshot   */
+    APP_CMD_SET_SLEEP,       /* ival = seconds between polls asleep  */
+    APP_CMD_FETCH_FAILED,    /* NewsTask's first fetch of this boot   *
+                              * resolved with nothing to print        */
 } app_cmd_kind_t;
 
 typedef struct {
@@ -190,6 +250,12 @@ static inline void state_unlock(void) { xSemaphoreGive(s_mtx); }
 
 static news_t  s_data;                 /* what is on (or going to) the glass */
 static uint32_t s_data_hash;
+/* The server's ETag for the document s_data was parsed from, or "" if the
+ * server sent none. Its invariant is the whole of its usefulness: it always
+ * names a document that parses to exactly s_data, so publishing it beside
+ * s_data_hash is publishing one fact about one page rather than two facts that
+ * can disagree. Empty at boot on purpose — see NewsTask. */
+static char     s_data_etag[HTTP_ETAG_MAX];
 static int      s_page;
 
 static news_fetch_result_t s_last_result = NEWS_FETCH_NO_URL;
@@ -222,6 +288,13 @@ static int      s_batt_mv;
 static int      s_poll_seconds = POLL_SECONDS_DEFAULT;
 static int64_t  s_next_change;          /* epoch seconds; 0 = none announced */
 static bool     s_poll_from_policy;     /* what the companion app reports     */
+
+/* Whether POST /api/sleep set the local interval during THIS session. Reported
+ * as `sleepSource: "api"`, and deliberately not persisted: that call writes NVS
+ * as well as RTC memory, so after a sleep the very same number honestly reads
+ * "nvs" — which is where it now lives. A flag that survived would keep claiming
+ * a phone had just set it, months later. */
+static bool     s_sleep_from_api;
 
 /* A snapshot older than this is badged STALE. Derived rather than stored so it
  * follows the cadence the desk actually asked for — see STALE_FLOOR_SECONDS.
@@ -305,6 +378,18 @@ void UserApp_UiInit(void)
 
 /* --- presenting (UiTask only) --------------------------------------------- */
 
+/* Whether a FETCHED page reached the paper on this boot — not whether anything
+ * did. present_full() is also how a page swap, the self-test pattern and the
+ * demo page reach the glass, and none of those says a word about whether the
+ * desk is reachable. UiTask only: written by present_full(), read by
+ * enter_sleep(), both on that one task, so it needs no lock and must not
+ * acquire one.
+ *
+ * It exists because "this wake decided to print" and "this wake printed
+ * something it fetched" are different facts, and the failure that separates
+ * them is silent. See enter_sleep(). */
+static bool s_printed;
+
 /* Render whatever the setters changed, then push one refresh for the lot.
  *
  * There is only one kind of refresh on this panel and it costs twenty to thirty
@@ -314,6 +399,60 @@ static void present_full(void)
 {
     Lvgl_RenderNow();
     epd6_refresh();
+
+    /*
+     * Record what is now on the glass, so the next wake can tell whether it
+     * still is. This is the other half of the deep-sleep design and without it
+     * the quiet path cannot work at all: `content_hash` starts at zero, every
+     * wake hashes the payload, finds it different from zero, concludes the
+     * content changed, and spends twenty-five seconds reprinting the page that
+     * was already there. Every fifteen minutes. Forever.
+     *
+     * AFTER the refresh, never before, and that placement is the point rather
+     * than an accident of where the line sits. A board that recorded the hash
+     * and then browned out three seconds into a twenty-five second refresh
+     * would wake up believing it had printed a page it had not, and would go on
+     * believing it for as long as the payload held still — weeks, with nothing
+     * in any log to say so.
+     *
+     * The tag travels with the hash for exactly the same reason, and it is the
+     * one that would defeat the protection if it went early: the ETag
+     * short-circuits the comparison before the hash is ever computed, so a tag
+     * published before a refresh that then failed would earn a 304 on the next
+     * wake and the new edition would never print. Two facts about one page,
+     * published in one act, once the page is actually on the paper.
+     */
+    wp_rtc_state_t *rs = power_state();
+    state_lock();
+    rs->content_hash = s_data_hash;
+    http_etag_copy(rs->etag, sizeof(rs->etag), s_data_etag);
+
+    /* And the failure count — but only when this boot actually fetched
+     * something. This is the one place that knows a page is on the paper, and
+     * a page on the paper is the only evidence that the whole chain — connect,
+     * fetch, parse, compose, refresh — worked. But present_full() is also how
+     * a page swap, the self-test pattern and the demo page reach the glass, and
+     * none of those is evidence of anything: clearing the count on a KEY0 press
+     * would put a board whose desk has been down for five wakes back on full
+     * cadence for the crime of being looked at.
+     *
+     * s_last_ok_us is set by NewsTask on the fetch that produced the snapshot,
+     * before APP_CMD_DATA is posted, so the wake this rule exists for —
+     * TIMER, CHANGED, printed — is unaffected. It is guarded by s_mtx and this
+     * line is already inside state_lock().
+     *
+     * power_decide() used to clear the count on the mere decision to print, so
+     * a wake that decided to print and then failed to fetch anything told the
+     * next wake it was healthy. See its CHANGED arm, and enter_sleep(). */
+    const bool fetched_this_boot = (s_last_ok_us != 0);
+    if (fetched_this_boot) {
+        rs->consecutive_fails = 0;
+    }
+    state_unlock();
+
+    if (fetched_this_boot) {
+        s_printed = true;   /* UiTask only — see the declaration above */
+    }
 }
 
 /* --- content updates (UiTask only) ---------------------------------------- */
@@ -423,6 +562,13 @@ static void action_set_url(const char *url)
     s_next_change      = 0;
     s_poll_from_policy = false;
 
+    /* Including the copy that crosses a sleep. Without this the board would be
+     * pointed at a new desk and then go to sleep on the old desk's cadence —
+     * and on the old desk's `next_change`, which is an instant in a schedule
+     * this board no longer reads. */
+    power_state()->poll_seconds = 0;
+    power_state()->next_change  = 0;
+
     /* Clearing the URL means "go back to the demo screen", and it has to happen
      * here rather than by waiting for a poll — with no URL there is no poll, so
      * the board would otherwise sit on the last real snapshot indefinitely and
@@ -449,6 +595,53 @@ static void action_set_url(const char *url)
     if (s_poll_wake) {
         xSemaphoreGive(s_poll_wake);
     }
+}
+
+/*
+ * Change the deep-sleep interval, from a phone.
+ *
+ * This is the third of the three layers that set it — Kconfig, then the setup
+ * form's NVS value, then this — and it exists because taking a frame off a wall
+ * and finding a USB-C cable in order to change a polling interval is the thing
+ * that gets resented within a month.
+ *
+ * It runs on UiTask rather than on the HTTP task, like every other write in
+ * this file, and here that buys something specific beyond consistency: arriving
+ * as a command restarts the awake window. Without it a user who set the
+ * interval from the app could watch the board sleep in their face a second
+ * later, having just been told the request succeeded.
+ */
+static void action_set_sleep_seconds(uint32_t seconds)
+{
+    /* One gate for every writer — the setup form, NVS and this — so there is
+     * one answer to "what does 5 seconds mean" rather than three. Zero survives
+     * it unchanged, because zero is not a short interval, it is "nobody said". */
+    const uint32_t v = prov_clamp_sleep_seconds(seconds);
+
+    state_lock();
+    s_cfg.sleep_seconds = v;
+    /* A zero is not a setting, it is "revert to the compiled-in default" —
+     * prov_clamp_sleep_seconds() passes PROV_SLEEP_SECONDS_UNSET straight
+     * through — so it must not make the board report sleepSource "api" for a
+     * value nobody chose. It reports "default", which is what happened. */
+    s_sleep_from_api    = (v != PROV_SLEEP_SECONDS_UNSET);
+    state_unlock();
+
+    if (!prov_store_save(&s_cfg)) {
+        ESP_LOGW(TAG, "sleep interval: NVS save failed (will not survive a cold boot)");
+    }
+
+    /* And into RTC memory, which is what the quiet path reads. A wake that
+     * changes nothing never touches NVS at all — that is most of the point of
+     * it — so without this line the new interval would not take effect until
+     * something else forced a cold boot.
+     *
+     * The resolved figure rather than the raw one: this field means "the
+     * interval in force", and UNSET is an instruction, not an interval. */
+    power_state()->sleep_seconds = v ? v : power_default_sleep_seconds();
+
+    ESP_LOGI(TAG, "sleep interval set to %us%s", (unsigned)power_state()->sleep_seconds,
+             v ? "" : " (the build-time default)");
 }
 
 static void action_display_test(void)
@@ -478,11 +671,91 @@ static void force_ap_mode(void)
     esp_restart();
 }
 
+/*
+ * The escape hatch, at boot. See user_app.h for why it had to move here.
+ *
+ * It cannot use buttons_is_pressed(): that reads a pin table buttons_init()
+ * fills, and buttons_init() runs in UserApp_TaskInit, which is the far side of
+ * a Wi-Fi connect and a UI build from here. So it configures the one pin it
+ * needs and samples it directly — the pins arrive as data, as everywhere else
+ * in this component, so the pinout is still stated only in user_config.h.
+ *
+ * Nor can it use force_ap_mode(): there is no LVGL screen yet to draw the
+ * confirmation on, and no need to restart either. This runs before
+ * provisioning_run() consumes the flag, so setting it here brings the portal up
+ * on this boot instead of the next one — the user gets the setup sheet about
+ * twenty seconds sooner and the board saves a boot.
+ */
+bool user_app_check_force_ap_at_boot(const int *btn_gpios, int btn_count)
+{
+    /* Hand every wake pin back to the digital GPIO matrix first.
+     *
+     * ext1 wakeup drives these pads through RTC_IO, and the RTC domain is
+     * powered across a deep sleep, so the routing outlives the wake that the
+     * rest of the chip treats as a fresh boot. A pad still owned by RTC_IO does
+     * not answer gpio_get_level(), which would mean this check silently never
+     * fires and — worse — that buttons_init() brings up four buttons that never
+     * report a press again after the board's first sleep. rtc_gpio_deinit() is
+     * a no-op on a pad that was never in RTC mode, so this costs nothing on a
+     * board that has not slept and is done here because this is the first thing
+     * the boot path calls that knows the pin numbers.
+     *
+     * Untested on hardware: it is insurance against a documented ESP32-S3
+     * behaviour, not a fix for an observed failure. */
+    for (int i = 0; i < btn_count; i++) {
+        if (btn_gpios[i] >= 0 && rtc_gpio_is_valid_gpio((gpio_num_t)btn_gpios[i])) {
+            rtc_gpio_deinit((gpio_num_t)btn_gpios[i]);
+        }
+    }
+
+    /* Only where a person could plausibly be holding the button: a press woke
+     * us, or somebody just powered the board up or pressed reset. A timer wake
+     * has nobody in front of it, and polling a pin for five seconds on one
+     * would be five seconds of full-power awake time bought for nothing. */
+    const power_wake_t wake = power_wake_cause();
+    if (wake == POWER_WAKE_TIMER) {
+        return false;
+    }
+    if (!btn_gpios || btn_count <= BUTTON_KEY2 || btn_gpios[BUTTON_KEY2] < 0) {
+        return false;
+    }
+
+    const gpio_num_t pin = (gpio_num_t)btn_gpios[BUTTON_KEY2];
+    gpio_config_t in = {
+        .pin_bit_mask = 1ULL << pin,
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,     /* press-to-GND, so idle is high */
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&in) != ESP_OK) {
+        return false;
+    }
+
+    /* A button that is not held costs one poll interval, not five seconds. */
+    int waited = 0;
+    while (waited < FORCE_AP_HOLD_MS) {
+        if (gpio_get_level(pin) != 0) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(HOLD_POLL_MS));
+        waited += HOLD_POLL_MS;
+    }
+    if (gpio_get_level(pin) != 0) {
+        return false;
+    }
+
+    ESP_LOGW(TAG, "KEY2 held at boot -> forcing Wi-Fi setup (AP) mode");
+    prov_store_set_force_portal();
+    return true;
+}
+
 static void handle_cmd(const app_cmd_t *c)
 {
     switch (c->kind) {
     case APP_CMD_SET_PAGE:     action_set_page(c->ival); break;
     case APP_CMD_SET_URL:      action_set_url(c->text); break;
+    case APP_CMD_SET_SLEEP:    action_set_sleep_seconds((uint32_t)c->ival); break;
     case APP_CMD_DISPLAY_TEST: action_display_test(); break;
     case APP_CMD_REFRESH_NOW:
         if (s_poll_wake) xSemaphoreGive(s_poll_wake);
@@ -490,6 +763,14 @@ static void handle_cmd(const app_cmd_t *c)
     case APP_CMD_DATA:
         push_data_to_ui();
         present_full();
+        break;
+    case APP_CMD_FETCH_FAILED:
+        /* Nothing to do, and that is the whole of it: this command carries no
+         * page, touches no pixel and costs no refresh. It exists so that
+         * await_first_snapshot() learns the first fetch is over rather than
+         * waiting out a clock — see FIRST_PAINT_WAIT_TIMER_MS. Reaching
+         * handle_cmd() at all means it arrived after that wait had already
+         * ended, which is ordinary and means nothing. */
         break;
     }
 }
@@ -552,6 +833,34 @@ static void handle_press(button_id_t id)
  * something else already reached the glass while we waited and there is no
  * first page left to protect.
  */
+/* No snapshot is coming. Whether that is worth a refresh depends entirely on
+ * what is already hanging on the glass, and after deep sleep shipped there are
+ * two different answers.
+ *
+ * On a board that has just been switched on, the panel holds whatever the last
+ * firmware left there — or nothing — and a complete front page badged DEMO
+ * beats a blank sheet.
+ *
+ * On a board that woke from sleep with RTC state this build wrote, the glass
+ * holds a real edition and we know its hash. The snapshot itself did not
+ * survive — news_t is 32,952 bytes against 8 KB of RTC memory — so the only
+ * page this task could print is the demo, and spending twenty-five seconds to
+ * replace a real, correct, merely stale front page with a story about a company
+ * the board invented is strictly worse than doing nothing. Leave it alone.
+ *
+ * One function because there are now two ways to arrive here — the wait ran
+ * out, or NewsTask said it had given up — and they must not answer differently
+ * about the same glass. `why` is the log line's reason. */
+static bool print_the_demo_instead(const char *why)
+{
+    if (power_state_valid() && power_state()->content_hash != 0) {
+        ESP_LOGW(TAG, "%s — leaving the printed edition on the glass", why);
+        return false;
+    }
+    ESP_LOGW(TAG, "%s — printing the demo page", why);
+    return true;
+}
+
 static bool await_first_snapshot(void)
 {
     char url[PROV_URL_MAX_LEN + 1];
@@ -563,35 +872,185 @@ static bool await_first_snapshot(void)
         return true;        /* demo board: nothing better is ever coming */
     }
 
-    /* esp_timer rather than the tick count: this is a deadline held across
+    /* A TIMER wake waits on the FETCH, not on a clock — see
+     * FIRST_PAINT_WAIT_TIMER_MS. It is here for one page and will sleep the
+     * moment it has one or knows it will not get one, so the number below is a
+     * backstop against a stuck NewsTask rather than a budget anyone means to
+     * spend. A COLD or BUTTON wake keeps the fifteen seconds: somebody is
+     * standing in front of the frame, the loop's two-minute window will keep
+     * this task alive afterwards either way, and a blank panel for two minutes
+     * while they watch is the wrong trade.
+     *
+     * esp_timer rather than the tick count: this is a deadline held across
      * several blocking waits, and TickType_t wraps. */
-    const int64_t deadline_us =
-        esp_timer_get_time() + (int64_t)FIRST_PAINT_WAIT_MS * 1000;
+    const int wait_ms = (power_wake_cause() == POWER_WAKE_TIMER)
+                            ? FIRST_PAINT_WAIT_TIMER_MS
+                            : FIRST_PAINT_WAIT_MS;
+    const int64_t deadline_us = esp_timer_get_time() + (int64_t)wait_ms * 1000;
 
     for (;;) {
         app_cmd_t cmd;
         int64_t left_ms = (deadline_us - esp_timer_get_time()) / 1000;
         if (left_ms <= 0 ||
             xQueueReceive(s_cmd_queue, &cmd, pdMS_TO_TICKS(left_ms)) != pdTRUE) {
-            ESP_LOGW(TAG, "no snapshot within %d ms — printing the demo page",
-                     FIRST_PAINT_WAIT_MS);
-            return true;
+            char why[64];
+            snprintf(why, sizeof(why), "no snapshot within %d ms", wait_ms);
+            return print_the_demo_instead(why);
         }
         if (cmd.kind == APP_CMD_DATA) {
             return true;
+        }
+        if (cmd.kind == APP_CMD_FETCH_FAILED) {
+            /* NewsTask has stopped trying, so there is nothing left to wait
+             * for and no reason to hold the wake open. Same question as the
+             * timeout above, asked at the moment the answer became knowable
+             * instead of two minutes later — which on a timer wake is the
+             * difference between sleeping now and staying up for the backstop.
+             *
+             * It reaches the same decision, deliberately: a board that woke to
+             * print and could not fetch must not put the demo page over a real
+             * front page, however it found out. */
+            return print_the_demo_instead("the first fetch of this boot failed");
         }
         /* Anything the app asked for in the meantime is still honoured — the
          * control server comes up moments after this task does, so a command
          * landing inside the window is a real user, not a race. But anything
          * that reaches the glass ends the wait: once a page has been printed
-         * there is no first refresh left to save. REFRESH_NOW is the one kind
-         * that only pokes NewsTask, so it is the one we can keep waiting after
-         * — and waiting is exactly what the caller wanted. */
+         * there is no first refresh left to save. The two kinds that touch no
+         * pixels are the ones we can keep waiting after — REFRESH_NOW only
+         * pokes NewsTask, and SET_SLEEP only writes NVS — and waiting is
+         * exactly what the caller of either wanted. */
         handle_cmd(&cmd);
-        if (cmd.kind != APP_CMD_REFRESH_NOW) {
+        if (cmd.kind != APP_CMD_REFRESH_NOW && cmd.kind != APP_CMD_SET_SLEEP) {
             return false;
         }
     }
+}
+
+/* --- the awake window ----------------------------------------------------- */
+
+/*
+ * How long this board will sleep for, and who decided it.
+ *
+ * One call, two callers — enter_sleep(), which acts on it, and
+ * user_app_snapshot(), which reports it to the companion app. They must agree:
+ * a phone told "900 s, from config" by a board that is about to sleep for 120
+ * because its desk named a transition is a phone showing a number nobody can
+ * act on. So the inputs are assembled here rather than twice.
+ *
+ * Takes no lock, and one of the fields it reads is 64 bits wide, so say why.
+ * NewsTask writes rs->poll_seconds and rs->next_change under s_mtx; this reads
+ * them without it, on UiTask and on the control server's thread. poll_seconds
+ * is one aligned 32-bit word and cannot tear. next_change can: an LX7 has no
+ * 64-bit load. It is harmless because news_parse() clamps the field to
+ * (0, 253402300799] — so every half-and-half of an old and a new value is
+ * either one of the two, or an instant far enough out that `until < base` is
+ * false. A tear cannot produce a near-future instant, which is the only reading
+ * that could shorten a sleep. Widen that clamp and this argument goes with it.
+ *
+ * power_cadence() itself is pure.
+ */
+static void effective_cadence(power_cadence_t *out)
+{
+    const wp_rtc_state_t *rs = power_state();
+
+    power_cadence_in_t in = {};
+    in.policy.poll_seconds = rs->poll_seconds;
+    in.policy.next_change  = rs->next_change;
+    /* The local layer, resolved the way EffectiveSleepSeconds() in main.cpp
+     * resolves it: the value carried across the sleep, else the build-time
+     * default. NVS is already folded into the first of those by
+     * action_set_sleep_seconds() and by the boot path. */
+    in.local_seconds       = rs->sleep_seconds ? rs->sleep_seconds
+                                               : power_default_sleep_seconds();
+    in.now                 = (int64_t)time(NULL);
+    in.consecutive_fails   = rs->consecutive_fails;
+
+    power_cadence(&in, out);
+}
+
+/*
+ * Whether this board is allowed to sleep at all: the same four safety gates
+ * power_decide() applies, asked again here because the plan cannot answer this
+ * question.
+ *
+ * power_decide() returns POWER_STAY_AWAKE for two entirely different reasons —
+ * "a person pressed a button, so stay reachable for a couple of minutes" and
+ * "this board must never sleep" — and the awake window closes only on the
+ * first. Anything else would put a board to sleep in the middle of somebody's
+ * idf.py monitor session, which is the one failure that makes the feature
+ * impossible to debug.
+ */
+static bool sleeping_permitted(void)
+{
+    char url[PROV_URL_MAX_LEN + 1];
+    state_lock();
+    current_url(url, sizeof(url));
+    state_unlock();
+
+    return power_deep_sleep_enabled() && board_io_battery_present() &&
+           !power_usb_console_attached() && url[0] != '\0';
+}
+
+/* Close the window. Does not return. */
+static void enter_sleep(void)
+{
+    wp_rtc_state_t *rs = power_state();
+
+    /* Charged on the way out, so the figure includes everything this wake
+     * actually did — the connect, the fetch, the refresh and the window itself.
+     * It is one of the two numbers the whole battery estimate rests on and
+     * nobody has measured either, so a day on a wall is what turns the design's
+     * stated range into an answer. /api/state divides it by `wakes`. */
+    rs->awake_ms_total += (uint32_t)(esp_timer_get_time() / 1000);
+
+    /*
+     * What this boot actually achieved, which is not what it set out to do.
+     *
+     * A timer wake reaches the full path only because the quiet path found new
+     * content, and power_decide() has already returned REFRESH_THEN_SLEEP for
+     * it — but that is a decision, not a page. Everything after it can still
+     * fail: NewsTask's own fetch can land on a socket the desk closed in the
+     * second between the two requests, await_first_snapshot() times out, and
+     * UiTask deliberately leaves the old edition on the glass rather than
+     * replacing a real front page with the demo one. Nothing printed. Before
+     * this block the counter said zero, the board slept at full cadence, and
+     * it did the same thing again every fifteen minutes for as long as the desk
+     * stayed down — every log line agreeing that it was fine.
+     *
+     * So: printed clears it, and a timer wake that printed nothing counts as
+     * the failed poll it was. Gated on TIMER because a BUTTON wake is a person
+     * standing in front of the frame — they pressed something, nothing was due
+     * to print, and counting that as a failure would back the board off for
+     * being looked at. Saturating for the reason power_decide() saturates: a
+     * wrap to zero looks exactly like a recovery.
+     */
+    /* Written without s_mtx, and that is not an oversight: this runs on UiTask,
+     * as present_full() does, and the two are the only writers of this field on
+     * this side. The lock present_full() holds is for the hash and the tag,
+     * whose invariant is with s_data — not for the counter that happens to sit
+     * beside them. */
+    if (s_printed) {
+        rs->consecutive_fails = 0;
+    } else if (power_wake_cause() == POWER_WAKE_TIMER &&
+               rs->consecutive_fails < UINT16_MAX) {
+        rs->consecutive_fails++;
+    }
+
+    /* And the cadence, computed AFTER the accounting above, because the fail
+     * count is one of its inputs — a wake that printed nothing has just earned
+     * the longer sleep the curve gives it. */
+    power_cadence_t cad;
+    effective_cadence(&cad);
+
+    ESP_LOGI(TAG, "awake window closed — sleeping %us from %s "
+                  "(fetched page printed %s, fails %u)",
+             (unsigned)cad.seconds,
+             cad.source == POWER_CADENCE_POLICY        ? "policy"
+             : cad.source == POWER_CADENCE_NEXT_CHANGE ? "next_change"
+                                                       : "local",
+             s_printed ? "yes" : "no", (unsigned)rs->consecutive_fails);
+    power_sleep(cad.seconds, s_btn_gpios, s_btn_count);
 }
 
 /*
@@ -632,24 +1091,149 @@ static void UiTask(void *arg)
         present_full();
     }
 
+    /*
+     * How long this boot stays up before it sleeps, and it is three answers
+     * rather than two.
+     *
+     * A board a safety gate protects never sleeps: no cell fitted, a USB
+     * console attached, sleep switched off, or no URL to poll. deadline_us
+     * stays zero and the loop below is exactly the loop this file has always
+     * run. That is what keeps `idf.py monitor` usable and it is why the gates
+     * are asked here and not inferred from the plan — power_decide() answers
+     * POWER_STAY_AWAKE for "a person pressed a button" and for "this board must
+     * never sleep", and only one of those has a window that closes.
+     *
+     * A BUTTON or COLD wake has a person in front of the frame — they pressed
+     * something, or they just plugged it in — so it stays reachable for the
+     * configured window. The companion app cannot discover the board, connect
+     * and issue a request inside the three seconds a timer wake lives for.
+     * About 5.7 mAh, and only when somebody is actually there: 2.8 for the
+     * window, and the refresh beside it — RAM did not survive the sleep, so
+     * the first fetch never matches the demo page in memory and the sheet is
+     * reprinted even though the glass already holds it.
+     *
+     * A TIMER wake that got this far is the CHANGED case: it woke, found a new
+     * edition, and is here only to print it. Nobody is watching, so the window
+     * is zero and it sleeps as soon as the page is on the paper. Giving it the
+     * full two minutes would cost another 2.8 mAh on every content change, on
+     * top of the refresh it is already spending — about a third of the daily
+     * budget, waiting for a visitor who is not coming.
+     *
+     * The zero is measured from HERE, and here is after await_first_snapshot()
+     * has returned — which on a timer wake means after the first fetch
+     * resolved, not after a stopwatch ran out. That is the whole of the
+     * ordering: the window may only be zero because the thing it would have
+     * been waiting for has already happened. See FIRST_PAINT_WAIT_TIMER_MS.
+     */
+    const power_wake_t wake = power_wake_cause();
+    const int64_t window_us =
+        (wake == POWER_WAKE_TIMER) ? 0
+                                   : (int64_t)power_awake_window_seconds() * 1000000;
+    int64_t deadline_us = sleeping_permitted() ? esp_timer_get_time() + window_us : 0;
+    if (deadline_us && window_us) {
+        ESP_LOGI(TAG, "staying reachable for %us before sleeping",
+                 (unsigned)(window_us / 1000000));
+    } else if (deadline_us) {
+        /* The zero-window timer wake. It used to log "staying reachable for
+         * 0s", which is the line a bench operator reads on the wake that
+         * matters most and said the opposite of what happens — and then said
+         * "printing, then sleeping", which is wrong in the other direction:
+         * by the time this runs the printing is already done, and on the arm
+         * where NewsTask gave up there was none. What is true of both is the
+         * window. The accounting is the enter_sleep() line a moment later. */
+        ESP_LOGI(TAG, "zero-length window — sleeping as soon as this wake is done");
+    }
+
     for (;;) {
+        /* Wait no longer than whichever comes first, the idle tick or the end
+         * of the window. esp_timer rather than the tick count because this
+         * deadline is held across many waits and TickType_t wraps. */
+        int64_t wait_ms = TICK_SECONDS * 1000;
+        if (deadline_us) {
+            const int64_t left_ms = (deadline_us - esp_timer_get_time()) / 1000;
+            if (left_ms <= 0) {
+                /* Anything already queued raced the deadline and is a command
+                 * somebody — or NewsTask — is owed. A zero-window timer wake
+                 * reaches this test on its very first pass, before
+                 * xQueueSelectFromSet() has ever run, so without this drain a
+                 * command that landed in the microseconds since
+                 * await_first_snapshot() returned is thrown away unread. These
+                 * are the same commands the loop below would have run a
+                 * moment later; running them here changes when, not what, and
+                 * costs at most the queue's depth of eight.
+                 *
+                 * It matters most for the one it cannot afford to lose:
+                 * APP_CMD_DATA, which is the edition this wake got up to
+                 * print. Discarding it leaves the page unprinted, the hash and
+                 * tag unpublished and the wake counted as a failure — and the
+                 * next wake fetches the same changed payload and does it
+                 * again, hourly, with every log line reading
+                 * `fetch=changed -> refresh`. */
+                app_cmd_t pending;
+                while (xQueueReceive(s_cmd_queue, &pending, 0) == pdTRUE) {
+                    handle_cmd(&pending);
+                }
+                enter_sleep();          /* does not return */
+            }
+            if (left_ms < wait_ms) {
+                wait_ms = left_ms;
+            }
+        }
+
         QueueSetMemberHandle_t member =
-            xQueueSelectFromSet(s_queue_set, pdMS_TO_TICKS(TICK_SECONDS * 1000));
+            xQueueSelectFromSet(s_queue_set, pdMS_TO_TICKS(wait_ms));
 
         if (member == s_btn_queue) {
             button_event_t ev;
             if (xQueueReceive(s_btn_queue, &ev, 0) == pdTRUE) {
+                /* Restart the window on anything a person did. Cutting someone
+                 * off two minutes into reading their own board because the
+                 * clock ran out mid-interaction is the behaviour that would get
+                 * the whole feature turned off. */
+                if (deadline_us) deadline_us = esp_timer_get_time() + window_us;
                 handle_press(ev.id);
             }
         } else if (member == s_cmd_queue) {
             app_cmd_t cmd;
             if (xQueueReceive(s_cmd_queue, &cmd, 0) == pdTRUE) {
+                /*
+                 * A POLL ARRIVING IS NOT SOMEBODY STANDING THERE.
+                 *
+                 * The two are indistinguishable at the queue — one app_cmd_t
+                 * among others — and that is exactly why this needs saying. The
+                 * window exists for one reason: a person is in front of the
+                 * frame and the companion app cannot win a race against a
+                 * three-second wake. Only a person may extend it. Every other
+                 * command here came from a phone, which is a person; APP_CMD_DATA
+                 * came from NewsTask, which is the board talking to itself.
+                 *
+                 * Letting it extend the window is not a theoretical leak, it is
+                 * the failure tools/edition/PROMPT.md now warns producers about,
+                 * arriving from the other side. A producer that stamps
+                 * generated_at with the moment it filed moves the content
+                 * fingerprint on every poll, so APP_CMD_DATA lands every
+                 * POLL_SECONDS — sixty by default — and resets a hundred-and-
+                 * twenty-second window before it can ever expire. The board
+                 * never sleeps again. It sits at 81 mA refreshing every minute,
+                 * and every log line on both sides reads healthy: the producer
+                 * is filing, the board is printing what it was sent.
+                 *
+                 * There is deliberately no absolute cap on top of this. Someone
+                 * genuinely setting a board up may take ten minutes, and cutting
+                 * them off would be a worse bug than the one this prevents.
+                 */
+                if (deadline_us && cmd.kind != APP_CMD_DATA) {
+                    deadline_us = esp_timer_get_time() + window_us;
+                }
                 handle_cmd(&cmd);
             }
         } else {
             /* Idle tick: move the clock and the battery reading on in the
              * framebuffer. Deliberately no refresh — see TICK_SECONDS. The next
-             * poll that actually changes the page carries these out with it. */
+             * poll that actually changes the page carries these out with it.
+             *
+             * This does NOT restart the window: it is the board talking to
+             * itself, and a timer that only ever resets itself never expires. */
             read_battery();
             if (Lvgl_lock(-1)) {
                 ui_news_tick();
@@ -683,13 +1267,24 @@ static news_t s_fetched;
 static void NewsTask(void *arg)
 {
     (void)arg;
-    /* No settle delay. This task is only ever created after provisioning_run()
-     * has returned true, and what that returns true on is an acquired IP — the
-     * stack is not "settling", it is up. The three seconds this used to wait
+    /* No settle delay. This task is only ever created once the board has an IP
+     * — from provisioning_run() on a cold boot, or from
+     * provisioning_connect_only() when the quiet path found changed content and
+     * fell through — and an acquired IP is what both of those return true on.
+     * The stack is not "settling", it is up. The three seconds this used to wait
      * were three seconds UiTask spent holding a blank panel. If the first fetch
      * does lose a race with something, the retry below costs less than the wait
      * did. */
     int fast_retries = 0;      /* spent inside the first-paint window only */
+
+    /* Whether UiTask has been told how this boot's FIRST fetch turned out.
+     *
+     * It is owed exactly one answer and it blocks until it gets one, because on
+     * a timer wake the window it may sleep in opens when the fetch RESOLVES —
+     * not when a stopwatch runs out. APP_CMD_DATA is the good answer;
+     * APP_CMD_FETCH_FAILED, below, is the other one. Posted once: after the
+     * first outcome UiTask is in its ordinary loop and owes this task nothing. */
+    bool told_first_outcome = false;
 
     for (;;) {
         char url[PROV_URL_MAX_LEN + 1];
@@ -705,7 +1300,25 @@ static void NewsTask(void *arg)
              * and doing a blocking GET of its own between two panel refreshes. */
             ui_tile_set_base(url);
 
-            news_fetch_result_t r = news_service_fetch(url, &s_fetched);
+            /* Conditional on the tag of what THIS TASK last parsed, and not on
+             * the one in RTC memory naming what is on the glass. The two are
+             * equal for most of a session, and the moment they are not is the
+             * one that matters: s_data_etag is empty at boot, so the first poll
+             * of every boot is unconditional and real content always arrives.
+             *
+             * Sending the RTC tag instead would earn a 304 on that first poll —
+             * correct about the glass, and a disaster here, because this task
+             * would have nothing to hand UiTask, await_first_snapshot() would
+             * time out, and the demo page would be printed over a perfectly
+             * good front page. */
+            char etag[HTTP_ETAG_MAX] = "";
+            state_lock();
+            char if_none_match[HTTP_ETAG_MAX];
+            strlcpy(if_none_match, s_data_etag, sizeof(if_none_match));
+            state_unlock();
+
+            news_fetch_result_t r = news_service_fetch_cond(
+                url, if_none_match, &s_fetched, etag, sizeof(etag));
 
             state_lock();
             s_last_result = r;
@@ -720,6 +1333,15 @@ static void NewsTask(void *arg)
                     s_data      = s_fetched;
                     s_data_hash = h;
                 }
+                /* The tag is stored whether or not the content moved, because
+                 * its invariant is about s_data and not about the change: a 200
+                 * that hashes the same is the same page under a new tag (a
+                 * producer touching a field the sheet does not render moves the
+                 * tag and not the hash), and that new tag still names a document
+                 * parsing to exactly s_data. It reaches RTC memory only through
+                 * present_full(), so a tag learned here can never get ahead of a
+                 * refresh that has not happened. */
+                strlcpy(s_data_etag, etag, sizeof(s_data_etag));
                 s_last_ok_us = esp_timer_get_time();
                 s_online     = true;
 
@@ -745,6 +1367,17 @@ static void NewsTask(void *arg)
                     s_poll_from_policy = true;
                 }
                 s_next_change = s_fetched.policy.next_change;
+
+                /* And into RTC memory, by the same rule, so a board that sleeps
+                 * after this boot sleeps on what the desk said rather than on
+                 * the local interval. The quiet path publishes it too — this is
+                 * the other adoption site, for a full boot, whose fetch the
+                 * quiet path never made. */
+                power_state()->next_change = s_fetched.policy.next_change;
+                if (s_fetched.policy.poll_seconds != 0) {
+                    power_state()->poll_seconds =
+                        (uint32_t)s_fetched.policy.poll_seconds;
+                }
                 state_unlock();
 
                 if (changed) {
@@ -775,11 +1408,28 @@ static void NewsTask(void *arg)
                              s_fetched.brief_count,
                              (lead && lead->headline[0]) ? lead->headline : "(none)");
                     notify_ui(APP_CMD_DATA);
+                    told_first_outcome = true;
                 } else {
                     /* The single most common outcome, and the one that must not
                      * cost a panel refresh. */
                     ESP_LOGD(TAG, "news: unchanged, panel untouched");
                 }
+            } else if (r == NEWS_FETCH_NOT_MODIFIED) {
+                /* The server confirmed the document has not changed. That is a
+                 * successful poll, not an outage: the tag matched, so the page
+                 * already on the glass is the current one. It belongs here
+                 * rather than in the failure arm below because everything there
+                 * is wrong about it — s_last_ok_us would age until the sheet
+                 * badged itself STALE while the board was working perfectly,
+                 * and the log would carry a warning a reader would go looking
+                 * for a cause of. The panel is untouched, as on any unchanged
+                 * poll: news_hash() remains the sole authority on a refresh and
+                 * there is nothing new to hash. */
+                state_lock();
+                s_last_ok_us = esp_timer_get_time();
+                s_online     = true;
+                state_unlock();
+                ESP_LOGD(TAG, "news: 304 not modified, panel untouched");
             } else {
                 state_lock();
                 s_online = (r != NEWS_FETCH_TRANSPORT);
@@ -798,6 +1448,35 @@ static void NewsTask(void *arg)
          * that failed, whose connection is the one thing that cannot be trusted. */
         http_port_release();
 
+        /* How long until the next poll — the same function a sleeping board
+         * asks, and that is the point of it being a function. An awake board
+         * and a sleeping one obeying two different readings of one policy block
+         * is a fault nobody would ever look for, because both of them work.
+         *
+         * `poll_seconds` is passed only when the desk actually said it:
+         * s_poll_seconds falls back to the compiled-in default, which is the
+         * LOCAL layer here and must not masquerade as the desk's answer, or
+         * `sleepSource` on the companion app would read "policy" for a board no
+         * desk has ever spoken to.
+         *
+         * And no backoff: `fails` is zero because the awake path badges the
+         * sheet STALE and OFFLINE rather than slowing down. Someone is looking
+         * at this board; slowing its recovery is the opposite of what they
+         * want, and the badge is what tells them. */
+        power_cadence_in_t pc = {};
+        state_lock();
+        pc.policy.poll_seconds = s_poll_from_policy ? (uint32_t)s_poll_seconds : 0u;
+        pc.policy.next_change  = s_next_change;
+        bool never_fetched     = (s_last_ok_us == 0);
+        state_unlock();
+        pc.local_seconds       = POLL_SECONDS_DEFAULT;
+        pc.now                 = (int64_t)time(NULL);
+        pc.consecutive_fails   = 0;
+
+        power_cadence_t pcad;
+        power_cadence(&pc, &pcad);
+        int wait_s = (int)pcad.seconds;
+
         /* A board that has not yet fetched anything tries again in seconds
          * rather than after a full interval, for the first few attempts only.
          * The cases that reach here are a first fetch that lost a race with the
@@ -807,38 +1486,23 @@ static void NewsTask(void *arg)
          * would guarantee it times out and prints the demo page for a server
          * that was about to answer. Past that window a retry can no longer
          * change which page got printed, so there is nothing left to buy. */
-        state_lock();
-        int     wait_s       = s_poll_seconds;
-        int64_t next_change  = s_next_change;
-        bool    never_fetched = (s_last_ok_us == 0);
-        state_unlock();
-
-        /* Wake for the instant the desk said its answer would change, when that
-         * lands sooner than the next ordinary poll. A board on an hourly
-         * overnight cadence still catches the 06:00 edition at 06:00 rather than
-         * at 06:47, which is the whole reason `next_change` is on the wire.
-         *
-         * Only when it is still in the FUTURE, and that is not what "min(poll,
-         * next_change - now)" literally says. An instant that has already passed
-         * would floor at NEWS_POLL_MIN and keep flooring there — a static
-         * payload with a baked `next_change`, or a cached copy of a live one,
-         * would pin the board at a poll every thirty seconds for as long as it
-         * stayed up. Having arrived at the instant, the ordinary cadence is the
-         * correct behaviour: whatever was going to change has changed, and this
-         * fetch is the one that collected it.
-         *
-         * And only when the clock is synced. See CLOCK_SYNCED_EPOCH. */
-        int64_t now = (int64_t)time(NULL);
-        if (next_change > 0 && now >= (int64_t)CLOCK_SYNCED_EPOCH) {
-            int64_t until = next_change - now;
-            if (until > 0 && until < (int64_t)wait_s) {
-                wait_s = until > NEWS_POLL_MIN ? (int)until : NEWS_POLL_MIN;
-            }
-        }
-
         if (never_fetched && fast_retries < FIRST_RETRY_MAX) {
             fast_retries++;
             wait_s = FIRST_RETRY_SECONDS;
+        } else if (!told_first_outcome) {
+            /* The first fetch of this boot has RESOLVED, and it resolved with
+             * nothing for UiTask to print — the retries are spent and none of
+             * them came back, or one came back and carried no new page. Either
+             * way the question UiTask is holding its wake open for has an
+             * answer now, and it must be given rather than left to a timeout:
+             * on a timer wake that timeout is two minutes of radio and CPU
+             * spent learning what this task already knows.
+             *
+             * It carries no page and costs no refresh. All it does is end the
+             * wait, so the wake can count its failure and go back to sleep at
+             * the backoff the curve gives it. */
+            told_first_outcome = true;
+            notify_ui(APP_CMD_FETCH_FAILED);
         }
 
         /* Woken early by KEY1, by POST /api/refresh, or by a URL change. */
@@ -869,6 +1533,11 @@ void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_co
         gpios[i] = (btn_gpios && i < btn_count) ? btn_gpios[i] : -1;
     }
     buttons_init(s_btn_queue, gpios);
+
+    /* Kept for the sleep path: these are also the ext1 wake sources, and a
+     * board that sleeps without arming them is one only the timer can reach. */
+    memcpy(s_btn_gpios, gpios, sizeof(s_btn_gpios));
+    s_btn_count = BUTTON_COUNT;
 
     /* Create the global TLS-connect gate before any task can call http_get(). */
     http_port_init();
@@ -1025,7 +1694,68 @@ void user_app_snapshot(device_state_t *out)
     out->battery_present = s_batt_present;
     out->battery_pct     = s_batt_pct;
     out->battery_mv      = s_batt_mv;
+
+    /* Read under the lock because s_cfg is; used below, outside it, where the
+     * cadence is computed. */
+    const bool sleep_from_api = s_sleep_from_api;
+    const bool sleep_from_nvs = (s_cfg.sleep_seconds != PROV_SLEEP_SECONDS_UNSET);
     state_unlock();
+
+    /* The counters, copied with no arithmetic in the copy — device_api_json.c
+     * derives the mean and the daily estimate, because it is the half of this
+     * that has a host test and both of its divisors are legitimately zero on a
+     * board that has not slept yet.
+     *
+     * READ WITHOUT s_mtx, deliberately. Three reasons, and the third is the one
+     * that decides it:
+     *
+     * 1. They are not s_mtx's state. That lock guards things with invariants
+     *    BETWEEN fields — s_data against s_data_hash, s_last_ok_us against
+     *    s_last_result — and taking a lock over data it does not own would
+     *    imply a relationship these fields do not have.
+     * 2. Each of the counters below is one naturally-aligned 32-bit word, so an
+     *    LX7 load cannot tear one. The worst a race can produce is a value one
+     *    wake out of date, and "out of date" is the normal condition of every
+     *    counter here anyway: the document is a sample of a board that keeps
+     *    running. That is a claim about THESE fields and not about the whole
+     *    struct — `next_change` is an int64_t and an LX7 has no 64-bit load, so
+     *    it CAN tear; effective_cadence() is where that is argued, because it
+     *    is the only reader that acts on it.
+     * 3. Nothing downstream needs them to agree with each other. `wakes` and
+     *    `awake_ms_total` are divided into a mean by the serialiser, and a mean
+     *    computed across a wake boundary is off by one wake in a figure whose
+     *    whole purpose is to replace a range of 190-to-260 days with a
+     *    measurement. If that mattered the fix would be a snapshot in RTC
+     *    memory, not this lock. */
+    const wp_rtc_state_t *rs = power_state();
+    out->deep_sleep     = power_deep_sleep_enabled();
+
+    /* The EFFECTIVE interval — what this board will actually do when the window
+     * closes — and not the local setting it was built or configured with. The
+     * two differ whenever the desk has said anything, which on a board reading
+     * a desk is most of the time. Reporting the setting instead would have a
+     * phone show 900 s beside a board sleeping for 3,600 because its desk is in
+     * its quiet window, which is a number the reader cannot act on and cannot
+     * tell is wrong. */
+    power_cadence_t cad;
+    effective_cadence(&cad);
+    out->sleep_seconds  = (int)cad.seconds;
+
+    /* And who decided it, top down — the layer that actually won, not the
+     * layers underneath it that are still configured. Both of the desk's
+     * answers report as "policy": from a reader's point of view a cadence and a
+     * targeted wake are the same fact, that the desk is driving this board, and
+     * both end by themselves. Below that, this session's POST /api/sleep, then
+     * the setup form's NVS value, then the compiled-in default. */
+    out->sleep_source =
+        (cad.source == POWER_CADENCE_POLICY ||
+         cad.source == POWER_CADENCE_NEXT_CHANGE) ? DEV_SLEEP_SRC_POLICY
+        : sleep_from_api                          ? DEV_SLEEP_SRC_API
+        : sleep_from_nvs                          ? DEV_SLEEP_SRC_NVS
+                                                  : DEV_SLEEP_SRC_DEFAULT;
+    out->wakes          = (int)rs->wakes;
+    out->quiet_wakes    = (int)rs->quiet_wakes;
+    out->awake_ms_total = (int)rs->awake_ms_total;
 }
 
 bool user_app_set_page(int page)
@@ -1052,4 +1782,16 @@ bool user_app_set_news_url(const char *url)
 bool user_app_display_test(void)
 {
     return post_cmd(APP_CMD_DISPLAY_TEST, 0, NULL);
+}
+
+bool user_app_set_sleep_seconds(uint32_t seconds)
+{
+    /* Narrowed here rather than in the queue: app_cmd_t carries an int, and
+     * every value that survives prov_clamp_sleep_seconds() is at most 86,400.
+     * Clamping to INT_MAX first means a hostile or confused caller cannot turn
+     * a huge unsigned into a negative one on the way through. */
+    if (seconds > (uint32_t)INT_MAX) {
+        seconds = (uint32_t)INT_MAX;
+    }
+    return post_cmd(APP_CMD_SET_SLEEP, (int)seconds, NULL);
 }

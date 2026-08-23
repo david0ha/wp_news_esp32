@@ -1,6 +1,7 @@
 #include "device_api_json.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -115,6 +116,78 @@ static int clamped(int n, int cap)
         return 0;
     }
     return n > cap ? cap : n;
+}
+
+/* Microamp-hours drawn per second the board is awake.
+ *
+ * MEASURED, not estimated: derived from measured wattage at 3.7 V (battery mA ≈
+ * W × 270), and stated in the deep-sleep design's §10 as 0.023 mAh per awake
+ * second, which is 23 µAh. Everything the companion app says about battery life
+ * comes out of this one number, so it lives here with its provenance rather than
+ * as a 23 inside an expression, where nobody would ever dare change it and
+ * nobody could tell whether it had already been changed.
+ *
+ * µAh rather than mAh because the arithmetic is integer-only — a wake is a few
+ * seconds and rounds to zero mAh, so working in mAh would report a board that
+ * draws nothing at all. */
+#define POWER_UAH_PER_AWAKE_SECOND 23
+
+/* The word, not the ordinal. Written exactly as pollSource is written, and
+ * total: an out-of-range value — an uninitialised read, or an enumerator added
+ * without a case here — reads "default" rather than falling off the end of a
+ * switch.
+ * This string goes on a phone screen, and the failure it would otherwise cause
+ * is a pointer into .rodata serialised as JSON. */
+static const char *sleep_src_name(dev_sleep_src_t s)
+{
+    switch (s) {
+    case DEV_SLEEP_SRC_POLICY: return "policy";
+    case DEV_SLEEP_SRC_API:    return "api";
+    case DEV_SLEEP_SRC_NVS:    return "nvs";
+    case DEV_SLEEP_SRC_DEFAULT:
+    default:                   return "default";
+    }
+}
+
+/* The mean length of a wake, in milliseconds, or 0 when there has not been one.
+ *
+ * Derived here rather than by the caller because the divisor is legitimately
+ * zero — every board has no wakes at all until it has slept once — and an
+ * integer divide by zero on Xtensa is an exception that panics the board, from
+ * inside the HTTP handler answering the phone that asked. */
+static int mean_awake_ms(const device_state_t *st)
+{
+    if (st->wakes <= 0 || st->awake_ms_total <= 0) {
+        return 0;
+    }
+    return st->awake_ms_total / st->wakes;
+}
+
+/* What this board would draw in a day, in mAh, if it keeps waking at its
+ * configured interval and its wakes keep costing what they have cost so far.
+ *
+ * This is the AWAKE-TIME TERM ONLY. The refreshes (2.3 mAh each) and the
+ * standing deep-sleep current are not in it, the second because nobody has
+ * measured it on this board yet — which is exactly what these counters exist to
+ * fix. Reporting a total that silently contained a guess would defeat that.
+ *
+ * Integer-only, like everything else that has to agree between x86 and Xtensa,
+ * and computed in 64 bits on the way through: at a one-second interval with a
+ * long mean the product reaches 2e15, five orders of magnitude past an int32,
+ * and a 32-bit intermediate does not fail loudly — it reports some small,
+ * plausible, wrong number. */
+static int est_mah_per_day(const device_state_t *st)
+{
+    int mean_ms = mean_awake_ms(st);
+    if (st->sleep_seconds <= 0 || mean_ms <= 0) {
+        return 0;   /* no interval set, or nothing measured yet: no estimate */
+    }
+
+    int64_t wakes_per_day = 86400 / st->sleep_seconds;
+    int64_t uah = wakes_per_day * mean_ms * POWER_UAH_PER_AWAKE_SECOND / 1000;
+    int64_t mah = uah / 1000;
+
+    return mah > INT32_MAX ? INT32_MAX : (int)mah;
 }
 
 static int finish(sink_t *s)
@@ -265,6 +338,21 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
      * measured on the panel rather than assumed from its size. */
     put(&s, ",\"panel\":{");
     put_int_field(&s, "refreshMs", st->refresh_ms, true);
+    put(&s, "}");
+
+    /* The design measuring itself. Four counters straight off the board and two
+     * numbers derived from them — and the derivation is here, not in the caller,
+     * because both of its divisors are legitimately zero and this is the half of
+     * the endpoint that has host tests. See device_api_model.h for why these are
+     * counters rather than a verdict. */
+    put(&s, ",\"power\":{");
+    put_bool_field(&s, "deepSleep", st->deep_sleep, true);
+    put_int_field(&s, "sleepSeconds", st->sleep_seconds, false);
+    put_str_field(&s, "sleepSource", sleep_src_name(st->sleep_source), false);
+    put_int_field(&s, "wakes", st->wakes, false);
+    put_int_field(&s, "quietWakes", st->quiet_wakes, false);
+    put_int_field(&s, "meanAwakeMs", mean_awake_ms(st), false);
+    put_int_field(&s, "estMahPerDay", est_mah_per_day(st), false);
     put(&s, "}");
 
     put(&s, "}");

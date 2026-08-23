@@ -34,6 +34,23 @@ after it has passed the render check below. The board may poll mid-write, and a 
 is a rejected payload. (A rejected payload is safe — the board keeps the previous edition and
 badges it `STALE` — but a whole wasted cycle is not.)
 
+**Two fields must not move unless the edition does**, and they are worth separating because they
+cost different things. The board fingerprints the whole payload and reprints the sheet whenever that
+fingerprint changes — twenty-five seconds of flashing.
+
+- **`generated_at` moves with the edition, not with the clock.** This is the expensive one, because
+  `generated_at` is fingerprinted and **nothing on either sheet prints it**. Stamp it with the
+  moment you filed and the board reprints the entire page on every poll, forever, at a room with
+  nothing new in it — while every log on both sides still reads healthy. Nobody would find this
+  from the symptom. File the same edition twice and it carries the same `generated_at` both times.
+  `as_of` is the line the reader actually gets, and a time belongs there.
+- **`indices[].spark` moves with the tape.** This one is different: the sparkline *is* ink, 48×14
+  pixels of it, so a reprint when it changes is the board doing its job rather than wasting a
+  refresh. The waste is only in moving it for no reason — a window that slides and renormalises on
+  every pass produces a visibly different tape every time you file, whether or not the market did
+  anything. Rebuild it when those numbers change. Do not freeze it: a tape that never moves is
+  worse than one that moves too often.
+
 ## Which company
 
 `$EDITION_DIR/watchlist.json` names the candidates and holds the rotation. Read it first; if it is
@@ -315,6 +332,9 @@ accounts.
   printed is one missing number, and `--validate` names it — but only if you read the warnings.
 - **Every `n` says the same thing as the `values` beside it**, and the line row of a `bars_line`
   table is in **basis points**. Nothing downstream can check this; only you have both.
+- **`generated_at` carries the edition's stamp, not the clock's.** It is fingerprinted and never
+  printed, so moving it on every run reprints the whole sheet on every poll for nothing a reader
+  can see. `indices[].spark` changed only if the tape did.
 - `watchlist.json`'s `last` updated to the company you filed.
 - A one-screen summary: the company, the lead, what you could not find out, and what the render
   check said.

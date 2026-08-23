@@ -44,6 +44,33 @@ void provisioning_default_options(prov_options_t *opts);
 // submits a config, after which the device reboots (so it does not return in that path).
 bool provisioning_run(const prov_options_t *opts, prov_config_t *out);
 
+// Step 1 only: mount NVS and read the saved config into *out (zeroed first). Returns true if a
+// network is stored. Touches no radio and blocks for no timeout.
+//
+// The wake decision needs to know whether a news URL is configured BEFORE it decides whether to
+// connect at all — a board with nothing to poll has no reason ever to wake, so it stays awake
+// instead — and that question has to be answerable on a cold boot too, where there is no
+// connect attempt to piggyback on.
+bool provisioning_load_config(prov_config_t *out);
+
+// Steps 1 and 2 only: load the saved config and try to join it. Returns true when the radio
+// is up with an IP.
+//
+// The quiet deep-sleep wake path uses this, and what it does NOT do is the whole point of it:
+// no SoftAP, no captive portal, no event callback, and no infinite loop. Those three cost a
+// panel refresh apiece on this board, and a board whose network has gone away would otherwise
+// spend one on every wake — about 220 mAh a day showing a setup screen nobody is looking at,
+// which flattens the cell in under three weeks. A wake that cannot connect must be able to
+// give up silently and go back to sleep, and that is what this is for.
+//
+// *out is zeroed first and filled whenever a config was stored, whether or not the join
+// succeeded, so a caller that needs to know "is a news URL configured" gets an answer either
+// way. The one-shot force-portal flag is left alone — only provisioning_run() consumes it.
+//
+// Safe to call before provisioning_run() in the same boot: the Wi-Fi bring-up underneath is
+// guarded, so the full path can still run its own flow after this one has failed.
+bool provisioning_connect_only(prov_config_t *out, uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

@@ -34,7 +34,26 @@ bool prov_store_load(prov_config_t *cfg)
     len = sizeof(cfg->news_url);
     nvs_get_str(h, "vurl", cfg->news_url, &len);
 
+    // The interval is optional in flash, not merely optional to a user. Every
+    // board provisioned before this field existed has no "sleep_s" key at all,
+    // and nvs_get_u32 leaves `stored` alone when it says so — which is why the
+    // failure is read as PROV_SLEEP_SECONDS_UNSET ("use the build-time
+    // default") rather than as a config that failed to load. Treating it as an
+    // error here would push every device already hanging on a wall back into
+    // the captive portal on the next firmware update, asking for a Wi-Fi
+    // password it has had for months.
+    uint32_t stored = PROV_SLEEP_SECONDS_UNSET;
+    if (nvs_get_u32(h, "sleep_s", &stored) == ESP_OK) {
+        // Clamped on the way in as well as out: this is not the only writer of
+        // the key, and a value that got into flash unchecked would otherwise be
+        // believed forever.
+        cfg->sleep_seconds = prov_clamp_sleep_seconds(stored);
+    }
+
     nvs_close(h);
+    // Unchanged contract: "is there a network to join". A stored interval is not
+    // a provisioned board, and widening this would skip the portal on a board
+    // that has no credentials.
     return cfg->ssid[0] != '\0';
 }
 
@@ -47,9 +66,14 @@ bool prov_store_save(const prov_config_t *cfg)
         return false;
     }
 
+    // Clamped once, so the line logged below is the value that went into flash
+    // rather than a second opinion about it.
+    const uint32_t sleep_s = prov_clamp_sleep_seconds(cfg->sleep_seconds);
+
     nvs_set_str(h, "ssid", cfg->ssid);
     nvs_set_str(h, "pass", cfg->password);
     nvs_set_str(h, "vurl", cfg->news_url);
+    nvs_set_u32(h, "sleep_s", sleep_s);
 
     for (size_t i = 0; i < sizeof(kObsoleteKeys) / sizeof(kObsoleteKeys[0]); i++) {
         nvs_erase_key(h, kObsoleteKeys[i]);   // ESP_ERR_NVS_NOT_FOUND is fine
@@ -61,7 +85,8 @@ bool prov_store_save(const prov_config_t *cfg)
         ESP_LOGE(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
         return false;
     }
-    ESP_LOGI(TAG, "saved ssid='%s' news_url='%s'", cfg->ssid, cfg->news_url);
+    ESP_LOGI(TAG, "saved ssid='%s' news_url='%s' sleep_s=%u", cfg->ssid, cfg->news_url,
+             (unsigned)sleep_s);
     return true;
 }
 

@@ -56,6 +56,7 @@ in the captive portal or with
 """
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -968,6 +969,49 @@ class Handler(BaseHTTPRequestHandler):
     # readline() on it forever.
     timeout = 30
 
+    # --no-etag turns the conditional GET off. A board pointed at a server with
+    # no support for one is a SUPPORTED configuration and not a degraded one:
+    # it fetches and parses the whole payload every poll, and news_hash() still
+    # keeps the panel still. What it costs is a parse, not a refresh. Being able
+    # to switch it off here is how that path gets exercised on purpose, rather
+    # than the first time somebody points a board at a static file host.
+    etag_enabled = True
+
+    # The tag is computed from the payload OBJECT and never from the bytes about
+    # to be written. ensure_ascii, key order and separators are FORMATTING: they
+    # move the bytes on the wire without moving one pixel of the sheet. A tag
+    # derived from them would change the day somebody reformats this file, every
+    # deployed board would be told its edition had changed, and each one would
+    # answer that with a twenty-five second refresh of the whole panel. Spending
+    # a panel refresh on a json.dumps() flag is the exact failure the ETag is
+    # here to prevent, so sort_keys canonicalises the order and the hash is
+    # taken over the result.
+    #
+    # sha256 truncated to sixteen hex digits: the device treats the tag as an
+    # opaque string, so this is a change detector and not a security boundary,
+    # and sixty-four bits is a collision every few billion editions. The digest
+    # is sha256 because `server/claudepost/http.py`'s `_etag()` is, and there is
+    # one recipe rather than two — a board must not be able to tell the desk and
+    # the reference producer apart by the shape of a tag.
+    #
+    # The two share the RECIPE and not the INPUT, which is the part worth
+    # saying: the desk hashes the exact bytes it is about to write, policy block
+    # spliced in, so its tag moves at a schedule transition. This server hashes
+    # the canonical dump of the snapshot it made up, which carries no policy at
+    # all. Same shape, same digest, different question — and neither tag is ever
+    # compared against the other's.
+    #
+    # NOTE this is deliberately NOT news_hash(). That one fingerprints the
+    # parsed model — what reaches the glass — and remains the sole authority on
+    # whether the panel moves. This one fingerprints the document. They disagree
+    # exactly when a producer changes a field the sheet does not render, and on
+    # that poll the right answer is 200, a parse, and a panel that stays still.
+    @staticmethod
+    def etag_for(payload):
+        canonical = json.dumps(payload, sort_keys=True,
+                               ensure_ascii=False).encode("utf-8")
+        return '"' + hashlib.sha256(canonical).hexdigest()[:16] + '"'
+
     def do_GET(self):
         path = self.path.split("?")[0]
 
@@ -1010,15 +1054,60 @@ class Handler(BaseHTTPRequestHandler):
         # That equivalence is the point of the file; --live is the exception.
         payload = (live_snapshot(self.state, datetime.datetime.now()) if self.live
                    else snapshot())
+
+        etag = self.etag_for(payload) if self.etag_enabled else None
+        if etag is not None and etag in self._requested_tags():
+            # A 304 carries no body — RFC 7232 forbids one — and this says so
+            # with Content-Length: 0. That is a deliberate reading of RFC 7230,
+            # which asks for either no Content-Length at all or the length the
+            # 200 would have carried. The second of those is a trap on a
+            # keep-alive connection: a client that frames the response from the
+            # header, which esp_http_client does, would sit waiting for twenty
+            # kilobytes it is not allowed to be sent, once per poll, until its
+            # own timeout fires. Zero is the only framing nothing can wait on.
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            return
+
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if etag is not None:
+            self.send_header("ETag", etag)
         # The device polls one host repeatedly; letting it keep the socket saves
         # a connect per poll and, on an https:// URL, a whole TLS handshake.
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         self.wfile.write(body)
+
+    def _requested_tags(self):
+        """The tags in If-None-Match, as a list.
+
+        The board sends exactly one, because it stores exactly one. Splitting on
+        the comma anyway costs a line and covers the case where something else
+        is in the path — a browser, a proxy, curl with a saved tag — since the
+        header is a list by definition and a server that string-compares the
+        whole field answers 200 to a perfectly good conditional request. `*` is
+        not handled, and falls through to a full 200, which is always a correct
+        answer and merely a wasteful one.
+
+        Capped before the split, for the reason server/claudepost/http.py's
+        `_if_none_match()` caps: splitting a header the transport will happily
+        make megabytes long builds a list of millions of strings, and this
+        server is the one people point at a board on their own LAN. `.get()`
+        returns one line rather than all of them, so the ceiling here is 64 KB
+        rather than 6 MB — two orders of magnitude smaller and still no reason
+        to do it. Past the cap the answer is a full 200, which is what an
+        unrecognised tag gets anyway.
+        """
+        header = self.headers.get("If-None-Match", "")
+        if len(header) > 4096:
+            return []
+        return [t.strip() for t in header.split(",") if t.strip()]
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -1691,6 +1780,9 @@ def main():
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--live", action="store_true",
                     help="nudge the prices on every request")
+    ap.add_argument("--no-etag", action="store_true",
+                    help="serve no ETag and ignore If-None-Match, the way a "
+                         "plain file server does")
     ap.add_argument("--dump", action="store_true", help="print the payload and exit")
     ap.add_argument("--write-fixture", action="store_true",
                     help="rewrite the host tests' fixture from this payload")
@@ -1738,6 +1830,7 @@ def main():
         return 0
 
     Handler.live = args.live
+    Handler.etag_enabled = not args.no_etag
     # Threaded, and this is not a nicety. A board fetches the snapshot and the
     # photograph on two separate connections — `http_get()` and `http_get_bin()`
     # are different client handles — so a single-threaded server cannot serve

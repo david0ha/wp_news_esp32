@@ -145,13 +145,22 @@ class DeskTestCase(unittest.TestCase):
         self.assertEqual(status, 200, body)
 
     # -- a tiny client ----------------------------------------------------
-    def call(self, method, path, body=None, token=None, ctype="application/json"):
-        """Returns ``(status, bytes)``. Never raises for a 4xx -- those are answers."""
+    def call(self, method, path, body=None, token=None, ctype="application/json",
+             headers=None):
+        """Returns ``(status, bytes, headers)``. Never raises for a 4xx -- those are answers.
+
+        ``headers`` is the request headers a case sends deliberately, and
+        ``If-None-Match`` is the whole reason it exists. They go on after the
+        ones this helper sets, so a case that wants a different
+        ``Content-Type`` than the argument gives it can simply say so.
+        """
         req = urllib.request.Request(self.base + path, data=body, method=method)
         if token:
             req.add_header("Authorization", "Bearer " + token)
         if body is not None:
             req.add_header("Content-Type", ctype)
+        for name, value in (headers or {}).items():
+            req.add_header(name, value)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.status, resp.read(), dict(resp.headers)
@@ -264,20 +273,197 @@ class DevicePlaneTest(DeskTestCase):
         self.file_edition(tile_id="pic")
         self.assertEqual(self.call("GET", "/tiles/other.bin")[0], 404)
 
-    def test_no_cache_headers_reach_the_board(self):
-        # A cache between the desk and the board is a stale front page that
-        # nobody can explain from across a room.
-        self.file_edition()
-        _, _, headers = self.call("GET", "/news.json")
-        for header in ("Cache-Control", "ETag", "Last-Modified", "Expires"):
-            self.assertNotIn(header, headers)
-
     def test_head_returns_the_headers_and_no_body(self):
         self.file_edition()
         status, raw, headers = self.call("HEAD", "/news.json")
         self.assertEqual(status, 200)
         self.assertEqual(raw, b"")
         self.assertGreater(int(headers["Content-Length"]), 0)
+
+
+class ConditionalGetTest(DeskTestCase):
+    """The board asks whether the edition moved, and most of the time it has not.
+
+    A board on the default schedule asks ninety-six times a day and the answer
+    changes three or four times, so the ordinary poll is a full edition
+    downloaded to learn nothing. The tag is computed over the EXACT bytes about
+    to be written -- the policy block spliced in and all -- which is what makes
+    it safe to answer 304 on a match and what makes it move at a schedule
+    transition, where the cadence in those bytes is the one thing the board
+    must not miss.
+    """
+
+    def tag_of(self, path="/news.json", **kwargs):
+        """The current validator for a path, and a 200 asserted on the way past."""
+        status, _raw, headers = self.call("GET", path, **kwargs)
+        self.assertEqual(status, 200)
+        return headers["ETag"]
+
+    def test_the_edition_carries_a_strong_etag(self):
+        self.file_edition()
+        status, _raw, headers = self.call("GET", "/news.json")
+        self.assertEqual(status, 200)
+        # Strong and quoted: sixteen hex digits inside quotation marks, which
+        # is the recipe tools/mock_news_server.py serves too. A `W/` here would
+        # say the bytes may differ, and they may not -- the tag is over them.
+        self.assertRegex(headers["ETag"], r'^"[0-9a-f]{16}"$')
+        self.assertFalse(headers["ETag"].startswith("W/"), headers["ETag"])
+
+    def test_the_tag_is_stable_across_requests(self):
+        self.file_edition()
+        tags, bodies = set(), set()
+        for _ in range(5):
+            status, raw, headers = self.call("GET", "/news.json")
+            self.assertEqual(status, 200)
+            tags.add(headers["ETag"])
+            bodies.add(raw)
+        # One tag for one edition. A tag that hashed anything clock-shaped
+        # would come back five different answers here and every poll would be
+        # a full transfer, with nothing in any log to say why.
+        self.assertEqual(len(tags), 1, tags)
+        self.assertEqual(len(bodies), 1)
+
+    def test_a_matching_if_none_match_is_a_304_with_no_body(self):
+        self.file_edition()
+        tag = self.tag_of()
+        status, raw, headers = self.call("GET", "/news.json",
+                                         headers={"If-None-Match": tag})
+        self.assertEqual(status, 304)
+        self.assertEqual(raw, b"")
+        self.assertEqual(headers["Content-Length"], "0")
+        self.assertEqual(headers["ETag"], tag)
+
+    def test_a_stale_tag_gets_the_whole_edition(self):
+        self.file_edition()
+        _status, body, headers = self.call("GET", "/news.json")
+        status, raw, again = self.call(
+            "GET", "/news.json", headers={"If-None-Match": '"0000000000000000"'})
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, body)
+        self.assertEqual(again["ETag"], headers["ETag"])
+
+    def test_the_tag_moves_when_the_edition_moves(self):
+        self.file_edition()
+        first = self.tag_of()
+
+        self.file_edition(payload=json.dumps({
+            "edition": "SEMICONDUCTORS",
+            "subject": {"symbol": "SNDK", "name": "Sandisk Corp."},
+            "stories": [{"rank": 0, "headline": "A second day, and a second lead",
+                         "body": "MILPITAS - more copy."}],
+        }).encode())
+        second = self.tag_of()
+        self.assertNotEqual(first, second)
+
+        # And the board holding yesterday's tag is told so, rather than being
+        # left with yesterday's front page because a validator went stale
+        # quietly.
+        status, raw, _headers = self.call("GET", "/news.json",
+                                          headers={"If-None-Match": first})
+        self.assertEqual(status, 200)
+        self.assertIn(b"A second day", raw)
+
+    def test_the_tag_moves_across_a_schedule_transition(self):
+        self.file_edition()
+        active = self.tag_of()
+
+        self.clock.set(at(2026, 8, 20, 1, 0))          # inside 00:30-06:00
+        status, raw, headers = self.call("GET", "/news.json",
+                                         headers={"If-None-Match": active})
+        # The cadence is IN the bytes, so the transition is a 200 and the board
+        # learns the quiet interval. This is the mechanism a sleeping board's
+        # whole schedule rests on: a 304 here would leave it polling at the
+        # active rate all night.
+        self.assertEqual(status, 200)
+        self.assertNotEqual(headers["ETag"], active)
+        self.assertEqual(json.loads(raw)["policy"]["poll_seconds"],
+                         S.DEFAULT_SCHEDULE.poll_quiet_seconds)
+
+    def test_the_tag_does_not_flap_inside_a_window(self):
+        self.file_edition()
+
+        def tag_at(*when):
+            self.clock.set(at(*when))
+            return self.tag_of()
+
+        # Both of these are inside the quiet window, and both look forward to
+        # the same 06:00 transition, so the bytes are identical -- this is the
+        # test that catches somebody hashing time.time() instead of the body.
+        self.assertEqual(tag_at(2026, 8, 20, 1, 0), tag_at(2026, 8, 20, 5, 59))
+        self.assertNotEqual(tag_at(2026, 8, 20, 5, 59), tag_at(2026, 8, 20, 6, 1))
+
+    def test_head_answers_the_same_tag_and_a_304(self):
+        self.file_edition()
+        status, raw, headers = self.call("HEAD", "/news.json")
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, b"")
+        tag = headers["ETag"]
+        self.assertEqual(tag, self.tag_of())
+
+        status, raw, headers = self.call("HEAD", "/news.json",
+                                         headers={"If-None-Match": tag})
+        self.assertEqual(status, 304)
+        self.assertEqual(raw, b"")
+        self.assertEqual(headers["Content-Length"], "0")
+        self.assertEqual(headers["ETag"], tag)
+
+    def test_a_comma_separated_list_matches(self):
+        self.file_edition()
+        tag = self.tag_of()
+        # A list, with one entry that is this tag weakened by something in
+        # between and one that is not this tag at all. A parser that compared
+        # the whole header string answers 200 to every one of these.
+        for header in ('"aaa", %s, W/"bbb"' % tag,
+                       '%s,"aaa"' % tag,
+                       'W/%s' % tag,
+                       "*"):
+            status, raw, _headers = self.call("GET", "/news.json",
+                                              headers={"If-None-Match": header})
+            self.assertEqual(status, 304, header)
+            self.assertEqual(raw, b"", header)
+
+    def test_cache_control_is_no_cache(self):
+        # This is what "no cache headers reach the board" became. The point has
+        # not changed -- a cache between the desk and the board is a stale front
+        # page nobody can explain from across a room -- but it is now carried by
+        # a validator instead of by silence: `no-cache` is not "do not store",
+        # it is "do not serve this without asking me first", which is the
+        # board's own behaviour said out loud to whatever is in between. A
+        # freshness lifetime is still the thing that must never appear.
+        self.file_edition()
+        _status, _raw, headers = self.call("GET", "/news.json")
+        self.assertEqual(headers["Cache-Control"], "no-cache")
+
+        status, _raw, on_304 = self.call("GET", "/news.json",
+                                         headers={"If-None-Match": headers["ETag"]})
+        self.assertEqual(status, 304)
+        self.assertEqual(on_304["Cache-Control"], "no-cache")
+
+        for header in ("Last-Modified", "Expires"):
+            self.assertNotIn(header, headers)
+            self.assertNotIn(header, on_304)
+
+        # And nothing else on this plane grew one along with it: the validator
+        # is the edition's, passed by its handler, not something `_send_bytes`
+        # hangs on everything it writes.
+        _status, _raw, healthz = self.call("GET", "/healthz")
+        for header in ("ETag", "Cache-Control"):
+            self.assertNotIn(header, healthz)
+
+    def test_tiles_are_unconditional(self):
+        # A tile is immutable by id -- a new picture is a new id in a new
+        # edition -- so there is nothing for a validator to validate, and the
+        # board fetches one only when the edition it arrived with is new.
+        self.file_edition(tile_id="pic")
+        status, raw, headers = self.call("GET", "/tiles/pic.bin")
+        self.assertEqual(status, 200)
+        self.assertNotIn("ETag", headers)
+        self.assertNotIn("Cache-Control", headers)
+
+        status, raw, _headers = self.call(
+            "GET", "/tiles/pic.bin", headers={"If-None-Match": '"0000000000000000"'})
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, TILE)
 
 
 class SheetTest(DeskTestCase):
@@ -604,6 +790,14 @@ def read_response(fp):
     line = fp.readline()
     if not line:
         return None                                  # the server hung up first
+    # The status line is where a desync surfaces, and it surfaces as junk in
+    # front of it rather than as a missing response: a body written past a
+    # Content-Length has no newline of its own, so `int(line.split()[1])` would
+    # read `b'oopsHTTP/1.1 200 OK'` as a perfectly good 200 and swallow the
+    # bug. `http.client` refuses that line; so does this.
+    if not line.startswith(b"HTTP/"):
+        raise AssertionError(
+            "the previous response wrote past its Content-Length: %r" % line[:80])
     status = int(line.split(b" ")[1])
     headers = {}
     while True:
@@ -706,6 +900,53 @@ class KeepAliveTest(RawTestCase):
         # desync it exists to catch.
         self.assertEqual(json.loads(body).get("service"), "claudepost", body)
 
+    def test_a_304_leaves_the_connection_reusable(self):
+        # A 304 is the only response this desk sends that has a status, headers
+        # and nothing after them, and it is the one the board will spend most
+        # of its life reading. If its framing is ambiguous the socket is left
+        # holding a body that never comes, and the failure lands on whatever
+        # request follows rather than on this one.
+        self.file_edition()
+        conn = self.connect()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, headers, body = conn.response()
+        self.assertEqual(status, 200)
+        self.assertTrue(body)
+
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n"
+                  b"If-None-Match: " + headers["etag"].encode() + b"\r\n\r\n")
+        status, headers, body = conn.response()
+        self.assertEqual(status, 304)
+        self.assertEqual(body, b"")
+        self.assertEqual(headers.get("content-length"), "0")
+
+        # The reuse first and the sweep after, which is this class's order
+        # everywhere: `spare()` waits out a timeout on the socket, and a
+        # `makefile` reader that has once timed out refuses every read after
+        # it. So the healthz proves the connection was left usable, and the
+        # empty sweep proves three responses came back for three requests --
+        # a 304 that wrote a body would show up as a fourth.
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
+        self.assert_is_healthz(conn.response())
+        self.assertEqual(conn.spare(), b"", "the 304 wrote something after its headers")
+
+    def test_two_if_none_match_field_lines_are_one_list(self):
+        # A proxy is entitled to split a repeated field across lines. A desk
+        # that read only the first would answer 200 to a board that asked
+        # correctly -- silently, and once every poll. Raw, because
+        # `urllib.request.Request.add_header` de-duplicates by name and
+        # `DeskTestCase.call(headers=)` cannot express two field lines at all.
+        self.file_edition()
+        conn = self.connect()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+        _status, headers, _body = conn.response()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n"
+                  b'If-None-Match: "0000000000000000"\r\n'
+                  b"If-None-Match: " + headers["etag"].encode() + b"\r\n\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 304)
+        self.assertEqual(body, b"")
+
     def test_a_refused_requests_body_never_becomes_the_next_request(self):
         # Variant A of the finding: the attacker holds no token at all. The
         # 401 is decided from the header, before anything reads the body -- so
@@ -791,6 +1032,91 @@ class KeepAliveTest(RawTestCase):
         conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
         self.assert_is_healthz(conn.response())
         self.assertEqual(conn.spare(), b"")
+
+
+class ValidatorFloodTest(RawTestCase):
+    """A validator list far longer than any honest one is a miss, not work.
+
+    ``If-None-Match`` is the one header the device plane parses, and the device
+    plane takes no token: ``GET /news.json`` is open by design, because a board
+    on a wall cannot hold a credential the operator has not typed into it. So
+    everything this desk does with that header is done for anybody who can
+    reach the port.
+
+    ``http.client`` will hand a handler a hundred header lines of 64 KB each,
+    and splitting six megabytes on commas builds a list of millions of strings
+    -- hundreds of megabytes of interned Python objects, per request, on a
+    threading server with no connection cap. The desk does not die loudly; it
+    swaps, and the board on the wall stops receiving editions.
+
+    Raw sockets rather than ``call()`` because the amplification needs REPEATED
+    header lines and a dict cannot hold two of one key -- which is also how it
+    gets past the 64 KB per-line limit that would otherwise bound it.
+    """
+
+    def flood(self, tag: bytes, lines: int = 2, per_line: int = 35000) -> bytes:
+        """`lines` header lines of junk validators, with the real tag last.
+
+        The real tag is genuinely in there, so a desk that parsed the whole
+        thing would find it and answer 304. That is what makes the assertion
+        below about the CAP and not about the tag being absent.
+        """
+        junk = b'"' + b"a" * 14 + b'",'
+        filler = junk * (per_line // len(junk))
+        out = b""
+        for i in range(lines):
+            out += b"If-None-Match: " + filler
+            out += (tag + b"\r\n") if i == lines - 1 else b'"deadbeefdeadbeef"\r\n'
+        return out
+
+    def test_a_validator_list_past_the_cap_is_a_miss(self):
+        self.file_edition()
+        conn = self.connect()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, headers, body = conn.response()
+        self.assertEqual(status, 200)
+        self.assertTrue(body)
+        tag = headers["etag"].encode()
+
+        # The same tag, in a list nothing honest would send. Past the cap the
+        # answer is a full 200: wasteful, never wrong, and the same answer a
+        # tag the desk does not recognise gets.
+        flood = self.flood(tag)
+        self.assertGreater(len(flood), 65536)
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n" + flood + b"\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 200)
+        self.assertTrue(body)
+
+        # And the connection is still usable, so the cap is a decision rather
+        # than a way of falling over.
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 200, body)
+
+    def test_a_list_inside_the_cap_still_matches(self):
+        """The cap must not break the case it exists to protect.
+
+        A board behind a cache can legitimately be handed a short list, and
+        test_a_comma_separated_list_matches covers that on the ordinary path.
+        This is the same question asked right up against the boundary, so a cap
+        that was accidentally off by a decimal place fails here.
+        """
+        self.file_edition()
+        conn = self.connect()
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
+        status, headers, _body = conn.response()
+        self.assertEqual(status, 200)
+        tag = headers["etag"].encode()
+
+        junk = b'"' + b"b" * 14 + b'",'
+        header = junk * ((4096 - len(tag) - 8) // len(junk)) + tag
+        self.assertLessEqual(len(header), 4096)
+        conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n"
+                  b"If-None-Match: " + header + b"\r\n\r\n")
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 304)
+        self.assertEqual(body, b"")
 
 
 class SocketTimeoutTest(RawTestCase):

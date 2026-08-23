@@ -104,3 +104,13 @@ CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
 # CS lines, so the console must live on USB Serial/JTAG — a UART0 console would
 # clock log bytes straight into the panel control pins.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Skip re-verifying the app image on a deep-sleep wake. The bootloader hashes
+# the whole application on every boot, and a wake IS a boot — but it is a boot
+# of an image that was verified when it was written and has been sitting in
+# flash, unpowered, ever since. On a wake that is otherwise about three seconds
+# long (boot, Wi-Fi connect, one conditional GET) this validation is the single
+# largest fixed cost, and it is paid ninety-six times a day to re-answer a
+# question whose answer cannot have changed. It is still performed on a genuine
+# power-on reset, which is when the image might actually be new.
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y

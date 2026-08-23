@@ -1,0 +1,84 @@
+menu "Claude Post power"
+
+config CLAUDEPOST_DEEP_SLEEP
+    bool "Sleep between polls (battery mode)"
+    default y
+    help
+      Turn the board into a picture frame that wakes, polls, and goes back to
+      sleep without ever powering the panel. Spectra 6 is bistable, so the last
+      edition stays on the glass while the chip draws microamps.
+
+      What it buys, on a 4200 mAh cell, assuming two content changes a day:
+
+        always on (today)     1944 mAh/day     2.2 days
+        1 min                  150-160         26-28 days
+        5 min                   35-41          100-120 days
+        15 min                  16-22          190-260 days
+        30 min                  11-17          250-380 days
+        60 min                   8-14          300-520 days
+
+      The knee is 15-30 minutes; past it, deep-sleep current and the refreshes
+      dominate and a longer interval buys progressively less. Two terms in those
+      numbers are estimates rather than measurements, which is why they are
+      ranges — GET /api/state reports what this board actually does after a day
+      on the wall.
+
+      It is ON by default, and what makes that safe is that this switch is not
+      what decides. Three runtime gates disable sleep whatever this says: no
+      cell fitted, a USB console attached, or no news URL configured. A board on
+      a bench satisfies at least one of them permanently — it is on USB, and
+      usually has no battery — so it never sleeps, `idf.py monitor` keeps
+      working, and this option changes nothing about developing on one. A board
+      on a wall satisfies none of them, and sleeps.
+
+      That asymmetry is the whole argument for the default. The alternative is
+      an option somebody has to find and turn on before the feature they
+      actually wanted exists, and a frame that runs flat in two days until they
+      do. Off by default would only have protected the case the gates already
+      protect.
+
+      Read "Getting back in" in docs/specs/2026-08-17-deep-sleep-design.md
+      before hanging one up, though: a sleeping board is a board you cannot
+      reach between wakes, and the escape hatch is KEY2 held for five seconds.
+      That is worth knowing before you need it.
+
+config CLAUDEPOST_SLEEP_SECONDS
+    int "Sleep between polls (seconds)"
+    default 900
+    range 60 86400
+    help
+      The interval when nothing has changed. Only consulted when deep sleep is
+      enabled and permitted.
+
+      This is the build-time floor of three layers: the captive portal writes an
+      override into NVS, and POST /api/sleep changes it from a phone at runtime.
+      Taking a frame off a wall and finding a USB-C cable in order to change a
+      polling interval is the thing that gets resented within a month, so the
+      other two exist and this one is only the default.
+
+      15 minutes is the knee of the curve in the table above. Shorter buys
+      freshness the reader almost never sees — this is a newspaper — and costs
+      the cell steeply below about five minutes.
+
+config CLAUDEPOST_AWAKE_WINDOW_SECONDS
+    int "How long a button wake stays reachable (seconds)"
+    default 120
+    range 10 3600
+    help
+      A timer wake sleeps again in about three seconds. A BUTTON wake means a
+      person is standing in front of the frame, so the board stays up this long
+      with the companion app's HTTP server and mDNS running, then sleeps.
+
+      Without it the companion app is effectively dead on a sleeping board: it
+      cannot discover, connect and issue a request inside a three-second window.
+      About 5.7 mAh per press, incurred only when somebody presses — the
+      standing cost is zero. Any command or button press restarts the window, so
+      a user mid-interaction is not cut off.
+
+      Half of that figure is this window and half is the refresh beside it: a
+      button wake takes the full path, RAM did not survive the sleep, so the
+      first fetch never matches the demo page in memory and the sheet is
+      reprinted even though the glass already holds it. 2.8 mAh of window, 2.3
+      of refresh, ~0.6 of being awake to do it.
+
+endmenu

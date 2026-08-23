@@ -10,9 +10,13 @@ extern "C" {
 #endif
 
 // Load the saved config into `cfg` (zeroed first). Returns true if a network SSID is stored.
+//
+// Every field but the SSID is optional, including in the sense that its key may be absent
+// from flash entirely — which is what a config written by an older firmware looks like. A
+// missing key leaves the zeroed value in place and does not change the verdict.
 bool prov_store_load(prov_config_t *cfg);
 
-// Persist `cfg` (SSID, password, news URL). Also erases the keys the
+// Persist `cfg` (SSID, password, news URL, sleep interval). Also erases the keys the
 // stock-ticker firmware used to write — one of which held an API secret.
 // Returns true if the write committed; false if opening or committing NVS failed.
 bool prov_store_save(const prov_config_t *cfg);
