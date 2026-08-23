@@ -40,10 +40,14 @@ connection. It activates the IDF environment if you have not.
 
 ## Verify before claiming anything works
 
-Four layers, three of them runnable without hardware. Run them in this order — each is faster than
+Five layers, four of them runnable without hardware. Run them in this order — each is faster than
 the next and catches a different class of mistake.
 
 ```bash
+# 0) the desk and the worker, pure logic — no Docker, no network, no API key
+sh server/test/run.sh
+sh agent/test/run.sh
+
 # 1) pure logic — nine host tests: the wire format, the demo snapshot, the fetch
 #    layer, the companion-app JSON, the quantizer, the framebuffer repack,
 #    copyfitting, chart scaling, and the compositor's tiling invariants
@@ -195,6 +199,8 @@ tools/
   make_tile.py            a photograph -> a 4bpp tile the board blits verbatim
   gen_fonts.py            regenerates components/news_core/fonts/
   flash.sh                find the board and flash it
+server/                   the desk: command queue, directives, gates, editions, and the URL the board polls
+agent/                    an example worker that files into the desk, plus the standalone no-server producer
 ```
 
 ## Working rules
@@ -330,6 +336,13 @@ tools/
   Measure it rather than trusting this line: the number has been wrong twice.
 - **`sdkconfig` holds per-developer values and is gitignored — never commit it.** Wi-Fi passwords live
   in NVS via the portal, never in Kconfig.
+- **Nothing personal belongs in this repository.** No home paths, no real hostnames, no vault paths,
+  no watchlist, no standing editorial instruction. Whatever makes a paper sound like somebody's own —
+  a rotation, a house style, a list of things that must never print — is read at runtime from an
+  `AGENT_CONTEXT_DIR` the operator points at their own directory (see `agent/README.md`'s "Bring your
+  own continuity"), never checked in. The repository ships templates only — `*.example` files and
+  `agent/context.example/` — and a repository about to be public is the wrong place to discover that
+  a path or a hostname was somebody's own.
 - The mDNS hostname is `wpnews` and the AP prefix `"WP News"` — deliberately **not** the
   `tickerboard` / `"Ticker Board"` of the project this forked from, whose shipped app resolves those
   names.

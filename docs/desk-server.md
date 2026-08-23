@@ -40,19 +40,24 @@ and the idle tick in `user_app.cpp` deliberately does *not* refresh. So a page
 going stale at 3 a.m. does not light the wall either. The badge rides out with
 the next refresh that had a reason.
 
-**2. The private half lives on an external SSD, and an SSD can be unplugged.**
-The vault is a private git repository the owner reads and edits in Obsidian.
-Putting the serving path on it would mean that pulling a disk blanks a
-newspaper. So **the vault is the source and the archive, and never the serving
-path.** That is the infrastructure form of the rule the parser already follows:
-a rejected payload leaves the previous snapshot byte-for-byte alone.
+**2. The desk holds nothing personal.** It answers the internet, so what it
+can be made to leak matters: `~/.wpnews`, mounted read-only, holds bearer
+tokens and nothing else of the owner's, and `/data` holds only the editions it
+has typeset and the schedule it was told to keep. A house style, a rotation, a
+list of things that must never print — what makes a paper sound like
+somebody's own — lives wherever the *worker's* `AGENT_CONTEXT_DIR` points, a
+directory this container never sees; see
+[`agent/README.md`](../agent/README.md). So a compromised desk loses bearer
+tokens and a schedule, never anybody's opinions.
 
 **3. This repository is public and the owner's editorial voice is not.** The
 contract belongs in the open — [`tools/edition/PROMPT.md`](../tools/edition/PROMPT.md)
 is how anybody builds a producer. The watchlist, the standing instructions, the
 blocklist, the daily briefs and every token do not. The boundary is drawn once,
-at the filesystem, and it is a **mount** rather than a `.gitignore` rule:
-nothing private is ever inside the repository to be accidentally added.
+at the filesystem — tokens in `~/.wpnews`, editorial opinions in whatever
+directory the worker's `AGENT_CONTEXT_DIR` names — rather than as a
+`.gitignore` rule: nothing private is ever inside the repository to be
+accidentally added.
 
 ## What the device already allows, and why the wire was barely touched
 
@@ -138,32 +143,17 @@ forever. Hanging both off `/api/editions/<something>/` would put two different
 kinds of identifier in one path position, told apart only by the verb after
 them, which is a thing to get wrong at three in the morning.
 
-## Three storage roots
+## Two storage roots
 
 | Root | Where | Holds |
 |---|---|---|
-| **Serving** | Docker volume → `/data` | `current`, `staged`, `editions/<id>/…`, `desk.sqlite`, the schedule cache |
+| **Serving** | Docker volume → `/data` | `current`, `staged`, `editions/<id>/…`, `desk.sqlite`, `schedule.json` |
 | **Secrets** | `~/.wpnews/` → `/run/secrets`, ro | `tokens.json`, `agent.env` |
 
-**Only one subdirectory of the vault is mounted.** A vault holds somebody's
-whole second brain, and this container is reachable from the internet. The blast
-radius is chosen rather than inherited.
-
-**Serving never depends on the vault.** Unplug the SSD and the worker cannot
-file, but the board keeps receiving the last edition; `/api/state` reports
-`vault: "unavailable"` and the desk runs on the last schedule it read
-successfully. The condition is logged once per transition, not once per poll.
-
-**Each file has exactly one writer.** `standing.md`, `blocklist.md`,
-`watchlist.json` and `schedule.json` are authored in the vault — by the owner in
-Obsidian, or by `PUT /api/schedule` writing that same file. The database is a
-parsed cache, never a second source of truth. A `schedule.json` that does not
-validate is rejected into `schedule.errors.md` beside it and the previous
-schedule stays in force, because silently ignoring a bad edit is how somebody
-spends a week wondering why 06:00 does nothing.
-
-**Secrets are not in the vault.** The vault is a git repository, and a private
-repository is one setting away from a public one while git history is permanent.
+**Secrets are not in the repository, the image, or any synced directory.**
+`~/.wpnews/` sits outside all three — the repository is public and git history
+is permanent, and a private repository or a synced folder is one setting away
+from being public too.
 
 ## Commands and directives are different objects
 
@@ -174,9 +164,8 @@ This is the distinction most easily got wrong, and getting it wrong is silent.
 
 Put the second in the queue and it applies to exactly one edition, after which
 the desk forgets it and the owner concludes the system ignored them. So
-directives are their own store — additive, removable, rendered into every
-worker run's prompt, and mirrored into `standing.md` so they can be read and
-edited as prose.
+directives are their own store — additive, removable, and rendered into every
+worker run's prompt until deleted.
 
 The queue itself is ordinary: priority then FIFO, a thirty-minute lease, three
 attempts, and a deadline past which a pending command expires rather than
@@ -199,6 +188,16 @@ goes up at the boundary. `wake` is when the **worker** runs. `poll` is what the
 **device** is told to do. Both are on one document because they are one decision
 from the owner's side — *what happens at six* — and splitting them across two
 files would make it possible for them to disagree.
+
+**`/data/schedule.json` is the desk's own file, not a mirror of anything.**
+`PUT /api/schedule` is its only writer; the desk reads it once at start-up and
+again in the same call that handles a PUT, and nowhere else — `tick()`
+deliberately does not re-read it, because polling a file the desk just wrote
+would be the desk watching its own output. Hand-editing it inside the running
+volume therefore does nothing until the container restarts. (A deployment
+upgraded from before this file existed may still carry an inert
+`<data>/schedule.cache.json` beside it — nothing reads it, and it is safe to
+delete.)
 
 The three publish policies are genuinely different behaviours:
 
@@ -264,17 +263,19 @@ gets its own spec if measured battery numbers justify the re-render.
 ## The worker
 
 A separate container from the desk, and separate for the reason
-[`agent/standalone/README.md`](../agent/standalone/README.md) gives for splitting
-filing from serving: **filing is an event that can fail, serving is a condition
-that must hold.** One container means a failed filing takes the served page down
-with it, which converts a stale paper — the failure the firmware is designed to
+[`agent/README.md`](../agent/README.md) gives for splitting filing from
+serving: **filing is an event that can fail, serving is a condition that must
+hold.** One container means a failed filing takes the served page down with
+it, which converts a stale paper — the failure the firmware is designed to
 survive and badge — into no paper at all.
 
 It claims an instruction over a long poll, assembles a prompt from `PROMPT.md`
-(the contract, from the repository) plus the vault's `standing.md`,
-`blocklist.md` and `watchlist.json` (the voice), runs `claude --print` with the
-same narrow allowlist `file-edition.sh` uses, opens a draft, uploads, and asks
-the desk to proof it.
+(the contract, from the repository), the operator's own context files if
+`AGENT_CONTEXT_DIR` points anywhere (the voice — see `agent/README.md`'s
+"Bring your own continuity"), and the desk's own standing directives, then
+runs `claude --print` with its own narrow allowlist — reads, writes, search,
+and the two contract scripts, deliberately without `render-check.sh` or any
+market-data MCP — opens a draft, uploads, and asks the desk to proof it.
 
 Then it does the thing this whole arrangement exists to make possible: **it
 fetches the proof sheets back and looks at them.** The desk owns the only

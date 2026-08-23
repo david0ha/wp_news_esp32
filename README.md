@@ -296,6 +296,8 @@ tools/
   make_tile.py            a photograph -> a 4bpp Spectra 6 tile
   gen_fonts.py            regenerates components/news_core/fonts/
   flash.sh                find the board and flash it
+server/                   the desk: command queue, directives, gates, editions, and the URL the board polls
+agent/                    an example worker that files into the desk, plus the standalone no-server producer
 app/                      React Native companion app — setup + control over the LAN
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 ```
@@ -304,6 +306,7 @@ third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: reading the boot log, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
+- [docs/desk-server.md](docs/desk-server.md) — the always-on desk: the command queue, the schedule, and the typesetting gate run before every candidate page
 - [docs/pages.md](docs/pages.md) — the two pages, the layout grid, and the font decision
 - [docs/epaper-13in3.md](docs/epaper-13in3.md) — the panel driver, the refresh policy, the self-test
 - [docs/pinout.md](docs/pinout.md) — GPIO assignments and the three traps

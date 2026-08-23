@@ -1003,7 +1003,7 @@ $ python3 tools/mock_news_server.py --validate components/news_core/test/host/fi
 validate: …/fixtures/news.json — ok (4 stories, 22 figures, 6 briefs, tiles from sim/tiles, 0 warning(s))
 ```
 
-The scheduled desk in [`agent/standalone/`](../agent/standalone/README.md) runs this before it files,
+The scheduled producer in [`agent/standalone/`](../agent/standalone/README.md) runs this before it files,
 because a page the firmware would reject is a wasted cycle whose failure shows up hours later as a
 `STALE` badge with nothing to explain it.
 

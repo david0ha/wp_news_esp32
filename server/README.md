@@ -12,6 +12,9 @@ else copies it somewhere — and neither can be **told** anything. This is the
 third thing: a service that can be asked, from anywhere, by anything holding a
 token.
 
+The desk knows nothing about notes, a vault, or where an agent keeps its
+opinions — see [`agent/README.md`](../agent/README.md).
+
 The design and the arguments behind it are in
 [docs/desk-server.md](../docs/desk-server.md). This file is how to run it.
 
@@ -57,9 +60,9 @@ server/tools/mint-token.sh operator me
 server/tools/mint-token.sh producer agent
 ```
 
-Both land in `~/.wpnews/tokens.json`, mode 0600, **outside the repository** —
-because the repository is public and git history is permanent, and a private
-repository is one setting away from a public one.
+Both land in `~/.wpnews/tokens.json`, mode 0600, **outside the repository,
+which is public, and outside any directory you sync** — git history is
+permanent, and a private repository is one setting away from a public one.
 
 **2. The agent's own credential.** `~/.wpnews/agent.env`, also 0600:
 
@@ -86,6 +89,7 @@ cp server/tunnel/wpnews.yml.example ~/.cloudflared/wpnews.yml
 
 ```sh
 docker network create wpnews        # once; the worker joins this too
+cp server/.env.example server/.env  # then fill it in
 docker compose -f server/compose.yaml up -d
 docker compose -f server/compose.yaml logs -f desk
 ```
@@ -152,7 +156,16 @@ every tile. That is
 the wire returns, not what is on the disk", automated, and it is the check that
 catches a publish that copied the wrong file or copied nothing.
 
-## Two things that will bite
+## Three things that will bite
+
+**The desk owns `/data/schedule.json`, and hand-editing the volume does
+nothing until a restart.** `PUT /api/schedule` is its only writer; the desk
+reads the file once at start-up and again in the same call that handles a PUT,
+never on a timer — polling a file it just wrote would be the desk watching its
+own output. Reaching into the volume and editing it directly is invisible
+until the container comes back up. (A deployment upgraded from before this
+file existed may still be carrying an inert `<data>/schedule.cache.json`
+beside it — nothing reads it; it is safe to delete.)
 
 **Bot Fight Mode must stay off.** It "may challenge API or mobile app traffic"
 and the challenge assumes a JavaScript engine. The board has none, so a

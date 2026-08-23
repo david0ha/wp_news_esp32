@@ -11,10 +11,11 @@ it wins.
 >
 > [`server/`](../../server/README.md) is the other path — an always-on service that can be *told*
 > things: a command queue agents push into from anywhere, a schedule, and a typesetting gate on
-> every candidate page. It **reuses this directory rather than replacing it**: `PROMPT.md` is still
-> the standing instructions it hands the agent, `render-check.sh` is still the gate, and
-> `mock_news_server.py --validate` is still the schema check. What it adds is somewhere to put an
-> instruction at three in the morning. See [docs/desk-server.md](../../docs/desk-server.md).
+> every candidate page. [`agent/README.md`](../README.md) is the containerized worker that talks to
+> it. Both **reuse this directory rather than replacing it**: `PROMPT.md` is still the standing
+> instructions handed to the agent, `render-check.sh` is still the gate, and
+> `mock_news_server.py --validate` is still the schema check. What the desk adds is somewhere to put
+> an instruction at three in the morning. See [docs/desk-server.md](../../docs/desk-server.md).
 
 Twice a day, `file-edition.sh` wakes Claude Code headless, hands it
 [`PROMPT.md`](../../tools/edition/PROMPT.md) — the desk's standing instructions — and lets it research **one company**
