@@ -33,7 +33,7 @@ RUN useradd --create-home --uid 10001 --shell /bin/bash worker
 
 WORKDIR /repo
 COPY --chown=worker:worker tools/ tools/
-COPY --chown=worker:worker agent/ /app/agent/
+COPY --chown=worker:worker agent/loop.py /app/agent/loop.py
 
 ENV PYTHONUNBUFFERED=1 \
     WPNEWS_DESK=http://desk:8080 \

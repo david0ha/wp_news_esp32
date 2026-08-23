@@ -191,7 +191,7 @@ sim/                      desktop simulator — renders the real UI to 1200x1600
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 tools/
   mock_news_server.py     the contract from a fixed payload — the reference producer
-  edition/                the real producer: an agent prompt, a shell driver, two launchd plists
+  edition/                the shared producer contract: PROMPT.md and the typesetting gate
   make_tile.py            a photograph -> a 4bpp tile the board blits verbatim
   gen_fonts.py            regenerates components/news_core/fonts/
   flash.sh                find the board and flash it
