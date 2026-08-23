@@ -37,7 +37,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_a_worker_with_no_environment_at_all_gets_the_images_defaults(self):
         # The paths the Dockerfile lays down. A container started with nothing
-        # set reaches the desk over the wpnews network and files, which is what
+        # set reaches the desk over the claudepost network and files, which is what
         # makes agent/compose.yaml's environment block optional rather than
         # load-bearing.
         cfg = loop.Settings.from_env({})

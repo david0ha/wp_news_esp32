@@ -140,7 +140,7 @@ class DeskClient:
         name here for long: the loop makes a directory of it and empties that
         directory with ``shutil.rmtree``, so an id of ``../..`` from a desk
         this worker should not have trusted -- a compromised one, a
-        misconfigured ``WPNEWS_DESK``, a MITM on plain HTTP -- deletes its way
+        misconfigured ``CLAUDEPOST_DESK``, a MITM on plain HTTP -- deletes its way
         out of the scratch. The precondition is real enough to check for: this
         container is the one holding the API key.
 
@@ -251,7 +251,7 @@ def read_token(secrets: str) -> str:
     """The producer token, from the mounted secrets directory.
 
     Args:
-        secrets: the directory ``~/.wpnews`` is mounted at, read-only.
+        secrets: the directory ``~/.claudepost`` is mounted at, read-only.
 
     Two shapes are accepted because two things write them: ``agent.env`` is what
     a human edits, ``tokens.json`` is what the desk reads. ``agent.env`` wins
@@ -266,7 +266,7 @@ def read_token(secrets: str) -> str:
         SystemExit: with code 2, when there is no producer token to be had.
     """
     env_path = os.path.join(secrets, "agent.env")
-    token = _read_env_file(env_path).get("WPNEWS_TOKEN")
+    token = _read_env_file(env_path).get("CLAUDEPOST_TOKEN")
     if token:
         return token
 
@@ -278,7 +278,7 @@ def read_token(secrets: str) -> str:
             if entry.get("scope") == "producer":
                 return entry["token"]
 
-    LOG.error("no producer token: put WPNEWS_TOKEN in %s, or a producer entry in %s",
+    LOG.error("no producer token: put CLAUDEPOST_TOKEN in %s, or a producer entry in %s",
               env_path, tokens_path)
     raise SystemExit(2)
 
@@ -287,10 +287,10 @@ def load_agent_env(secrets: str) -> dict:
     """Everything in ``agent.env`` except the desk token, for the child process.
 
     Args:
-        secrets: the directory ``~/.wpnews`` is mounted at, read-only.
+        secrets: the directory ``~/.claudepost`` is mounted at, read-only.
 
     Returns:
-        The file's ``KEY=value`` pairs, minus ``WPNEWS_TOKEN``. Empty when there
+        The file's ``KEY=value`` pairs, minus ``CLAUDEPOST_TOKEN``. Empty when there
         is no such file, which is a warning at startup rather than an error
         here.
 
@@ -300,12 +300,12 @@ def load_agent_env(secrets: str) -> dict:
     ``agent/standalone/file-edition.sh`` guards against by checking ``PATH``
     first.
 
-    ``WPNEWS_TOKEN`` is dropped on purpose. It authorises writing to the desk;
+    ``CLAUDEPOST_TOKEN`` is dropped on purpose. It authorises writing to the desk;
     the child is a model with a shell, and it has no use for the token and every
     reason not to see it.
     """
     env = _read_env_file(os.path.join(secrets, "agent.env"))
-    env.pop("WPNEWS_TOKEN", None)
+    env.pop("CLAUDEPOST_TOKEN", None)
     return env
 
 

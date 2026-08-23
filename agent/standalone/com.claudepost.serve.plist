@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  com.wpnews.serve — hold the edition directory open on the LAN, always.
+  com.claudepost.serve — hold the edition directory open on the LAN, always.
 
-  Separate from com.wpnews.edition on purpose. Filing is an event that happens twice a day and can
+  Separate from com.claudepost.edition on purpose. Filing is an event that happens twice a day and can
   fail; serving is a condition that must hold continuously, because the board polls every five
   minutes and does not care that nothing new has been filed since dawn. Putting both in one job
   means a failed filing takes the served page down with it, which turns a stale paper — the failure
   the firmware is designed to survive and badge — into no paper at all.
 
   Install:
-      cp agent/standalone/com.wpnews.serve.plist ~/Library/LaunchAgents/
-      launchctl load ~/Library/LaunchAgents/com.wpnews.serve.plist
+      cp agent/standalone/com.claudepost.serve.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.claudepost.serve.plist
 
   Then point the board at it, once:
-      curl -X POST http://wpnews.local/api/news -d '{"url":"http://<this mac>.local:8123/news.json"}'
+      curl -X POST http://claudepost.local/api/news -d '{"url":"http://<this mac>.local:8123/news.json"}'
 
   This serves a directory read-only over plain HTTP on a home network, with no authentication. That
   is the same posture as the rest of this project's LAN services and the same one the firmware
@@ -22,11 +22,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.wpnews.serve</string>
+    <string>com.claudepost.serve</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/YOUR-USERNAME/Documents/wp_news_esp32/agent/standalone/file-edition.sh</string>
+        <string>/Users/YOUR-USERNAME/Documents/claudepost/agent/standalone/file-edition.sh</string>
         <string>--serve-only</string>
     </array>
 
@@ -37,8 +37,8 @@
         <key>HOME</key>
         <string>/Users/YOUR-USERNAME</string>
         <key>EDITION_DIR</key>
-        <string>/Users/YOUR-USERNAME/.wpnews/edition</string>
-        <key>WPNEWS_PORT</key>
+        <string>/Users/YOUR-USERNAME/.claudepost/edition</string>
+        <key>CLAUDEPOST_PORT</key>
         <string>8123</string>
     </dict>
 
@@ -48,8 +48,8 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/serve.out</string>
+    <string>/Users/YOUR-USERNAME/.claudepost/edition/log/serve.out</string>
     <key>StandardErrorPath</key>
-    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/serve.err</string>
+    <string>/Users/YOUR-USERNAME/.claudepost/edition/log/serve.err</string>
 </dict>
 </plist>

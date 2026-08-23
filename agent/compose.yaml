@@ -1,6 +1,6 @@
 # The worker.
 #
-#   docker network create wpnews            # once; the desk joins it too
+#   docker network create claudepost            # once; the desk joins it too
 #   cp agent/.env.example agent/.env        # then fill it in
 #   docker compose -f agent/compose.yaml up -d
 #
@@ -17,10 +17,10 @@
 # handles a desk that is not up yet, doubling to five minutes and then staying
 # there, so a worker started first waits rather than exits.
 
-# A different project name from server/compose.yaml's `wpnews`, on purpose:
+# A different project name from server/compose.yaml's `claudepost`, on purpose:
 # compose removes the containers of a project that are not in the file it was
 # given, so sharing a name would make bringing the worker up tear the desk down.
-name: wpnews-agent
+name: claudepost-agent
 
 services:
   agent:
@@ -28,13 +28,13 @@ services:
       # The repository root: the image carries tools/ as well as the loop.
       context: ..
       dockerfile: agent/Dockerfile
-    image: wpnews-agent:latest
+    image: claudepost-agent:latest
     restart: unless-stopped
-    networks: [wpnews]
+    networks: [claudepost]
     environment:
       # http://desk:8080 is the desk's name on the network below. See
       # agent/.env.example for what to put here when the desk is elsewhere.
-      WPNEWS_DESK: ${WPNEWS_DESK:-http://desk:8080}
+      CLAUDEPOST_DESK: ${CLAUDEPOST_DESK:-http://desk:8080}
       # Inside the container the context directory is always /context. Whether
       # anything is *at* /context is the commented volume below, and the worker
       # treats a directory that is not there as no context at all -- which is
@@ -44,12 +44,12 @@ services:
       # Empty means "the image's default allowlist" -- see DEFAULT_TOOLS in
       # agent/loop.py. This is where a market-data MCP goes.
       AGENT_TOOLS: ${AGENT_TOOLS:-}
-      WPNEWS_LOG_LEVEL: ${WPNEWS_LOG_LEVEL:-INFO}
+      CLAUDEPOST_LOG_LEVEL: ${CLAUDEPOST_LOG_LEVEL:-INFO}
       TZ: ${TZ:-UTC}
     volumes:
       # Tokens and the API key. Read-only, and outside the repository, because
       # the repository is public and git history is permanent.
-      - ${HOME}/.wpnews:/run/secrets:ro
+      - ${HOME}/.claudepost:/run/secrets:ro
       # Bring your own continuity. Uncomment this line and set
       # AGENT_CONTEXT_DIR in agent/.env to a directory on THIS machine -- a
       # folder of an Obsidian vault, a git checkout of notes, anything. Nothing
@@ -63,18 +63,18 @@ services:
       # proof sheets fetched back to look at. Named rather than a bind mount --
       # it is scratch, it is rebuilt per command, and nobody reads it from the
       # host.
-      - wpnews-scratch:/scratch
+      - claudepost-scratch:/scratch
     security_opt:
       - no-new-privileges:true
 
 volumes:
-  wpnews-scratch:
+  claudepost-scratch:
 
 networks:
   # Declared external rather than created here, because the desk joins it from
   # its own side and neither compose file owns the other. Created once, by hand:
-  #   docker network create wpnews
+  #   docker network create claudepost
   # `external: true` is what makes a missing network fail legibly at `up`
   # instead of silently creating a second, empty one.
-  wpnews:
+  claudepost:
     external: true

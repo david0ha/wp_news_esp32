@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  com.wpnews.edition — file a front page twice a day, and serve it in between.
+  com.claudepost.edition — file a front page twice a day, and serve it in between.
 
   Two editions, chosen against the New York session rather than against the clock:
 
@@ -15,9 +15,9 @@
   filing more often costs nothing but rarely buys anything either.
 
   Install:
-      cp agent/standalone/com.wpnews.edition.plist ~/Library/LaunchAgents/
-      launchctl load  ~/Library/LaunchAgents/com.wpnews.edition.plist
-      launchctl start com.wpnews.edition            # file one now, to check it works
+      cp agent/standalone/com.claudepost.edition.plist ~/Library/LaunchAgents/
+      launchctl load  ~/Library/LaunchAgents/com.claudepost.edition.plist
+      launchctl start com.claudepost.edition            # file one now, to check it works
 
   The paths below are absolute because launchd does not run a login shell — it has no PATH worth
   the name, no nvm, no pyenv, and no idea where `claude` lives. Every one of those is a real way
@@ -26,11 +26,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.wpnews.edition</string>
+    <string>com.claudepost.edition</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/YOUR-USERNAME/Documents/wp_news_esp32/agent/standalone/file-edition.sh</string>
+        <string>/Users/YOUR-USERNAME/Documents/claudepost/agent/standalone/file-edition.sh</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -40,7 +40,7 @@
         <key>HOME</key>
         <string>/Users/YOUR-USERNAME</string>
         <key>EDITION_DIR</key>
-        <string>/Users/YOUR-USERNAME/.wpnews/edition</string>
+        <string>/Users/YOUR-USERNAME/.claudepost/edition</string>
     </dict>
 
     <key>StartCalendarInterval</key>
@@ -56,8 +56,8 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/launchd.out</string>
+    <string>/Users/YOUR-USERNAME/.claudepost/edition/log/launchd.out</string>
     <key>StandardErrorPath</key>
-    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/launchd.err</string>
+    <string>/Users/YOUR-USERNAME/.claudepost/edition/log/launchd.err</string>
 </dict>
 </plist>

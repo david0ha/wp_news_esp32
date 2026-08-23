@@ -7,7 +7,7 @@
 # a failed filing take the served page down with it, which converts a stale
 # paper (the failure the firmware is designed to survive and badge) into no
 # paper at all. That is the same argument agent/standalone/README.md makes for
-# splitting com.wpnews.edition from com.wpnews.serve, and it does not stop being
+# splitting com.claudepost.edition from com.claudepost.serve, and it does not stop being
 # true inside Docker.
 #
 # The worker holds the operator's credentials and, if one is mounted, reads a
@@ -15,7 +15,7 @@
 # the two exposed through the tunnel.
 #
 # Build context is the REPOSITORY ROOT:
-#     docker build -f agent/Dockerfile -t wpnews-agent .
+#     docker build -f agent/Dockerfile -t claudepost-agent .
 
 FROM node:22-slim
 
@@ -40,10 +40,10 @@ COPY --chown=worker:worker tools/ tools/
 COPY --chown=worker:worker agent/*.py /app/agent/
 
 ENV PYTHONUNBUFFERED=1 \
-    WPNEWS_DESK=http://desk:8080 \
-    WPNEWS_SECRETS=/run/secrets \
-    WPNEWS_REPO=/repo \
-    WPNEWS_SCRATCH=/scratch \
+    CLAUDEPOST_DESK=http://desk:8080 \
+    CLAUDEPOST_SECRETS=/run/secrets \
+    CLAUDEPOST_REPO=/repo \
+    CLAUDEPOST_SCRATCH=/scratch \
     HOME=/home/worker
 
 RUN mkdir -p /scratch && chown worker:worker /scratch

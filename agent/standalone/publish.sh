@@ -12,7 +12,7 @@
 #
 # Credentials: interactively, `npx wrangler login` once is enough. Under launchd
 # there is no browser and no keychain prompt, so put a token in
-# ~/.wpnews/cloudflare.env (chmod 600) and this picks it up:
+# ~/.claudepost/cloudflare.env (chmod 600) and this picks it up:
 #
 #   CLOUDFLARE_API_TOKEN=...
 #   CLOUDFLARE_ACCOUNT_ID=...
@@ -22,7 +22,7 @@ set -eu
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPO=$(CDPATH='' cd -- "$HERE/../.." && pwd)
 
-EDITION_DIR="${EDITION_DIR:-$HOME/.wpnews/edition}"
+EDITION_DIR="${EDITION_DIR:-$HOME/.claudepost/edition}"
 PUBLIC_DIR="$HERE/public"
 
 DRY_RUN=0
@@ -86,9 +86,9 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 # --- deploying ------------------------------------------------------------
-if [ -f "$HOME/.wpnews/cloudflare.env" ]; then
+if [ -f "$HOME/.claudepost/cloudflare.env" ]; then
     # shellcheck disable=SC1091
-    . "$HOME/.wpnews/cloudflare.env"
+    . "$HOME/.claudepost/cloudflare.env"
     export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
 fi
 
