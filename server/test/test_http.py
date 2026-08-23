@@ -159,10 +159,17 @@ class DevicePlaneTest(DeskTestCase):
         for path in ("/", "/index.html", "/watchlist.json", "/standing.md",
                      "/schedule.json", "/desk.sqlite", "/data/desk.sqlite",
                      "/editions", "/log/2026-08-19.json", "/tiles/", "/tiles/pic",
-                     "/tiles/pic.bin.bak", "/vault/standing.md", "/api",
+                     "/tiles/pic.bin.bak", "/vault/standing.md",
                      "/../etc/passwd", "/tiles/../news.json"):
             status, _, _ = self.call("GET", path)
             self.assertIn(status, (400, 404), "%s answered %d" % (path, status))
+
+        # /api is a control-plane path by the router's own say-so, and the
+        # control plane authenticates before it matches a route -- so an
+        # anonymous caller is refused without learning which routes exist. That
+        # is 401 rather than 404, and asserting the 401 is what makes this test
+        # say the thing the code means.
+        self.assertEqual(self.call("GET", "/api")[0], 401)
 
     def test_the_control_plane_is_not_reachable_without_a_token(self):
         for path in ("/api/state", "/api/schedule", "/api/commands", "/api/editions"):
