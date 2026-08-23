@@ -193,6 +193,16 @@ static const char *EffectiveUrl(const prov_config_t *cfg)
 // The interval in force, of the three layers that can set it: the value carried
 // across the sleep (which is what POST /api/sleep changed), else NVS from the
 // setup form, else the build-time default.
+//
+// It has a second reader, and the second reader cannot see all three layers:
+// user_app.cpp's effective_cadence() resolves the local layer as
+// `rs->sleep_seconds ? rs->sleep_seconds : power_default_sleep_seconds()` —
+// RTC, then Kconfig, with no NVS in it. The two agree only because THIS boot
+// writes `rs->sleep_seconds = local_seconds` below, on every path, before
+// UserApp_TaskInit() can run: the NVS layer is already folded into the field
+// that function reads. Move or condition that write and the board's awake half
+// silently stops honouring the setup form's interval, which is the same shape
+// as R1 — two copies of one rule, only one of them read.
 static uint32_t EffectiveSleepSeconds(const prov_config_t *cfg, const wp_rtc_state_t *rs)
 {
 	if (rs->sleep_seconds) {

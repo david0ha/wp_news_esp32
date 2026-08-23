@@ -71,8 +71,14 @@ config CLAUDEPOST_AWAKE_WINDOW_SECONDS
 
       Without it the companion app is effectively dead on a sleeping board: it
       cannot discover, connect and issue a request inside a three-second window.
-      About 2.8 mAh per press, incurred only when somebody presses — the
+      About 5.7 mAh per press, incurred only when somebody presses — the
       standing cost is zero. Any command or button press restarts the window, so
       a user mid-interaction is not cut off.
+
+      Half of that figure is this window and half is the refresh beside it: a
+      button wake takes the full path, RAM did not survive the sleep, so the
+      first fetch never matches the demo page in memory and the sheet is
+      reprinted even though the glass already holds it. 2.8 mAh of window, 2.3
+      of refresh, ~0.6 of being awake to do it.
 
 endmenu

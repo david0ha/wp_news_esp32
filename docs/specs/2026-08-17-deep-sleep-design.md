@@ -408,9 +408,10 @@ reach. Four layers, because this is the failure mode that turns a frame into a
 brick.
 
 1. **KEY2 held 5 s → AP portal.** GPIO 0/2/3/5 are all RTC GPIOs, so `ext1`
-   wakes on any of them. **But the hold detection currently lives inside `UiTask`
-   (`user_app.cpp:472`), which under deep sleep may never run.** It moves to the
-   top of the full path, checked against the wake cause. This is not optional —
+   wakes on any of them. **But the hold detection currently lives inside `UiTask`,
+   which under deep sleep may never run.** It moves to the top of the full path
+   — `user_app_check_force_ap_at_boot()`, called from `app_main` before the panel
+   is powered — checked against the wake cause. This is not optional —
    without it the documented escape hatch stops working the day deep sleep ships.
 2. **No cell → never sleep.** `board_io_battery_present()` false (USB power, no
    battery fitted) means `POWER_STAY_AWAKE` unconditionally. Development,
@@ -428,9 +429,22 @@ A TIMER wake sleeps again immediately. An **EXT1 wake means a person is standing
 in front of the frame**, so the full path stays up for `AWAKE_WINDOW_SECONDS`
 (120) with `device_api` and mDNS serving, then sleeps.
 
-About 2.8 mAh per press, incurred only when someone presses. The standing cost is
-zero. Without this the companion app is effectively dead on a sleeping board —
-it can never win the race against a three-second window.
+About **5.7 mAh per press**, incurred only when someone presses. The standing
+cost is zero. Without this the companion app is effectively dead on a sleeping
+board — it can never win the race against a three-second window.
+
+The window itself is only half of that. A button wake takes the full path, and
+the full path prints: RAM did not survive the sleep, so `s_data` is the demo
+snapshot and the first fetch always hashes differently from it, so the sheet is
+reprinted even though the glass already holds exactly that edition. So a press
+costs 2.8 mAh of window (120 s at 0.023 mAh/s), 2.3 mAh of refresh, and ~0.6 for
+the 25 seconds of being awake to do it.
+
+Suppressing the reprint by comparing against `power_state()->content_hash` looks
+obvious and is not safe: `present_full()` also publishes that hash after a page
+swap to A2, after the self-test and after `force_ap_mode()`'s overlay, so a match
+does not prove the front page is what is hanging on the glass. The reprint stays;
+the number beside it is now the true one.
 
 ## 9. The board measures itself
 

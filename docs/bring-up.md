@@ -360,7 +360,8 @@ I app: awake window closed — sleeping 900s from policy (fetched page printed y
 ```
 
 and between those the boot proceeds through the whole of §2 — `epd6`, `LvglPort`, the refresh — before
-sleeping. This is the expensive kind, and on a normal day there should be about two of them. The last
+sleeping. `printing, then sleeping` is the line that says this wake has a zero-length window: it got
+up to print one page and will sleep the moment that page is on the paper. This is the expensive kind, and on a normal day there should be about two of them. The last
 line is where the accounting happens rather than at the decision: `fetched page printed yes` is what
 clears the failure count, because a wake that decided to print and then failed to fetch anything has
 printed nothing, and a board that called that healthy would go on doing it every fifteen minutes. It
@@ -375,7 +376,12 @@ I main: wake=button fetch=not_attempted -> awake (cadence 900s from policy, fail
 
 `fetch=not_attempted` is correct here rather than a failure — a button wake does not run the quiet
 poll, because a person is standing in front of the frame and the point is to be reachable, not to be
-quick. The interval still appears in the line; it is what the board will use when the window closes,
+quick. **The sheet reprints, and that is not a fault.** RAM did not survive the sleep, so the
+snapshot in memory is the demo page and the first fetch never hashes the same as it — so a press
+buys a twenty-five second flash that ends with the edition already on the glass. It is why a press
+costs about 5.7 mAh rather than the window's 2.8; see §8 of the
+[deep-sleep design](specs/2026-08-17-deep-sleep-design.md) for why suppressing it would not be
+safe. The interval still appears in the line; it is what the board will use when the window closes,
 recomputed at that moment. A button wake that prints nothing counts no failure either: somebody
 looked at the frame, which is not the board's network going away.
 
@@ -394,6 +400,32 @@ desk has nothing but its own interval. Note also what does *not* happen: a board
 away never puts up the captive portal, because doing that on every wake would flatten the cell in
 under three weeks while showing a setup screen nobody is looking at. The backoff and the rest of the
 decision are §3 and §7 of the [deep-sleep design](specs/2026-08-17-deep-sleep-design.md).
+
+**The symptom worth knowing by name: the wake said `changed` and nothing printed.** A wake whose
+quiet fetch came back `changed` must end in a refresh. If the log shows
+
+```
+I main: wake=timer fetch=changed -> refresh (cadence 900s from policy, fails 0)
+...
+I app: awake window closed — sleeping 900s from policy (fetched page printed no, fails 1)
+```
+
+with no refresh between them, then `NewsTask`'s own fetch did not resolve into a page this boot.
+Two lines say which:
+
+- `the first fetch of this boot failed — leaving the printed edition on the glass` — the desk
+  answered the quiet path and then did not answer `NewsTask`. `fails` climbing across wakes is the
+  correct behaviour and the backoff will slow the board down.
+- `no snapshot within 120000 ms — …` — `NewsTask` neither succeeded nor gave up inside the backstop,
+  which means it is stuck rather than slow. Two minutes covers five attempts at the port's 15 s
+  timeout plus every photograph in the edition, so this line is a bug report, not a slow network.
+
+What must **never** appear is that pair with no reason line at all between them, and the glass
+unchanged wake after wake with `fetch=changed` every time. That was the shape of the bug the zero
+window used to have — the page arrived a moment after a fifteen-second stopwatch ran out and was
+discarded unread — and it self-perpetuated, because a page that never printed never publishes its
+hash or its tag, so the next wake fetched the same changed edition and did the same thing. Hourly,
+forever, with every log line reading `refresh`.
 
 Two lines you should never see, both from `power.c`, both meaning a button will not wake the board:
 `GPIO46 cannot wake the chip (RTC GPIOs are 0..21)` and `no usable wake pins — only the timer can
