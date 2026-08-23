@@ -139,6 +139,33 @@ static int s_btn_count;
  * than a blank panel, and the real one lands on the next poll anyway. */
 #define FIRST_PAINT_WAIT_MS 15000
 
+/* The same wait on a TIMER wake, where it is a BACKSTOP rather than a budget.
+ *
+ * A timer wake reaches the full path only because the quiet path found new
+ * content, so it is here to print exactly one page and then sleep — and the
+ * moment it may sleep is when the first fetch has RESOLVED, not when a
+ * stopwatch says so. NewsTask says which of the two happened: APP_CMD_DATA
+ * when it has a page, APP_CMD_FETCH_FAILED when it has given up. Either ends
+ * this wait, so on every ordinary wake the number below is never reached.
+ *
+ * Fifteen seconds cannot be the answer here. The quiet path already spent a
+ * connect and a fetch, NewsTask then re-fetches the JSON and every photograph
+ * in the edition — the cache did not survive the sleep — and on a slow network
+ * that lands past fifteen seconds. What used to happen then was the failure
+ * this constant exists to remove: the wait timed out, the loop's zero-length
+ * window fired on its first pass, and the APP_CMD_DATA that arrived a moment
+ * later was discarded. The edition never reached the glass, the wake counted a
+ * failure, and the next wake did the same thing — hourly, forever, with every
+ * log line reading `fetch=changed -> refresh`.
+ *
+ * Two minutes, derived rather than picked: the definitive-failure path is
+ * five attempts at the port's 15,000 ms timeout plus four FIRST_RETRY_SECONDS
+ * waits, which is 87 seconds, and the success path's tail is at most
+ * UI_TILE_SLOTS photographs against the same timeout. Past two minutes
+ * NewsTask is not slow, it is stuck, and a board that printed nothing is
+ * better than a board that never sleeps again. */
+#define FIRST_PAINT_WAIT_TIMER_MS 120000
+
 /* Poll interval used for the first few attempts of a boot, so a first fetch
  * that lands a moment before the server does is not punished with a whole
  * interval of blank panel.
@@ -168,6 +195,8 @@ typedef enum {
     APP_CMD_DISPLAY_TEST,    /* run epd6_selftest()                  */
     APP_CMD_DATA,            /* NewsTask published a new snapshot   */
     APP_CMD_SET_SLEEP,       /* ival = seconds between polls asleep  */
+    APP_CMD_FETCH_FAILED,    /* NewsTask's first fetch of this boot   *
+                              * resolved with nothing to print        */
 } app_cmd_kind_t;
 
 typedef struct {
@@ -703,6 +732,14 @@ static void handle_cmd(const app_cmd_t *c)
         push_data_to_ui();
         present_full();
         break;
+    case APP_CMD_FETCH_FAILED:
+        /* Nothing to do, and that is the whole of it: this command carries no
+         * page, touches no pixel and costs no refresh. It exists so that
+         * await_first_snapshot() learns the first fetch is over rather than
+         * waiting out a clock — see FIRST_PAINT_WAIT_TIMER_MS. Reaching
+         * handle_cmd() at all means it arrived after that wait had already
+         * ended, which is ordinary and means nothing. */
+        break;
     }
 }
 
@@ -764,6 +801,34 @@ static void handle_press(button_id_t id)
  * something else already reached the glass while we waited and there is no
  * first page left to protect.
  */
+/* No snapshot is coming. Whether that is worth a refresh depends entirely on
+ * what is already hanging on the glass, and after deep sleep shipped there are
+ * two different answers.
+ *
+ * On a board that has just been switched on, the panel holds whatever the last
+ * firmware left there — or nothing — and a complete front page badged DEMO
+ * beats a blank sheet.
+ *
+ * On a board that woke from sleep with RTC state this build wrote, the glass
+ * holds a real edition and we know its hash. The snapshot itself did not
+ * survive — news_t is 32,952 bytes against 8 KB of RTC memory — so the only
+ * page this task could print is the demo, and spending twenty-five seconds to
+ * replace a real, correct, merely stale front page with a story about a company
+ * the board invented is strictly worse than doing nothing. Leave it alone.
+ *
+ * One function because there are now two ways to arrive here — the wait ran
+ * out, or NewsTask said it had given up — and they must not answer differently
+ * about the same glass. `why` is the log line's reason. */
+static bool print_the_demo_instead(const char *why)
+{
+    if (power_state_valid() && power_state()->content_hash != 0) {
+        ESP_LOGW(TAG, "%s — leaving the printed edition on the glass", why);
+        return false;
+    }
+    ESP_LOGW(TAG, "%s — printing the demo page", why);
+    return true;
+}
+
 static bool await_first_snapshot(void)
 {
     char url[PROV_URL_MAX_LEN + 1];
@@ -775,43 +840,45 @@ static bool await_first_snapshot(void)
         return true;        /* demo board: nothing better is ever coming */
     }
 
-    /* esp_timer rather than the tick count: this is a deadline held across
+    /* A TIMER wake waits on the FETCH, not on a clock — see
+     * FIRST_PAINT_WAIT_TIMER_MS. It is here for one page and will sleep the
+     * moment it has one or knows it will not get one, so the number below is a
+     * backstop against a stuck NewsTask rather than a budget anyone means to
+     * spend. A COLD or BUTTON wake keeps the fifteen seconds: somebody is
+     * standing in front of the frame, the loop's two-minute window will keep
+     * this task alive afterwards either way, and a blank panel for two minutes
+     * while they watch is the wrong trade.
+     *
+     * esp_timer rather than the tick count: this is a deadline held across
      * several blocking waits, and TickType_t wraps. */
-    const int64_t deadline_us =
-        esp_timer_get_time() + (int64_t)FIRST_PAINT_WAIT_MS * 1000;
+    const int wait_ms = (power_wake_cause() == POWER_WAKE_TIMER)
+                            ? FIRST_PAINT_WAIT_TIMER_MS
+                            : FIRST_PAINT_WAIT_MS;
+    const int64_t deadline_us = esp_timer_get_time() + (int64_t)wait_ms * 1000;
 
     for (;;) {
         app_cmd_t cmd;
         int64_t left_ms = (deadline_us - esp_timer_get_time()) / 1000;
         if (left_ms <= 0 ||
             xQueueReceive(s_cmd_queue, &cmd, pdMS_TO_TICKS(left_ms)) != pdTRUE) {
-            /* Nothing arrived. Whether that is worth a refresh depends entirely
-             * on what is already hanging on the glass, and after deep sleep
-             * shipped there are two different answers.
-             *
-             * On a board that has just been switched on, the panel holds
-             * whatever the last firmware left there — or nothing — and a
-             * complete front page badged DEMO beats a blank sheet.
-             *
-             * On a board that woke from sleep with RTC state this build wrote,
-             * the glass holds a real edition and we know its hash. The snapshot
-             * itself did not survive — news_t is 32,952 bytes against 8 KB of
-             * RTC memory — so the only page this task could print is the demo,
-             * and spending twenty-five seconds to replace a real, correct,
-             * merely stale front page with a story about a company the board
-             * invented is strictly worse than doing nothing. Leave it alone. */
-            if (power_state_valid() && power_state()->content_hash != 0) {
-                ESP_LOGW(TAG, "no snapshot within %d ms — leaving the printed "
-                              "edition on the glass",
-                         FIRST_PAINT_WAIT_MS);
-                return false;
-            }
-            ESP_LOGW(TAG, "no snapshot within %d ms — printing the demo page",
-                     FIRST_PAINT_WAIT_MS);
-            return true;
+            char why[64];
+            snprintf(why, sizeof(why), "no snapshot within %d ms", wait_ms);
+            return print_the_demo_instead(why);
         }
         if (cmd.kind == APP_CMD_DATA) {
             return true;
+        }
+        if (cmd.kind == APP_CMD_FETCH_FAILED) {
+            /* NewsTask has stopped trying, so there is nothing left to wait
+             * for and no reason to hold the wake open. Same question as the
+             * timeout above, asked at the moment the answer became knowable
+             * instead of two minutes later — which on a timer wake is the
+             * difference between sleeping now and staying up for the backstop.
+             *
+             * It reaches the same decision, deliberately: a board that woke to
+             * print and could not fetch must not put the demo page over a real
+             * front page, however it found out. */
+            return print_the_demo_instead("the first fetch of this boot failed");
         }
         /* Anything the app asked for in the meantime is still honoured — the
          * control server comes up moments after this task does, so a command
@@ -1008,23 +1075,37 @@ static void UiTask(void *arg)
      * something, or they just plugged it in — so it stays reachable for the
      * configured window. The companion app cannot discover the board, connect
      * and issue a request inside the three seconds a timer wake lives for.
-     * About 2.8 mAh, and only when somebody is actually there.
+     * About 5.7 mAh, and only when somebody is actually there: 2.8 for the
+     * window, and the refresh beside it — RAM did not survive the sleep, so
+     * the first fetch never matches the demo page in memory and the sheet is
+     * reprinted even though the glass already holds it.
      *
      * A TIMER wake that got this far is the CHANGED case: it woke, found a new
      * edition, and is here only to print it. Nobody is watching, so the window
      * is zero and it sleeps as soon as the page is on the paper. Giving it the
-     * full two minutes would cost 2.8 mAh on every content change, which is
-     * about a third of the daily budget spent waiting for a visitor who is not
-     * coming.
+     * full two minutes would cost another 2.8 mAh on every content change, on
+     * top of the refresh it is already spending — about a third of the daily
+     * budget, waiting for a visitor who is not coming.
+     *
+     * The zero is measured from HERE, and here is after await_first_snapshot()
+     * has returned — which on a timer wake means after the first fetch
+     * resolved, not after a stopwatch ran out. That is the whole of the
+     * ordering: the window may only be zero because the thing it would have
+     * been waiting for has already happened. See FIRST_PAINT_WAIT_TIMER_MS.
      */
     const power_wake_t wake = power_wake_cause();
     const int64_t window_us =
         (wake == POWER_WAKE_TIMER) ? 0
                                    : (int64_t)power_awake_window_seconds() * 1000000;
     int64_t deadline_us = sleeping_permitted() ? esp_timer_get_time() + window_us : 0;
-    if (deadline_us) {
+    if (deadline_us && window_us) {
         ESP_LOGI(TAG, "staying reachable for %us before sleeping",
                  (unsigned)(window_us / 1000000));
+    } else if (deadline_us) {
+        /* The zero-window timer wake. It used to log "staying reachable for
+         * 0s", which is the line a bench operator reads on the wake that
+         * matters most and it said the opposite of what happens. */
+        ESP_LOGI(TAG, "printing, then sleeping");
     }
 
     for (;;) {
@@ -1035,6 +1116,27 @@ static void UiTask(void *arg)
         if (deadline_us) {
             const int64_t left_ms = (deadline_us - esp_timer_get_time()) / 1000;
             if (left_ms <= 0) {
+                /* Anything already queued raced the deadline and is a command
+                 * somebody — or NewsTask — is owed. A zero-window timer wake
+                 * reaches this test on its very first pass, before
+                 * xQueueSelectFromSet() has ever run, so without this drain a
+                 * command that landed in the microseconds since
+                 * await_first_snapshot() returned is thrown away unread. These
+                 * are the same commands the loop below would have run a
+                 * moment later; running them here changes when, not what, and
+                 * costs at most the queue's depth of eight.
+                 *
+                 * It matters most for the one it cannot afford to lose:
+                 * APP_CMD_DATA, which is the edition this wake got up to
+                 * print. Discarding it leaves the page unprinted, the hash and
+                 * tag unpublished and the wake counted as a failure — and the
+                 * next wake fetches the same changed payload and does it
+                 * again, hourly, with every log line reading
+                 * `fetch=changed -> refresh`. */
+                app_cmd_t pending;
+                while (xQueueReceive(s_cmd_queue, &pending, 0) == pdTRUE) {
+                    handle_cmd(&pending);
+                }
                 enter_sleep();          /* does not return */
             }
             if (left_ms < wait_ms) {
@@ -1138,6 +1240,15 @@ static void NewsTask(void *arg)
      * does lose a race with something, the retry below costs less than the wait
      * did. */
     int fast_retries = 0;      /* spent inside the first-paint window only */
+
+    /* Whether UiTask has been told how this boot's FIRST fetch turned out.
+     *
+     * It is owed exactly one answer and it blocks until it gets one, because on
+     * a timer wake the window it may sleep in opens when the fetch RESOLVES —
+     * not when a stopwatch runs out. APP_CMD_DATA is the good answer;
+     * APP_CMD_FETCH_FAILED, below, is the other one. Posted once: after the
+     * first outcome UiTask is in its ordinary loop and owes this task nothing. */
+    bool told_first_outcome = false;
 
     for (;;) {
         char url[PROV_URL_MAX_LEN + 1];
@@ -1261,6 +1372,7 @@ static void NewsTask(void *arg)
                              s_fetched.brief_count,
                              (lead && lead->headline[0]) ? lead->headline : "(none)");
                     notify_ui(APP_CMD_DATA);
+                    told_first_outcome = true;
                 } else {
                     /* The single most common outcome, and the one that must not
                      * cost a panel refresh. */
@@ -1341,6 +1453,20 @@ static void NewsTask(void *arg)
         if (never_fetched && fast_retries < FIRST_RETRY_MAX) {
             fast_retries++;
             wait_s = FIRST_RETRY_SECONDS;
+        } else if (!told_first_outcome) {
+            /* The first fetch of this boot has RESOLVED, and it resolved with
+             * nothing for UiTask to print — the retries are spent and none of
+             * them came back, or one came back and carried no new page. Either
+             * way the question UiTask is holding its wake open for has an
+             * answer now, and it must be given rather than left to a timeout:
+             * on a timer wake that timeout is two minutes of radio and CPU
+             * spent learning what this task already knows.
+             *
+             * It carries no page and costs no refresh. All it does is end the
+             * wait, so the wake can count its failure and go back to sleep at
+             * the backoff the curve gives it. */
+            told_first_outcome = true;
+            notify_ui(APP_CMD_FETCH_FAILED);
         }
 
         /* Woken early by KEY1, by POST /api/refresh, or by a URL change. */
