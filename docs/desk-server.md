@@ -143,7 +143,6 @@ them, which is a thing to get wrong at three in the morning.
 | Root | Where | Holds |
 |---|---|---|
 | **Serving** | Docker volume → `/data` | `current`, `staged`, `editions/<id>/…`, `desk.sqlite`, the schedule cache |
-| **Vault** | one subdirectory of ObsidianBrain → `/vault`, rw | `standing.md`, `blocklist.md`, `watchlist.json`, `schedule.json`, `briefs/`, `archive/` |
 | **Secrets** | `~/.wpnews/` → `/run/secrets`, ro | `tokens.json`, `agent.env` |
 
 **Only one subdirectory of the vault is mounted.** A vault holds somebody's

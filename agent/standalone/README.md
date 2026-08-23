@@ -181,7 +181,13 @@ curl -X POST http://wpnews.local/api/news \
 ```
 
 Both plists carry **absolute paths**, including to this checkout and to `$HOME` — edit them if yours
-differ. `PATH` is spelled out rather than inherited for the same reason: launchd does not run a login
+differ, or run this once instead of hand-editing both:
+
+```bash
+sed -i '' "s|/Users/YOUR-USERNAME|$HOME|g" agent/standalone/*.plist
+```
+
+`PATH` is spelled out rather than inherited for the same reason: launchd does not run a login
 shell, so it has no PATH worth the name, no nvm, no pyenv and no idea where `claude` lives. Every one
 of those is a way this fails silently at 6 a.m., and `file-edition.sh` checks for `claude` on PATH
 first and says so rather than producing an empty page.

@@ -1,5 +1,10 @@
 # The desk server
 
+> **2026-08-23 — superseded in part.** Shipped without the vault bridge (`vault.py`, the notes
+> bridge) — the schedule now lives at `/data/schedule.json` instead, and the worker moved to
+> `agent/`. See [docs/desk-server.md](../../desk-server.md) for what actually shipped. The
+> reasoning below is kept as filed.
+
 **Status:** design, approved 2026-08-18. Supersedes nothing; `tools/edition/` keeps working and
 stays the way back.
 
@@ -36,7 +41,7 @@ in `user_app.cpp:589-597` deliberately does **not** refresh — so a page going 
 not light the wall either.
 
 **2. The private half lives on an external SSD, and the SSD can be unplugged.** The owner's vault is
-`/Volumes/ssd/ObsidianBrain`, a private git repository they read and edit in Obsidian. Putting the
+`<a private notes directory>`, a private git repository they read and edit in Obsidian. Putting the
 serving path on it would mean that pulling a disk blanks a newspaper. So the vault is the *source*
 and the *archive*, and never the serving path. This is the infrastructure form of the rule the
 parser already follows: a rejected payload leaves the previous snapshot byte-for-byte alone.
@@ -86,7 +91,7 @@ server/
     directives.py           the standing-instruction store
     schedule.py             windows, wake times, next-transition arithmetic
     policy.py               the block spliced into the served payload
-    vault.py                the ObsidianBrain bridge
+    vault.py                the notes bridge
     proofpng.py             BMP24 -> PNG, zlib only
   agent/
     loop.py                 claim -> run claude -> proof -> look -> commit -> brief
@@ -226,7 +231,7 @@ Retention: the last 30 editions plus whatever is current or staged.
 | Root | Where | Holds |
 |---|---|---|
 | **Serving** | Docker volume `wpnews-data` → `/data` | `current`, `staged`, `editions/<id>/{news.json,tiles/,proof/,meta.json}`, `desk.sqlite`, `schedule.cache.json` |
-| **Vault** | `…/ObsidianBrain/02_areas/investing/wpnews/` → `/vault`, rw | `standing.md`, `watchlist.json`, `blocklist.md`, `schedule.json`, `briefs/<date>.md`, `archive/<id>/` |
+| **Vault** | `<a private notes directory>/` → `/vault`, rw | `standing.md`, `watchlist.json`, `blocklist.md`, `schedule.json`, `briefs/<date>.md`, `archive/<id>/` |
 | **Secrets** | `~/.wpnews/` → `/run/secrets`, ro | `tokens.json`, `agent.env` |
 
 **Only one subdirectory of the vault is mounted.** The vault holds the owner's whole second brain,
@@ -416,8 +421,8 @@ A second container, from `Dockerfile.agent`. Its loop:
    mount) + `/vault/standing.md` + `/vault/blocklist.md` + `/vault/watchlist.json` + the command
    text + the last few `briefs/`.
 3. `claude --print` with the same narrow allowlist `file-edition.sh` uses, plus the market-data MCPs.
-   Those already answer at `alpaca.daehun.dev`, `kis.daehun.dev` and `toss.daehun.dev`, so the
-   container reaches them over the network rather than needing anything from the host.
+   Those already answer at the owner's own market-data MCP endpoints, so the container reaches them
+   over the network rather than needing anything from the host.
 4. Write into a scratch directory, open a draft, `PUT` the payload and every tile,
    `POST …/proof`.
 5. **Fetch the proof PNGs and look at them.** This is the step the whole design exists to make
@@ -447,13 +452,13 @@ machine for six named tunnels.
 tunnel: <uuid>
 credentials-file: /etc/cloudflared/<uuid>.json
 ingress:
-  - hostname: wpnews.daehun.dev
+  - hostname: wpnews.example.dev
     service: http://desk:8080
   - service: http_status:404
 ```
 
 Installation is `cloudflared tunnel create wpnews`, then
-`cloudflared tunnel route dns wpnews wpnews.daehun.dev`, then filling those two values into
+`cloudflared tunnel route dns wpnews wpnews.example.dev`, then filling those two values into
 `server/tunnel/wpnews.yml` — which is gitignored, because it names a hostname and a credentials
 path that belong to one person.
 

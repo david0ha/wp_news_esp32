@@ -74,29 +74,7 @@ Discovering that at 06:00 is exactly the silent failure `file-edition.sh`
 already guards against by checking `PATH` first, so the worker warns at startup
 if neither is set.
 
-**3. Where the private half lives.**
-
-```sh
-cp server/.env.example server/.env
-# set WPNEWS_VAULT to ONE SUBDIRECTORY of your vault, e.g.
-#   /Volumes/ssd/ObsidianBrain/02_areas/investing/wpnews
-```
-
-One subdirectory, never the whole vault: this container answers the internet and
-a vault is somebody's whole second brain. The desk creates the layout inside it
-on first start and never overwrites anything you wrote.
-
-```
-<WPNEWS_VAULT>/
-  standing.md        your standing editorial instructions   <- you write this
-  blocklist.md       what must never print                  <- you write this
-  watchlist.json     the rotation                           <- you write this
-  schedule.json      the schedule; edit here or over the API
-  briefs/<date>.md   what the desk filed and why            <- the worker writes these
-  archive/<id>/      filed editions and their proof sheets
-```
-
-**4. The tunnel.**
+**3. The tunnel.**
 
 ```sh
 cloudflared tunnel create wpnews
@@ -105,14 +83,14 @@ cp server/tunnel/wpnews.yml.example ~/.cloudflared/wpnews.yml
 # put the uuid it printed into both fields, and your hostname into the ingress
 ```
 
-**5. Up.**
+**4. Up.**
 
 ```sh
 docker compose -f server/compose.yaml up -d
 docker compose -f server/compose.yaml logs -f desk
 ```
 
-**6. Point the board at it, once.**
+**5. Point the board at it, once.**
 
 ```sh
 curl -X POST http://wpnews.local/api/news \

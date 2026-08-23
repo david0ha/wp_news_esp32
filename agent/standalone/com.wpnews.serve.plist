@@ -26,7 +26,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ggrrm/Documents/wp_news_esp32/agent/standalone/file-edition.sh</string>
+        <string>/Users/YOUR-USERNAME/Documents/wp_news_esp32/agent/standalone/file-edition.sh</string>
         <string>--serve-only</string>
     </array>
 
@@ -35,9 +35,9 @@
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
-        <string>/Users/ggrrm</string>
+        <string>/Users/YOUR-USERNAME</string>
         <key>EDITION_DIR</key>
-        <string>/Users/ggrrm/.wpnews/edition</string>
+        <string>/Users/YOUR-USERNAME/.wpnews/edition</string>
         <key>WPNEWS_PORT</key>
         <string>8123</string>
     </dict>
@@ -48,8 +48,8 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/ggrrm/.wpnews/edition/log/serve.out</string>
+    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/serve.out</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ggrrm/.wpnews/edition/log/serve.err</string>
+    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/serve.err</string>
 </dict>
 </plist>

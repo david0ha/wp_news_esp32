@@ -1,5 +1,10 @@
 # Desk Server Implementation Plan
 
+> **2026-08-23 — superseded in part.** Shipped without the vault bridge (`vault.py`, the notes
+> bridge) — the schedule now lives at `/data/schedule.json` instead, and the worker moved to
+> `agent/`. See [docs/desk-server.md](../../desk-server.md) for what actually shipped. The
+> reasoning below is kept as filed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An always-on containerised service that owns the URL the board polls — holding the current edition, taking commands from agents anywhere, deciding when a new page may reach the glass, and typesetting every candidate before it does — plus a `policy` block on the wire so the server can also set the device's poll cadence.
@@ -25,7 +30,7 @@
 - **All prose in `server/` and `docs/` is English**, matching the rest of the repository.
 - **Comments explain why, not what** — match the density and voice of `components/news_core/*.c` and `tools/edition/*.sh`.
 - **Docstrings on every public function, class and module.**
-- Timezone for all defaults: `Asia/Seoul`. Vault subdirectory: `02_areas/investing/wpnews`.
+- Timezone for all defaults: `Asia/Seoul`.
 
 ---
 
@@ -51,7 +56,7 @@ server/
     store.py      SQLite: commands, directives, audit      (errors, clock)
     gates.py      Gates protocol + Subprocess/Stub         (errors)
     editions.py   drafts, gates, pointers, publish        (errors, clock, tiles, gates, store, proofpng)
-    vault.py      ObsidianBrain bridge                    (errors, clock, schedule)
+    vault.py      the notes bridge                        (errors, clock, schedule)
     app.py        Desk — wiring, scheduler tick           (everything above)
     http.py       routing, the two planes                 (app)
     __main__.py   env config, threads, signals            (app, http)
@@ -888,7 +893,7 @@ dropped_producer_policy, tile_count, bytes`.
 
 ---
 
-## Task 9: `vault.py` — the ObsidianBrain bridge
+## Task 9: `vault.py` — the notes bridge
 
 **Files:**
 - Create: `server/wpdesk/vault.py`
