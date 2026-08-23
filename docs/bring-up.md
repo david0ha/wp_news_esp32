@@ -270,10 +270,13 @@ is that the switch is not what decides:
 idf.py menuconfig     # Claude Post power -> Sleep between polls (battery mode)
 ```
 
-`sdkconfig` is gitignored and per-developer, so a tree that predates this default keeps its explicit
-`# CONFIG_CLAUDEPOST_DEEP_SLEEP is not set` until it is regenerated — **`idf.py reconfigure`** is what
-picks the new default up, and it is worth running once on any tree that predates this branch, which
-also renamed every Kconfig symbol here into the `CLAUDEPOST_*` namespace.
+`sdkconfig` is gitignored and per-developer, and a value recorded in it outranks a Kconfig default
+forever: `# CONFIG_CLAUDEPOST_DEEP_SLEEP is not set` is an explicit **n** to kconfiglib, not an
+absence, so a tree that built this branch before the default flipped keeps deep sleep off through
+every `idf.py build` and every `idf.py reconfigure`. Turn it on in `idf.py menuconfig`, or delete
+`sdkconfig` and let the next build write it again from the defaults. A tree that predates the
+`CLAUDEPOST_*` rename this branch also carries has no line for the symbol at all, and picks the new
+default up on its own.
 
 Three runtime gates disable sleep whatever the build says, and a board at a bench trips at least one
 of them permanently:
@@ -310,7 +313,7 @@ otherwise awake for three seconds at a time. Three things are worth reading in i
 | what | how | why it matters |
 |---|---|---|
 | `power.wakes`, `power.quietWakes`, `power.meanAwakeMs` | `curl -s http://claudepost.local/api/state \| jq .power` | that the board is waking, and that nearly all of them are quiet. `meanAwakeMs` is the measurement §4 wants |
-| `power.sleepSeconds` and `power.sleepSource` after a policy-driven wake | the same call | the one thing no host test can see: that a targeted wake has not been written into the board's *local* interval. `sleepSource` reading `"nvs"` beside a shortened interval is that bug, and it would cost a cell rather than a page |
+| `power.sleepSeconds` and `power.sleepSource` after a policy-driven wake | the same call | the one thing no host test can see: that a targeted wake has not been written into the board's *local* interval. `sleepSource` reading `"nvs"` beside a shortened interval is that bug — on a wake after the desk has gone quiet, since while it is naming a cadence the same field correctly reads `"policy"` — and it would cost a cell rather than a page |
 | **the sleep current, in µA, on a bench supply** | a meter in series with the cell, board asleep | the number this whole design rests on and nobody has measured. `power_sleep()` keeps the RTC peripheral domain powered so the four buttons hold their pull-ups through the sleep, which the IDF's tables put at a few µA over the bare ~14 µA figure — an **estimate**, and this row is where it stops being one. Record it here |
 
 Press each of the four buttons on a sleeping board too, and confirm each one wakes it. That is the
@@ -353,14 +356,16 @@ I main: quiet fetch: ok
 I main: wake=timer fetch=changed -> refresh (cadence 900s from policy, fails 0)
 I main: content changed — printing without a second connect
 ...
-I user_app: awake window closed — sleeping 900s from policy (printed yes, fails 0)
+I app: awake window closed — sleeping 900s from policy (fetched page printed yes, fails 0)
 ```
 
 and between those the boot proceeds through the whole of §2 — `epd6`, `LvglPort`, the refresh — before
 sleeping. This is the expensive kind, and on a normal day there should be about two of them. The last
-line is where the accounting happens rather than at the decision: `printed yes` is what clears the
-failure count, because a wake that decided to print and then failed to fetch anything has printed
-nothing, and a board that called that healthy would go on doing it every fifteen minutes.
+line is where the accounting happens rather than at the decision: `fetched page printed yes` is what
+clears the failure count, because a wake that decided to print and then failed to fetch anything has
+printed nothing, and a board that called that healthy would go on doing it every fifteen minutes. It
+says *fetched* because a page swap, the self-test pattern and the demo page all reach the glass
+through the same call and none of them is evidence that the desk is reachable.
 
 A **button wake** stays up instead of sleeping, which is what makes the companion app usable:
 

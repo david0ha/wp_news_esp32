@@ -270,7 +270,9 @@ that wakes a sleeping board both call it, so what this desk says is what the
 board does in either power mode. A quiet window is therefore not merely fewer
 requests; for the hours it covers it is a board waking at a rate of twenty-four
 a day rather than ninety-six. On the shipped schedule's own two numbers, against
-a 4200 mAh cell:
+a 4200 mAh cell — each row read as though that cadence ran all day, which is how
+the design states them; the shipped schedule spends 00:30 to 06:00 in the second
+and the rest in the first, so a real day lands between them:
 
 | what the desk says | wakes/day | mAh/day | the cell lasts |
 |---|---|---|---|
@@ -283,8 +285,8 @@ actually takes — have never been measured on this board. §9 and §10 of the
 deep-sleep design work them through, and the board counts its own wakes so that
 a day on a wall replaces them with a measurement; `GET /api/state` reports it.
 What the table is for is the shape, and the shape is that the knee is between a
-quarter of an hour and an hour. Below five minutes the cell drains steeply for
-freshness nobody reads on a newspaper; past an hour a longer interval buys
+quarter of an hour and half an hour. Below five minutes the cell drains steeply
+for freshness nobody reads on a newspaper; past the knee a longer interval buys
 progressively less, because the refreshes and the standing current dominate.
 
 **`next_change` is a targeted wake, and it is what stops a quiet cadence from

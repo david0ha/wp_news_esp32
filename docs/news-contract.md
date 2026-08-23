@@ -225,25 +225,35 @@ On a board that sleeps between polls a 304 is more than a saved transfer: it is 
 board comes up, connects, asks, is told nothing has changed, and goes back to sleep without powering
 the panel, building the UI or allocating the 960,000-byte framebuffer — about three seconds, and the
 whole reason such a board lasts months on a cell rather than two days. It also clears the failure
-count, exactly as a 200 does, so a healthy board answered 304 all day never backs off.
+count, as does any poll that turns out to change nothing — a 200 carrying a *new* edition clears it
+only once `present_full()` has the page on the paper — so a healthy board answered 304 all day never
+backs off.
 
-### Every tag the device sends names the page on the glass
+### The tag that names the glass, and the tag that names the snapshot
 
-`If-None-Match` carries the tag of the edition **currently printed**, never one the board is about to
-print, and that ordering is a rule rather than an accident of where a line sits. Only two events may
-record a tag:
+The device holds two of them, and which one goes into `If-None-Match` depends on which path is
+asking. A **sleeping** board sends the tag in RTC memory, and that one names the edition **currently
+printed** — never one it is about to print. Only two events may write it:
 
-- a poll whose document parsed to exactly what is already on the paper — the tag names a page the
-  panel is displaying, so there is nothing in flight for it to get ahead of;
+- a quiet poll whose document parsed to exactly what is already on the paper — the tag names a page
+  the panel is displaying, so there is nothing in flight for it to get ahead of;
 - `present_full()`, *after* a refresh has finished, publishing the tag beside the content hash in one
   act once the page is actually on the paper.
 
-A document that is about to be printed is deliberately left untagged until it has been. Write the tag
-first and a brownout twenty seconds into a twenty-five second refresh leaves a board whose next poll
-sends the new tag, receives a 304, and concludes that nothing has changed — the edition never prints,
-for as long as the payload holds still, with a log full of successful polls. The same rule is why a
-tag from a document that failed to parse is never stored: it would make the next poll a 304 on a
-document the device has never successfully read.
+A document about to be printed is deliberately left untagged in RTC memory until it has been. Write
+the tag first and a brownout twenty seconds into a twenty-five second refresh leaves a board whose
+next wake sends the new tag, receives a 304, and concludes that nothing has changed — the edition
+never prints, for as long as the payload holds still, with a log full of successful polls. The same
+rule is why a tag from a document that failed to parse is never stored: it would make the next poll a
+304 on a document the device has never successfully read.
+
+An **awake** board sends the other one, which names the snapshot `NewsTask` last parsed rather than
+the page on the glass, and is recorded on every 200 — including one that has not printed yet. That is
+safe for a different reason rather than by the same rule: it lives in RAM, so a brownout takes it
+with the snapshot it names, and on that path `news_hash()` and not the tag is what decides whether
+the panel moves. It is empty at boot, which is what makes the first poll of every boot unconditional;
+sending the RTC tag there would earn a 304 with nothing to hand `UiTask`, and the demo page would
+print over a perfectly good front page.
 
 **A tag that moves is also how the board learns something that is not the page.** The `policy` block
 below rides in the payload, so a cadence change is a byte change; a server that computes its tag over

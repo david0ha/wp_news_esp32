@@ -115,9 +115,10 @@ Four layers, three of which need no hardware. Each is faster than the next and c
 class of mistake.
 
 ```bash
-# 1) pure logic — eight tests: the wire format, the demo front page against the
+# 1) pure logic — ten tests: the wire format, the demo front page against the
 #    producer's committed fixture, the fetch layer, the companion-app JSON, the
-#    framebuffer -> dual-controller repack, the quantizer, copyfit, chart scaling
+#    framebuffer -> dual-controller repack, the quantizer, copyfit, chart scaling,
+#    the compositor's tiling invariants, and the wake decision
 cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 (cd /tmp/vt && ctest --output-on-failure)
 
@@ -289,11 +290,12 @@ components/
     wp_palette.c          the six-ink quantizer, shared with the simulator
     device_api_json.c     the JSON the companion app receives
     fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
-    test/host/            the nine host tests
+    test/host/            the ten host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP onboarding
   device_api/             STA-mode HTTP/JSON control server + mDNS (claudepost.local)
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
+  power/                  the wake decision (pure, host-tested), RTC-retained state, the shutdown
 sim/                      desktop simulator — the real UI at 1200x1600, and its assertions
 tools/
   edition/                the typesetting gate: PROMPT.md, render-check.sh

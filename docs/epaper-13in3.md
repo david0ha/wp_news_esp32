@@ -159,8 +159,9 @@ has to observe both controllers, and a wait that samples with only the master se
 while the slave is still driving.
 
 Re-initialising on every refresh is this port's, not Seeed's. bigink gets away without it because it
-deep-sleeps the ESP32 between updates and so re-runs `setup()`; this board stays awake serving a
-control API, so the rail it switched off at the end of the last refresh has to be brought back here.
+deep-sleeps the ESP32 between updates and so re-runs `setup()`; this board re-initialises for the
+same reason on a wake and for a different one on USB, where it stays awake serving a control API and
+the rail it switched off at the end of the last refresh has to be brought back here.
 
 The deviations from the vendor sequence, and what each one prevents:
 

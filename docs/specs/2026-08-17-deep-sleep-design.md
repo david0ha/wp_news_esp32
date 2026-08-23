@@ -15,7 +15,8 @@ conclusion. The task-by-task plan this was built from is
 > sleep defaults to on** rather than to off (§6), because the runtime gates and
 > not the Kconfig switch are what decide. And the ext1 pins keep their pull-ups
 > through the sleep — `power_sleep()` pins the RTC peripheral domain on, at a
-> few µA — where §7 assumed the automatic behaviour was enough. Two smaller
+> few µA — where §4's shutdown checklist armed ext1 and said nothing about the
+> pulls. Two smaller
 > corrections: the failure count is cleared where a page reaches paper
 > (`present_full()`) rather than where a wake decides to print, since a decision
 > to print is not a print; and the ETag recipe is SHA-256 in both servers. The
