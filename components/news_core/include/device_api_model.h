@@ -116,6 +116,16 @@ typedef struct {
     int  chg_bp;                        /* basis points */
 } dev_index_t;
 
+/* Which of the four layers decided the interval above. The vocabulary mirrors
+ * source.pollSource's — "policy" | "api" | "nvs" | "default" — because the app
+ * already renders one of them and two spellings of one idea is one too many. */
+typedef enum {
+    DEV_SLEEP_SRC_DEFAULT = 0,   /* Kconfig, or nothing has said otherwise */
+    DEV_SLEEP_SRC_NVS,           /* the setup form, or an earlier /api/sleep */
+    DEV_SLEEP_SRC_API,           /* POST /api/sleep, this session           */
+    DEV_SLEEP_SRC_POLICY,        /* the desk: poll_seconds or next_change   */
+} dev_sleep_src_t;
+
 typedef struct {
     char model[DEV_MODEL_MAXLEN];
     char fw[DEV_FW_MAXLEN];
@@ -198,11 +208,24 @@ typedef struct {
      * rather than by whoever fills this struct. Both of them divide, and both
      * divisors are legitimately zero on a real board. */
     bool deep_sleep;      /* the feature is enabled for this board            */
-    /* The interval actually in force. The device's own filler resolves the
+    /* The EFFECTIVE interval — what this board will actually sleep for when its
+     * window closes, which since the desk began setting the cadence is often
+     * not the interval anybody configured. The device's own filler resolves the
      * build-time default before it gets here, so 0 should never reach a phone —
      * but the serialiser still guards it, because this struct is also filled by
      * the host tests and a 0 here is a divide by zero in est_mah_per_day(). */
     int  sleep_seconds;
+    /* And who decided it, for the reason poll_from_policy sits beside
+     * poll_seconds: an hourly interval the desk set for its quiet window ends
+     * at 06:00 by itself, one compiled into the image needs a reflash, and one
+     * typed into the setup form needs the form. Same number, three different
+     * things to do about it.
+     *
+     * DEFAULT is zero so a memset struct is honest rather than claiming a desk
+     * said something. "api" does not survive a sleep, and that is correct
+     * rather than a gap: POST /api/sleep writes NVS as well as RTC memory, so
+     * after a wake the very same value reads "nvs" — which is what it now is. */
+    dev_sleep_src_t sleep_source;
     int  wakes;           /* since the last cold boot (RTC memory is lost on one) */
     int  quiet_wakes;     /* of those, the ones that cost no refresh          */
     int  awake_ms_total;  /* summed over `wakes`; the mean is derived from it */

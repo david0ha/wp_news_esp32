@@ -138,6 +138,22 @@ static int clamped(int n, int cap)
  * zero — every board has no wakes at all until it has slept once — and an
  * integer divide by zero on Xtensa is an exception that panics the board, from
  * inside the HTTP handler answering the phone that asked. */
+/* The word, not the ordinal. Written exactly as pollSource is written, and
+ * total: an out-of-range value — an uninitialised read, or an enumerator added
+ * without this table — reads "default" rather than indexing past the array.
+ * This string goes on a phone screen, and the failure it would otherwise cause
+ * is a pointer into .rodata serialised as JSON. */
+static const char *sleep_src_name(dev_sleep_src_t s)
+{
+    switch (s) {
+    case DEV_SLEEP_SRC_POLICY: return "policy";
+    case DEV_SLEEP_SRC_API:    return "api";
+    case DEV_SLEEP_SRC_NVS:    return "nvs";
+    case DEV_SLEEP_SRC_DEFAULT:
+    default:                   return "default";
+    }
+}
+
 static int mean_awake_ms(const device_state_t *st)
 {
     if (st->wakes <= 0 || st->awake_ms_total <= 0) {
@@ -331,6 +347,7 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put(&s, ",\"power\":{");
     put_bool_field(&s, "deepSleep", st->deep_sleep, true);
     put_int_field(&s, "sleepSeconds", st->sleep_seconds, false);
+    put_str_field(&s, "sleepSource", sleep_src_name(st->sleep_source), false);
     put_int_field(&s, "wakes", st->wakes, false);
     put_int_field(&s, "quietWakes", st->quiet_wakes, false);
     put_int_field(&s, "meanAwakeMs", mean_awake_ms(st), false);

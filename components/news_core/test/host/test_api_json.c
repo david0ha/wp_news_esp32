@@ -86,6 +86,7 @@ static void fill(device_state_t *st)
      * spec's §10 15-minute row seen from the inside. */
     st->deep_sleep     = true;
     st->sleep_seconds  = 900;
+    st->sleep_source   = DEV_SLEEP_SRC_NVS;
     st->wakes          = 137;
     st->quiet_wakes    = 129;
     st->awake_ms_total = 411000;
@@ -293,6 +294,7 @@ static void test_state_shape(void)
     cJSON *pw = obj(r, "power");
     check_bool(pw, "deepSleep", true);
     check_int(pw, "sleepSeconds", 900);
+    check_str(pw, "sleepSource", "nvs");
     check_int(pw, "wakes", 137);
     check_int(pw, "quietWakes", 129);
     check_int(pw, "meanAwakeMs", 3000);     /* 411000 / 137 */
@@ -566,8 +568,85 @@ static void fill_worst_case(device_state_t *st)
      * digits. The derived fields are the reason this matters: they are the only
      * numbers here that are not simply copied from the struct, so their width
      * is not obvious from the struct's own field sizes. */
-    st->sleep_seconds = 1;
+    /* The widest interval the wire allows, and the longest of the four source
+     * words. "default" is seven characters against "policy"'s six and "nvs"'s
+     * three, and it is also the value a zeroed struct carries — so the widest
+     * case here is the one a half-filled struct produces, which is the right
+     * way round. */
+    st->sleep_seconds = 86400;
+    st->sleep_source  = DEV_SLEEP_SRC_DEFAULT;
     st->wakes = st->quiet_wakes = st->awake_ms_total = 999999999;
+}
+
+static void test_sleep_source_vocabulary(void)
+{
+    /* `sleepSeconds` is now the EFFECTIVE interval — what the board will
+     * actually do — so the number alone stopped being actionable. 3,600
+     * seconds set by a desk for its quiet window ends at 06:00 by itself; 3,600
+     * compiled into the image needs a reflash; 3,600 typed into the setup form
+     * needs the form again. Same number, three different things to do about it,
+     * and a phone that showed only the number would have the reader guessing.
+     *
+     * The vocabulary mirrors source.pollSource's, which the app already
+     * renders, and a word rather than an enum ordinal because it is going on a
+     * screen. Zero is "default", so a memset struct is honest rather than
+     * silently claiming a desk said something. */
+    static const struct { dev_sleep_src_t src; const char *want; } cases[] = {
+        { DEV_SLEEP_SRC_DEFAULT, "default" },
+        { DEV_SLEEP_SRC_NVS,     "nvs"     },
+        { DEV_SLEEP_SRC_API,     "api"     },
+        { DEV_SLEEP_SRC_POLICY,  "policy"  },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        device_state_t st;
+        fill(&st);
+        st.sleep_source = cases[i].src;
+
+        char buf[ROOMY];
+        CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+        cJSON *r = cJSON_Parse(buf);
+        CHECK(r != NULL);
+        if (!r) continue;
+        check_str(obj(r, "power"), "sleepSource", cases[i].want);
+        cJSON_Delete(r);
+    }
+
+    /* And an out-of-range value does not walk off the end of a table. This
+     * struct is filled by a device, by these tests, and by whatever comes next;
+     * an uninitialised read must produce a word, not a pointer into .rodata. */
+    device_state_t st;
+    fill(&st);
+    st.sleep_source = (dev_sleep_src_t)99;
+    char buf[ROOMY];
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    cJSON *r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (r) {
+        check_str(obj(r, "power"), "sleepSource", "default");
+        cJSON_Delete(r);
+    }
+}
+
+static void test_sleep_seconds_is_the_effective_interval(void)
+{
+    /* The pair travels together or neither is worth carrying. A board whose
+     * desk put it on an hourly poll reports the hour AND says the desk said so
+     * — and it must not report the 900 s its own NVS still holds, because that
+     * is the number a reader would try to change. */
+    device_state_t st;
+    fill(&st);
+    st.sleep_seconds = 3600;                    /* the desk's, not the form's */
+    st.sleep_source  = DEV_SLEEP_SRC_POLICY;
+
+    char buf[ROOMY];
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    cJSON *r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (!r) return;
+    cJSON *pw = obj(r, "power");
+    check_int(pw, "sleepSeconds", 3600);
+    check_str(pw, "sleepSource", "policy");
+    cJSON_Delete(r);
 }
 
 static void test_worst_case_fits_the_servers_buffer(void)
@@ -724,6 +803,8 @@ int main(void)
     test_the_daily_estimate_is_pinned_to_its_measured_constant();
     test_the_estimate_does_not_overflow_thirty_two_bits();
     test_the_power_estimate_never_divides_by_zero();
+    test_sleep_source_vocabulary();
+    test_sleep_seconds_is_the_effective_interval();
     test_utf8_passes_through();
     test_control_characters_are_escaped();
     test_worst_case_fits_the_servers_buffer();

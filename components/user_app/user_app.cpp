@@ -228,6 +228,13 @@ static int      s_poll_seconds = POLL_SECONDS_DEFAULT;
 static int64_t  s_next_change;          /* epoch seconds; 0 = none announced */
 static bool     s_poll_from_policy;     /* what the companion app reports     */
 
+/* Whether POST /api/sleep set the local interval during THIS session. Reported
+ * as `sleepSource: "api"`, and deliberately not persisted: that call writes NVS
+ * as well as RTC memory, so after a sleep the very same number honestly reads
+ * "nvs" — which is where it now lives. A flag that survived would keep claiming
+ * a phone had just set it, months later. */
+static bool     s_sleep_from_api;
+
 /* A snapshot older than this is badged STALE. Derived rather than stored so it
  * follows the cadence the desk actually asked for — see STALE_FLOOR_SECONDS.
  * Caller holds s_mtx. */
@@ -534,6 +541,7 @@ static void action_set_sleep_seconds(uint32_t seconds)
 
     state_lock();
     s_cfg.sleep_seconds = v;
+    s_sleep_from_api    = true;   /* see the declaration: this session only */
     state_unlock();
 
     if (!prov_store_save(&s_cfg)) {
@@ -1487,6 +1495,11 @@ void user_app_snapshot(device_state_t *out)
     out->battery_present = s_batt_present;
     out->battery_pct     = s_batt_pct;
     out->battery_mv      = s_batt_mv;
+
+    /* Read under the lock because s_cfg is; used below, outside it, where the
+     * cadence is computed. */
+    const bool sleep_from_api = s_sleep_from_api;
+    const bool sleep_from_nvs = (s_cfg.sleep_seconds != PROV_SLEEP_SECONDS_UNSET);
     state_unlock();
 
     /* The counters, copied with no arithmetic in the copy — device_api_json.c
@@ -1524,6 +1537,19 @@ void user_app_snapshot(device_state_t *out)
     power_cadence_t cad;
     effective_cadence(&cad);
     out->sleep_seconds  = (int)cad.seconds;
+
+    /* And who decided it, top down — the layer that actually won, not the
+     * layers underneath it that are still configured. Both of the desk's
+     * answers report as "policy": from a reader's point of view a cadence and a
+     * targeted wake are the same fact, that the desk is driving this board, and
+     * both end by themselves. Below that, this session's POST /api/sleep, then
+     * the setup form's NVS value, then the compiled-in default. */
+    out->sleep_source =
+        (cad.source == POWER_CADENCE_POLICY ||
+         cad.source == POWER_CADENCE_NEXT_CHANGE) ? DEV_SLEEP_SRC_POLICY
+        : sleep_from_api                          ? DEV_SLEEP_SRC_API
+        : sleep_from_nvs                          ? DEV_SLEEP_SRC_NVS
+                                                  : DEV_SLEEP_SRC_DEFAULT;
     out->wakes          = (int)rs->wakes;
     out->quiet_wakes    = (int)rs->quiet_wakes;
     out->awake_ms_total = (int)rs->awake_ms_total;
