@@ -7,6 +7,7 @@
 
 #include "board_io.h"
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"   /* rtc_gpio_pullup_en — see hold_the_pulls() */
 #include "driver/usb_serial_jtag.h"
 #include "epd6_panel.h"
 #include "esp_app_desc.h"
@@ -173,6 +174,47 @@ static uint64_t wake_mask(const int *gpios, int n)
     return mask;
 }
 
+/*
+ * Keep the buttons pulled up through the sleep.
+ *
+ * All four buttons are press-to-GND with no external pull-up, so the input only
+ * reads HIGH because something is pulling it there — and in deep sleep that
+ * something goes away. The IDF's own sleep_modes documentation for the S3 says
+ * it plainly: the internal pull-up and pull-down of an RTC GPIO are lost when
+ * the RTC_PERIPH power domain is powered down, which is what the automatic
+ * power-down chooses when nothing asks otherwise. What is left is four floating
+ * inputs on an ext1 wake armed for ANY_LOW: either the board wakes on nothing
+ * at all, or it wakes on a hand moving near the frame. Both look like a fault
+ * in the sleep and neither says a word in any log — the board that never wakes
+ * has no log, and the board that wakes constantly has a log full of perfectly
+ * ordinary button wakes.
+ *
+ * So RTC_PERIPH is pinned ON and each masked pin is given its pull explicitly.
+ *
+ * NOT rtc_gpio_hold_en(): HOLD latches a pin's current OUTPUT state, and these
+ * pins must stay inputs with pulls. Holding them would freeze the level and
+ * defeat the very edge the wake is armed on.
+ *
+ * The cost is keeping one power domain alive. The IDF's tables put that in the
+ * region of a few microamps against this design's ~14 uA budget — call it 10 to
+ * 30 per cent, which matters and is still nothing beside four buttons that do
+ * not work. It is an ESTIMATE and stated as one: nobody has measured this
+ * board. docs/bring-up.md is where the measured figure goes.
+ */
+static void hold_the_pulls(uint64_t mask)
+{
+    ESP_ERROR_CHECK_WITHOUT_ABORT(
+        esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON));
+
+    for (int p = 0; p <= POWER_RTC_GPIO_MAX; p++) {
+        if (!(mask & (1ULL << p))) {
+            continue;
+        }
+        ESP_ERROR_CHECK_WITHOUT_ABORT(rtc_gpio_pullup_en((gpio_num_t)p));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(rtc_gpio_pulldown_dis((gpio_num_t)p));
+    }
+}
+
 void power_sleep(uint32_t seconds, const int *wake_gpios, int wake_count)
 {
     /* A zero interval arms a timer that fires immediately: a boot loop at full
@@ -212,6 +254,10 @@ void power_sleep(uint32_t seconds, const int *wake_gpios, int wake_count)
 
     uint64_t mask = wake_mask(wake_gpios, wake_count);
     if (mask) {
+        /* The pulls first, then the arming: a wake armed on pins that float is
+         * worse than no wake at all, because it looks like one. */
+        hold_the_pulls(mask);
+
         /* Every button is press-to-GND, so the wake is on any of them going
          * low. Without this the board is reachable only on the timer, and the
          * documented KEY2-held-five-seconds escape hatch — the thing that turns
