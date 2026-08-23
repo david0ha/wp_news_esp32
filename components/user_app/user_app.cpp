@@ -317,13 +317,16 @@ void UserApp_UiInit(void)
 
 /* --- presenting (UiTask only) --------------------------------------------- */
 
-/* Whether anything reached the paper on this boot. UiTask only — it is written
- * by present_full() and read by enter_sleep(), both of which run on that one
- * task, so it needs no lock and must not acquire one.
+/* Whether a FETCHED page reached the paper on this boot — not whether anything
+ * did. present_full() is also how a page swap, the self-test pattern and the
+ * demo page reach the glass, and none of those says a word about whether the
+ * desk is reachable. UiTask only: written by present_full(), read by
+ * enter_sleep(), both on that one task, so it needs no lock and must not
+ * acquire one.
  *
- * It exists because "this wake decided to print" and "this wake printed" are
- * different facts and the failure that separates them is silent. See
- * enter_sleep(). */
+ * It exists because "this wake decided to print" and "this wake printed
+ * something it fetched" are different facts, and the failure that separates
+ * them is silent. See enter_sleep(). */
 static bool s_printed;
 
 /* Render whatever the setters changed, then push one refresh for the lot.
@@ -363,17 +366,32 @@ static void present_full(void)
     rs->content_hash = s_data_hash;
     http_etag_copy(rs->etag, sizeof(rs->etag), s_data_etag);
 
-    /* And the failure count, cleared HERE and nowhere earlier. This is the one
-     * place in the firmware that knows a page is on the paper, which is the
-     * only evidence that the whole chain — connect, fetch, parse, compose,
-     * refresh — actually worked. power_decide() used to clear it on the mere
-     * decision to print, so a wake that decided to print and then failed to
-     * fetch anything told the next wake it was healthy. See the CHANGED arm of
-     * power_decide() and enter_sleep(). */
-    rs->consecutive_fails = 0;
+    /* And the failure count — but only when this boot actually fetched
+     * something. This is the one place that knows a page is on the paper, and
+     * a page on the paper is the only evidence that the whole chain — connect,
+     * fetch, parse, compose, refresh — worked. But present_full() is also how
+     * a page swap, the self-test pattern and the demo page reach the glass, and
+     * none of those is evidence of anything: clearing the count on a KEY0 press
+     * would put a board whose desk has been down for five wakes back on full
+     * cadence for the crime of being looked at.
+     *
+     * s_last_ok_us is set by NewsTask on the fetch that produced the snapshot,
+     * before APP_CMD_DATA is posted, so the wake this rule exists for —
+     * TIMER, CHANGED, printed — is unaffected. It is guarded by s_mtx and this
+     * line is already inside state_lock().
+     *
+     * power_decide() used to clear the count on the mere decision to print, so
+     * a wake that decided to print and then failed to fetch anything told the
+     * next wake it was healthy. See its CHANGED arm, and enter_sleep(). */
+    const bool fetched_this_boot = (s_last_ok_us != 0);
+    if (fetched_this_boot) {
+        rs->consecutive_fails = 0;
+    }
     state_unlock();
 
-    s_printed = true;   /* UiTask only — see the declaration above */
+    if (fetched_this_boot) {
+        s_printed = true;   /* UiTask only — see the declaration above */
+    }
 }
 
 /* --- content updates (UiTask only) ---------------------------------------- */
@@ -541,7 +559,11 @@ static void action_set_sleep_seconds(uint32_t seconds)
 
     state_lock();
     s_cfg.sleep_seconds = v;
-    s_sleep_from_api    = true;   /* see the declaration: this session only */
+    /* A zero is not a setting, it is "revert to the compiled-in default" —
+     * prov_clamp_sleep_seconds() passes PROV_SLEEP_SECONDS_UNSET straight
+     * through — so it must not make the board report sleepSource "api" for a
+     * value nobody chose. It reports "default", which is what happened. */
+    s_sleep_from_api    = (v != PROV_SLEEP_SECONDS_UNSET);
     state_unlock();
 
     if (!prov_store_save(&s_cfg)) {
@@ -817,8 +839,17 @@ static bool await_first_snapshot(void)
  * because its desk named a transition is a phone showing a number nobody can
  * act on. So the inputs are assembled here rather than twice.
  *
- * Takes no lock. Everything it reads is RTC memory, which s_mtx does not guard
- * — see the note in user_app_snapshot() — and power_cadence() is pure.
+ * Takes no lock, and one of the fields it reads is 64 bits wide, so say why.
+ * NewsTask writes rs->poll_seconds and rs->next_change under s_mtx; this reads
+ * them without it, on UiTask and on the control server's thread. poll_seconds
+ * is one aligned 32-bit word and cannot tear. next_change can: an LX7 has no
+ * 64-bit load. It is harmless because news_parse() clamps the field to
+ * (0, 253402300799] — so every half-and-half of an old and a new value is
+ * either one of the two, or an instant far enough out that `until < base` is
+ * false. A tear cannot produce a near-future instant, which is the only reading
+ * that could shorten a sleep. Widen that clamp and this argument goes with it.
+ *
+ * power_cadence() itself is pure.
  */
 static void effective_cadence(power_cadence_t *out)
 {
@@ -895,6 +926,11 @@ static void enter_sleep(void)
      * being looked at. Saturating for the reason power_decide() saturates: a
      * wrap to zero looks exactly like a recovery.
      */
+    /* Written without s_mtx, and that is not an oversight: this runs on UiTask,
+     * as present_full() does, and the two are the only writers of this field on
+     * this side. The lock present_full() holds is for the hash and the tag,
+     * whose invariant is with s_data — not for the counter that happens to sit
+     * beside them. */
     if (s_printed) {
         rs->consecutive_fails = 0;
     } else if (power_wake_cause() == POWER_WAKE_TIMER &&
@@ -1263,15 +1299,6 @@ static void NewsTask(void *arg)
          * that failed, whose connection is the one thing that cannot be trusted. */
         http_port_release();
 
-        /* A board that has not yet fetched anything tries again in seconds
-         * rather than after a full interval, for the first few attempts only.
-         * The cases that reach here are a first fetch that lost a race with the
-         * network coming up and a server that is not listening yet, and both
-         * are usually over within seconds — while UiTask is holding the boot's
-         * one refresh open for FIRST_PAINT_WAIT_MS, so a full interval here
-         * would guarantee it times out and prints the demo page for a server
-         * that was about to answer. Past that window a retry can no longer
-         * change which page got printed, so there is nothing left to buy. */
         /* How long until the next poll — the same function a sleeping board
          * asks, and that is the point of it being a function. An awake board
          * and a sleeping one obeying two different readings of one policy block
@@ -1301,6 +1328,15 @@ static void NewsTask(void *arg)
         power_cadence(&pc, &pcad);
         int wait_s = (int)pcad.seconds;
 
+        /* A board that has not yet fetched anything tries again in seconds
+         * rather than after a full interval, for the first few attempts only.
+         * The cases that reach here are a first fetch that lost a race with the
+         * network coming up and a server that is not listening yet, and both
+         * are usually over within seconds — while UiTask is holding the boot's
+         * one refresh open for FIRST_PAINT_WAIT_MS, so a full interval here
+         * would guarantee it times out and prints the demo page for a server
+         * that was about to answer. Past that window a retry can no longer
+         * change which page got printed, so there is nothing left to buy. */
         if (never_fetched && fast_retries < FIRST_RETRY_MAX) {
             fast_retries++;
             wait_s = FIRST_RETRY_SECONDS;
@@ -1514,10 +1550,14 @@ void user_app_snapshot(device_state_t *out)
      *    BETWEEN fields — s_data against s_data_hash, s_last_ok_us against
      *    s_last_result — and taking a lock over data it does not own would
      *    imply a relationship these fields do not have.
-     * 2. Each is one naturally-aligned 32-bit word, so an LX7 load cannot tear
-     *    one. The worst a race can produce is a value one wake out of date, and
-     *    "out of date" is the normal condition of every counter here anyway:
-     *    the document is a sample of a board that keeps running.
+     * 2. Each of the counters below is one naturally-aligned 32-bit word, so an
+     *    LX7 load cannot tear one. The worst a race can produce is a value one
+     *    wake out of date, and "out of date" is the normal condition of every
+     *    counter here anyway: the document is a sample of a board that keeps
+     *    running. That is a claim about THESE fields and not about the whole
+     *    struct — `next_change` is an int64_t and an LX7 has no 64-bit load, so
+     *    it CAN tear; effective_cadence() is where that is argued, because it
+     *    is the only reader that acts on it.
      * 3. Nothing downstream needs them to agree with each other. `wakes` and
      *    `awake_ms_total` are divided into a mean by the serialiser, and a mean
      *    computed across a wake boundary is off by one wake in a figure whose

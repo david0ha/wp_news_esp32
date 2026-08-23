@@ -566,6 +566,38 @@ static void test_the_cadence_table(void)
     CHECK_INT(g_cout.source, POWER_CADENCE_NEXT_CHANGE);
 }
 
+static void test_the_curve_bends_between_the_third_and_fourth_failure(void)
+{
+    /* THE NUMBER TWO ORDERINGS DISAGREE ABOUT.
+     *
+     * Both the quiet path and enter_sleep() ask power_cadence() how long to
+     * sleep after a wake that got nothing onto the paper, and the only thing
+     * they could differ on is WHICH count they hand it: the one before this
+     * wake's failure, or the one after. Nothing distinguishes those two on most
+     * of the curve — it is flat below four failures and pinned at the cap above
+     * ten — so a board can run for a long time with the two paths disagreeing
+     * and nothing to show for it.
+     *
+     * This is the boundary where the disagreement becomes a real number: the
+     * fourth consecutive failure sleeps for the base if the curve sees three,
+     * and for five times the base if it sees four. main.cpp recomputes the
+     * cadence with plan.next_fails so that it sees four, which is what
+     * enter_sleep() has always done. That ORDERING is in main.cpp and no host
+     * test can reach it; what this pins is the fact that the ordering matters
+     * at all, so a future edit that flattens the curve here does not quietly
+     * make the comment in main.cpp untrue. */
+    power_cadence_t before, after;
+
+    cad(0, 0, NOW_SYNCED, 900, 3);
+    before = g_cout;
+    cad(0, 0, NOW_SYNCED, 900, 4);
+    after = g_cout;
+
+    CHECK_INT(before.seconds, 900);
+    CHECK_INT(after.seconds, 3600);
+    CHECK(before.seconds != after.seconds);
+}
+
 static void test_the_poll_bounds_agree_with_the_wire(void)
 {
     /* Two headers cannot restate one range and be trusted to keep it. The
@@ -755,6 +787,7 @@ int main(void)
     test_the_fail_counter_saturates();
     test_not_attempted_is_treated_as_a_failure();
     test_the_cadence_table();
+    test_the_curve_bends_between_the_third_and_fourth_failure();
     test_the_poll_bounds_agree_with_the_wire();
     test_a_304_is_unchanged_and_stores_no_tag();
     test_changed_content_does_not_store_the_tag_yet();
