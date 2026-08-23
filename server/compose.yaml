@@ -45,7 +45,7 @@ services:
     environment:
       WPDESK_KEEP_EDITIONS: ${WPDESK_KEEP_EDITIONS:-30}
       WPDESK_LOG_LEVEL: ${WPDESK_LOG_LEVEL:-INFO}
-      TZ: ${TZ:-Asia/Seoul}
+      TZ: ${TZ:-UTC}
     security_opt:
       - no-new-privileges:true
     read_only: false          # /data and /repo/sim/build are written at runtime

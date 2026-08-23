@@ -41,7 +41,8 @@ FROM python:3.14-slim
 
 # libcurl4 is the simulator's one runtime dependency (http_port_curl.c).
 # tzdata is not optional: zoneinfo reads the system database and the slim image
-# ships none, so without it every schedule in Asia/Seoul silently becomes UTC.
+# ships none, so without it every schedule written in a named zone silently
+# becomes UTC.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4 tzdata ca-certificates \
     && rm -rf /var/lib/apt/lists/*

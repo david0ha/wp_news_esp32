@@ -104,7 +104,7 @@ static prov_config_t s_cfg;
  * A front page carries a date, not a ticking clock — see docs/pages.md. */
 #define TICK_SECONDS       60
 
-/* A snapshot older than this gets the "오래됨" badge.
+/* A snapshot older than this gets the STALE badge.
  *
  * Two poll intervals rather than one: a single missed poll is a laptop closing
  * its lid, not a problem the user needs told about. But the badge answers a
@@ -223,7 +223,7 @@ static int      s_poll_seconds = POLL_SECONDS_DEFAULT;
 static int64_t  s_next_change;          /* epoch seconds; 0 = none announced */
 static bool     s_poll_from_policy;     /* what the companion app reports     */
 
-/* A snapshot older than this is badged 오래됨. Derived rather than stored so it
+/* A snapshot older than this is badged STALE. Derived rather than stored so it
  * follows the cadence the desk actually asked for — see STALE_FLOOR_SECONDS.
  * Caller holds s_mtx. */
 static int stale_seconds_locked(void)
@@ -426,7 +426,7 @@ static void action_set_url(const char *url)
     /* Clearing the URL means "go back to the demo screen", and it has to happen
      * here rather than by waiting for a poll — with no URL there is no poll, so
      * the board would otherwise sit on the last real snapshot indefinitely and
-     * then quietly badge it 오래됨, which is the opposite of what was asked. */
+     * then quietly badge it STALE, which is the opposite of what was asked. */
     bool to_demo = (url[0] == '\0');
     if (to_demo) {
         news_mock(&s_data);
