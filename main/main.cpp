@@ -398,10 +398,18 @@ extern "C" void app_main(void)
 	// would sleep on what the desk said an interval ago — or, on the first wake
 	// after a URL change, on nothing at all. The local interval is the
 	// fallback, for static hosting and for a mock with no policy block.
+	//
+	// The local layer is named once and used twice — here and at the write into
+	// RTC memory below. The two expressions were identical and idempotent, so
+	// they could not disagree today; naming it is cheap insurance against the
+	// exact shape of R1, which is two copies of "the local interval" drifting
+	// apart where only one of them was ever read.
+	const uint32_t local_seconds = EffectiveSleepSeconds(&cfg, rs);
+
 	power_cadence_in_t c = {};
 	c.policy.poll_seconds = rs->poll_seconds;
 	c.policy.next_change  = rs->next_change;
-	c.local_seconds       = EffectiveSleepSeconds(&cfg, rs);
+	c.local_seconds       = local_seconds;
 	c.now                 = (int64_t)time(NULL);
 	c.consecutive_fails   = rs->consecutive_fails;
 
@@ -412,6 +420,27 @@ extern "C" void app_main(void)
 	// --- the decision ------------------------------------------------------
 	power_plan_t plan;
 	power_decide(&in, &plan);
+
+	// And the cadence again, with the count this wake ENDED on.
+	//
+	// The curve must see the failure that has just happened, because that is
+	// what enter_sleep() does on the full path: it does its accounting first
+	// and computes the cadence second. Left as one call, the same event — "this
+	// wake got nothing onto the paper" — would produce a different sleep
+	// depending on which path it happened on, and power_backoff_seconds() bends
+	// at four, so the fourth consecutive failure would sleep for the base here
+	// and for five times the base there. One extra wake at full cadence per
+	// outage is a small cost; two paths quietly disagreeing about one rule is
+	// the defect this task exists to remove, and it is invisible because both
+	// of them work.
+	//
+	// The second call is a few hundred nanoseconds of integer arithmetic, and
+	// it keeps power_decide() taking base_sleep_seconds as already-final rather
+	// than growing a second way to express the same thing.
+	c.consecutive_fails = plan.next_fails;
+	power_cadence(&c, &cad);
+	plan.sleep_seconds  = cad.seconds;
+
 	ESP_LOGI(TAG, "wake=%s fetch=%s -> %s (cadence %us from %s, fails %u)",
 	         wake == POWER_WAKE_TIMER  ? "timer"
 	         : wake == POWER_WAKE_BUTTON ? "button"
@@ -443,7 +472,7 @@ extern "C" void app_main(void)
 	// wakes a day instead of 96, with every log line agreeing, until somebody
 	// reflashed it. The cadence is a per-wake answer and lives only in
 	// `plan.sleep_seconds`; this field is a setting.
-	rs->sleep_seconds     = EffectiveSleepSeconds(&cfg, rs);
+	rs->sleep_seconds     = local_seconds;
 
 	if (plan.action == POWER_SLEEP_AGAIN) {
 		rs->quiet_wakes++;

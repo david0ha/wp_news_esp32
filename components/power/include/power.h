@@ -62,15 +62,6 @@ typedef struct {
     int64_t  next_change;       /* the desk's next transition; 0 = none    */
 } wp_rtc_state_t;
 
-/* A CEILING, not a transcription — see CLAUDE.md on sizeof(news_t), a number
- * that has been wrong twice because it was written down rather than measured.
- * What matters about this struct is that it fits in RTC slow memory with room
- * to spare, and 8 KB is the whole of that: at a hundred-odd bytes this has two
- * orders of magnitude of headroom, and the assert exists to catch somebody
- * putting a snapshot, a URL or a framebuffer in here, not to pin the padding. */
-static_assert(sizeof(wp_rtc_state_t) <= 1024,
-              "wp_rtc_state_t must stay a small corner of the 8 KB RTC slow memory");
-
 /*
  * The three diagnostics are not decoration. Both numbers this design rests on
  * are unmeasured — deep-sleep current (the XIAO is specified at 14 uA, forum
@@ -80,6 +71,14 @@ static_assert(sizeof(wp_rtc_state_t) <= 1024,
  * day on a wall turns the estimates into measurements with no instruments at
  * all: /api/state divides them out and reports a daily draw.
  */
+/* A CEILING, not a transcription — see CLAUDE.md on sizeof(news_t), a number
+ * that has been wrong twice because it was written down rather than measured.
+ * What matters about this struct is that it fits in RTC slow memory with room
+ * to spare, and 8 KB is the whole of that: at a hundred-odd bytes this has two
+ * orders of magnitude of headroom, and the assert exists to catch somebody
+ * putting a snapshot, a URL or a framebuffer in here, not to pin the padding. */
+static_assert(sizeof(wp_rtc_state_t) <= 1024,
+              "wp_rtc_state_t must stay a small corner of the 8 KB RTC slow memory");
 
 /* Why this boot happened. Maps esp_sleep_get_wakeup_cause() onto the policy's
  * hand-written mirror — this function is the ONLY place in the project that

@@ -132,15 +132,10 @@ static int clamped(int n, int cap)
  * draws nothing at all. */
 #define POWER_UAH_PER_AWAKE_SECOND 23
 
-/* The mean length of a wake, in milliseconds, or 0 when there has not been one.
- *
- * Derived here rather than by the caller because the divisor is legitimately
- * zero — every board has no wakes at all until it has slept once — and an
- * integer divide by zero on Xtensa is an exception that panics the board, from
- * inside the HTTP handler answering the phone that asked. */
 /* The word, not the ordinal. Written exactly as pollSource is written, and
  * total: an out-of-range value — an uninitialised read, or an enumerator added
- * without this table — reads "default" rather than indexing past the array.
+ * without a case here — reads "default" rather than falling off the end of a
+ * switch.
  * This string goes on a phone screen, and the failure it would otherwise cause
  * is a pointer into .rodata serialised as JSON. */
 static const char *sleep_src_name(dev_sleep_src_t s)
@@ -154,6 +149,12 @@ static const char *sleep_src_name(dev_sleep_src_t s)
     }
 }
 
+/* The mean length of a wake, in milliseconds, or 0 when there has not been one.
+ *
+ * Derived here rather than by the caller because the divisor is legitimately
+ * zero — every board has no wakes at all until it has slept once — and an
+ * integer divide by zero on Xtensa is an exception that panics the board, from
+ * inside the HTTP handler answering the phone that asked. */
 static int mean_awake_ms(const device_state_t *st)
 {
     if (st->wakes <= 0 || st->awake_ms_total <= 0) {
