@@ -29,6 +29,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from test_schedule import at
 
@@ -37,7 +38,7 @@ from wpdesk import schedule as S
 from wpdesk import tiles
 from wpdesk.clock import FixedClock
 from wpdesk.editions import EditionStore
-from wpdesk.errors import BadRequest, Conflict, NotFound, TooLarge
+from wpdesk.errors import BadRequest, Conflict, Internal, NotFound, TooLarge
 from wpdesk.gates import GateResult, StubGates
 from wpdesk.store import Store
 
@@ -185,6 +186,25 @@ class DraftTest(EditionTestCase):
                 self.es.draft_info(bad)
             with self.assertRaises(NotFound, msg=bad):
                 self.es.put_payload(bad, payload())
+
+    def test_a_draft_id_the_desk_itself_mints_is_checked_like_any_other(self):
+        # uuid4().hex always matches _DRAFT_RE today, so this is a test of the
+        # day that stops being true: an id the desk mints for itself is not
+        # exempt from the anchored regex every path join in this module
+        # depends on, and a caller inside the desk that hands one a
+        # path-shaped id is a bug here, not a request to refuse.
+        fake = mock.Mock()
+        fake.hex = "../escaped"
+        with mock.patch.object(E.uuid, "uuid4", return_value=fake):
+            # A bug in the desk must reach somebody who can fix it, not just
+            # whoever happened to be making the request.
+            with self.assertLogs("wpdesk.editions", level="ERROR"):
+                with self.assertRaises(Internal):
+                    self.es.open_draft()
+
+        escaped = [base for base, dirs, files in os.walk(self.dir.name)
+                   if "escaped" in dirs or "escaped" in files]
+        self.assertEqual(escaped, [])
 
     def test_sweeping_removes_the_old_and_keeps_the_new(self):
         old = self.es.open_draft()

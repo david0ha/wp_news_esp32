@@ -45,7 +45,7 @@ from zoneinfo import ZoneInfo
 
 from . import tiles
 from .clock import Clock
-from .errors import BadRequest, Conflict, NotFound
+from .errors import BadRequest, Conflict, Internal, NotFound
 from .fsutil import atomic_write, fsync_dir
 from .gates import Gates
 from .policy import dropped_producer_policy
@@ -905,11 +905,32 @@ class EditionStore:
             return 0.0
 
     def _draft_dir(self, draft_id: str) -> str:
-        """The directory of a draft whose id has already passed the regex."""
+        """The directory of a draft, refusing an id that is not one.
+
+        Every path join in this module goes through here rather than each
+        checking the regex itself, so a bad id cannot reach ``os.path.join``
+        whoever the caller is -- including this module's own
+        ``uuid.uuid4().hex``, which has no reason to fail the check today but
+        no promise that it never will. ``_require_draft`` checks first and
+        answers ``NotFound``, so this guard never fires for a caller's id; one
+        that does fire is a bug in the desk, not a request to refuse.
+        """
+        if not _valid(_DRAFT_RE, draft_id):
+            LOG.error("draft id that is not one reached _draft_dir: %r", draft_id)
+            raise Internal(message=f"not a draft id: {draft_id!r:.64}")
         return os.path.join(self._drafts_root, draft_id)
 
     def _edition_dir(self, edition_id: str) -> str:
-        """The directory of an edition whose id has already passed the regex."""
+        """The directory of an edition, refusing an id that is not one.
+
+        Same rule as :meth:`_draft_dir`, for the same reason: every edition id
+        that reaches here today is either regex-checked by a caller or minted
+        by :func:`_fingerprint_of` as sixteen hex characters, but the guard
+        belongs to the join rather than to whichever of them happened to run.
+        """
+        if not _valid(_EID_RE, edition_id):
+            LOG.error("edition id that is not one reached _edition_dir: %r", edition_id)
+            raise Internal(message=f"not an edition id: {edition_id!r:.64}")
         return os.path.join(self._editions_root, edition_id)
 
     def _require_draft(self, draft_id: str) -> str:

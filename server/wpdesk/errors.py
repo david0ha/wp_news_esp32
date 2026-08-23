@@ -104,10 +104,13 @@ class TooLarge(DeskError):
 class Internal(DeskError):
     """The desk broke, and it is not the caller's fault.
 
-    Raised nowhere: the HTTP layer turns an unhandled exception into one of
-    these so that a 500 leaves in the board's own envelope rather than in a
-    dict assembled by hand at the boundary. A client that can parse every
-    refusal can parse this one too.
+    Raised where a path join finds an id the desk itself should never have
+    minted -- ``editions.py``'s own guard against a bug in the desk, not a
+    caller's request to refuse. Everywhere else it is the HTTP layer's,
+    which turns an unhandled exception into one of these so that a 500
+    leaves in the board's own envelope rather than in a dict assembled by
+    hand at the boundary: a client that can parse every refusal can parse
+    the desk breaking too.
     """
 
     default_code = "internal"
