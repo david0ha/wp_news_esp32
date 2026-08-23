@@ -37,6 +37,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -173,6 +174,11 @@ class EditionStore:
         #: Drafts inside a commit. A gate can run for ten minutes and the
         #: sweeper must not delete a draft out from under a render.
         self._busy: set[str] = set()
+
+        #: Directories the desk is in the middle of writing: a build being
+        #: filled, and the edition a commit is placing. Retention skips them,
+        #: because neither is rubbish and neither is history yet.
+        self._building: set[str] = set()
 
         #: The staged edition already complained about. ``publish_due`` runs
         #: every few seconds, and a warning per tick would bury the one that
@@ -517,9 +523,14 @@ class EditionStore:
         with self._lock:
             self._sweep_partials()
 
+            known = self._edition_ids()
             protected = {p for p in (self.current_id(), self.staged_id())
                          if p is not None}
-            known = self._edition_ids()
+            # An edition a commit is placing is not history yet: its pointer
+            # has not moved, so neither of those would protect it, and deleting
+            # it would leave `current` naming a directory that is gone.
+            protected.update(e for e in known
+                             if self._edition_dir(e) in self._building)
             # Newest first, by the edition's own record of when it was built --
             # an mtime would be whatever the last copy or restore made it.
             known.sort(key=self._created_at, reverse=True)
@@ -598,13 +609,35 @@ class EditionStore:
                 "tile_count": len(tile_ids),
                 "bytes": len(stored)}
 
-        self._build_edition(eid, draft_dir, stored, meta)
-        self._store.record_edition(eid, meta)
-
+        # Held against retention for the whole tail. Until the pointer moves,
+        # this edition is neither current nor staged, so prune() would be free
+        # to take it as old history -- and the pointer would then name a
+        # directory that is gone.
+        dest = self._edition_dir(eid)
         with self._lock:
-            if ok:
-                return self._publish(eid, now, reason, draft_id=draft_id)
-            return self._stage(eid, now, reason, draft_id=draft_id)
+            self._building.add(dest)
+        try:
+            if not self._build_edition(dest, draft_dir, stored, meta):
+                # It was filed before. meta.json is that edition's birth
+                # certificate and is never rewritten, so the store gets the
+                # copy on disk rather than this commit's -- two records of one
+                # immutable edition disagreeing about when it was born would
+                # put the history (ordered from the store) and retention
+                # (ordered from disk) in different orders. Re-recording rather
+                # than skipping also repairs a crash between build and record.
+                try:
+                    meta = self.edition_meta(eid)
+                except NotFound:
+                    pass          # unreadable: this commit's copy beats none
+            self._store.record_edition(eid, meta)
+
+            with self._lock:
+                if ok:
+                    return self._publish(eid, now, reason, draft_id=draft_id)
+                return self._stage(eid, now, reason, draft_id=draft_id)
+        finally:
+            with self._lock:
+                self._building.discard(dest)
 
     def _publish(self, edition_id: str, at: float, reason: str,
                  draft_id: str | None = None) -> CommitResult:
@@ -675,9 +708,13 @@ class EditionStore:
 
         return True, REASON_IMMEDIATE
 
-    def _build_edition(self, edition_id: str, draft_dir: str, stored: bytes,
-                       meta: dict) -> str:
-        """Assemble an edition beside its destination and rename it into place.
+    def _build_edition(self, dest: str, draft_dir: str, stored: bytes,
+                       meta: dict) -> bool:
+        """Assemble an edition beside ``dest`` and rename it into place.
+
+        Returns whether it actually built one: ``False`` means this edition was
+        already on disk, and since the id *is* the content, the copy that is
+        there is the same bytes and is the one a reader may be inside right now.
 
         Everything is written under ``editions/.build-XXXX`` -- which cannot
         match an edition id and is therefore invisible to every reader here --
@@ -685,15 +722,15 @@ class EditionStore:
         consequently never exists half-built: it appears whole or not at all,
         which is the promise ``current`` relies on.
 
-        An id whose directory already exists is already built. The id *is* the
-        content, so there is nothing a rebuild could add, and the existing
-        directory is the one a reader may be inside right now.
+        The temporary directory is filled *before* the question "is it already
+        there?" is asked, and asking it and renaming happen in one critical
+        section. An answer taken earlier could be false by the time the rename
+        runs -- retention deletes editions and the answer decides whether this
+        commit has a directory at all -- and the cost of the arrangement is one
+        wasted copy on the rare path where an old edition is filed again.
         """
-        dest = self._edition_dir(edition_id)
-        if os.path.isdir(dest):
-            return dest
-
-        tmp = tempfile.mkdtemp(dir=self._editions_root, prefix=BUILD_PREFIX)
+        tmp = self._open_build_dir()
+        placed = False
         try:
             _write_file(os.path.join(tmp, PAYLOAD_NAME), stored)
 
@@ -701,14 +738,23 @@ class EditionStore:
             os.makedirs(tiles_dir)
             source_tiles = os.path.join(draft_dir, TILES_DIR)
             for tile_id in _tile_ids(source_tiles):
-                data = _read_bytes(os.path.join(source_tiles, tile_id + ".bin"))
-                if data is not None:
-                    _write_file(os.path.join(tiles_dir, tile_id + ".bin"), data)
+                # A raising read, unlike everywhere on the serving path: this
+                # is a write, and a tile silently dropped here would be an
+                # immutable edition whose id and tile_count promise a picture
+                # that is not in it. The commit fails instead, and nothing
+                # outside the draft has been touched.
+                _write_file(os.path.join(tiles_dir, tile_id + ".bin"),
+                            _read_or_raise(os.path.join(source_tiles,
+                                                        tile_id + ".bin")))
 
             proof_dir = os.path.join(tmp, PROOF_DIR)
             os.makedirs(proof_dir)
             source_proof = os.path.join(draft_dir, PROOF_DIR)
             for name in _sheet_names(source_proof):
+                # Lenient, and only here: a proof sheet is evidence that
+                # somebody looked at the paper, not part of the edition. It is
+                # not fingerprinted and not counted, so losing one costs a
+                # picture in a diagnostic view and nothing on the wall.
                 data = _read_bytes(os.path.join(source_proof, name))
                 if data is not None:
                     _write_file(os.path.join(proof_dir, name), data)
@@ -721,33 +767,59 @@ class EditionStore:
 
             with self._lock:
                 if os.path.isdir(dest):
-                    # Another thread built the same id while this one worked.
-                    # Same id, same bytes: drop this copy rather than replace a
-                    # directory somebody may be reading.
-                    shutil.rmtree(tmp, ignore_errors=True)
-                    return dest
+                    return False
                 os.replace(tmp, dest)
-        except BaseException:
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise
+                placed = True
+        finally:
+            with self._lock:
+                self._building.discard(tmp)
+            if not placed:
+                shutil.rmtree(tmp, ignore_errors=True)
 
         fsync_dir(self._editions_root)
-        return dest
+        return True
+
+    def _open_build_dir(self) -> str:
+        """A registered ``.build-*`` directory to assemble an edition in.
+
+        Registered before it is used, so that retention running on the tick
+        thread cannot delete a directory a request thread is still filling --
+        which would either fail the commit or, worse, let it rename a directory
+        with tiles missing from it into place under a fingerprint that promised
+        them.
+        """
+        with self._lock:
+            tmp = tempfile.mkdtemp(dir=self._editions_root, prefix=BUILD_PREFIX)
+            self._building.add(tmp)
+            return tmp
 
     def _sweep_partials(self) -> None:
         """Remove ``editions/.build-*`` left by a crash. Lock held.
 
-        They are invisible to every reader already; this is housekeeping, not
-        repair, which is why it lives in ``prune`` and not on the serving path.
+        Two things are not crash leftovers and are left alone: a directory a
+        build has registered, and one written recently enough that it is more
+        likely a commit in progress than a corpse. The age comes from the
+        filesystem's clock rather than the desk's, because what is being read
+        is an mtime -- the two are different clocks, and this is housekeeping
+        rather than schedule arithmetic, where the injected one is the rule.
         """
         try:
             names = os.listdir(self._editions_root)
         except OSError:
             return
+        cutoff = time.time() - DRAFT_TTL_SECONDS
         for name in names:
-            if name.startswith(BUILD_PREFIX):
-                shutil.rmtree(os.path.join(self._editions_root, name),
-                              ignore_errors=True)
+            if not name.startswith(BUILD_PREFIX):
+                continue
+            path = os.path.join(self._editions_root, name)
+            if path in self._building:
+                continue
+            try:
+                if os.path.getmtime(path) >= cutoff:
+                    continue
+            except OSError:
+                continue
+            shutil.rmtree(path, ignore_errors=True)
 
     def _edition_ids(self) -> list[str]:
         """Every edition on disk. A ``.build-*`` is not one."""
@@ -958,7 +1030,9 @@ def _fingerprint_of(content: bytes, tiles_dir: str) -> str:
     h = hashlib.sha256()
     h.update(b"news.json\0" + len(content).to_bytes(8, "big") + content)
     for tile_id in _tile_ids(tiles_dir):
-        data = _read_bytes(os.path.join(tiles_dir, tile_id + ".bin")) or b""
+        # Raising, not `or b""`: an unreadable tile must not fingerprint as an
+        # empty one, which would file two different editions under one id.
+        data = _read_or_raise(os.path.join(tiles_dir, tile_id + ".bin"))
         h.update(b"tile\0" + tile_id.encode("utf-8") + b"\0"
                  + len(data).to_bytes(8, "big") + data)
     return h.hexdigest()[:FINGERPRINT_HEX]
@@ -982,6 +1056,19 @@ def _read_bytes(path: str) -> bytes | None:
             return f.read()
     except OSError:
         return None
+
+
+def _read_or_raise(path: str) -> bytes:
+    """A whole file, or the ``OSError`` that stopped it reaching the caller.
+
+    The counterpart to :func:`_read_bytes`, and the split is the module's rule:
+    a read on the serving path answers ``None`` because every way of failing
+    means one thing to the board, while a read feeding a *write* must raise --
+    an edition is immutable, so a byte lost on the way in is lost for as long
+    as the edition is kept.
+    """
+    with open(path, "rb") as f:
+        return f.read()
 
 
 def _write_file(path: str, data: bytes) -> None:

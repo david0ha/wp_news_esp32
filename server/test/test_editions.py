@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import threading
+import time
 import unittest
 
 from test_schedule import at
 
+from wpdesk import editions as E
 from wpdesk import schedule as S
 from wpdesk import tiles
 from wpdesk.clock import FixedClock
@@ -69,6 +72,17 @@ def payload(n: int = 1, **extra) -> bytes:
            "stories": [{"rank": 0, "headline": f"Story {n}"}]}
     doc.update(extra)
     return json.dumps(doc).encode("utf-8")
+
+
+def _backdate(path: str) -> None:
+    """Make a directory look as old as a crash leftover from yesterday.
+
+    The build sweeper compares against the filesystem's clock rather than the
+    desk's, because what it is reading is a file's mtime -- so a test ages one
+    by touching it, not by moving :class:`FixedClock`.
+    """
+    old = time.time() - E.DRAFT_TTL_SECONDS - 60
+    os.utime(path, (old, old))
 
 
 class SheetGates(StubGates):
@@ -506,6 +520,38 @@ class CommitTest(EditionTestCase):
         self.assertEqual(os.stat(news).st_mtime_ns, stamp)
         self.assertEqual(self.es.read_payload(first.edition_id), payload(1))
 
+        # And the store's copy is the same birth certificate as the disk's.
+        # meta.json is written once and never rewritten, so a store row that
+        # took the *second* filing's created_at would make the history
+        # (ordered from the store) and retention (ordered from disk) disagree
+        # about which edition is the oldest.
+        on_disk = self.es.edition_meta(first.edition_id)
+        self.assertEqual(on_disk["created_at"], T0)
+        self.assertEqual(self.store.get_edition(first.edition_id)["created_at"], T0)
+        self.assertEqual(self.store.get_edition(first.edition_id)["source"],
+                         on_disk["source"])
+
+    def test_a_tile_that_cannot_be_read_fails_the_commit_rather_than_the_edition(self):
+        # Reads answer None on the serving path; a write must not. An edition
+        # is immutable, so a tile quietly dropped here is an edition whose id
+        # promises a picture that is not in it, for as long as it is kept --
+        # and it would fingerprint identically to one with an empty tile.
+        first = self.file(1)
+        d = self.draft(2)
+        tile = os.path.join(self.root, "drafts", d, "tiles", "pic.bin")
+        os.chmod(tile, 0)
+        self.addCleanup(os.chmod, tile, 0o600)
+        if os.access(tile, os.R_OK):
+            self.skipTest("this user's file modes do not stop a read")
+
+        with self.assertRaises(OSError):
+            self.es.commit(d, IMMEDIATE, self.jump(T0 + 60))
+
+        self.assertEqual(self.es.current_id(), first.edition_id)
+        self.assertEqual(self.es.read_payload(first.edition_id), payload(1))
+        self.assertEqual(os.listdir(os.path.join(self.root, "editions")),
+                         [first.edition_id])
+
 
 # --------------------------------------------------------------------------
 # Gate 4 — the schedule
@@ -729,12 +775,29 @@ class PruneTest(EditionTestCase):
         os.makedirs(os.path.join(partial, "tiles"))
         with open(os.path.join(partial, "news.json"), "wb") as f:
             f.write(payload(9))
+        _backdate(partial)
 
         self.assertIsNone(self.es.read_payload(".build-abcd1234"))
         self.assertEqual(self.es.prune(keep=5), 0)
         self.assertFalse(os.path.exists(partial))
         self.assertEqual(self.es.current_id(), r.edition_id)
         self.assertEqual(self.es.read_payload(r.edition_id), payload(1))
+
+    def test_a_build_directory_younger_than_the_ttl_is_left_alone(self):
+        # Retention runs on the tick, and a build takes as long as it takes to
+        # copy the tiles. A `.build-*` that was written a moment ago is far more
+        # likely to be a commit in progress than a crash's leftover, and the
+        # cost of being wrong is a published edition with tiles missing from it.
+        self.file(1)
+        fresh = os.path.join(self.root, "editions", ".build-inflight")
+        os.makedirs(fresh)
+
+        self.assertEqual(self.es.prune(keep=0), 0)
+        self.assertTrue(os.path.isdir(fresh))
+
+        _backdate(fresh)
+        self.assertEqual(self.es.prune(keep=0), 0)
+        self.assertFalse(os.path.exists(fresh))
 
     def test_the_constructor_sets_the_default_depth(self):
         es = EditionStore(self.root, self.gates, self.store, self.clock, keep=1)
@@ -884,6 +947,79 @@ class SweepDuringCommitTest(EditionTestCase):
         commit.join(timeout=10)
         self.assertEqual(done[0].state, "published")
         self.assertEqual(self.es.read_payload(self.es.current_id()), payload(1))
+
+
+class PruneDuringBuildTest(EditionTestCase):
+    """Retention on the tick thread, arriving in the middle of a commit.
+
+    ``prune()`` runs from ``Desk.tick()`` every ten minutes and commits arrive
+    on the request threads of a ``ThreadingHTTPServer``, so these two meet
+    without anybody arranging it. Both tests here are the same question asked
+    at two moments: can housekeeping delete the thing a commit is standing on?
+    """
+
+    def test_a_build_in_flight_survives_retention_however_old_it_looks(self):
+        entered = threading.Event()
+        release = threading.Event()
+        original = E._write_file
+
+        def park(path: str, data: bytes) -> None:
+            """Stop inside the build, with its directory half filled."""
+            original(path, data)
+            if os.path.basename(path) == "news.json":
+                entered.set()
+                release.wait(10)
+
+        E._write_file = park
+        self.addCleanup(setattr, E, "_write_file", original)
+
+        done: list = []
+        commit = threading.Thread(
+            target=lambda: done.append(self.es.commit(self.draft(1), IMMEDIATE, T0)),
+            daemon=True)
+        commit.start()
+        self.assertTrue(entered.wait(10), "the build never started")
+
+        builds = [n for n in os.listdir(os.path.join(self.root, "editions"))
+                  if n.startswith(".build-")]
+        self.assertEqual(len(builds), 1, builds)
+        partial = os.path.join(self.root, "editions", builds[0])
+        _backdate(partial)          # as old as anything a crash left behind
+
+        self.assertEqual(self.es.prune(keep=0), 0)
+        self.assertTrue(os.path.isdir(partial), "retention took a live build")
+
+        release.set()
+        commit.join(timeout=10)
+        self.assertEqual(done[0].state, "published")
+        self.assertEqual(self.es.read_payload(self.es.current_id()), payload(1))
+        self.assertEqual(self.es.read_tile(self.es.current_id(), "pic"),
+                         b"\x01\x02\x03\x04")
+
+    def test_retention_cannot_take_the_edition_a_commit_is_placing(self):
+        # The reuse path. The edition is on disk and the commit is about to
+        # point `current` at it, but until that pointer moves it is neither
+        # current nor staged -- so retention would otherwise be free to take it
+        # as old history, and `current` would name a directory that is gone.
+        first = self.file(1)
+        self.file(2, now=self.jump(T0 + 60))
+
+        real = self.store.record_edition
+
+        def record_then_prune(eid, meta):
+            """The tick, arriving between the build and the pointer write."""
+            real(eid, meta)
+            self.es.prune(keep=0)
+
+        self.store.record_edition = record_then_prune
+        self.addCleanup(setattr, self.store, "record_edition", real)
+
+        again = self.es.commit(self.draft(1), IMMEDIATE, self.jump(T0 + 120))
+        self.assertEqual(again.edition_id, first.edition_id)
+        self.assertEqual(self.es.current_id(), first.edition_id)
+        self.assertEqual(self.es.read_payload(first.edition_id), payload(1))
+        self.assertEqual(self.es.read_tile(first.edition_id, "pic"),
+                         b"\x01\x02\x03\x04")
 
 
 # --------------------------------------------------------------------------
