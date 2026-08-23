@@ -233,9 +233,23 @@ void power_decide(const power_input_t *in, power_plan_t *out)
     switch (in->fetch) {
     case POWER_FETCH_CHANGED:
         /* The only outcome allowed to reach the panel repeatedly, and the only
-         * reason the board is on the wall at all. */
-        out->action     = POWER_REFRESH_THEN_SLEEP;
-        out->next_fails = 0;
+         * reason the board is on the wall at all.
+         *
+         * The count CARRIES rather than clearing, and that is the whole of D7:
+         * a decision to print is not a print. main.cpp commits next_fails to
+         * RTC memory here, before NewsTask has run — so a wake that clears the
+         * count and then fails to fetch anything, times out
+         * await_first_snapshot() and leaves the old edition on the glass has
+         * printed nothing and told the next wake it was fine. It would sleep at
+         * full cadence and do the same thing every fifteen minutes forever,
+         * with no log line disagreeing.
+         *
+         * The reset belongs where a page reaches paper, which is
+         * present_full(); the increment belongs where a wake gives up, which is
+         * enter_sleep(). Neither is here, and `out->next_fails` is already
+         * pre-set to `in->consecutive_fails` at the top of this function, so
+         * carrying it is the absence of a line rather than a line. */
+        out->action = POWER_REFRESH_THEN_SLEEP;
         break;
 
     case POWER_FETCH_UNCHANGED:

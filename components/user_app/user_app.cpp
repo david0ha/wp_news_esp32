@@ -322,6 +322,15 @@ void UserApp_UiInit(void)
 
 /* --- presenting (UiTask only) --------------------------------------------- */
 
+/* Whether anything reached the paper on this boot. UiTask only — it is written
+ * by present_full() and read by enter_sleep(), both of which run on that one
+ * task, so it needs no lock and must not acquire one.
+ *
+ * It exists because "this wake decided to print" and "this wake printed" are
+ * different facts and the failure that separates them is silent. See
+ * enter_sleep(). */
+static bool s_printed;
+
 /* Render whatever the setters changed, then push one refresh for the lot.
  *
  * There is only one kind of refresh on this panel and it costs twenty to thirty
@@ -358,7 +367,18 @@ static void present_full(void)
     state_lock();
     rs->content_hash = s_data_hash;
     http_etag_copy(rs->etag, sizeof(rs->etag), s_data_etag);
+
+    /* And the failure count, cleared HERE and nowhere earlier. This is the one
+     * place in the firmware that knows a page is on the paper, which is the
+     * only evidence that the whole chain — connect, fetch, parse, compose,
+     * refresh — actually worked. power_decide() used to clear it on the mere
+     * decision to print, so a wake that decided to print and then failed to
+     * fetch anything told the next wake it was healthy. See the CHANGED arm of
+     * power_decide() and enter_sleep(). */
+    rs->consecutive_fails = 0;
     state_unlock();
+
+    s_printed = true;   /* UiTask only — see the declaration above */
 }
 
 /* --- content updates (UiTask only) ---------------------------------------- */
@@ -820,9 +840,38 @@ static void enter_sleep(void)
      * stated range into an answer. /api/state divides it by `wakes`. */
     rs->awake_ms_total += (uint32_t)(esp_timer_get_time() / 1000);
 
+    /*
+     * What this boot actually achieved, which is not what it set out to do.
+     *
+     * A timer wake reaches the full path only because the quiet path found new
+     * content, and power_decide() has already returned REFRESH_THEN_SLEEP for
+     * it — but that is a decision, not a page. Everything after it can still
+     * fail: NewsTask's own fetch can land on a socket the desk closed in the
+     * second between the two requests, await_first_snapshot() times out, and
+     * UiTask deliberately leaves the old edition on the glass rather than
+     * replacing a real front page with the demo one. Nothing printed. Before
+     * this block the counter said zero, the board slept at full cadence, and
+     * it did the same thing again every fifteen minutes for as long as the desk
+     * stayed down — every log line agreeing that it was fine.
+     *
+     * So: printed clears it, and a timer wake that printed nothing counts as
+     * the failed poll it was. Gated on TIMER because a BUTTON wake is a person
+     * standing in front of the frame — they pressed something, nothing was due
+     * to print, and counting that as a failure would back the board off for
+     * being looked at. Saturating for the reason power_decide() saturates: a
+     * wrap to zero looks exactly like a recovery.
+     */
+    if (s_printed) {
+        rs->consecutive_fails = 0;
+    } else if (power_wake_cause() == POWER_WAKE_TIMER &&
+               rs->consecutive_fails < UINT16_MAX) {
+        rs->consecutive_fails++;
+    }
+
     const uint32_t seconds =
         rs->sleep_seconds ? rs->sleep_seconds : power_default_sleep_seconds();
-    ESP_LOGI(TAG, "awake window closed — sleeping");
+    ESP_LOGI(TAG, "awake window closed — sleeping (printed %s, fails %u)",
+             s_printed ? "yes" : "no", (unsigned)rs->consecutive_fails);
     power_sleep(seconds, s_btn_gpios, s_btn_count);
 }
 

@@ -208,11 +208,61 @@ static void test_changed_content_earns_the_refresh(void)
     CHECK_INT(g_out.next_fails, 0);
     CHECK_INT(g_out.sleep_seconds, 900);
 
+    /* And the count CARRIES. This line used to assert 0 and was asserting the
+     * bug: see test_a_changed_wake_carries_the_fail_count below. */
     baseline();
     g_in.fetch             = POWER_FETCH_CHANGED;
     g_in.consecutive_fails = 6;
     decide();
     CHECK_INT(g_out.action, POWER_REFRESH_THEN_SLEEP);
+    CHECK_INT(g_out.next_fails, 6);
+}
+
+static void test_a_changed_wake_carries_the_fail_count(void)
+{
+    /* A DECISION TO PRINT IS NOT A PRINT, and the difference is a board that
+     * stops backing off while it is still failing.
+     *
+     * The sequence, all of it real: a timer wake fetches, the content has
+     * moved, so this returns REFRESH_THEN_SLEEP and main.cpp commits
+     * next_fails to RTC memory — before NewsTask has run. The full path comes
+     * up, NewsTask's own fetch fails (the desk went down in the second between
+     * the two requests, or the retry landed on a socket the peer had closed),
+     * await_first_snapshot() times out, and UiTask leaves the old edition on
+     * the glass because replacing a stale front page with the demo page is
+     * worse than doing nothing. Nothing printed. The counter says zero. The
+     * board sleeps at full cadence and does the same thing again in fifteen
+     * minutes, forever, with every log line agreeing that it is fine.
+     *
+     * So the reset moves from the decision to the print: present_full() clears
+     * it once a page is actually on paper, and enter_sleep() increments it when
+     * a timer wake reaches a sleep having printed nothing. This function only
+     * has to stop lying about it. */
+    baseline();
+    g_in.fetch             = POWER_FETCH_CHANGED;
+    g_in.consecutive_fails = 3;
+    decide();
+    CHECK_INT(g_out.action, POWER_REFRESH_THEN_SLEEP);
+    CHECK_INT(g_out.next_fails, 3);
+
+    /* Nothing else moves. UNCHANGED is a poll that worked, and COLD or a stale
+     * RTC state is a board that is about to print unconditionally — both still
+     * clear the count where they always did. */
+    baseline();
+    g_in.consecutive_fails = 3;
+    decide();
+    CHECK_INT(g_out.next_fails, 0);
+
+    baseline();
+    g_in.wake              = POWER_WAKE_COLD;
+    g_in.consecutive_fails = 3;
+    decide();
+    CHECK_INT(g_out.next_fails, 0);
+
+    baseline();
+    g_in.rtc_valid         = false;
+    g_in.consecutive_fails = 3;
+    decide();
     CHECK_INT(g_out.next_fails, 0);
 }
 
@@ -668,6 +718,7 @@ int main(void)
     test_stale_rtc_state_forces_a_print();
     test_unchanged_content_sleeps_without_a_refresh();
     test_changed_content_earns_the_refresh();
+    test_a_changed_wake_carries_the_fail_count();
     test_a_failure_sleeps_and_counts();
     test_the_backoff_curve();
     test_backoff_never_shortens_a_configured_sleep();
