@@ -40,6 +40,7 @@ looks like an error from in here. Behind a tunnel that client is anybody, so
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -108,6 +109,52 @@ _SHEET_TYPES = {".png": "image/png", ".bmp": "image/bmp"}
 _TILE_ID = tiles.TILE_ID_RE.pattern.removeprefix("^").removesuffix(r"\Z")
 
 _TILE_PATH_RE = re.compile(r"^/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID)
+
+
+def _etag(body: bytes) -> str:
+    """The validator for one response: strong, quoted, sixteen hex digits.
+
+    Strong -- no ``W/`` -- because it is taken over the exact bytes about to be
+    written, policy block and all, so two responses carrying this tag are
+    identical rather than merely equivalent. That is what lets the desk answer
+    a match with a 304 and lets the board treat the tag as the whole question.
+
+    Sixteen digits of SHA-256 is sixty-four bits, and it is the same recipe
+    ``tools/mock_news_server.py`` uses so that a board cannot tell the mock and
+    the desk apart by the shape of a tag. The two servers share the recipe and
+    not the input: this one hashes what it serves, the mock hashes the
+    canonical dump of the snapshot it made up, which carries no policy.
+    """
+    return '"%s"' % hashlib.sha256(body).hexdigest()[:16]
+
+
+def _if_none_match(header: str | None, tag: str) -> bool:
+    """Whether the client already holds the representation this tag is for.
+
+    ``If-None-Match`` is a comma-separated list, ``*`` matches whatever the
+    desk currently has, and a ``W/`` prefix marks a validator something in
+    between has weakened on the way past -- a transforming proxy is entitled
+    to, and the opaque part still names the edition. Dropping the prefix
+    before comparing is the weak comparison RFC 9110 asks for on a GET, and it
+    is the right question: whether the board already has this front page, not
+    whether it has it byte for byte.
+
+    Parsing rather than comparing the header whole is not fussiness. A board
+    that sent one tag gets a string back that a cache may return as a list, and
+    a desk that compared the whole string would answer 200 to every one of
+    those -- correct, silent, and exactly the saving this exists for, lost.
+    """
+    if not header:
+        return False
+    for candidate in header.split(","):
+        candidate = candidate.strip()
+        if candidate == "*":
+            return True
+        if candidate.startswith("W/"):
+            candidate = candidate[2:].strip()
+        if candidate == tag:
+            return True
+    return False
 
 
 class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -328,7 +375,21 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             raise NotFound(message="no edition has been filed yet")
 
         body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
-        self._send_bytes(200, body, "application/json", head=head)
+
+        # Over the spliced bytes rather than over the stored payload, so the
+        # tag answers the only question the board is asking -- is what I have
+        # what you would send me -- and moves when the cadence in the policy
+        # block moves. Within a schedule window those bytes are constant (both
+        # numbers are step functions of the clock, and `next_change` is
+        # truncated to a whole second), so an ordinary poll is a 304 and a
+        # schedule transition is a full edition. That is the mechanism a
+        # sleeping board's cadence rests on: a 304 across a transition would
+        # leave it polling at the wrong rate until something else changed.
+        tag = _etag(body)
+        if _if_none_match(self.headers.get("If-None-Match"), tag):
+            self._send_not_modified(tag)
+            return
+        self._send_bytes(200, body, "application/json", head=head, etag=tag)
 
     def _serve_tile(self, match, head: bool) -> None:
         desk = self.desk
@@ -619,20 +680,58 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _send_not_modified(self, tag: str) -> None:
+        """A 304: the same validator, no body, and a length that says so.
+
+        GET and HEAD answer identically here, because a 304 has nothing to omit
+        for a HEAD -- which is why this takes no ``head`` flag rather than
+        taking one and ignoring it.
+
+        ``Content-Length: 0`` is explicit. A 304 may not carry a body and a
+        client that knows the rule needs no telling, but framing is what the
+        socket is actually reading: the board polls on a keep-alive connection
+        it holds for hours, and the response it will see most often in its life
+        is this one. A client left to infer the length is one bug away from
+        waiting for bytes that are not coming, and the failure lands on the
+        request AFTER this one -- somebody else's, behind a tunnel that pools
+        connections. It is also what ``tools/test_mock_etag.py`` asserts of the
+        mock, so the two servers frame a 304 the same way.
+        """
+        self._send_status(304)
+        self.send_header("ETag", tag)
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _send_json(self, status: int, doc: dict, head: bool = False) -> None:
         body = json.dumps(doc, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         self._send_bytes(status, body, "application/json", head=head)
 
     def _send_bytes(self, status: int, body: bytes, content_type: str,
-                    head: bool = False) -> None:
-        """One response.
+                    head: bool = False, etag: str | None = None) -> None:
+        """One response, with a validator when the caller has one for it.
 
-        No ``Cache-Control`` and no ``ETag``, deliberately. The board reads
-        neither, and a cache between the desk and the board is a stale front
-        page nobody can explain from across a room.
+        Still no ``Last-Modified`` and no ``Expires``, and for the same reason
+        as before: a cache between the desk and the board that answers out of
+        its own copy is a stale front page nobody can explain from across a
+        room. What has changed is that silence turned out to be a weak way to
+        say it. ``Cache-Control: no-cache`` is not "do not store" -- it is "do
+        not serve this without asking me first", which is the board's own
+        behaviour written down for anything in between. A tunnel that honours
+        it revalidates to origin on every poll and then answers the board out
+        of its copy when the desk says 304, which costs the desk a request it
+        was already getting and saves the edition; a tunnel handed silence had
+        no instruction at all and was free to guess.
+
+        The two headers travel together on purpose: a validator with no
+        ``Cache-Control`` invites a heuristic freshness lifetime, which is the
+        one thing a front page must never be given.
         """
         self._send_status(status)
         self.send_header("Content-Type", content_type)
+        if etag is not None:
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if not head:
