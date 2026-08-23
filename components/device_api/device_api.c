@@ -245,10 +245,10 @@ static void start_mdns(void)
     // forked from, whose shipped app resolves tickerboard.local. Two devices
     // answering the same discovery probe on one LAN is a support ticket nobody
     // can debug from the outside.
-    mdns_hostname_set("wpnews");
+    mdns_hostname_set("claudepost");
     mdns_instance_name_set(DEVICE_MODEL);
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-    ESP_LOGI(TAG, "mDNS advertising http://wpnews.local");
+    ESP_LOGI(TAG, "mDNS advertising http://claudepost.local");
 }
 
 void device_api_start(void)

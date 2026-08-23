@@ -51,7 +51,7 @@ the simulator reads them from.
 Then set the board’s URL to http://<this machine>.local:8123/news.json, either
 in the captive portal or with
 
-    curl -X POST http://wpnews.local/api/news \\
+    curl -X POST http://claudepost.local/api/news \\
          -d '{"url":"http://mymac.local:8123/news.json"}'
 """
 

@@ -1,6 +1,6 @@
 """The two planes, the scheduler tick, and the property the device plane exists to have.
 
-Every test here runs a real :class:`~wpdesk.http.DeskServer` on a loopback port
+Every test here runs a real :class:`~claudepost.http.DeskServer` on a loopback port
 and talks to it with ``urllib``. That is slower than calling the handlers
 directly and it is the point: the thing being asserted is what a board or an
 agent gets from a socket, and a test that called ``_device()`` in-process could
@@ -25,11 +25,11 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from wpdesk import schedule as S
-from wpdesk.app import Config, Desk
-from wpdesk.clock import FixedClock
-from wpdesk.gates import GateResult, StubGates
-from wpdesk.http import MAX_CONTROL_BODY, DeskHTTPRequestHandler, make_server
+from claudepost import schedule as S
+from claudepost.app import Config, Desk
+from claudepost.clock import FixedClock
+from claudepost.gates import GateResult, StubGates
+from claudepost.http import MAX_CONTROL_BODY, DeskHTTPRequestHandler, make_server
 
 from test_schedule import at
 
@@ -561,7 +561,7 @@ class TickTest(DeskTestCase):
         # transaction every five seconds to ask whether either has passed is a
         # transaction that finds nothing all day. It goes with the sweep and
         # the prune, ten minutes apart, where the rest of the tidying lives.
-        from wpdesk.app import HOUSEKEEPING_SECONDS
+        from claudepost.app import HOUSEKEEPING_SECONDS
 
         self.desk.tick()                      # the first pass takes its housekeeping
         status, doc = self.api("POST", "/api/commands",
@@ -704,7 +704,7 @@ class KeepAliveTest(RawTestCase):
         # By the body, not the status: the smuggled POST /api/hold answers 200
         # too, and a test that read only the code would pass against the
         # desync it exists to catch.
-        self.assertEqual(json.loads(body).get("service"), "wpdesk", body)
+        self.assertEqual(json.loads(body).get("service"), "claudepost", body)
 
     def test_a_refused_requests_body_never_becomes_the_next_request(self):
         # Variant A of the finding: the attacker holds no token at all. The
@@ -831,7 +831,7 @@ class SocketTimeoutTest(RawTestCase):
         # it costs the connection, it is not worth a traceback, and there is
         # nobody left to send a 500 to.
         conn = self.connect()
-        with self.assertNoLogs("wpdesk.http", level="ERROR"):
+        with self.assertNoLogs("claudepost.http", level="ERROR"):
             conn.send(b"POST /api/hold HTTP/1.1\r\nHost: desk\r\n"
                       b"Authorization: Bearer " + self.tokens["operator"].encode() + b"\r\n"
                       b"Content-Type: application/json\r\n"
@@ -902,7 +902,7 @@ class SocketTimeoutTest(RawTestCase):
         sock.settimeout(self.PATIENCE)
         sock.connect(("127.0.0.1", self.server.server_address[1]))
 
-        with self.assertNoLogs("wpdesk.http", level="ERROR"):
+        with self.assertNoLogs("claudepost.http", level="ERROR"):
             sock.sendall(b"GET /tiles/big.bin HTTP/1.1\r\nHost: desk\r\n\r\n")
             threading.Event().wait(self.TIMEOUT * 4)     # let the write give up
 
@@ -974,7 +974,7 @@ class LostConnectionTest(RawTestCase):
         tracebacks = self.watch_for_tracebacks()
 
         conn = self.connect()
-        with self.assertNoLogs("wpdesk.http", level="ERROR"):
+        with self.assertNoLogs("claudepost.http", level="ERROR"):
             conn.send(b"GET /api/state HTTP/1.1\r\nHost: desk\r\n\r\n")
             self.assertTrue(conn.is_closed(), "the handler never let the connection go")
 
@@ -996,7 +996,7 @@ class LostConnectionTest(RawTestCase):
         self.addCleanup(patch.stop)
 
         conn = self.connect()
-        with self.assertLogs("wpdesk.http", level="ERROR") as logged:
+        with self.assertLogs("claudepost.http", level="ERROR") as logged:
             conn.send(b"GET /news.json HTTP/1.1\r\nHost: desk\r\n\r\n")
             self.assertTrue(conn.is_closed(), "the handler never let the connection go")
 

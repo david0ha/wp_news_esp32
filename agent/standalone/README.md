@@ -19,10 +19,10 @@ it wins.
 
 Twice a day, `file-edition.sh` wakes Claude Code headless, hands it
 [`PROMPT.md`](../../tools/edition/PROMPT.md) — the desk's standing instructions — and lets it research **one company**
-and write a two-page edition into `$EDITION_DIR` (default `~/.wpnews/edition`):
+and write a two-page edition into `$EDITION_DIR` (default `~/.claudepost/edition`):
 
 ```
-~/.wpnews/edition/
+~/.claudepost/edition/
   watchlist.json        the candidates and the rotation   (you write this)
   news.json             the edition                       (the desk writes this)
   tiles/<id>.bin        one 4 bpp tile per picture        (the desk writes these)
@@ -175,21 +175,21 @@ tracked ones leaves two modified plists in a public checkout and has to be redon
 files change.
 
 ```bash
-cp agent/standalone/com.wpnews.edition.plist ~/Library/LaunchAgents/
-cp agent/standalone/com.wpnews.serve.plist   ~/Library/LaunchAgents/
-sed -i '' "s|/Users/YOUR-USERNAME|$HOME|g" ~/Library/LaunchAgents/com.wpnews.*.plist
-launchctl load ~/Library/LaunchAgents/com.wpnews.edition.plist
-launchctl load ~/Library/LaunchAgents/com.wpnews.serve.plist
-launchctl start com.wpnews.edition        # file one now, to check the scheduled path works
+cp agent/standalone/com.claudepost.edition.plist ~/Library/LaunchAgents/
+cp agent/standalone/com.claudepost.serve.plist   ~/Library/LaunchAgents/
+sed -i '' "s|/Users/YOUR-USERNAME|$HOME|g" ~/Library/LaunchAgents/com.claudepost.*.plist
+launchctl load ~/Library/LaunchAgents/com.claudepost.edition.plist
+launchctl load ~/Library/LaunchAgents/com.claudepost.serve.plist
+launchctl start com.claudepost.edition        # file one now, to check the scheduled path works
 ```
 
 `$HOME` is the only part of those paths `sed` can know: the plists also assume this checkout is at
-`~/Documents/wp_news_esp32`, so edit them by hand if yours is somewhere else.
+`~/Documents/claudepost`, so edit them by hand if yours is somewhere else.
 
 Then point the board at the serving machine, once:
 
 ```bash
-curl -X POST http://wpnews.local/api/news \
+curl -X POST http://claudepost.local/api/news \
      -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
@@ -209,8 +209,8 @@ been filed since dawn.
 
 Putting both in one job means a failed filing takes the served page down with it — which converts a
 stale paper, the failure the firmware is designed to survive and badge, into no paper at all. So
-`com.wpnews.serve` runs `--serve-only` forever under `KeepAlive`, and `com.wpnews.edition` comes and
-goes on its schedule beside it.
+`com.claudepost.serve` runs `--serve-only` forever under `KeepAlive`, and `com.claudepost.edition`
+comes and goes on its schedule beside it.
 
 ## Why twice, and why those two times
 
@@ -234,10 +234,11 @@ last received. `PROMPT.md` tells the desk to file the week's story instead and s
 
 ## What this exposes
 
-`--serve-only` is `python3 -m http.server` bound to `0.0.0.0`, serving `$EDITION_DIR` **read-only
-over plain HTTP with no authentication**. Everything in that directory is reachable, not just
-`news.json` — the watchlist naming the owner's positions, the tiles, and `log/`, which holds a week
-of filed editions and the agent's own transcripts.
+`--serve-only` is `python3 -m http.server` bound to `0.0.0.0` on `CLAUDEPOST_PORT` (default `8123`
+— this standalone server's own port, not the desk's), serving `$EDITION_DIR` **read-only over
+plain HTTP with no authentication**. Everything in that directory is reachable, not just
+`news.json` — the watchlist naming the owner's positions, the tiles, and `log/`, which holds a
+week of filed editions and the agent's own transcripts.
 
 That is the same posture as the rest of this project's LAN services and the same one the firmware
 expects. It suits a home network and nothing else. Do not put it on a network you do not control, and

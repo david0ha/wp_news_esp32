@@ -166,7 +166,7 @@ extern "C" void app_main(void)
 	// I2C header are a user button and the battery divider's enable here — so
 	// the clock is SNTP alone, and this is the only thing that turns it into
 	// local time.
-	setenv("TZ", CONFIG_WP_NEWS_TIMEZONE, 1);
+	setenv("TZ", CONFIG_CLAUDEPOST_TIMEZONE, 1);
 	tzset();
 
 	board_io_init(BATT_ADC_PIN, BATT_ENABLE_PIN);
@@ -196,7 +196,7 @@ extern "C" void app_main(void)
 	}
 
 	prov_options_t opts;
-	provisioning_default_options(&opts);   // AP prefix "WP News", 15s timeout
+	provisioning_default_options(&opts);   // AP prefix "Claude Post", 15s timeout
 	opts.event_cb = OnProvisioningEvent;
 
 	prov_config_t cfg;
@@ -223,7 +223,7 @@ extern "C" void app_main(void)
 		UserApp_TaskInit(&cfg, btn_gpios, (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
-		// "wpnews.local"), reading and driving the app through the
+		// "claudepost.local"), reading and driving the app through the
 		// user_app_api bridge.
 		device_api_start();
 	}

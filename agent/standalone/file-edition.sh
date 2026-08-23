@@ -10,12 +10,12 @@
 #   ./agent/standalone/file-edition.sh            # file now
 #   ./agent/standalone/file-edition.sh --serve    # file now, then serve until interrupted
 #
-# Scheduled twice a day by com.wpnews.edition.plist; see README in this directory.
+# Scheduled twice a day by com.claudepost.edition.plist; see README in this directory.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EDITION_DIR="${EDITION_DIR:-$HOME/.wpnews/edition}"
-PORT="${WPNEWS_PORT:-8123}"
+EDITION_DIR="${EDITION_DIR:-$HOME/.claudepost/edition}"
+PORT="${CLAUDEPOST_PORT:-8123}"
 LOG="$EDITION_DIR/log/$(date +%Y-%m-%d_%H%M).log"
 
 mkdir -p "$EDITION_DIR/tiles" "$EDITION_DIR/log"

@@ -1,6 +1,6 @@
 # The desk and the tunnel.
 #
-#   docker network create wpnews            # once; the worker joins it too
+#   docker network create claudepost        # once; the worker joins it too
 #   cp server/.env.example server/.env      # then fill it in
 #   docker compose -f server/compose.yaml up -d
 #
@@ -22,29 +22,29 @@
 # intended way in and a second, unauthenticated way in on the LAN is a second
 # thing to reason about. 8790 because 8787-8789 are the existing MCP tunnels.
 
-name: wpnews
+name: claudepost
 
 services:
   desk:
     build:
       context: ..
       dockerfile: server/Dockerfile
-    image: wpnews-desk:latest
+    image: claudepost-desk:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:8790:8080"
-    networks: [wpnews]
+    networks: [claudepost]
     volumes:
       # Serving state: the database, the editions, and the schedule the
       # operator last PUT. A named volume rather than a bind mount, so a
       # newspaper on a wall does not depend on any disk being plugged in.
-      - wpnews-data:/data
+      - claudepost-data:/data
       # Tokens. Read-only, and outside the repository, because the repository
       # is public and git history is permanent.
-      - ${HOME}/.wpnews:/run/secrets:ro
+      - ${HOME}/.claudepost:/run/secrets:ro
     environment:
-      WPDESK_KEEP_EDITIONS: ${WPDESK_KEEP_EDITIONS:-30}
-      WPDESK_LOG_LEVEL: ${WPDESK_LOG_LEVEL:-INFO}
+      CLAUDEPOST_KEEP_EDITIONS: ${CLAUDEPOST_KEEP_EDITIONS:-30}
+      CLAUDEPOST_LOG_LEVEL: ${CLAUDEPOST_LOG_LEVEL:-INFO}
       TZ: ${TZ:-UTC}
     security_opt:
       - no-new-privileges:true
@@ -58,8 +58,8 @@ services:
     depends_on:
       desk:
         condition: service_healthy
-    networks: [wpnews]
-    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/wpnews.yml", "run"]
+    networks: [claudepost]
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/claudepost.yml", "run"]
     volumes:
       # The named tunnel's credentials and the ingress file. Read-only: the
       # tunnel needs to present a certificate, not to manage one.
@@ -68,12 +68,12 @@ services:
       - no-new-privileges:true
 
 volumes:
-  wpnews-data:
+  claudepost-data:
 
 networks:
   # Declared external rather than created here, because the worker joins it
   # from its own side and neither compose file owns the other. Created once,
   # by hand:
-  #   docker network create wpnews — see agent/README.md
-  wpnews:
+  #   docker network create claudepost — see agent/README.md
+  claudepost:
     external: true

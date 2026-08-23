@@ -7,7 +7,7 @@ parsed, which a checked-in file would not be.
 """
 
 import os, struct, unittest, zlib
-from wpdesk import proofpng
+from claudepost import proofpng
 
 HERE = os.path.dirname(__file__)
 FIXTURE = os.path.join(HERE, "fixtures", "tiny.bmp")
@@ -96,12 +96,12 @@ class ProofPngTest(unittest.TestCase):
         self.assertEqual((w, h, depth, colour), (W, H, 8, 2))
 
     def test_a_file_that_is_not_a_bmp_is_refused(self):
-        from wpdesk.errors import BadRequest
+        from claudepost.errors import BadRequest
         with self.assertRaises(BadRequest):
             proofpng.bmp24_to_png(b"not a bitmap at all")
 
     def test_a_paletted_bmp_is_refused_rather_than_misread(self):
-        from wpdesk.errors import BadRequest
+        from claudepost.errors import BadRequest
         data = bytearray(read(FIXTURE))
         data[28] = 8                                    # bit depth field
         with self.assertRaises(BadRequest):
@@ -176,32 +176,32 @@ class RefusalTest(unittest.TestCase):
         cls.good = read(FIXTURE)
 
     def test_a_file_too_short_for_its_header_is_refused(self):
-        from wpdesk.errors import BadRequest
+        from claudepost.errors import BadRequest
         for n in (0, 2, 13, 14, 40, 53):
             with self.assertRaises(BadRequest, msg=f"{n} bytes"):
                 proofpng.bmp24_to_png(self.good[:n])
 
     def test_a_compressed_bmp_is_refused(self):
-        from wpdesk.errors import BadRequest
+        from claudepost.errors import BadRequest
         data = bytearray(self.good)
         data[30] = 1                                    # biCompression = BI_RLE8
         with self.assertRaises(BadRequest):
             proofpng.bmp24_to_png(bytes(data))
 
     def test_pixel_data_shorter_than_the_header_promises_is_refused(self):
-        from wpdesk.errors import BadRequest
+        from claudepost.errors import BadRequest
         with self.assertRaises(BadRequest):
             proofpng.bmp24_to_png(self.good[:-4])
 
     def test_a_declared_image_size_that_disagrees_is_refused(self):
-        from wpdesk.errors import BadRequest
+        from claudepost.errors import BadRequest
         data = bytearray(self.good)
         struct.pack_into("<I", data, 34, 9999)          # biSizeImage
         with self.assertRaises(BadRequest):
             proofpng.bmp24_to_png(bytes(data))
 
     def test_a_zero_dimension_is_refused(self):
-        from wpdesk.errors import BadRequest
+        from claudepost.errors import BadRequest
         data = bytearray(self.good)
         struct.pack_into("<i", data, 18, 0)             # biWidth
         with self.assertRaises(BadRequest):
@@ -213,7 +213,7 @@ class ConvertDirTest(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        self.dir = tempfile.mkdtemp(prefix="wpdesk-proof-")
+        self.dir = tempfile.mkdtemp(prefix="claudepost-proof-")
 
     def tearDown(self):
         import shutil

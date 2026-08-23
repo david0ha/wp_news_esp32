@@ -23,7 +23,7 @@ leaves yesterday's paper on the wall, which the firmware is designed to survive
 and badge `STALE`. One container that did both would turn that into a blank
 wall, which is the failure a reader actually notices. That is the same argument
 [`agent/standalone/README.md`](standalone/README.md) makes for splitting
-`com.wpnews.edition` from `com.wpnews.serve`, and it does not stop being true
+`com.claudepost.edition` from `com.claudepost.serve`, and it does not stop being true
 inside Docker.
 
 The desk validates, typesets and decides when a page may be published. The
@@ -35,15 +35,15 @@ worker owns the half a language model is actually for.
 that neither owns the other:
 
 ```sh
-docker network create wpnews
+docker network create claudepost
 ```
 
-**2. Credentials**, in `~/.wpnews/agent.env`, mode 0600, **outside the
+**2. Credentials**, in `~/.claudepost/agent.env`, mode 0600, **outside the
 repository** — because the repository is public and git history is permanent:
 
 ```sh
-ANTHROPIC_API_KEY=sk-ant-...      # or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
-WPNEWS_TOKEN=<a producer token>   # server/tools/mint-token.sh producer agent
+ANTHROPIC_API_KEY=sk-ant-...          # or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
+CLAUDEPOST_TOKEN=<a producer token>   # server/tools/mint-token.sh producer agent
 ```
 
 Headless Claude Code in a container will not find a desktop login session, so
@@ -144,14 +144,14 @@ only file in this directory that touches the environment.
 
 | Variable | Default | What it is |
 |---|---|---|
-| `WPNEWS_DESK` | `http://desk:8080` | the desk. `http://host.docker.internal:8790` on Docker Desktop against a local desk; `https://your-hostname/` through the tunnel from another machine |
-| `WPNEWS_SECRETS` | `/run/secrets` | where `~/.wpnews` is mounted: `agent.env`, or `tokens.json` as a fallback |
-| `WPNEWS_REPO` | `/repo` | the repository in the image — `PROMPT.md` and `tools/` |
-| `WPNEWS_SCRATCH` | `/scratch` | one workdir per command: the payload, the tiles, the sheets fetched back |
+| `CLAUDEPOST_DESK` | `http://desk:8080` | the desk. `http://host.docker.internal:8790` on Docker Desktop against a local desk; `https://your-hostname/` through the tunnel from another machine |
+| `CLAUDEPOST_SECRETS` | `/run/secrets` | where `~/.claudepost` is mounted: `agent.env`, or `tokens.json` as a fallback |
+| `CLAUDEPOST_REPO` | `/repo` | the repository in the image — `PROMPT.md` and `tools/` |
+| `CLAUDEPOST_SCRATCH` | `/scratch` | one workdir per command: the payload, the tiles, the sheets fetched back |
 | `AGENT_CONTEXT_DIR` | unset | your context directory. Unset, missing or empty are all "no context". That is a **host** path in `agent/.env` or a bare run; under `docker compose` the container always sees `/context`, so there the commented volume line is the switch and this variable is what it mounts |
 | `AGENT_WRITE_BRIEFS` | `0` | whether the worker may append to `<context>/briefs/`. Needs a context directory too |
 | `AGENT_TOOLS` | see above | the `claude --print` allowlist. Empty means the default |
-| `WPNEWS_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |
+| `CLAUDEPOST_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |
 | `TZ` | `UTC` | log timestamps and the date a brief is filed under |
 
 ## Verifying

@@ -41,7 +41,7 @@ going stale at 3 a.m. does not light the wall either. The badge rides out with
 the next refresh that had a reason.
 
 **2. The desk holds nothing personal.** It answers the internet, so what it
-can be made to leak matters: `~/.wpnews`, mounted read-only, holds bearer
+can be made to leak matters: `~/.claudepost`, mounted read-only, holds bearer
 tokens and nothing else of the owner's, and `/data` holds only the editions it
 has typeset and the schedule it was told to keep. A house style, a rotation, a
 list of things that must never print — what makes a paper sound like
@@ -54,7 +54,7 @@ tokens and a schedule, never anybody's opinions.
 contract belongs in the open — [`tools/edition/PROMPT.md`](../tools/edition/PROMPT.md)
 is how anybody builds a producer. The watchlist, the standing instructions, the
 blocklist, the daily briefs and every token do not. The boundary is drawn once,
-at the filesystem — tokens in `~/.wpnews`, editorial opinions in whatever
+at the filesystem — tokens in `~/.claudepost`, editorial opinions in whatever
 directory the worker's `AGENT_CONTEXT_DIR` names — rather than as a
 `.gitignore` rule: nothing private is ever inside the repository to be
 accidentally added.
@@ -148,10 +148,10 @@ them, which is a thing to get wrong at three in the morning.
 | Root | Where | Holds |
 |---|---|---|
 | **Serving** | Docker volume → `/data` | `current`, `staged`, `editions/<id>/…`, `desk.sqlite`, `schedule.json` |
-| **Secrets** | `~/.wpnews/` → `/run/secrets`, ro | `tokens.json`, `agent.env` |
+| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env` |
 
 **Secrets are not in the repository, the image, or any synced directory.**
-`~/.wpnews/` sits outside all three — the repository is public and git history
+`~/.claudepost/` sits outside all three — the repository is public and git history
 is permanent, and a private repository or a synced folder is one setting away
 from being public too.
 
@@ -302,7 +302,7 @@ board has no JavaScript engine, so a challenge is a hard failure that arrives as
 `STALE` with nothing in the log to explain it.
 
 **The desk closes a silent socket after two minutes** (`SOCKET_TIMEOUT_SECONDS`
-in `server/wpdesk/http.py`), and that number must stay *above* the tunnel's idle
+in `server/claudepost/http.py`), and that number must stay *above* the tunnel's idle
 keep-alive — cloudflared's `--proxy-keepalive-timeout`, 90 s by default — so that
 the tunnel is always the side that lets go first. Raise the tunnel's figure past
 the desk's and the desk starts closing origin connections cloudflared still means
@@ -310,7 +310,7 @@ to reuse, which costs a retry per closed socket and, for anything the tunnel wil
 not retry, a failed request with nothing in either log that says why.
 
 The tunnel means the board and the Mac no longer have to be on the same network.
-`wpnews.local`, the device API and the LAN path are untouched and remain the way
+`claudepost.local`, the device API and the LAN path are untouched and remain the way
 back.
 
 ## What this does not do

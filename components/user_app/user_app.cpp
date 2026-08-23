@@ -1,5 +1,5 @@
 /*
- * user_app.cpp — app orchestration for the WP News board.
+ * user_app.cpp — app orchestration for the Claude Post board.
  *
  *   AppInit:  route cJSON allocations to PSRAM.
  *   UiInit:   build the LVGL news UI on a fresh screen.
@@ -67,17 +67,17 @@ static prov_config_t s_cfg;
 
 /* --- cadences ------------------------------------------------------------ */
 
-#ifndef CONFIG_WP_NEWS_POLL_SECONDS
-#define CONFIG_WP_NEWS_POLL_SECONDS 60
+#ifndef CONFIG_CLAUDEPOST_POLL_SECONDS
+#define CONFIG_CLAUDEPOST_POLL_SECONDS 60
 #endif
-#ifndef CONFIG_WP_NEWS_FEED_URL
-#define CONFIG_WP_NEWS_FEED_URL ""
+#ifndef CONFIG_CLAUDEPOST_FEED_URL
+#define CONFIG_CLAUDEPOST_FEED_URL ""
 #endif
 
 /* The cadence a board boots at, and the one it falls back to. It is a default
  * and no longer the answer: the payload may carry a `policy` block that says how
  * often to come back, so the live figure is `s_poll_seconds` below. */
-#define POLL_SECONDS_DEFAULT  CONFIG_WP_NEWS_POLL_SECONDS
+#define POLL_SECONDS_DEFAULT  CONFIG_CLAUDEPOST_POLL_SECONDS
 
 /* Before this instant — 2024-01-01T00:00:00Z — `time(NULL)` is the epoch plus
  * however long the board has been up, which is not a date.
@@ -388,7 +388,7 @@ static void restate_page(void)
  * configuration and no fetch will ever happen. Caller holds s_mtx. */
 static void current_url(char *out, size_t n)
 {
-    strlcpy(out, s_cfg.news_url[0] ? s_cfg.news_url : CONFIG_WP_NEWS_FEED_URL, n);
+    strlcpy(out, s_cfg.news_url[0] ? s_cfg.news_url : CONFIG_CLAUDEPOST_FEED_URL, n);
 }
 
 /* --- actions -------------------------------------------------------------- */

@@ -12,14 +12,14 @@
   // Also the DNS label of the workers.dev URL below, so: alphanumeric and
   // dashes, 63 characters or less, no leading or trailing dash. Unique within
   // YOUR account, not globally — nobody else's deployment collides with it.
-  "name": "wpnews-edition",
+  "name": "claudepost-edition",
 
   "compatibility_date": "2026-08-17",
 
   // A public URL without owning a domain. Every Cloudflare account gets one
   // subdomain, and the Worker is served at
   //
-  //     https://wpnews-edition.<your-account-subdomain>.workers.dev/news.json
+  //     https://claudepost-edition.<your-account-subdomain>.workers.dev/news.json
   //
   // `wrangler deploy` prints the exact URL. That is the whole domain story for
   // anyone who does not want to buy a name — which is why it is the default
@@ -34,7 +34,7 @@
   // not already have a CNAME record.
   //
   // "routes": [
-  //   { "pattern": "wpnews.example.com", "custom_domain": true }
+  //   { "pattern": "claudepost.example.com", "custom_domain": true }
   // ],
 
   "assets": {

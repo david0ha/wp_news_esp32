@@ -2354,7 +2354,7 @@ int main(int argc, char **argv)
      * "opaque" means. What is checked instead is that the pane really is opaque:
      * the strip between the setup sheet's two bands is bare on this page and
      * dense with news on A1. */
-    ui_news_set_overlay(S_WIFI_TITLE, "WP News-1A2B",
+    ui_news_set_overlay(S_WIFI_TITLE, "Claude Post-1A2B",
                         "1. Join that Wi-Fi network\n\n"
                         "2. Stay connected, then open the page it offers");
     render();

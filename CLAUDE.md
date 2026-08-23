@@ -187,7 +187,7 @@ components/
     fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
     test/host/            the nine host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
-  device_api/             STA-mode HTTP/JSON control server + mDNS (wpnews.local)
+  device_api/             STA-mode HTTP/JSON control server + mDNS (claudepost.local)
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
 app/                      React Native companion app — setup + control over the LAN
@@ -343,7 +343,7 @@ agent/                    an example worker that files into the desk, plus the s
   own continuity"), never checked in. The repository ships templates only — `*.example` files and
   `agent/context.example/` — and a repository about to be public is the wrong place to discover that
   a path or a hostname was somebody's own.
-- The mDNS hostname is `wpnews` and the AP prefix `"WP News"` — deliberately **not** the
+- The mDNS hostname is `claudepost` and the AP prefix `"Claude Post"` — deliberately **not** the
   `tickerboard` / `"Ticker Board"` of the project this forked from, whose shipped app resolves those
   names.
 - If anything about the hardware is uncertain, don't guess — check

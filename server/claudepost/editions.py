@@ -52,7 +52,7 @@ from .policy import dropped_producer_policy
 from .schedule import Schedule, is_quiet, next_wake, quiet_ends_at
 from .store import Store
 
-LOG = logging.getLogger("wpdesk.editions")
+LOG = logging.getLogger("claudepost.editions")
 
 #: The layout under the data root. Gate 1 appends ``news.json`` to a draft
 #: directory itself and looks for ``tiles/`` beside it, so these names are the
@@ -155,9 +155,9 @@ class EditionStore:
     staged.
 
     Construction is deliberately cheap: two ``makedirs`` and a look at the
-    pointers. :class:`~wpdesk.app.Desk` builds one before its first tick, and a
-    constructor that swept directories would put a filesystem walk between the
-    process starting and the board's next poll being answered.
+    pointers. :class:`~claudepost.app.Desk` builds one before its first tick,
+    and a constructor that swept directories would put a filesystem walk
+    between the process starting and the board's next poll being answered.
     """
 
     def __init__(self, root: str, gates: Gates, store: Store, clock: Clock,

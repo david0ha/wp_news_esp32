@@ -12,8 +12,8 @@ import os
 import tempfile
 import unittest
 
-from wpdesk import auth
-from wpdesk.errors import DeskError, Forbidden, Unauthorized
+from claudepost import auth
+from claudepost.errors import DeskError, Forbidden, Unauthorized
 
 # Not credentials. Thirty-two hex characters each so they clear the length
 # floor, and obviously fabricated so nobody greps this file and finds a real

@@ -109,23 +109,23 @@ class Settings:
         """Build settings from the container's environment, with the image's defaults.
 
         The defaults are the paths the image lays down, so a worker started with
-        no environment at all reaches the desk over the ``wpnews`` network and
+        no environment at all reaches the desk over the ``claudepost`` network and
         files without an operator having set a single variable. Two things are
         deliberately off by default: there is no context directory, and briefs
         are not written -- see :func:`write_brief`.
         """
         return Settings(
-            desk=env.get("WPNEWS_DESK", "http://desk:8080"),
-            secrets=env.get("WPNEWS_SECRETS", "/run/secrets"),
-            repo=env.get("WPNEWS_REPO", "/repo"),
-            scratch=env.get("WPNEWS_SCRATCH", "/scratch"),
+            desk=env.get("CLAUDEPOST_DESK", "http://desk:8080"),
+            secrets=env.get("CLAUDEPOST_SECRETS", "/run/secrets"),
+            repo=env.get("CLAUDEPOST_REPO", "/repo"),
+            scratch=env.get("CLAUDEPOST_SCRATCH", "/scratch"),
             context_dir=env.get("AGENT_CONTEXT_DIR") or None,
             write_briefs=env.get("AGENT_WRITE_BRIEFS", "0").strip().lower() in _TRUTHY,
             # `or` rather than a default argument: compose passes an unset
             # variable through as an empty string, and an empty allowlist is
             # never what anybody meant -- it is a worker that can do nothing.
             tools=env.get("AGENT_TOOLS") or DEFAULT_TOOLS,
-            log_level=env.get("WPNEWS_LOG_LEVEL", "INFO"),
+            log_level=env.get("CLAUDEPOST_LOG_LEVEL", "INFO"),
         )
 
 

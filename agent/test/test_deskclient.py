@@ -301,7 +301,7 @@ class SecretsTest(unittest.TestCase):
     def test_agent_env_is_preferred(self):
         # Two files can hold a token and they can disagree. agent.env is the one
         # a human edited last, so it wins.
-        self.write("agent.env", 'ANTHROPIC_API_KEY=sk-x\nWPNEWS_TOKEN="from-env"\n')
+        self.write("agent.env", 'ANTHROPIC_API_KEY=sk-x\nCLAUDEPOST_TOKEN="from-env"\n')
         self.write("tokens.json", json.dumps(
             {"tokens": [{"scope": "producer", "token": "from-json"}]}))
         self.assertEqual(deskclient.read_token(self.tmp), "from-env")
@@ -325,7 +325,7 @@ class SecretsTest(unittest.TestCase):
         self.write("agent.env",
                    "# a comment\n\n"
                    "ANTHROPIC_API_KEY='sk-quoted'\n"
-                   "WPNEWS_TOKEN=secret\n"
+                   "CLAUDEPOST_TOKEN=secret\n"
                    "not a pair\n")
         env = deskclient.load_agent_env(self.tmp)
         self.assertEqual(env, {"ANTHROPIC_API_KEY": "sk-quoted"})

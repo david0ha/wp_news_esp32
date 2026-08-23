@@ -12,8 +12,8 @@ import { normalizeBaseUrl } from './discovery'
 // Namespaced under this board's own name. A phone that once ran the fortune board's app keeps its
 // `tickerboard.*` entries untouched — those point at a different device on the same LAN, and
 // inheriting one as "your board" would send every request to the wrong hardware.
-const KEY_BASE_URL = 'wpnews.deviceBaseUrl'
-const KEY_ONBOARDED = 'wpnews.onboardingComplete'
+const KEY_BASE_URL = 'claudepost.deviceBaseUrl'
+const KEY_ONBOARDED = 'claudepost.onboardingComplete'
 
 let onboardedCache: boolean | null = null
 let baseUrlCache: string | null | undefined // undefined = not yet read

@@ -1,5 +1,5 @@
 #!/bin/sh
-# mint-token.sh -- add a bearer token to ~/.wpnews/tokens.json.
+# mint-token.sh -- add a bearer token to ~/.claudepost/tokens.json.
 #
 #   server/tools/mint-token.sh operator me
 #   server/tools/mint-token.sh producer agent
@@ -35,7 +35,7 @@ if [ -z "$name" ]; then
     exit 2
 fi
 
-dir="$HOME/.wpnews"
+dir="$HOME/.claudepost"
 file="$dir/tokens.json"
 
 mkdir -p "$dir"

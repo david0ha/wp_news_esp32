@@ -18,13 +18,13 @@ import shutil
 import tempfile
 import unittest
 
-from wpdesk import schedule as S
-from wpdesk import schedulefile
+from claudepost import schedule as S
+from claudepost import schedulefile
 
 # The module warns when a file will not parse, which is exactly what two tests
 # here provoke. Without a handler that warning prints to stderr and a passing
 # run reads like a failing one.
-logging.getLogger("wpdesk.schedulefile").addHandler(logging.NullHandler())
+logging.getLogger("claudepost.schedulefile").addHandler(logging.NullHandler())
 
 
 class ScheduleFileCase(unittest.TestCase):

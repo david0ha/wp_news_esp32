@@ -14,7 +14,7 @@ load config (NVS)
       │                          │
       no                        fail
       ▼                          ▼
-  start SoftAP "WP News-XXXX" (open) + captive portal
+  start SoftAP "Claude Post-XXXX" (open) + captive portal
       │
   user submits SSID / password / news_url  →  save to NVS  →  reboot
 ```

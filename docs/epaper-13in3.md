@@ -393,7 +393,7 @@ every refresh and served over the network, so the number can be read off a phone
 holding a serial cable to a board on a shelf:
 
 ```bash
-curl -s http://wpnews.local/api/state | jq .panel
+curl -s http://claudepost.local/api/state | jq .panel
 # {"refreshMs": 26314}
 ```
 

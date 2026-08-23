@@ -124,7 +124,7 @@ First boot has nothing stored:
 
 ```
 I provisioning: no stored network — starting setup portal
-I provisioning: setup portal ready — join Wi-Fi 'WP News-XXXX' and open http://192.168.4.1
+I provisioning: setup portal ready — join Wi-Fi 'Claude Post-XXXX' and open http://192.168.4.1
 ```
 
 The sheet should now show the setup overlay with that same SSID on it. **That is the first end-to-end
@@ -167,7 +167,7 @@ appears, which is correct and not a hang.
 ```
 I net_time: time synced
 I device_api: control server up on port 80
-I device_api: mDNS advertising http://wpnews.local
+I device_api: mDNS advertising http://claudepost.local
 ```
 
 `sntp sync timeout` costs **only the dateline**, and only on a board whose payload did not spell one
@@ -177,7 +177,7 @@ prints empty rather than 1970. Snapshot staleness is measured monotonically and 
 here the board is reachable:
 
 ```bash
-curl -s http://wpnews.local/api/info
+curl -s http://claudepost.local/api/info
 ```
 
 If mDNS does not resolve — some routers and most corporate networks block it — use the IP from the
@@ -186,7 +186,7 @@ If mDNS does not resolve — some routers and most corporate networks block it �
 ## 3. Run the self-test
 
 ```bash
-curl -X POST http://wpnews.local/api/display/test
+curl -X POST http://claudepost.local/api/display/test
 ```
 
 **Four refreshes at twenty to thirty seconds each: this blocks the UI task for about a minute and a
@@ -208,7 +208,7 @@ job.
 These are the measurements the firmware was deliberately built not to guess at.
 
 ```bash
-curl -s http://wpnews.local/api/state | jq '.panel, .battery'
+curl -s http://claudepost.local/api/state | jq '.panel, .battery'
 ```
 
 | number | where it comes from | what it decides |
@@ -224,7 +224,7 @@ document that cannot be re-derived from the code.
 
 ```bash
 python3 tools/mock_news_server.py                    # the reference producer, on :8123
-curl -X POST http://wpnews.local/api/news -d '{"url":"http://mymac.local:8123/news.json"}'
+curl -X POST http://claudepost.local/api/news -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
 The `DEMO` badge should disappear on the next poll — or immediately, since setting the URL wakes the
