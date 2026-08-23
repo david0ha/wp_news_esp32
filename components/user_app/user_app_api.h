@@ -30,7 +30,7 @@
  * and "Ticker Board" SSID prefix are hardcoded in its shipped companion app, so
  * reusing them would make two different devices answer the same discovery
  * probe on the same LAN. */
-#define DEVICE_MODEL  "WP News"
+#define DEVICE_MODEL  "Claude Post"
 #define DEVICE_FW     "0.1.0"
 
 #ifdef __cplusplus

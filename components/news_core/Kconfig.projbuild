@@ -1,6 +1,6 @@
-menu "WP News"
+menu "Claude Post"
 
-config WP_NEWS_TIMEZONE
+config CLAUDEPOST_TIMEZONE
     string "Local timezone (POSIX TZ)"
     default "KST-9"
     help
@@ -10,7 +10,7 @@ config WP_NEWS_TIMEZONE
       Examples: "KST-9" (Korea), "JST-9" (Japan), "EST5EDT,M3.2.0,M11.1.0"
       (US Eastern), "CET-1CEST,M3.5.0,M10.5.0/3" (Central Europe), "UTC0".
 
-config WP_NEWS_POLL_SECONDS
+config CLAUDEPOST_POLL_SECONDS
     int "News poll interval (seconds)"
     default 60
     range 30 86400
@@ -27,7 +27,7 @@ config WP_NEWS_POLL_SECONDS
       A snapshot older than twice this interval — or a quarter of an hour,
       whichever is longer — is badged STALE.
 
-config WP_NEWS_FEED_URL
+config CLAUDEPOST_FEED_URL
     string "Fallback news URL"
     default ""
     help

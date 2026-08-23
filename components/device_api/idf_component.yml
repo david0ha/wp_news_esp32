@@ -2,5 +2,5 @@
 dependencies:
   idf:
     version: '>=5.0'
-  # mDNS responder so the app can reach the device at "tickerboard.local" on the home LAN.
+  # mDNS responder so the app can reach the device at "claudepost.local" on the home LAN.
   espressif/mdns: '^1.2.0'

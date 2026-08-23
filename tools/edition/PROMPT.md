@@ -22,7 +22,7 @@ A reader who wants a table of sixteen quotes is holding the wrong object.
 
 ## What you produce
 
-Into `$EDITION_DIR` (default `~/.wpnews/edition`):
+Into `$EDITION_DIR` (default `~/.claudepost/edition`):
 
 ```
 news.json          the edition — the contract in docs/news-contract.md

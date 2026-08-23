@@ -2,7 +2,7 @@
  * device_api.h — the STA-mode control server the companion app talks to.
  *
  * Brings up an HTTP/JSON server on port 80 and advertises it over mDNS as
- * `wpnews.local`. Call once, after Wi-Fi is connected.
+ * `claudepost.local`. Call once, after Wi-Fi is connected.
  *
  *   GET  /api/info            { deviceId, model, fw, ip }   — discovery probe
  *   GET  /api/state           the full device snapshot, including the measured
@@ -17,7 +17,7 @@
  * the only actions are "show a different page" and "fetch from a different URL
  * on this LAN".
  *
- * The hostname is `wpnews`, NOT the `tickerboard` of the fortune board
+ * The hostname is `claudepost`, NOT the `tickerboard` of the fortune board
  * this project forked from: that name is hardcoded in the other project's
  * shipped app, and two devices answering one discovery probe on the same LAN is
  * a fault nobody can diagnose from the phone side.

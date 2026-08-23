@@ -62,7 +62,7 @@
  * the brand: provisioning, and the first boot before a snapshot has arrived.
  * On a page that has data, the masthead is the brand.
  */
-#define S_BRAND            "WP NEWS"
+#define S_BRAND            "CLAUDE POST"
 
 /* One badge, and only ever one: a board that is offline, showing a snapshot
  * past its poll interval, or running the built-in demo, says so in the kicker
@@ -203,7 +203,7 @@
 #define S_SETUP_AFTER_H    "AFTER IT RESTARTS"
 #define S_SETUP_AFTER      "The board joins the network you gave it, sets its " \
                            "clock from the internet, and prints the front page. " \
-                           "It answers to wpnews.local on that same network — " \
+                           "It answers to claudepost.local on that same network — " \
                            "which is where the companion app finds it, and where " \
                            "the address it polls can be changed. If that address " \
                            "ever stops answering, the board keeps the last sheet " \
