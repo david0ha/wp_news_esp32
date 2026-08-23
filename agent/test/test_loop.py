@@ -1,5 +1,6 @@
-"""The two decisions the loop makes on its own: what it is configured with, and
-whether it may write into somebody's notes.
+"""The three decisions the loop makes on its own: what it is configured with,
+whether it may write into somebody's notes, and whether what the desk answered a
+claim with is an instruction at all.
 
 Everything else in ``loop.py`` is a claim, a subprocess and a commit, and the
 parts of it that could be wrong in isolation were moved into :mod:`prompt` and
@@ -17,6 +18,12 @@ unable to read a file, and nothing in the log would say why.
 this repository that writes into a directory the operator owns, and the failure
 is not an exception -- it is a file appearing in somebody's vault that they
 did not ask for.
+
+``is_command`` fails loudest of the three, which is why it is here: the answer
+it rejects arrives as a **200**, and reading an id off it raises outside every
+try in :func:`loop.main`. A worker that exits is a worker that ``restart:
+unless-stopped`` restarts, which replaces this loop's one-second-to-five-minute
+backoff with a container that comes up and dies once a minute forever.
 """
 
 from __future__ import annotations
@@ -122,6 +129,41 @@ class WriteBriefTest(unittest.TestCase):
         self.assertIn("AAPL", text)
         self.assertIn("aaa", text)
         self.assertIn("bbb", text)
+
+
+class ClaimAnswerTest(unittest.TestCase):
+    """A 200 from the desk is not yet an instruction.
+
+    :meth:`deskclient.DeskClient._json` deliberately does not raise on a 200
+    whose body is not JSON -- it answers ``{"ok": False, "error": "not_json",
+    ...}`` so that a proxy in front of the tunnel serving an HTML error page
+    gets *reported* rather than swallowed. That answer reaches the loop, and so
+    does a 200 carrying a JSON array. Neither has an id.
+    """
+
+    def test_a_not_json_answer_is_not_a_command(self):
+        self.assertFalse(loop.is_command(
+            {"ok": False, "error": "not_json",
+             "detail": "<html>502 bad gateway</html>"}))
+
+    def test_a_json_array_is_not_a_command(self):
+        # Worth its own case because it fails differently: ``command["id"]`` on
+        # a list is a TypeError where the not_json dict is a KeyError, and an
+        # `isinstance` check that only rejected the dict would still exit.
+        self.assertFalse(loop.is_command([{"id": "abc"}]))
+        self.assertFalse(loop.is_command([]))
+
+    def test_an_expired_long_poll_is_not_a_command_either(self):
+        # ``None`` is the healthy idle answer and the loop handles it before it
+        # gets here, but nothing about it is runnable.
+        self.assertFalse(loop.is_command(None))
+
+    def test_a_dict_with_an_id_is_a_command(self):
+        self.assertTrue(loop.is_command({"id": "abc", "text": "NVDA"}))
+        # The id alone is enough. It is what ``finish`` reports against, which
+        # is what makes an instruction that fails still leave the queue -- so a
+        # command with nothing else in it is one the loop must still take.
+        self.assertTrue(loop.is_command({"id": "abc"}))
 
 
 if __name__ == "__main__":

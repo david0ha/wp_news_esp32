@@ -70,7 +70,7 @@ class DeskClient:
             return text
         return text.replace(self.token, "<token>")
 
-    def _request(self, method: str, path: str, body: bytes = None,
+    def _request(self, method: str, path: str, body: bytes | None = None,
                  content_type: str = "application/json", timeout: int = 120):
         """One request. Returns ``(status, bytes)``; a 4xx is an answer, not a raise."""
         req = urllib.request.Request(self.base + path, data=body, method=method)

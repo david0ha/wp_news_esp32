@@ -286,6 +286,24 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     desk.finish(cid, True, "%s %s" % (result.get("state"), result.get("edition_id")))
 
 
+def is_command(doc: object) -> bool:
+    """Whether what the desk answered a claim with is an instruction to run.
+
+    A 200 is not enough. :meth:`deskclient.DeskClient._json` deliberately does
+    not raise on a 200 whose body is not JSON -- it answers ``{"ok": False,
+    "error": "not_json", ...}`` so that a proxy in front of the tunnel serving
+    an HTML error page gets *reported* rather than swallowed -- and a 200
+    carrying a JSON array comes through as a list. Neither has an id, and
+    reading one off them raises where :func:`main` has nothing to catch it.
+
+    Which is the whole point of asking: a worker that raises out of its loop
+    exits, and ``restart: unless-stopped`` restarts it, so a desk answering
+    rubbish would replace the backoff below with a container that comes up and
+    dies once a minute for as long as nobody is watching.
+    """
+    return isinstance(doc, dict) and "id" in doc
+
+
 def main() -> int:
     """Claim, handle, repeat -- forever, and through a desk that is not there yet."""
     cfg = Settings.from_env(os.environ)
@@ -311,7 +329,6 @@ def main() -> int:
     while True:
         try:
             command = desk.claim()
-            backoff = 1.0
         except Exception as e:                          # noqa: BLE001 - see below
             # Any failure to reach the desk is the same failure from here: wait
             # and try again. Distinguishing them would produce three branches
@@ -325,8 +342,23 @@ def main() -> int:
             continue
 
         if command is None:
+            # The long poll expired with nothing queued: the healthy idle
+            # answer, and an answer, so the backoff resets with it.
+            backoff = 1.0
             continue
 
+        if not is_command(command):
+            # An answer the desk should never give, and the same medicine as an
+            # unreachable one for the same reason -- see :func:`is_command` for
+            # what exiting here would cost. Logged with the answer itself
+            # because "which endpoint returned HTML" is the only question
+            # anybody has once this starts.
+            LOG.warning("the desk answered a claim with %.120r; backing off", command)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+            continue
+
+        backoff = 1.0
         LOG.info("claimed %s: %s", command["id"], command.get("text", "")[:120])
         try:
             handle(cfg, desk, command, agent_env)

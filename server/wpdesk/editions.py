@@ -40,6 +40,8 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from . import tiles
 from .clock import Clock
@@ -684,11 +686,12 @@ class EditionStore:
         """
         hold = self._store.get_hold()
         if hold is not None and hold > now:
-            return False, REASON_HOLD.format(t=int(hold))
+            return False, REASON_HOLD.format(t=_at(hold, schedule))
 
         if is_quiet(schedule, now):
             ends = quiet_ends_at(schedule, now)
-            return False, REASON_QUIET.format(t=int(ends if ends is not None else now))
+            return False, REASON_QUIET.format(
+                t=_at(ends if ends is not None else now, schedule))
 
         floor = schedule.min_gap_minutes * 60
         last = self._store.last_publish_at()
@@ -702,8 +705,7 @@ class EditionStore:
         if schedule.publish_policy == "on_wake":
             wake = next_wake(schedule, staged_at)
             if wake is None or wake > now:
-                return False, REASON_WAKE.format(
-                    t=int(wake) if wake is not None else "never")
+                return False, REASON_WAKE.format(t=_at(wake, schedule))
             return True, REASON_DUE
 
         return True, REASON_IMMEDIATE
@@ -978,8 +980,10 @@ def _canonical(doc: dict) -> str:
     """A dict as the one JSON text this desk considers to be its content.
 
     Sorted keys and no whitespace, which is what makes two producers that
-    serialised the same edition differently fingerprint the same. It is the
-    same form ``policy.py`` writes at serve time, for the same reason.
+    serialised the same edition differently fingerprint the same. Compact like
+    the form ``policy.py`` writes at serve time, and sorted on top of that
+    because this one is *hashed*: the two need not be byte-equal, and the
+    function that does match ``policy.py`` is :func:`_stored_payload`.
     """
     return json.dumps(doc, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False)
@@ -1036,6 +1040,22 @@ def _fingerprint_of(content: bytes, tiles_dir: str) -> str:
         h.update(b"tile\0" + tile_id.encode("utf-8") + b"\0"
                  + len(data).to_bytes(8, "big") + data)
     return h.hexdigest()[:FINGERPRINT_HEX]
+
+
+def _at(t: float | None, schedule: Schedule) -> str:
+    """An instant as the schedule's own clock reads it, written for a person.
+
+    The reasons this formats are prose handed to whoever filed the draft -- the
+    commit's answer, and the worker's failure report after it -- and an epoch
+    integer in one of them is a number somebody has to go and convert before
+    they know whether to wait or to change something. The zone is the
+    schedule's rather than the container's, because the quiet window and the
+    wake instants were written in it. ``None`` is a wake that never comes.
+    """
+    if t is None:
+        return "never"
+    return datetime.fromtimestamp(t, ZoneInfo(schedule.timezone)).strftime(
+        "%Y-%m-%d %H:%M %Z")
 
 
 def _clip(output: str) -> str:

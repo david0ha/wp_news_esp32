@@ -49,10 +49,12 @@ MAX_CLAIM_WAIT = 90
 
 #: A proof sheet's filename, as produced by the simulator and reported by the
 #: render gate. Anchored, and no dot outside the extension, because this becomes
-#: a path component.
-_SHEET_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.png$")
+#: a path component -- and ``\Z`` rather than ``$`` for the reason
+#: ``editions.py`` gives beside its own three: ``$`` also matches before a
+#: trailing newline, so ``"A1.png\n"`` would pass it.
+_SHEET_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.png\Z")
 
-_TILE_PATH_RE = re.compile(r"^/tiles/([A-Za-z0-9_-]{1,15})\.bin$")
+_TILE_PATH_RE = re.compile(r"^/tiles/([A-Za-z0-9_-]{1,15})\.bin\Z")
 
 
 class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -437,7 +439,8 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
 # -- the routing table ----------------------------------------------------
 #
-# Anchored patterns, and every captured group is validated by the module that
+# Anchored patterns -- with ``\Z``, never ``$``, which also matches before a
+# trailing newline -- and every captured group is validated by the module that
 # consumes it before it becomes a path. The scope beside each verb is the
 # minimum that may call it:
 #
@@ -452,55 +455,55 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 # has to survive all five gates before it reaches paper. Editing the standing
 # directives is operator because those outlive every gate.
 _ROUTES = [
-    (re.compile(r"^/api/drafts$"), {
+    (re.compile(r"^/api/drafts\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_open_draft)}),
-    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})$"), {
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_draft_info)}),
-    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/news\.json$"), {
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/news\.json\Z"), {
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_payload)}),
-    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/tiles/(?P<tile>[A-Za-z0-9_-]{1,15})\.bin$"), {
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/tiles/(?P<tile>[A-Za-z0-9_-]{1,15})\.bin\Z"), {
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_tile)}),
-    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof$"), {
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_proof)}),
-    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof/(?P<name>[^/]{1,60})$"), {
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof/(?P<name>[^/]{1,60})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_sheet)}),
-    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/commit$"), {
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/commit\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_commit)}),
 
-    (re.compile(r"^/api/editions$"), {
+    (re.compile(r"^/api/editions\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_list_editions)}),
-    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})$"), {
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_get_edition)}),
-    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote$"), {
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_promote)}),
 
-    (re.compile(r"^/api/commands$"), {
+    (re.compile(r"^/api/commands\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_list_commands),
         "POST": ("producer", DeskHTTPRequestHandler.h_enqueue)}),
-    (re.compile(r"^/api/commands/next$"), {
+    (re.compile(r"^/api/commands/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_claim)}),
-    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})$"), {
+    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})\Z"), {
         "DELETE": ("operator", DeskHTTPRequestHandler.h_cancel)}),
-    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})/(?P<verb>done|fail)$"), {
+    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})/(?P<verb>done|fail)\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_finish)}),
 
-    (re.compile(r"^/api/directives$"), {
+    (re.compile(r"^/api/directives\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_list_directives),
         "POST": ("operator", DeskHTTPRequestHandler.h_add_directive)}),
-    (re.compile(r"^/api/directives/(?P<did>[0-9a-f]{8,64})$"), {
+    (re.compile(r"^/api/directives/(?P<did>[0-9a-f]{8,64})\Z"), {
         "DELETE": ("operator", DeskHTTPRequestHandler.h_delete_directive)}),
 
-    (re.compile(r"^/api/schedule$"), {
+    (re.compile(r"^/api/schedule\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_get_schedule),
         "PUT": ("operator", DeskHTTPRequestHandler.h_put_schedule)}),
-    (re.compile(r"^/api/schedule/next$"), {
+    (re.compile(r"^/api/schedule/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_schedule_next)}),
 
-    (re.compile(r"^/api/state$"), {
+    (re.compile(r"^/api/state\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_state)}),
-    (re.compile(r"^/api/publish$"), {
+    (re.compile(r"^/api/publish\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_publish)}),
-    (re.compile(r"^/api/hold$"), {
+    (re.compile(r"^/api/hold\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_hold)}),
 ]
 

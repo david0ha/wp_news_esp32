@@ -148,7 +148,7 @@ only file in this directory that touches the environment.
 | `WPNEWS_SECRETS` | `/run/secrets` | where `~/.wpnews` is mounted: `agent.env`, or `tokens.json` as a fallback |
 | `WPNEWS_REPO` | `/repo` | the repository in the image — `PROMPT.md` and `tools/` |
 | `WPNEWS_SCRATCH` | `/scratch` | one workdir per command: the payload, the tiles, the sheets fetched back |
-| `AGENT_CONTEXT_DIR` | unset | your context directory. Unset, missing or empty are all "no context" |
+| `AGENT_CONTEXT_DIR` | unset | your context directory. Unset, missing or empty are all "no context". That is a **host** path in `agent/.env` or a bare run; under `docker compose` the container always sees `/context`, so there the commented volume line is the switch and this variable is what it mounts |
 | `AGENT_WRITE_BRIEFS` | `0` | whether the worker may append to `<context>/briefs/`. Needs a context directory too |
 | `AGENT_TOOLS` | see above | the `claude --print` allowlist. Empty means the default |
 | `WPNEWS_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |

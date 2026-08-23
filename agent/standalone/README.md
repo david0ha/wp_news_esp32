@@ -166,13 +166,25 @@ than in the JSON.
 
 ## Installing the two agents
 
+Both plists carry **absolute paths**, including to this checkout and to `$HOME`, and
+`/Users/YOUR-USERNAME` in them is a placeholder rather than anybody's home — launchd refuses a plist
+whose program it cannot find, and that is the point: somebody else's real path would have failed
+quietly instead. So
+the `sed` below runs *before* `launchctl load`, and against the **installed** copies: rewriting the
+tracked ones leaves two modified plists in a public checkout and has to be redone every time the
+files change.
+
 ```bash
 cp agent/standalone/com.wpnews.edition.plist ~/Library/LaunchAgents/
 cp agent/standalone/com.wpnews.serve.plist   ~/Library/LaunchAgents/
+sed -i '' "s|/Users/YOUR-USERNAME|$HOME|g" ~/Library/LaunchAgents/com.wpnews.*.plist
 launchctl load ~/Library/LaunchAgents/com.wpnews.edition.plist
 launchctl load ~/Library/LaunchAgents/com.wpnews.serve.plist
 launchctl start com.wpnews.edition        # file one now, to check the scheduled path works
 ```
+
+`$HOME` is the only part of those paths `sed` can know: the plists also assume this checkout is at
+`~/Documents/wp_news_esp32`, so edit them by hand if yours is somewhere else.
 
 Then point the board at the serving machine, once:
 
@@ -181,17 +193,10 @@ curl -X POST http://wpnews.local/api/news \
      -d '{"url":"http://mymac.local:8123/news.json"}'
 ```
 
-Both plists carry **absolute paths**, including to this checkout and to `$HOME` — edit them if yours
-differ, or run this once instead of hand-editing both:
-
-```bash
-sed -i '' "s|/Users/YOUR-USERNAME|$HOME|g" agent/standalone/*.plist
-```
-
-`PATH` is spelled out rather than inherited for the same reason: launchd does not run a login
-shell, so it has no PATH worth the name, no nvm, no pyenv and no idea where `claude` lives. Every one
-of those is a way this fails silently at 6 a.m., and `file-edition.sh` checks for `claude` on PATH
-first and says so rather than producing an empty page.
+`PATH` is spelled out rather than inherited for the same reason the paths above are absolute:
+launchd does not run a login shell, so it has no PATH worth the name, no nvm, no pyenv and no idea
+where `claude` lives. Every one of those is a way this fails silently at 6 a.m., and
+`file-edition.sh` checks for `claude` on PATH first and says so rather than producing an empty page.
 
 `RunAtLoad` is off for the filing job: loading the agent should not spend an API call. It is on, with
 `KeepAlive`, for the serving job.

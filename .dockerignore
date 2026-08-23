@@ -29,8 +29,12 @@ app/
 # Assembled by agent/standalone/publish.sh from a live edition.
 agent/standalone/public/
 
-# Local server state and secrets.
+# Local state and secrets, both halves. Neither Dockerfile COPYs an .env, so
+# this is about the context rather than about a layer -- and the two halves are
+# listed together because the next person to add one will look here for where
+# the other went.
 server/.env
+agent/.env
 server/data/
 server/tunnel/*.yml
 !server/tunnel/*.yml.example

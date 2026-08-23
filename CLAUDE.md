@@ -356,6 +356,7 @@ agent/                    an example worker that files into the desk, plus the s
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/hosting-cloudflare.md](docs/hosting-cloudflare.md) — serving the edition from a domain instead of a Mac on the LAN: what must be published, what must not, and what changes on the device once the URL is `https://`
+- [docs/desk-server.md](docs/desk-server.md) — the desk server behind the URL the board polls: `server/` serves it and owns every gate, `agent/` files the editions and holds the credentials
 - [docs/pages.md](docs/pages.md) — A1 and A2, the grid, the bands, the font decision
 - [docs/epaper-13in3.md](docs/epaper-13in3.md) — the dual-UC8179 driver, the refresh policy, the self-test
 - [docs/graphics.md](docs/graphics.md) — six-ink rendering: the two palettes, the dither, the halftone

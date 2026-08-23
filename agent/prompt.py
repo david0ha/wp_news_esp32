@@ -144,7 +144,7 @@ def revision_prompt(report: dict, sheet_paths: list[str]) -> str:
     Args:
         report: the desk's proof report -- ``validate`` and ``render`` are the
             two gate transcripts, either of which may be absent when clean.
-        sheet_paths: where :func:`agent.loop.fetch_sheets` put the proof images.
+        sheet_paths: where :func:`loop.fetch_sheets` put the proof images.
 
     An empty gate report is printed as ``(clean)`` rather than as an empty code
     fence, because a blank fence reads as a truncated message and invites the
@@ -177,9 +177,11 @@ def revision_prompt(report: dict, sheet_paths: list[str]) -> str:
 def look_prompt(sheet_paths: list[str]) -> str:
     """Ask for a verdict when the gates passed but nobody has read the page.
 
-    One word on the first line, because the loop reads this to decide whether to
-    file, and a verdict that has to be parsed out of a paragraph is a verdict
-    that gets parsed wrong.
+    One word on the first line, and it comes before the edits so that the model
+    has to commit to a judgement rather than write one to fit what it already
+    changed. Nothing on this side parses it: :func:`loop.handle` discards the
+    turn's output and takes whatever files are on disk afterwards, which it
+    then re-uploads and proofs again.
     """
     return (
         "The edition passed every mechanical check. Now read the sheets and judge them "

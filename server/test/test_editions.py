@@ -578,6 +578,20 @@ class QuietTest(EditionTestCase):
         self.assertEqual(self.es.current_id(), r.edition_id)
         self.assertIsNone(self.es.staged_id())
 
+    def test_a_staged_reason_names_an_hour_a_person_can_read(self):
+        # `reason` is prose for a person -- it comes back as the commit's
+        # answer and again in the worker's failure report -- and "nothing new
+        # becomes current until 1787086800" is not something anybody can act
+        # on. The desk already knows the zone the schedule reasons in, so the
+        # instant is written in it: 06:00 KST, not 21:00 UTC and not whatever
+        # TZ the container happens to carry.
+        r = self.es.commit(self.draft(1), S.DEFAULT_SCHEDULE,
+                           self.jump(at(2026, 8, 19, 1, 0)))
+        self.assertEqual(r.state, "staged")
+        self.assertIn("quiet", r.reason)
+        self.assertIn("2026-08-19 06:00 KST", r.reason)
+        self.assertNotIn(str(int(at(2026, 8, 19, 6, 0))), r.reason)
+
     def test_a_quiet_window_does_not_stop_a_page_that_is_already_up(self):
         # Quiet means nothing NEW becomes current, not that the URL goes quiet.
         self.file(1)
