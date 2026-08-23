@@ -19,6 +19,16 @@ Paths are matched against anchored regular expressions and the captured groups
 are validated before they are used, never joined to a directory as they
 arrived. This service is reachable from the internet through a tunnel, which
 is the whole reason the rule is a rule rather than a habit.
+
+And a request's body ends with that request. Bodies are read inside handlers,
+so every path that answers before reaching one -- a 401 decided from the
+header, a 405, a 404, a 413 -- and every handler that wants no body would
+otherwise leave those bytes in a keep-alive socket, where the next read takes
+them for a request LINE. The tunnel pools its connections to this origin, so
+that next request is somebody else's and the smuggled one runs with their
+bearer token. :meth:`_settle_body` closes that at the transport, on every path
+including the exceptional ones, because a route that forgets to read its body
+must not be a way in.
 """
 
 from __future__ import annotations
@@ -43,6 +53,13 @@ LOG = logging.getLogger("wpdesk.http")
 #: which have their own limits; everything else here is a small JSON document
 #: and a megabyte of it is somebody probing.
 MAX_CONTROL_BODY = 64 * 1024
+
+#: The most of a body nobody read that the desk will read and throw away
+#: rather than closing the connection. It is the largest any route accepts, so
+#: a request inside the limits never costs its connection, and a longer one is
+#: already past anything the desk would have taken -- so the socket goes
+#: instead of the bytes.
+MAX_DRAIN_BYTES = max(MAX_CONTROL_BODY, tiles.MAX_PAYLOAD_BYTES, tiles.MAX_TILE_BYTES)
 
 #: The longest a claim may park. Long enough that an idle worker makes one
 #: request a minute and a half; short enough that a stalled connection is
@@ -70,6 +87,13 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     server_version = "wpdesk"
     sys_version = ""
     protocol_version = "HTTP/1.1"
+
+    #: What this request said its body was, and how much of it a handler took.
+    #: Reset per request in :meth:`_dispatch`: one handler instance serves a
+    #: whole keep-alive connection, so a leftover count here is the next
+    #: request reading the previous one's bytes.
+    _declared = 0
+    _read = 0
 
     # -- plumbing ---------------------------------------------------------
     @property
@@ -105,6 +129,8 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         path = urllib.parse.unquote(split.path)
         query = urllib.parse.parse_qs(split.query)
 
+        self._declared = self._declared_length()
+        self._read = 0
         try:
             if path.startswith("/api/") or path == "/api":
                 self._control(method, path, query)
@@ -122,6 +148,62 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             # every refusal this desk gives can parse the desk breaking.
             fault = Internal()
             self._send_json(fault.status, fault.to_json())
+        finally:
+            self._settle_body()
+
+    def _declared_length(self) -> int:
+        """How long this request says its body is, or ``-1`` for uncountable.
+
+        Uncountable is a chunked transfer, which ``BaseHTTPRequestHandler``
+        does not decode at all, or a ``Content-Length`` that is not a number,
+        or one longer than anything the desk accepts. All three end the
+        connection, and they end it HERE rather than in :meth:`_settle_body`
+        so that the response still to come carries ``Connection: close``
+        instead of the socket vanishing under a client that thinks it has one.
+        """
+        encoding = (self.headers.get("Transfer-Encoding") or "").strip().lower()
+        raw = self.headers.get("Content-Length")
+        if encoding not in ("", "identity"):
+            self.close_connection = True
+            return -1
+        if raw is None:
+            return 0
+        try:
+            length = int(raw)
+        except ValueError:
+            self.close_connection = True
+            return -1
+        if length < 0 or length > MAX_DRAIN_BYTES:
+            self.close_connection = True
+            return -1
+        return length
+
+    def _settle_body(self) -> None:
+        """Whatever a handler left of the body: read and discard it, or close.
+
+        This is the transport's promise rather than each handler's, which is
+        the point -- the table of paths that answer without reading a body is
+        long and gains a row every time a route is added. Draining keeps the
+        connection usable for the ordinary case (a ``{}`` posted to a route
+        that wants no body); anything that cannot be drained to the end takes
+        the socket with it, because the alternative is leaving bytes in flight
+        on a connection the next caller will be given.
+        """
+        if self.close_connection:
+            return                          # the socket is going; the bytes go with it
+        remaining = self._declared - self._read
+        if remaining <= 0:
+            return
+        try:
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 64 * 1024))
+                if not chunk:               # the client hung up mid-body
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            remaining = -1
+        if remaining:
+            self.close_connection = True
 
     # -- the device plane -------------------------------------------------
     def _device(self, method: str, path: str) -> None:
@@ -399,8 +481,15 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         if length < 0:
             raise BadRequest(message="Content-Length is negative")
         if length > limit:
+            # The socket still holds those bytes and this refusal is the reason
+            # nobody is going to read them. Reading them anyway would spend
+            # exactly what the header check exists to save, so the connection
+            # is what ends instead.
+            self.close_connection = True
             raise TooLarge(message="%d bytes, limit %d" % (length, limit))
-        return self.rfile.read(length) if length else b""
+        data = self.rfile.read(length) if length else b""
+        self._read += len(data)
+        return data
 
     def _json_body(self, required: bool = True) -> dict:
         data = self._body(MAX_CONTROL_BODY)
@@ -427,13 +516,26 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, "edition_id": result.edition_id,
                               "state": result.state, "reason": result.reason})
 
+    def _send_status(self, status: int) -> None:
+        """The status line, and ``Connection: close`` when this is the last answer.
+
+        Saying so is not politeness: a client promised keep-alive that finds
+        the socket gone retries, and behind a tunnel it retries onto a pooled
+        connection somebody else is using. ``send_header`` sets
+        ``close_connection`` itself for this value, so the header and the
+        decision cannot drift apart.
+        """
+        self.send_response(status)
+        if self.close_connection:
+            self.send_header("Connection", "close")
+
     def _send_empty(self, status: int, **headers: str) -> None:
         """A response with no body: the 204 of an idle claim, the 405 of a verb.
 
         ``Content-Length: 0`` explicitly. This server speaks HTTP/1.1 with
         keep-alive, and a client not told the length waits for one.
         """
-        self.send_response(status)
+        self._send_status(status)
         for name, value in headers.items():
             self.send_header(name, value)
         self.send_header("Content-Length", "0")
@@ -451,7 +553,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         neither, and a cache between the desk and the board is a stale front
         page nobody can explain from across a room.
         """
-        self.send_response(status)
+        self._send_status(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

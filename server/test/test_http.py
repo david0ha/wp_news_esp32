@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import tempfile
 import threading
 import unittest
@@ -26,7 +27,7 @@ from wpdesk import schedule as S
 from wpdesk.app import Config, Desk
 from wpdesk.clock import FixedClock
 from wpdesk.gates import GateResult, StubGates
-from wpdesk.http import make_server
+from wpdesk.http import MAX_CONTROL_BODY, make_server
 
 from test_schedule import at
 
@@ -570,6 +571,201 @@ class TickTest(DeskTestCase):
         doc["publish"] = {"policy": "immediate", "min_gap_minutes": 0}
         self.api("PUT", "/api/schedule", doc)
         self.assertEqual(self.file_edition()["state"], "published")
+
+
+# -- one socket, several requests -----------------------------------------
+#
+# Everything above opens a connection per request, which is exactly why the
+# desync these helpers exist to catch was invisible to all of it.
+
+def read_response(fp):
+    """One response off a shared reader: ``(status, headers, body)``.
+
+    Hand-rolled rather than :mod:`http.client`, because ``HTTPResponse.read()``
+    closes the file it was handed and the whole point here is to read several
+    responses off ONE socket. Header names come back lowercased.
+    """
+    line = fp.readline()
+    if not line:
+        return None                                  # the server hung up first
+    status = int(line.split(b" ")[1])
+    headers = {}
+    while True:
+        raw = fp.readline()
+        if raw in (b"\r\n", b"\n", b""):
+            break
+        name, _, value = raw.decode("latin-1").partition(":")
+        headers[name.strip().lower()] = value.strip()
+    length = int(headers.get("content-length", 0))
+    return status, headers, (fp.read(length) if length else b"")
+
+
+class RawConnection:
+    """A socket the test holds open across requests, with no client in the way."""
+
+    def __init__(self, base: str) -> None:
+        host, _, port = base.removeprefix("http://").partition(":")
+        self.sock = socket.create_connection((host, int(port)), timeout=10)
+        self.fp = self.sock.makefile("rb")
+
+    def send(self, raw: bytes) -> None:
+        self.sock.sendall(raw)
+
+    def response(self):
+        return read_response(self.fp)
+
+    def spare(self) -> bytes:
+        """Anything the server sent that nobody asked for; ``b""`` when it behaved.
+
+        A drained connection is idle rather than closed, so this has to wait to
+        be able to say "nothing more came"; a closed one answers at once.
+        """
+        self.sock.settimeout(0.5)
+        try:
+            return self.fp.readline()
+        except (TimeoutError, OSError):
+            return b""
+
+    def is_closed(self) -> bool:
+        """True when the server hung up, False when it is holding the socket open."""
+        self.sock.settimeout(2)
+        try:
+            return self.fp.read(1) == b""
+        except (TimeoutError, OSError):
+            return False
+
+    def close(self) -> None:
+        self.fp.close()
+        self.sock.close()
+
+
+class KeepAliveTest(DeskTestCase):
+    """One response per request, on a connection that gets reused.
+
+    ``protocol_version = "HTTP/1.1"`` makes every connection keep-alive, and a
+    body no handler read stays in the socket -- where
+    ``BaseHTTPRequestHandler`` reads it as the next request LINE. Behind a
+    tunnel that pools origin connections, the next request is somebody else's,
+    so the smuggled one runs with whatever credential that request carried.
+    The rule this class holds the desk to is the transport's, not any
+    handler's: a request's body ends with that request.
+    """
+
+    HOLD = b'{"until":99999999999}'
+
+    def smuggled(self, scope: str = "operator") -> bytes:
+        """A whole request, to be carried inside another request's body.
+
+        It carries a token because that is what the desync steals: in the wild
+        the header block of the NEXT caller's request is absorbed into this
+        one. Spelling the token out here is the same thing with the timing
+        taken out.
+        """
+        return (b"POST /api/hold HTTP/1.1\r\n"
+                b"Host: desk\r\n"
+                b"Authorization: Bearer " + self.tokens[scope].encode() + b"\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: %d\r\n\r\n" % len(self.HOLD)) + self.HOLD
+
+    def connect(self) -> RawConnection:
+        conn = RawConnection(self.base)
+        self.addCleanup(conn.close)
+        return conn
+
+    def assert_is_healthz(self, answer) -> None:
+        self.assertIsNotNone(answer, "the connection was closed with a request unanswered")
+        status, _headers, body = answer
+        self.assertEqual(status, 200, body)
+        # By the body, not the status: the smuggled POST /api/hold answers 200
+        # too, and a test that read only the code would pass against the
+        # desync it exists to catch.
+        self.assertEqual(json.loads(body).get("service"), "wpdesk", body)
+
+    def test_a_refused_requests_body_never_becomes_the_next_request(self):
+        # Variant A of the finding: the attacker holds no token at all. The
+        # 401 is decided from the header, before anything reads the body -- so
+        # the body is still in the socket when the next request arrives.
+        smuggled = self.smuggled()
+        conn = self.connect()
+        conn.send(b"POST /api/state HTTP/1.1\r\nHost: desk\r\n"
+                  b"Content-Type: application/json\r\n"
+                  b"Content-Length: %d\r\n\r\n" % len(smuggled) + smuggled)
+        self.assertEqual(conn.response()[0], 401)
+
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
+        self.assert_is_healthz(conn.response())
+        self.assertEqual(conn.spare(), b"", "a third response for two requests")
+        self.assertIsNone(self.desk.store.get_hold(),
+                          "an unauthenticated body set an operator-only hold")
+
+    def test_a_200_that_never_read_its_body_does_not_leave_it_in_the_socket(self):
+        # Variant B: no error path is needed. `h_open_draft` answers 200 and
+        # never calls `_body()`, so a valid producer token is enough to put an
+        # operator-only request into the connection.
+        smuggled = self.smuggled()
+        conn = self.connect()
+        conn.send(b"POST /api/drafts HTTP/1.1\r\nHost: desk\r\n"
+                  b"Authorization: Bearer " + self.tokens["producer"].encode() + b"\r\n"
+                  b"Content-Type: application/json\r\n"
+                  b"Content-Length: %d\r\n\r\n" % len(smuggled) + smuggled)
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 200, body)
+        self.assertIn("draft_id", json.loads(body))
+
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
+        self.assert_is_healthz(conn.response())
+        self.assertEqual(conn.spare(), b"", "a third response for two requests")
+        self.assertIsNone(self.desk.store.get_hold(),
+                          "a producer token reached an operator-only route")
+
+    def test_an_over_limit_body_ends_the_connection(self):
+        # The 413 is decided from the header so the bytes never cost anything
+        # (`_body`'s own promise), which leaves them in the socket. There is
+        # nothing to drain them by and no reason to read them, so the socket
+        # goes instead -- and it says so, rather than closing under a client
+        # that thinks it has a connection.
+        conn = self.connect()
+        conn.send(b"POST /api/hold HTTP/1.1\r\nHost: desk\r\n"
+                  b"Authorization: Bearer " + self.tokens["operator"].encode() + b"\r\n"
+                  b"Content-Type: application/json\r\n"
+                  b"Content-Length: %d\r\n\r\n" % (MAX_CONTROL_BODY + 1))
+        status, headers, body = conn.response()
+        self.assertEqual(status, 413, body)
+        self.assertEqual(headers.get("connection"), "close", headers)
+        self.assertTrue(conn.is_closed(), "the socket was kept with a body in flight")
+
+    def test_a_chunked_body_ends_the_connection_because_nothing_can_read_it(self):
+        # `BaseHTTPRequestHandler` does not decode chunked transfer at all, so
+        # the chunks stay in the socket and there is no declared length to
+        # drain by. The connection is the only thing that can be thrown away.
+        smuggled = self.smuggled()
+        conn = self.connect()
+        conn.send(b"POST /api/hold HTTP/1.1\r\nHost: desk\r\n"
+                  b"Authorization: Bearer " + self.tokens["operator"].encode() + b"\r\n"
+                  b"Content-Type: application/json\r\n"
+                  b"Transfer-Encoding: chunked\r\n\r\n"
+                  b"%x\r\n" % len(smuggled) + smuggled + b"\r\n0\r\n\r\n")
+        status, headers, body = conn.response()
+        self.assertEqual(status, 400, body)
+        self.assertEqual(headers.get("connection"), "close", headers)
+        self.assertTrue(conn.is_closed(), "the socket was kept with chunks in flight")
+        self.assertIsNone(self.desk.store.get_hold())
+
+    def test_a_body_the_handler_did_read_leaves_the_connection_usable(self):
+        # The other half of the rule, and the one a drain can break: a request
+        # whose body was read in full must not have anything read after it.
+        conn = self.connect()
+        conn.send(b"POST /api/hold HTTP/1.1\r\nHost: desk\r\n"
+                  b"Authorization: Bearer " + self.tokens["operator"].encode() + b"\r\n"
+                  b"Content-Type: application/json\r\n"
+                  b"Content-Length: %d\r\n\r\n" % len(self.HOLD) + self.HOLD)
+        status, _headers, body = conn.response()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["hold"], 99999999999)
+
+        conn.send(b"GET /healthz HTTP/1.1\r\nHost: desk\r\n\r\n")
+        self.assert_is_healthz(conn.response())
+        self.assertEqual(conn.spare(), b"")
 
 
 if __name__ == "__main__":
