@@ -40,13 +40,15 @@ LOG = logging.getLogger("worker.desk")
 #: reacting on a poll interval.
 CLAIM_WAIT = 60
 
-#: What the desk mints for a command -- ``uuid4().hex``, and nothing else ever.
-#: Checked here because :func:`loop.handle` joins the id to the scratch
-#: directory and hands the result to ``shutil.rmtree``: this is the line where
+#: What the desk mints for a command, and for a draft -- ``uuid4().hex``, and
+#: nothing else ever. Checked here because :func:`loop.handle` joins a command
+#: id to the scratch directory and hands the result to ``shutil.rmtree``, and
+#: :meth:`DeskClient.open_draft` hands a draft id straight back to the caller,
+#: who joins it onto every other draft route in turn: this is the line where
 #: the desk's answer stops being a document and becomes a path. ``\Z`` and not
 #: ``$``, for the reason the desk gives at ``editions.py`` -- ``$`` also matches
 #: before a trailing newline, and that is not a directory name.
-COMMAND_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+DESK_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 class DeskClient:
@@ -156,7 +158,7 @@ class DeskClient:
             raise self._fail("claim failed", status, doc)
         if not isinstance(doc, dict) or "id" not in doc:
             raise self._fail("claim answered with no instruction", status, doc)
-        if not isinstance(doc["id"], str) or not COMMAND_ID_RE.match(doc["id"]):
+        if not isinstance(doc["id"], str) or not DESK_ID_RE.match(doc["id"]):
             raise self._fail("claim answered with a malformed id", status, doc)
         return doc
 
@@ -168,11 +170,26 @@ class DeskClient:
 
     # -- drafts -----------------------------------------------------------
     def open_draft(self) -> str:
-        """Open a draft. Returns its id."""
+        """Open a draft. Returns its id.
+
+        The id is checked for its shape as well as its presence, the same
+        precondition :meth:`claim` holds a command id to and for the same
+        reason: every later draft call -- :meth:`put_payload`, :meth:`put_tile`,
+        :meth:`proof`, :meth:`commit` -- joins this string straight onto a URL
+        path, so a desk behind a proxy that answers with something other than
+        what the desk said is exactly the case this guards against.
+
+        Raises:
+            RuntimeError: the status was not 200, or the answer carried no
+                ``draft_id`` shaped like one the desk mints.
+        """
         status, doc = self._json("POST", "/api/drafts", {})
         if status != 200:
             raise self._fail("open draft", status, doc)
-        return doc["draft_id"]
+        draft_id = doc.get("draft_id") if isinstance(doc, dict) else None
+        if not isinstance(draft_id, str) or not DESK_ID_RE.match(draft_id):
+            raise self._fail("open draft answered with a malformed id", status, doc)
+        return draft_id
 
     def put_payload(self, draft: str, data: bytes) -> None:
         """Upload ``news.json`` into a draft."""

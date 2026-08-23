@@ -168,12 +168,52 @@ class ClaimTest(unittest.TestCase):
         self.assertIn("502", str(caught.exception))
 
 
+class OpenDraftTest(unittest.TestCase):
+    """The draft id ``open_draft()`` hands back is checked the same way
+    ``claim()``'s command id is.
+
+    It flows straight into every other draft call as a URL path segment --
+    ``/api/drafts/%s/news.json`` and the rest -- so this is `claim()`'s own
+    precondition again: a desk behind a proxy that answers with something
+    other than what the desk said is exactly the case that check was written
+    for. Draft ids are ``uuid4().hex`` too, the same shape as command ids.
+    """
+
+    def test_a_malformed_draft_id_raises(self):
+        for bad in ("../x", "abc", "", "0123456789abcdef",
+                    "0123456789abcdef0123456789abcdeg",         # 32, but not hex
+                    "0123456789ABCDEF0123456789ABCDEF"):        # uuid4().hex is lower
+            desk, _ = client((200, json.dumps({"draft_id": bad}).encode()))
+            with self.assertRaises(RuntimeError, msg=repr(bad)):
+                desk.open_draft()
+
+    def test_a_non_string_draft_id_raises(self):
+        desk, _ = client((200, json.dumps({"draft_id": 12345}).encode()))
+        with self.assertRaises(RuntimeError):
+            desk.open_draft()
+
+    def test_a_missing_draft_id_raises(self):
+        desk, _ = client((200, json.dumps({"ok": True}).encode()))
+        with self.assertRaises(RuntimeError):
+            desk.open_draft()
+
+    def test_the_token_never_reaches_the_message_of_a_malformed_draft_id(self):
+        # Same shape as claim()'s equivalent case: a proxy that echoed the
+        # request back into the draft_id it invented would put the bearer
+        # token in the message, and from there into an operator's log.
+        desk, _ = client((200, json.dumps(
+            {"draft_id": "../" + TOKEN}).encode()))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.open_draft()
+        self.assertNotIn(TOKEN, str(caught.exception))
+
+
 class RequestTest(unittest.TestCase):
     """What goes out on the wire."""
 
     def test_every_request_carries_the_bearer_token(self):
-        desk, opener = client((200, b'{"draft_id":"d"}'), (200, b"ok"),
-                              (200, b'{"ok":true}'))
+        desk, opener = client((200, ('{"draft_id":"%s"}' % CID).encode()),
+                              (200, b"ok"), (200, b'{"ok":true}'))
         desk.open_draft()
         desk.put_payload("d", b"{}")
         desk.directives()
@@ -184,7 +224,7 @@ class RequestTest(unittest.TestCase):
             self.assertEqual(req.get_header("Authorization"), "Bearer " + TOKEN)
 
     def test_the_base_url_is_joined_without_a_double_slash(self):
-        desk, opener = client((200, b'{"draft_id":"d"}'))
+        desk, opener = client((200, ('{"draft_id":"%s"}' % CID).encode()))
         desk.open_draft()
         self.assertEqual(opener.requests[0].full_url, "http://desk:8080/api/drafts")
 
