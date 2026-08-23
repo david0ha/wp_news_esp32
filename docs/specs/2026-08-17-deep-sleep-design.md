@@ -3,7 +3,23 @@
 *2026-08-17. Supersedes nothing; extends the boot policy established when
 `epd6_init()` stopped refreshing. Read that section of
 [CLAUDE.md](../../CLAUDE.md) first — this is the same argument taken to its
-conclusion.*
+conclusion. The task-by-task plan this was built from is
+[docs/superpowers/plans/2026-08-17-deep-sleep.md](../superpowers/plans/2026-08-17-deep-sleep.md).*
+
+> **2026-08-24 — superseded in part.** The board now shares a desk server
+> ([docs/desk-server.md](../desk-server.md)), and three things below are no
+> longer what the code does. **The cadence comes from the desk when it sends
+> one**: `power_cadence()` resolves `policy.poll_seconds` and `next_change`
+> above the three local layers of §6, for a sleeping board and an awake one
+> alike, and the local interval is the fallback rather than the answer. **Deep
+> sleep defaults to on** rather than to off (§6), because the runtime gates and
+> not the Kconfig switch are what decide. And the ext1 pins keep their pull-ups
+> through the sleep — `power_sleep()` pins the RTC peripheral domain on, at a
+> few µA — where §7 assumed the automatic behaviour was enough. Two smaller
+> corrections: the failure count is cleared where a page reaches paper
+> (`present_full()`) rather than where a wake decides to print, since a decision
+> to print is not a print; and the ETag recipe is SHA-256 in both servers. The
+> arguments below are otherwise unchanged and are still the reasoning of record.
 
 This board is meant to hang on a wall like a picture frame and go months between
 charges. It currently draws about 81 mA continuously, which is a little over two
@@ -289,10 +305,12 @@ redundant — they save different things.
 | **ETag / 304** | server | the payload transfer, the cJSON tree, the 32 KB struct fill |
 | **`news_hash()`** | device | **the 25-second refresh** — and it remains the sole authority |
 
-`tools/mock_news_server.py` gains `ETag: "<sha1(canonical json)[:16]>"` on
+`tools/mock_news_server.py` gains `ETag: "<sha256(canonical json)[:16]>"` on
 `/news.json`, and answers `304 Not Modified` with no body when `If-None-Match`
 matches. The device treats the tag as an **opaque string** and never interprets
-it.
+it. The desk server uses the same recipe over the bytes it actually serves, so
+its tag moves when the spliced `policy` block does — see
+[docs/desk-server.md](../desk-server.md).
 
 **Why both.** `news_hash()` fingerprints the *parsed model* — what reaches the
 glass. The ETag fingerprints the *document*. They disagree exactly when a
@@ -342,22 +360,45 @@ it.
 with no conditional-GET support has to keep working, and that is a behaviour
 worth being able to test on purpose.
 
-## 6. The interval: three layers
+## 6. The interval: three layers, and the desk above them
 
 The same shape `news_url` already has, for the same reason.
 
 | layer | where | changed by |
 |---|---|---|
+| **the desk's `policy` block** | the payload, per poll | the server, per its own schedule |
 | `CONFIG_CLAUDEPOST_SLEEP_SECONDS` | Kconfig, default 900 | reflashing |
 | `prov_config_t.sleep_seconds` | NVS, via the captive portal form | a phone |
 | `POST /api/sleep {"seconds": 1800}` | runtime, persisted to NVS | a phone |
 
 Taking a frame off a wall and finding a USB-C cable in order to change a polling
-interval is the thing that will be resented within a month. `CONFIG_CLAUDEPOST_DEEP_SLEEP`
-is a separate bool and **defaults to off**; deep sleep is opt-in.
+interval is the thing that will be resented within a month, which is why the
+lower three exist. The value in force among them is copied into
+`wp_rtc_state.sleep_seconds` so a change made over the API survives into the next
+wake without an NVS read on the quiet path.
 
-The value in force is copied into `wp_rtc_state.sleep_seconds` so a change made
-over the API survives into the next wake without an NVS read on the quiet path.
+**The desk outranks all three, and the three are the fallback.** That is the
+2026-08-24 change at the head of this document, and the reason is that the awake
+poll loop had already obeyed `policy.poll_seconds` since the desk shipped. A
+sleeping board that did not would be the same board following two different rules
+depending on which power mode it happened to be in — one of them set by a server
+that knows about its own quiet window and its own publishing schedule, the other
+by a number somebody typed into a form months ago. The desk also names the
+instant its answer will change (`next_change`), which becomes a targeted wake: a
+board on an hourly overnight cadence still catches the 06:00 edition at 06:00.
+One function resolves the lot — `power_cadence()` in `power_policy.c`, pure and
+host-tested, called by the quiet path, by `enter_sleep()` and by the awake poll
+loop — and the local layers are consulted when a payload carries no `policy` at
+all: a file on a static host, or a mock without the block.
+
+`CONFIG_CLAUDEPOST_DEEP_SLEEP` is a separate bool and **defaults to on**. The
+argument for opt-in was that a sleeping board is a board you cannot reach; what
+answers it is that this switch is not what decides. Three runtime gates disable
+sleep whatever it says — no cell fitted, a USB console attached, no news URL —
+and a board at a bench satisfies at least one of them permanently while a board
+on a wall satisfies none. So off-by-default protects only the case the gates
+already protect, and costs the case they do not: a frame hung up by somebody who
+never found the menu entry, flat in two days.
 
 ## 7. Getting back in
 

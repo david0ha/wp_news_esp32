@@ -63,9 +63,13 @@ is unavailable, so a depopulated part never wedges the render loop.
 ## Power
 
 Seeed quotes about three months on a charge for a board that sleeps between refreshes. This firmware
-does not sleep — it holds Wi-Fi up so `claudepost.local` stays reachable and the poll interval
-stays honest. On USB that is the right trade; on battery it is not, and a future revision that wants
-battery life should look at light sleep between polls before anything else.
+does that now, and it is deep sleep rather than light: on a cell it wakes on the news server's own
+cadence, asks one conditional question, and goes back down without powering the panel, which takes
+the estimate from about two days of holding Wi-Fi up to months. On USB — no cell fitted, or a console
+attached — it does not sleep at all and behaves as it always did, `claudepost.local` reachable and
+the poll interval honest. Those gates, and the numbers, are
+[the deep-sleep design](specs/2026-08-17-deep-sleep-design.md); the board measures its own draw and
+reports it in `GET /api/state`, because the two terms the estimate rests on are unmeasured.
 
 The panel itself is not the problem: `epd6_sleep()` gets the controllers to about 1 µA, and the
 refresh policy already keeps refreshes rare (see [epaper-13in3.md](epaper-13in3.md)).

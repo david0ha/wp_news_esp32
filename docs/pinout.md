@@ -73,8 +73,12 @@ GPIO41 in its warning for exactly this reason.
 | BOOT | 0 | `BTN_BOOT_PIN` | previous page |
 
 KEY0–2 are the carrier's three side buttons; all are press-to-GND with the internal pull-up enabled.
-BOOT is the button on the XIAO module itself — also the bootloader strap pin, so holding it while
-pressing RESET enters download mode, which is unrelated to the firmware's use of it.
+`power_sleep()` keeps those pull-ups through a deep sleep — it pins the RTC peripheral domain on and
+re-enables each masked pin's pull-up in the RTC IO block — because the domain is otherwise powered
+down and a press-to-GND pin with nothing holding it high floats: either spurious wakes or none, with
+nothing in any log to say which. A few microamps against a budget of about fourteen buys four buttons
+that work. BOOT is the button on the XIAO module itself — also the bootloader strap pin, so holding
+it while pressing RESET enters download mode, which is unrelated to the firmware's use of it.
 
 **GPIO3 is the hardware wake pin on the EE02.** Treat a press there as "wake" rather than binding it
 to anything destructive; KEY1's "poll now" is chosen with that in mind.
@@ -105,10 +109,11 @@ frame.
 > board`. Both are errors you can act on, which is the whole reason they exist; moving a button to a
 > pin above 21 is otherwise a change with no visible consequence until a board is on a wall.
 
-Deep sleep is off by default, so none of this is in play until `CONFIG_CLAUDEPOST_DEEP_SLEEP` is
-enabled — see [bring-up.md](bring-up.md#6-deep-sleep-during-bring-up). The KEY2 escape hatch and the
-rest of getting back into a sleeping board are §7 of the
-[deep-sleep design](specs/2026-08-17-deep-sleep-design.md).
+Deep sleep is on by default (`CONFIG_CLAUDEPOST_DEEP_SLEEP`), but a board on USB with a console
+attached never sleeps, so none of this is in play at a bench — see
+[bring-up.md](bring-up.md#6-deep-sleep-during-bring-up), which is also where the sleep current these
+pull-ups cost gets measured. The KEY2 escape hatch and the rest of getting back into a sleeping board
+are §7 of the [deep-sleep design](specs/2026-08-17-deep-sleep-design.md).
 
 ## Battery
 

@@ -69,6 +69,13 @@ captive sheet automatically.
 `ssid` (str) · `pass` (str) · `vurl` (str, the news snapshot URL) · `sleep_s` (u32, seconds between
 polls; 0 or absent means "use the build-time default") · `force_ap` (u8, one-shot).
 
+`sleep_s` is a **fallback and not a cadence**: a payload may carry a `policy` block naming how often
+to come back, and when it does the board follows that instead, sleeping and polling alike
+(`power_cadence()`, and [../../docs/news-contract.md](../../docs/news-contract.md)). This value is
+what governs when the server has said nothing — a static file host, or a mock without the block —
+and the setup form's hint says so, because a number that is silently overridden is worse than no
+field. `GET /api/state` reports which layer actually won as `power.sleepSource`.
+
 Every key but `ssid` is optional **in flash as well as to a user**: a config written by an older
 firmware simply has no `sleep_s`, and `prov_store_load` reads a missing key as its zero value
 without changing its verdict. That verdict is only ever "is there a network to join". Anything

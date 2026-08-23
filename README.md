@@ -29,6 +29,11 @@ identity path, so black type and 1 px hairlines come out crisp, and anything in 
 edition badged `DEMO` — one company, its stories, its dossier, its accounts and a photograph. That
 is a complete configuration and a complete edition, not a placeholder.
 
+**Hang it on a wall and it sleeps.** On a cell the board deep-sleeps between polls, wakes on the
+cadence its news server asks for, and asks that server one conditional question — a `304` costs it
+about three seconds and never powers the panel, so the edition stays on the glass and the cell lasts
+months rather than two days.
+
 ## Quick start
 
 ```bash

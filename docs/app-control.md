@@ -101,19 +101,19 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
   "panel": { "refreshMs": 24810 },
 
   "power": {
-    "deepSleep": true, "sleepSeconds": 900,
+    "deepSleep": true, "sleepSeconds": 900, "sleepSource": "policy",
     "wakes": 96, "quietWakes": 94,
     "meanAwakeMs": 3140, "estMahPerDay": 6
   }
 }
 ```
 
-That document is 1,220 bytes. The buffer is `DEVICE_API_STATE_BUF_SZ`, 5120, and `test_api_json`
-builds the worst case — every string at its maximum length, every array at capacity, every character
-one the escaper expands to six — and asserts it fits, printing the margin (currently **4111 of
-5120**). The margin is checked rather than assumed because the overflow path returns `-1` and an
-**empty body**, so the symptom of being one byte over is "the app shows nothing" with no error
-anywhere.
+That document is 1,378 bytes without the indentation shown here. The buffer is
+`DEVICE_API_STATE_BUF_SZ`, 5120, and `test_api_json` builds the worst case — every string at its
+maximum length, every array at capacity, every character one the escaper expands to six — and asserts
+it fits, printing the margin (currently **4,280 of 5,120**). The margin is checked rather than
+assumed because the overflow path returns `-1` and an **empty body**, so the symptom of being one
+byte over is "the app shows nothing" with no error anywhere.
 
 ### One company, and how a client tells one edition from another
 
@@ -210,7 +210,7 @@ this server is answering, the number is a real measurement and not a zero.
 ### `power`, and the thing a client must be told before it files a bug
 
 ```json
-"power": { "deepSleep": true, "sleepSeconds": 900,
+"power": { "deepSleep": true, "sleepSeconds": 900, "sleepSource": "policy",
            "wakes": 96, "quietWakes": 94,
            "meanAwakeMs": 3140, "estMahPerDay": 6 }
 ```
@@ -251,8 +251,29 @@ measurement, with no instruments and no serial cable.
   higher is what a day on a wall is for.
 - Both are `0` until the board has slept at least once, because both divide by something that is
   legitimately zero before then. Not an error, and not a real figure either.
-- `sleepSeconds` is the interval **in force**, which is the last of the three layers to have spoken:
-  the Kconfig default, then the setup form's NVS value, then `POST /api/sleep`.
+- `sleepSeconds` is the interval this board will **actually sleep for** when the window closes, not
+  the one it was built or configured with. It is `power_cadence()`'s answer, computed from the same
+  inputs the board is about to sleep on: the news server's `policy` block if it sent one, otherwise
+  the local layers, shortened when the server named a `next_change` sooner than the ordinary cadence
+  and lengthened by the failure backoff when polls have been failing. Reporting the *setting* instead
+  would show 900 beside a board about to sleep for 3,600 because its desk is in a quiet window, which
+  is a number a reader can neither act on nor tell is wrong.
+- `sleepSource` says **which of the four layers won**, and it is not decoration: an interval a desk
+  set for the night ends by itself, and one compiled into the image does not.
+
+  | value | who decided |
+  |---|---|
+  | `"policy"` | the news server's `policy` block — its `poll_seconds`, or a `next_change` it named |
+  | `"api"` | `POST /api/sleep`, during this awake session |
+  | `"nvs"` | the interval typed into the setup form |
+  | `"default"` | `CONFIG_CLAUDEPOST_SLEEP_SECONDS`, the compiled-in fallback |
+
+  Top down: the server outranks all three local layers, and both of its answers report as `"policy"`
+  — from a reader's point of view a cadence and a targeted wake are the same fact, that the desk is
+  driving this board, and both end by themselves. **`"api"` does not survive a sleep.** That call
+  writes NVS as well as RTC memory, so after the next wake the very same number honestly reads
+  `"nvs"`, which is where it now lives; a flag that survived would go on claiming a phone had just
+  set it, months later.
 
 ## `POST /api/sleep`
 
@@ -260,15 +281,25 @@ measurement, with no instruments and no serial cable.
 {"seconds": 1800}
 ```
 
-Changes how long the board sleeps between polls. Persisted to NVS **and** written into RTC memory, so
-it takes effect from the very next wake without a reboot — a wake that changes nothing never reads
-NVS at all, which is most of the point of it.
+Sets the board's **own** sleep interval. Persisted to NVS **and** written into RTC memory, so it takes
+effect from the very next wake without a reboot — a wake that changes nothing never reads NVS at all,
+which is most of the point of it.
+
+**It is the fallback, not the cadence.** A board reading a desk is told how often to come back by the
+`policy` block in the payload (`poll_seconds`, and a `next_change` for a targeted wake), and that
+outranks every local layer — this endpoint, the setup form, and the compiled-in default alike. The
+number here is what governs when the server has said nothing about cadence at all: a payload on a
+static file host, a mock without the block, or a board whose desk has gone away. Which of the two is
+in force shows in one field, `power.sleepSource`: `"api"` means this call is deciding, `"policy"`
+means the desk is driving and your value is stored but waiting.
 
 `seconds` is clamped rather than rejected: `0` means "use the build-time default", and anything else
 lands in **[60, 86400]**. Those bounds are what the board can actually run on rather than a matter of
 taste — under a minute the wake's own cost is most of the duty cycle, and over a day a board is not
-polling, it is asleep. So `{"seconds":5}` succeeds and yields 60, and a client should re-read
-`power.sleepSeconds` rather than assume it got what it asked for.
+polling, it is asleep. So `{"seconds":5}` succeeds and yields 60, and a client should read back rather
+than assume it got what it asked for — but read `power.sleepSource` beside `power.sleepSeconds`.
+`sleepSeconds` is the *effective* interval, so a desk in its quiet window will have it reading 3,600
+next to a stored value of 1,800, and that is the two fields working rather than the write failing.
 
 The only rejections are a missing or non-numeric `seconds` (`bad_json`) and a negative one
 (`sleep_seconds_invalid`). A negative is named rather than folded into `0`, because `0` already means
@@ -279,8 +310,13 @@ requested.
 and a longer interval buys progressively less; below about five minutes the cell drains steeply. This
 is a newspaper, and a fifteen-minute worst case on one is not a problem worth a flat battery.
 
-This endpoint does **not** change the poll cadence of a board that is awake — that is
-`source.pollSeconds`, a build-time setting, and on USB it costs nothing.
+**There is one cadence and two power modes, and this endpoint is one input to it.** The same function
+answers "how long until the next poll" for an awake board and "how long to sleep" for a board on a
+cell (`power_cadence()`, in `components/power/power_policy.c`), which is why a desk's quiet window
+slows both. What this endpoint cannot do is shorten an awake board's poll loop: with no `policy` in
+play that loop falls back to its own compiled-in `CONFIG_CLAUDEPOST_POLL_SECONDS` rather than to the
+sleep interval, and a board that is awake is on USB, where a poll costs nothing worth tuning. The
+number set here is the one that matters on a wall.
 
 ## Examples
 

@@ -173,7 +173,7 @@ The reference producer's rule, in `tools/mock_news_server.py`:
 
 ```python
 canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-etag = '"' + hashlib.sha1(canonical).hexdigest()[:16] + '"'
+etag = '"' + hashlib.sha256(canonical).hexdigest()[:16] + '"'
 ```
 
 Hashed over the payload **object**, not over the bytes about to be written, because key order,
@@ -189,8 +189,20 @@ implemented the feature. **A formatting-derived tag is not dangerous, it is mere
 is useless intermittently and invisibly, which is worse than not having it. The dangerous version of
 this mistake is the one above — a field that reaches the model.
 
-Sixteen hex digits of SHA-1 is what the reference producer sends. The length is not a contract term;
-it is a change detector and not a security boundary, and any producer is free to send something else.
+Sixteen hex digits of SHA-256 is what the reference producer sends. The length is not a contract
+term; it is a change detector and not a security boundary, and any producer is free to send something
+else. The desk server uses the same recipe (`_etag()` in `server/claudepost/http.py`) so that a board
+cannot tell the two apart by the shape of a tag.
+
+**The desk hashes the bytes it writes, and that is not an exception to the rule above.** It splices
+the `policy` block in at serve time — the block is computed per request, because `next_change` is an
+instant and a stored one is wrong the moment the schedule moves — so there is no payload object on
+disk that carries the answer the board is actually being sent. What makes hashing the response safe
+there is the thing a producer usually cannot promise: one program owns the serialization, with fixed
+separators and a fixed key order, and its tests hash the same edition across repeated requests and
+across a whole schedule window to prove the tag holds still. **The two servers share the recipe, not
+the input.** If you are writing a producer whose serializer you do not control, follow the reference
+producer and hash the payload.
 
 ### A 304 is a success
 
@@ -208,6 +220,45 @@ healthy and never refreshes, indefinitely. That combination is the feature worki
 has hung. **If a board badges itself `STALE` or `OFFLINE` while its server is answering 304s, the
 fault is on the device and not in the payload** — which is worth knowing, because every other
 symptom this document describes points the other way.
+
+On a board that sleeps between polls a 304 is more than a saved transfer: it is the entire wake. The
+board comes up, connects, asks, is told nothing has changed, and goes back to sleep without powering
+the panel, building the UI or allocating the 960,000-byte framebuffer — about three seconds, and the
+whole reason such a board lasts months on a cell rather than two days. It also clears the failure
+count, exactly as a 200 does, so a healthy board answered 304 all day never backs off.
+
+### Every tag the device sends names the page on the glass
+
+`If-None-Match` carries the tag of the edition **currently printed**, never one the board is about to
+print, and that ordering is a rule rather than an accident of where a line sits. Only two events may
+record a tag:
+
+- a poll whose document parsed to exactly what is already on the paper — the tag names a page the
+  panel is displaying, so there is nothing in flight for it to get ahead of;
+- `present_full()`, *after* a refresh has finished, publishing the tag beside the content hash in one
+  act once the page is actually on the paper.
+
+A document that is about to be printed is deliberately left untagged until it has been. Write the tag
+first and a brownout twenty seconds into a twenty-five second refresh leaves a board whose next poll
+sends the new tag, receives a 304, and concludes that nothing has changed — the edition never prints,
+for as long as the payload holds still, with a log full of successful polls. The same rule is why a
+tag from a document that failed to parse is never stored: it would make the next poll a 304 on a
+document the device has never successfully read.
+
+**A tag that moves is also how the board learns something that is not the page.** The `policy` block
+below rides in the payload, so a cadence change is a byte change; a server that computes its tag over
+what it actually serves therefore answers 200 at the moment its schedule turns over, and the board
+adopts the new cadence from that response. The desk server does exactly this and
+[desk-server.md](desk-server.md) has the arithmetic — inside one of its windows the bytes hold still
+and every poll is a 304; at a transition they move and the edition comes down in full. A board asleep
+on a nightly cadence depends on that: it is the only thing that tells it the night is over.
+
+Tiles are outside all of this. `/tiles/<id>.bin` is immutable by its id — a different picture is a
+different id — so it carries no tag and an `If-None-Match` on one is answered with the bytes. The
+device asks for a tile only when a photograph on the page names one its cache does not already hold,
+and a board waking from deep sleep holds none: the cache is in RAM, and a wake is a boot. So a
+printing wake fetches the edition's pictures again, which is one of the reasons a wake that prints
+costs what it does and a wake that finds nothing new costs almost nothing.
 
 ### Why the device is not simply sent `news_hash()`
 
@@ -870,6 +921,34 @@ that works; `--validate` fails on it. The device waits `min(poll_seconds, next_c
 at 30 s, so a board on an hourly overnight cadence still catches the 06:00 edition at 06:00 rather
 than at 06:47.
 
+**On a board running off a cell, these two numbers are not a poll interval. They are the sleep.** The
+firmware resolves the cadence in one function — `power_cadence()`, in `components/power/power_policy.c`
+— and the awake poll loop and the RTC timer that wakes a sleeping board are both callers, so
+`poll_seconds` is what arms the timer and `next_change` is a targeted wake for the instant you named.
+A board's own interval (compiled in, set in the setup form, or set by `POST /api/sleep`) is the
+**fallback for a payload with no `policy` block**, not a competing answer: whatever you say outranks
+it, in both power modes. What an interval costs in battery is [desk-server.md](desk-server.md); what
+it costs you is nothing, which is the point of the block being optional.
+
+Two consequences worth knowing before you send a `next_change`, because both are deliberate and
+neither is visible from the server:
+
+- **A failing board overshoots the instant rather than hammering it.** The device's failure backoff
+  multiplies whatever base the two numbers settled on, including a shortened targeted wake — so a
+  board whose network has gone away and that was told to wake in 120 seconds sleeps for rather longer
+  than 120 seconds, and can come back after the transition it was aiming at. That is the better of
+  the two orders. Backing off first and shortening second would have a board that cannot reach you
+  waking on the dot of every transition all night, which is precisely what the backoff exists to
+  prevent.
+- **`next_change` is an absolute instant and the board's clock is SNTP or nothing.** This carrier has
+  no RTC, so a board whose clock is a few minutes out wakes a few minutes early or a few minutes
+  late, and neither the device nor you can see the difference. Early costs one extra poll; late costs
+  a sheet that is stale until the ordinary cadence brings the next one. The desk truncates the
+  instant to a whole second, which biases it earlier by under a second, and that is the whole of the
+  mitigation — the alternative is a round-trip clock estimate on the wire, which is not worth it for
+  a newspaper. Note that the synced-clock gate below proves only that a clock was *set*, never that
+  it is *right*.
+
 Four properties, each of them a test:
 
 - **The fingerprint cannot see it.** `news_hash()` covers everything that reaches the glass and this
@@ -882,10 +961,14 @@ Four properties, each of them a test:
   an array, all go to absent. This block cannot cost you a page. That is also why `--validate`
   reports the ones that clamp: a clamp is silent, and the symptom of a `poll_seconds` of 5 is a board
   polling twelve times a minute with nothing anywhere to say it was asked to.
-- **It does not survive a reboot.** Nothing writes it to NVS. A desk that put the board on a daily
-  poll and then went away must not leave it polling once a day forever; a power cycle is the reset,
-  and the first poll after it adopts whatever you are saying then. Pointing the board at a different
-  URL drops it too — a cadence belongs to the desk that asked for it.
+- **It does not survive a power cycle.** Nothing writes it to NVS. A desk that put the board on a
+  daily poll and then went away must not leave it polling once a day forever; pulling the power is
+  the reset, and the first poll after it adopts whatever you are saying then. Pointing the board at a
+  different URL drops it too — a cadence belongs to the desk that asked for it. It *does* survive a
+  deep sleep, and has to: RTC memory carries the last adopted cadence across a wake, so a wake that
+  is answered 304 — no body, therefore no `policy` — still sleeps by what you last said instead of
+  reverting to the board's own interval on every other wake. A power-on reset clears that memory, and
+  so does a firmware update, which is what keeps "pull the power" a true answer.
 - **It is ignored when the clock is not synced.** `next_change` is absolute and this board has no RTC:
   the clock is SNTP or nothing. Before 2024-01-01 `time()` is the epoch plus the uptime, which is not
   a date, so `next_change` is ignored and `poll_seconds` alone governs.
@@ -905,7 +988,9 @@ Two smaller rules that follow from "it clamps":
 The effective cadence and where it came from are both reported to the companion app as
 `source.pollSeconds` and `source.pollSource` (`"config"` or `"policy"`). Both, because the number
 alone cannot be acted on: an hourly poll set by the desk ends at 06:00 and an hourly poll compiled
-into the image does not.
+into the image does not. The sleeping board's half of the same question is `power.sleepSeconds` and
+`power.sleepSource` — the interval that wake will actually sleep for, and which of the desk, the app,
+NVS or the build decided it ([app-control.md](app-control.md)).
 
 The server half of this — the schedule it is computed from, and why the block is computed per request
 rather than stored — is [docs/desk-server.md](desk-server.md).

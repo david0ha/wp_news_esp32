@@ -246,19 +246,99 @@ reaches the glass and the policy reaches nothing. A host test asserts that two
 snapshots differing only in `policy` hash identically.
 
 Three more rules, each of which is also a test: it **clamps, never rejects**, so
-this block cannot cost a page; it **does not survive a reboot**, so a bad policy
-cannot leave a board polling once a day forever; and it is **ignored when the
-clock is not synced**, because `next_change` is absolute and the board has no
-RTC.
+this block cannot cost a page; it **does not survive a power cycle**, so a bad
+policy cannot leave a board polling once a day forever; and it is **ignored when
+the clock is not synced**, because `next_change` is absolute and the board has no
+RTC. A deep sleep is the one thing it does cross — RTC memory carries the last
+adopted cadence, so a wake answered 304 sleeps by what this desk last said
+rather than by the board's own interval.
 
-### Why there is no deep sleep
+## What a sleeping board asks of the desk
 
-The panel holds its image without power, so sleeping is about the board's own
-current and not about the paper. Deep sleep drops the 960 KB framebuffer in
-PSRAM, so every wake pays a full fetch and a full re-render — and a wake that
-finds nothing changed has spent that for nothing. The saving actually on the
-table is the polling itself, and `poll_seconds` collects all of it. Deep sleep
-gets its own spec if measured battery numbers justify the re-render.
+A board with a cell on it does not sit in a poll loop. It wakes, brings up
+Wi-Fi, asks this server one conditional question, and — when the answer is that
+nothing has changed — goes back to sleep without ever powering the panel, the
+LVGL tree or the 960,000-byte framebuffer. Spectra 6 is bistable, so the edition
+hangs on the glass through all of it, drawing nothing. The device half is
+[the deep-sleep design](specs/2026-08-17-deep-sleep-design.md); this is the part
+the desk owes it, and the desk already does all of it.
+
+**On a board on battery, `poll_seconds` is not advice about polling. It is the
+sleep.** One function resolves the cadence — `power_cadence()` in
+`components/power/power_policy.c` — and the awake poll loop and the RTC timer
+that wakes a sleeping board both call it, so what this desk says is what the
+board does in either power mode. A quiet window is therefore not merely fewer
+requests; for the hours it covers it is a board waking at a rate of twenty-four
+a day rather than ninety-six. On the shipped schedule's own two numbers, against
+a 4200 mAh cell:
+
+| what the desk says | wakes/day | mAh/day | the cell lasts |
+|---|---|---|---|
+| `poll_seconds: 900` (active) | 96 | 16–22 | 190–260 days |
+| `poll_seconds: 3600` (quiet) | 24 | 8–14 | 300–520 days |
+
+Those are **estimates and they are stated as ranges for a reason**: two of the
+terms in them — the standing deep-sleep current and how long a Wi-Fi connect
+actually takes — have never been measured on this board. §9 and §10 of the
+deep-sleep design work them through, and the board counts its own wakes so that
+a day on a wall replaces them with a measurement; `GET /api/state` reports it.
+What the table is for is the shape, and the shape is that the knee is between a
+quarter of an hour and an hour. Below five minutes the cell drains steeply for
+freshness nobody reads on a newspaper; past an hour a longer interval buys
+progressively less, because the refreshes and the standing current dominate.
+
+**`next_change` is a targeted wake, and it is what stops a quiet cadence from
+being a late paper.** A board on an hourly overnight cadence wakes an hour after
+whenever it last woke, so it would otherwise collect the 06:00 edition at 06:47.
+Told the instant as well, it sleeps until 06:00 —
+`min(poll_seconds, next_change − now)`, floored at thirty seconds, computed on
+the device with no calendar and no timezone database. It is honoured only when
+the board's clock is synced, because the instant is absolute and this carrier
+has no RTC.
+
+### The conditional GET
+
+`/news.json` carries a strong `ETag`, and answers a matching `If-None-Match`
+with `304 Not Modified` — no body, `Content-Length: 0`, the same tag back.
+
+- **The tag is the SHA-256 of the exact bytes served**, first sixteen hex digits,
+  quoted, no `W/` prefix (`_etag()` in `server/claudepost/http.py`). Taken
+  *after* the policy block is spliced in, so it names the whole answer rather
+  than the stored payload — which is what makes the next point true.
+- **`Cache-Control: no-cache` travels with it**, on the 200 and on the 304.
+  That is not "do not store", it is "do not serve this without asking me first":
+  the board's own rule, written down for anything in between.
+- **Tiles are unconditional.** `/tiles/<id>.bin` is immutable by id — a
+  different picture is a different id — so it carries no tag and an
+  `If-None-Match` on it is answered with the bytes.
+
+**The tag moves exactly when the answer moves, which means it moves at a
+schedule transition.** Both numbers in the policy block are step functions of
+the clock, constant across a whole window, and `next_change` is truncated to a
+whole second — so every poll inside a window hashes to the same tag and gets a
+304, and at a transition both integers change at once, the tag changes with
+them, and the board receives a full edition carrying the new cadence. That is
+not a side effect; it is the mechanism the one-cadence rule rests on. A tag that
+did not move there would leave a sleeping board polling at the night's rate
+through the morning, and nothing anywhere would say so. The shipped schedule has
+four transition instants in a day — 00:30, 06:00 (which is both the end of the
+quiet window and a wake), 12:40 and 22:00 — so it costs at most four full
+transfers per board per day, plus one for each edition actually filed. Every
+other poll is a couple of hundred bytes of headers.
+
+Nothing here is required of a server. A producer that has never heard of any of
+it is fully supported and pays one transfer per poll;
+[news-contract.md](news-contract.md) has that argument in full, along with the
+rule that keeps a bad tag from ever costing a page: `news_hash()` remains the
+sole authority on whether the panel moves.
+
+**Through a tunnel, `no-cache` is a behaviour change and it is the intended
+one.** A proxy that honours it revalidates to origin on every poll instead of
+answering out of a copy, so the desk sees the request it was already getting and
+the board can no longer be served yesterday's front page by something in the
+middle. The revalidation that finds nothing new is a 304 — about 160 bytes of
+headers, counted from what the desk sends — rather than a whole edition. See
+[hosting-cloudflare.md](hosting-cloudflare.md).
 
 ## The worker
 

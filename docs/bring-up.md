@@ -226,7 +226,7 @@ curl -s http://claudepost.local/api/state | jq '.panel, .battery, .power'
 | the SPI push, separately | `idf.py monitor` with `esp_log_level_set("epd6", ESP_LOG_DEBUG)`: `D epd6: pushed 2 x 480000 B in N ms` | how much of the refresh is bus and how much is panel. 960,000 bytes at 10 MHz is about 0.8 s of wire; if the push is materially longer than that, the DMA staging path is worth looking at, and if it is not, the rest is the waveform and no amount of code will move it. |
 | `battery.millivolts` against a multimeter on the cell | `BATT_DIVIDER` in `components/board_io/board_io.c` | that constant is 3.0 **from the documentation, never measured**. It fails quietly — a wrong ratio gives a percentage that looks entirely plausible and is wrong every time you glance at the panel. Scale it by the ratio between the two readings, then record here that it has been checked, and the question is closed. |
 | `power.meanAwakeMs` | `GET /api/state`, after the board has slept — see [§6](#6-deep-sleep-during-bring-up) | how long a wake actually costs. The design assumes a quiet wake is about three seconds, almost all of it the Wi-Fi connect, and three seconds against fifteen minutes is what makes the whole feature work. If it comes back at eight, the awake term is nearly three times what the table assumed and the interval wants lengthening. This is a **measurement**, taken by the board about itself: `awake_ms_total / wakes`. |
-| deep-sleep current, by subtraction | `power.estMahPerDay` and `battery.percent`, a day apart | the other unmeasured term, and the only one here that is arithmetic rather than a reading. Leave the board on a cell for a day, turn the drop in `battery.percent` into mAh against the cell's rated capacity (1% of a 4200 mAh cell is 42 mAh, so this is coarse — give it two days if the numbers are close), subtract `power.estMahPerDay` and 2.3 mAh for each refresh it printed, and what remains is the standing draw. Nobody knows this number: the XIAO is specified at 14 µA, published reports run from 9 µA to several hundred, and the carrier's own load switches add an unpublished amount. The design's §10 works it through — at 300 µA instead of 40, the 15-minute row goes from 16–22 mAh/day to 22–29, which is roughly a quarter off the life of the cell. |
+| deep-sleep current, by subtraction | `power.estMahPerDay` and `battery.percent`, a day apart | the other unmeasured term, and the only one here that is arithmetic rather than a reading. Leave the board on a cell for a day, turn the drop in `battery.percent` into mAh against the cell's rated capacity (1% of a 4200 mAh cell is 42 mAh, so this is coarse — give it two days if the numbers are close), subtract `power.estMahPerDay` and 2.3 mAh for each refresh it printed, and what remains is the standing draw. Nobody knows this number: the XIAO is specified at 14 µA, published reports run from 9 µA to several hundred, and the carrier's own load switches add an unpublished amount. The design's §10 works it through — at 300 µA instead of 40, the 15-minute row goes from 16–22 mAh/day to 22–29, which is roughly a quarter off the life of the cell. A meter in series with the cell answers the same question directly and in a minute rather than a day; [§6](#6-deep-sleep-during-bring-up) has that version, and the reason the figure is a few µA higher than the datasheet's: the RTC peripheral domain is kept powered so the buttons hold their pull-ups while the board sleeps. |
 
 **`power.estMahPerDay` is the awake-time term only.** It is `wakes/day × meanAwakeMs × 23 µAh/s`, and
 it carries neither the refreshes nor the standing sleep current — the second precisely because
@@ -237,7 +237,8 @@ cannot drift quietly.
 
 The rest of the `power` object is counters rather than conclusions: `wakes`, `quietWakes` (the ones
 that cost no refresh — on a healthy board this should be nearly all of them), `sleepSeconds` for the
-interval actually in force, and `deepSleep` for whether the feature is on at all. They are lost on a
+interval this board will actually sleep for, `sleepSource` for which of the desk, the app, NVS or the
+build decided it, and `deepSleep` for whether the feature is on at all. The counters are lost on a
 power-on reset, because they live in RTC memory; a day's worth means a day without unplugging it.
 
 Record the origin answer from §3 too, even when it is "top-left, correct". It is the only fact in this
@@ -260,20 +261,22 @@ see `agent/standalone/`.
 
 ## 6. Deep sleep during bring-up
 
-**It is off unless you turn it on, and then it stays off until you unplug the cable.** Those are two
-separate gates and both of them will look like a broken feature if you do not know they are there.
-
-Off at build time:
+**It is on, and it still will not sleep while you are standing there.** `CONFIG_CLAUDEPOST_DEEP_SLEEP`
+now defaults to **y** — the feature the board exists for should not need finding in a menu, and a
+frame that runs flat in two days until somebody finds it is the worse default. What makes that safe
+is that the switch is not what decides:
 
 ```bash
 idf.py menuconfig     # Claude Post power -> Sleep between polls (battery mode)
 ```
 
-`CONFIG_CLAUDEPOST_DEEP_SLEEP` defaults to **n**, because a sleeping board is a board you cannot reach.
-Remember that `sdkconfig` is gitignored and per-developer, so turning it on is a change to your tree
-alone and a colleague's board still never sleeps.
+`sdkconfig` is gitignored and per-developer, so a tree that predates this default keeps its explicit
+`# CONFIG_CLAUDEPOST_DEEP_SLEEP is not set` until it is regenerated — **`idf.py reconfigure`** is what
+picks the new default up, and it is worth running once on any tree that predates this branch, which
+also renamed every Kconfig symbol here into the `CLAUDEPOST_*` namespace.
 
-Then off at runtime, whatever the build says, for any one of three reasons:
+Three runtime gates disable sleep whatever the build says, and a board at a bench trips at least one
+of them permanently:
 
 | gate | why | what it means at a bench |
 |---|---|---|
@@ -281,14 +284,41 @@ Then off at runtime, whatever the build says, for any one of three reasons:
 | no cell fitted | there is no battery to save, and sleeping on USB power buys nothing | a board with nothing on the JST connector never sleeps |
 | no news URL configured | a board that wakes every fifteen minutes to fetch nothing | a fresh board on the demo snapshot never sleeps |
 
-So the whole of §2 above reads exactly as it always did, and that is the intended asymmetry: enabling
-this changes nothing on a bench and everything on a wall. To actually watch it work you need the
-build option on, a charged cell on the JST connector with its slide switch ON, a URL set, and the USB
-cable **out** — which also means the log below is one you cannot watch live, since attaching the
-monitor to read it is itself the thing that stops the board sleeping. That is not a gap in the
-tooling; it is why the counters in §4 exist at all. The board writes down what it did so that a
-reader who was not there can find out. Press a button and it stays reachable for two minutes
-(`CONFIG_CLAUDEPOST_AWAKE_WINDOW_SECONDS`), which is the window to get a `curl` in.
+So the whole of §2 above reads exactly as it always did, and that is the intended asymmetry: this
+changes nothing on a bench and everything on a wall.
+
+**The bench procedure, then, is mostly about getting out of the way.** To watch a board sleep you
+need a charged cell on the JST connector with its slide switch ON, a URL set, and the USB cable
+**out** — `idf.py monitor` is not merely unhelpful here, it is one of the three gates: attaching it
+is what keeps the board awake, and detaching it (`Ctrl-]`, then unplug) is a step of the procedure
+rather than the end of one. Shorten the interval before you unplug, or a run takes a quarter of an
+hour per wake:
+
+```bash
+curl -X POST http://claudepost.local/api/sleep -d '{"seconds":60}'   # then unplug
+```
+
+That number is the board's own fallback and the desk outranks it, so if the URL is a desk rather than
+a file the board will keep sleeping by the desk's `poll_seconds` and `power.sleepSource` will say so.
+Point the board at a static payload with no `policy` block for the duration if you want the interval
+you asked for.
+
+Then press a button — a button wake keeps the HTTP server and mDNS up for two minutes
+(`CONFIG_CLAUDEPOST_AWAKE_WINDOW_SECONDS`), and that window is the only way to `curl` a board that is
+otherwise awake for three seconds at a time. Three things are worth reading in it, and writing down:
+
+| what | how | why it matters |
+|---|---|---|
+| `power.wakes`, `power.quietWakes`, `power.meanAwakeMs` | `curl -s http://claudepost.local/api/state \| jq .power` | that the board is waking, and that nearly all of them are quiet. `meanAwakeMs` is the measurement §4 wants |
+| `power.sleepSeconds` and `power.sleepSource` after a policy-driven wake | the same call | the one thing no host test can see: that a targeted wake has not been written into the board's *local* interval. `sleepSource` reading `"nvs"` beside a shortened interval is that bug, and it would cost a cell rather than a page |
+| **the sleep current, in µA, on a bench supply** | a meter in series with the cell, board asleep | the number this whole design rests on and nobody has measured. `power_sleep()` keeps the RTC peripheral domain powered so the four buttons hold their pull-ups through the sleep, which the IDF's tables put at a few µA over the bare ~14 µA figure — an **estimate**, and this row is where it stops being one. Record it here |
+
+Press each of the four buttons on a sleeping board too, and confirm each one wakes it. That is the
+only check there is on the pull-ups: without them the pins float, and a floating press-to-GND pin
+produces either spurious wakes or none at all, with nothing in any log either way.
+
+The rest is what the counters in §4 are for. The board writes down what it did so that a reader who
+was not there can find out.
 
 ### What a wake looks like in the log
 
@@ -301,46 +331,61 @@ LVGL is never built, the 960,000-byte framebuffer is never allocated:
 
 ```
 I main: quiet fetch: not_modified
-I main: wake=timer fetch=unchanged -> sleep (sleep 900s, fails 0)
+I main: wake=timer fetch=unchanged -> sleep (cadence 900s from policy, fails 0)
 I power: sleeping 900s (wakes 12, quiet 11, awake 34210ms total, mask 0x2d)
 ```
 
-Three seconds, start to finish. `awake` is cumulative across every wake since the last power-on, so
-34,210 ms over 12 wakes is a mean of 2.9 s — that division is exactly what `power.meanAwakeMs`
-reports. `quiet 11` of `wakes 12` is a healthy board: eleven wakes that printed nothing. `mask 0x2d`
-is bits 0, 2, 3 and 5 — the four buttons armed as wake sources; a `0x0` there means nothing but the
-timer can wake this board and is worth investigating.
+Three seconds, start to finish. **`from policy` is the field to read**: it is who decided this
+interval, and it is one of `policy` (the desk's `poll_seconds`), `next_change` (a targeted wake for a
+schedule transition the desk named) or `local` (the board's own interval — Kconfig, the setup form,
+or `POST /api/sleep`). A board pointed at a desk that reads `local` is a board that is not receiving
+a `policy` block, which is worth knowing before the cadence is blamed on anything else. `awake` is
+cumulative across every wake since the last power-on, so 34,210 ms over 12 wakes is a mean of 2.9 s —
+that division is exactly what `power.meanAwakeMs` reports. `quiet 11` of `wakes 12` is a healthy
+board: eleven wakes that printed nothing. `mask 0x2d` is bits 0, 2, 3 and 5 — the four buttons armed
+as wake sources; a `0x0` there means nothing but the timer can wake this board and is worth
+investigating.
 
 A **printing wake** — the server had something new, so the board takes the full path:
 
 ```
 I main: quiet fetch: ok
-I main: wake=timer fetch=changed -> refresh (sleep 900s, fails 0)
+I main: wake=timer fetch=changed -> refresh (cadence 900s from policy, fails 0)
 I main: content changed — printing without a second connect
+...
+I user_app: awake window closed — sleeping 900s from policy (printed yes, fails 0)
 ```
 
-and from there the boot proceeds through the whole of §2 — `epd6`, `LvglPort`, the refresh — before
-sleeping. This is the expensive kind, and on a normal day there should be about two of them.
+and between those the boot proceeds through the whole of §2 — `epd6`, `LvglPort`, the refresh — before
+sleeping. This is the expensive kind, and on a normal day there should be about two of them. The last
+line is where the accounting happens rather than at the decision: `printed yes` is what clears the
+failure count, because a wake that decided to print and then failed to fetch anything has printed
+nothing, and a board that called that healthy would go on doing it every fifteen minutes.
 
 A **button wake** stays up instead of sleeping, which is what makes the companion app usable:
 
 ```
-I main: wake=button fetch=not_attempted -> awake (sleep 900s, fails 0)
+I main: wake=button fetch=not_attempted -> awake (cadence 900s from policy, fails 0)
 ```
 
 `fetch=not_attempted` is correct here rather than a failure — a button wake does not run the quiet
 poll, because a person is standing in front of the frame and the point is to be reachable, not to be
-quick. The interval still appears in the line; it is what the board will use when the window closes.
+quick. The interval still appears in the line; it is what the board will use when the window closes,
+recomputed at that moment. A button wake that prints nothing counts no failure either: somebody
+looked at the frame, which is not the board's network going away.
 
 A **failed wake** counts and sleeps rather than starting the setup portal:
 
 ```
 W main: quiet path: no network — counting a failure
-I main: wake=timer fetch=not_attempted -> sleep (sleep 900s, fails 1)
+I main: wake=timer fetch=not_attempted -> sleep (cadence 900s from local, fails 1)
 ```
 
 Watch `fails` climb across wakes; the interval holds until the fourth, then steps up — at a 900 s
-base, `sleep 900s` becomes `sleep 3600s`. Note what does *not* happen: a board whose Wi-Fi has gone
+base, `cadence 900s` becomes `cadence 3600s` (five times 900 is 4,500, capped at an hour). Note that
+`from local` is expected here on a board whose desk it cannot reach — the cadence carried across the
+sleep is only as fresh as the last poll that brought a body, and a board that has never reached its
+desk has nothing but its own interval. Note also what does *not* happen: a board whose Wi-Fi has gone
 away never puts up the captive portal, because doing that on every wake would flatten the cell in
 under three weeks while showing a setup screen nobody is looking at. The backoff and the rest of the
 decision are §3 and §7 of the [deep-sleep design](specs/2026-08-17-deep-sleep-design.md).

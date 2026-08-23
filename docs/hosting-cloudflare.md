@@ -225,6 +225,15 @@ discovering that every poll, and the first request of each poll would travel in 
 it is the difference between a browser downloading a tile and rendering it as mojibake when you are
 debugging by hand.
 
+**Fronting the desk server instead of a publish directory changes what a proxy does.** The desk
+([desk-server.md](desk-server.md)) serves `/news.json` with an `ETag` and `Cache-Control: no-cache`,
+which is not "do not store" but "revalidate before serving" — so a tunnel or proxy that honours it
+goes back to origin on every poll rather than answering out of its own copy, and gets a bodiless 304
+of about 160 bytes when nothing has moved. That is the intended behaviour and the reason the header
+is there: a cache that serves a front page out of its own copy is a stale sheet nobody can explain
+from across a room. Sending no cache headers at all left that to a proxy's own heuristics; this
+trades those for one small revalidation per board per poll.
+
 ## Verifying, before believing any of it
 
 The project's rule is four layers, cheapest first. This adds one that has to come between the

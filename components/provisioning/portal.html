@@ -133,12 +133,17 @@
         <!-- Optional, and blank is a real answer: it means "use the interval this
              firmware was built with". A plain seconds box rather than a menu of
              intervals, because the firmware clamps whatever arrives into a range
-             of its own and a menu would have to be kept in step with it. -->
+             of its own and a menu would have to be kept in step with it.
+
+             It is also the fallback rather than the answer: a news server may
+             send a cadence of its own, and when it does the display follows
+             that instead. The hint says so in one clause, because a number that
+             is silently overridden is worse than no field at all. -->
         <input class="input" id="sleepSeconds" name="sleep_seconds" value="{{SLEEP_SECONDS}}"
                placeholder="Leave blank for the default"
                autocomplete="off" autocapitalize="none" spellcheck="false"
                inputmode="numeric" maxlength="5">
-        <div class="hint">How often the display looks for a new edition. 60 to 86400 (a day); anything outside is brought into range. It only reprints when the page has actually changed.</div>
+        <div class="hint">How often the display looks for a new edition, when the news server does not set a pace of its own. 60 to 86400 (a day); anything outside is brought into range. It only reprints when the page has actually changed.</div>
       </div>
     </div>
   </form>

@@ -205,6 +205,12 @@ content is the one thing that earns the full path.
 failure table; `main.cpp` carries the one row it settles differently — the `OFFLINE` badge — and says
 why at the point of the decision.
 
+**How long to wait is one rule in both power modes.** The desk's `policy.poll_seconds` arms the RTC
+timer on a board on a cell exactly as it paces the poll loop on a board on USB, with `next_change` as
+a targeted wake and the board's own interval as the fallback when a payload carries no policy at all.
+A board that slept by one rule and polled by another would still work, which is why the rule lives in
+one function rather than in three.
+
 ## Project structure
 
 ```
@@ -371,6 +377,14 @@ agent/                    an example worker that files into the desk, plus the s
   what the quiet path is for, and why the decision to take it is a pure function with a host test
   rather than a condition buried in `app_main`. Anything added to either path should be measured in
   refreshes first.
+- **The cadence is one function — `power_cadence()`**: the desk's `policy` when present, the local
+  interval otherwise, `next_change` as a targeted wake, the failure backoff on top. The quiet path,
+  `enter_sleep()` and NewsTask's awake wait all call it; never add a fourth place that decides how
+  long to wait. Two rules travel with it: the curve is applied **there and nowhere else**, so
+  `power_decide()` takes `base_sleep_seconds` as final and cannot compound it, and the answer is a
+  per-wake figure that belongs in `plan.sleep_seconds` — writing it into `wp_rtc_state.sleep_seconds`
+  would turn one 120-second targeted wake into this board's local interval permanently, at 720 wakes
+  a day, with every log line agreeing.
 - **`sizeof(news_t)` is 32,952 bytes** — measured, not estimated. That is four times `UiTask`'s whole
   8 KB stack, so all three snapshots in `user_app.cpp` — the state, the UI copy and the fetch buffer —
   are file-scope statics, safe only because the single-owner rule holds: `UiTask` is the only caller
@@ -410,7 +424,7 @@ agent/                    an example worker that files into the desk, plus the s
 
 - [docs/specs/2026-08-15-single-company-broadsheet-design.md](docs/specs/2026-08-15-single-company-broadsheet-design.md) — **the current design**: one company an edition, the guillotine compositor, and why the measure decides the layout
 - [docs/specs/2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md) — what this was built from. Its geometry, colour policy, chart and photo rules still hold; its data model and band table are superseded
-- [docs/specs/2026-08-17-deep-sleep-design.md](docs/specs/2026-08-17-deep-sleep-design.md) — the wake path that never powers the panel: what crosses a sleep, the failure table, and how a board stays reachable
+- [docs/specs/2026-08-17-deep-sleep-design.md](docs/specs/2026-08-17-deep-sleep-design.md) — the wake path that never powers the panel: what crosses a sleep, the failure table, and how a board stays reachable. Its dated note at the top says what the desk's cadence superseded; the task-by-task plan it was built from is [docs/superpowers/plans/2026-08-17-deep-sleep.md](docs/superpowers/plans/2026-08-17-deep-sleep.md)
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/hosting-cloudflare.md](docs/hosting-cloudflare.md) — serving the edition from a domain instead of a Mac on the LAN: what must be published, what must not, and what changes on the device once the URL is `https://`
