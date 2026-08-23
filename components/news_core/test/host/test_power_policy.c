@@ -22,6 +22,7 @@
  */
 #include "th.h"
 
+#include "news_model.h"   /* NEWS_POLL_MIN / NEWS_POLL_MAX — see the bounds test */
 #include "power_policy.h"
 
 /* --- the fixture ---------------------------------------------------------- */
@@ -345,6 +346,160 @@ static void test_not_attempted_is_treated_as_a_failure(void)
     CHECK_INT(g_out.sleep_seconds, 3600);
 }
 
+/* --- the effective cadence ------------------------------------------------ */
+
+/*
+ * How long until the next wake, and who decided it.
+ *
+ * There are three parties to that question and until now they were answered in
+ * three places: the desk, which knows when its own answer will next change; the
+ * board's local interval, which is Kconfig then NVS then POST /api/sleep; and
+ * the backoff curve, which knows only that the last few polls did not work.
+ * `power_cadence()` is the one rule, and every one of these rows is a way a
+ * board on a wall goes wrong quietly — polling a dead desk every thirty
+ * seconds, sleeping through the 06:00 edition, or taking a targeted
+ * two-minute wake for its permanent interval.
+ */
+
+static power_cadence_in_t g_cin;
+static power_cadence_t    g_cout;
+
+/* An hour past the gate: a board whose SNTP has landed. Every row that is about
+ * `next_change` needs one, because an unsynced clock is not a clock — see
+ * POWER_CLOCK_SYNCED_EPOCH and row 7. */
+#define NOW_SYNCED ((int64_t)POWER_CLOCK_SYNCED_EPOCH + 3600)
+
+static void cad(uint32_t poll, int64_t next_change, int64_t now,
+                uint32_t local, uint16_t fails)
+{
+    memset(&g_cin, 0, sizeof(g_cin));
+    memset(&g_cout, 0, sizeof(g_cout));
+    g_cin.policy.poll_seconds = poll;
+    g_cin.policy.next_change  = next_change;
+    g_cin.local_seconds       = local;
+    g_cin.now                 = now;
+    g_cin.consecutive_fails   = fails;
+    power_cadence(&g_cin, &g_cout);
+}
+
+static void test_the_cadence_table(void)
+{
+    /* 1. The desk said nothing about cadence, so the local layer answers. This
+     * is static hosting — a file on a web server, no policy block — and it must
+     * keep working exactly as it did before the desk existed. */
+    cad(0, 0, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, 900);
+    CHECK_INT(g_cout.source, POWER_CADENCE_LOCAL);
+
+    /* 2. Nobody said anything at all — no policy, no local interval, no clock.
+     * Total means total: there is no input that yields zero, because zero arms
+     * a timer that fires immediately and boot-loops the board at full power. */
+    cad(0, 0, 0, 0, 0);
+    CHECK_INT(g_cout.seconds, POWER_POLL_FALLBACK_SECONDS);
+    CHECK_INT(g_cout.source, POWER_CADENCE_LOCAL);
+
+    /* 3. THE HEADLINE: the desk beats the local interval. One cadence for both
+     * power modes — the awake poll loop has obeyed the policy block since the
+     * desk shipped, and a sleeping board that ignored it would poll a quiet
+     * desk four times an hour all night for nothing. */
+    cad(3600, 0, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, 3600);
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 4. A targeted wake. The desk named the instant its answer changes and it
+     * is sooner than the next ordinary poll, so the board wakes for it: the
+     * 06:00 edition prints at 06:00 rather than at 06:47. */
+    cad(900, NOW_SYNCED + 120, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, 120);
+    CHECK_INT(g_cout.source, POWER_CADENCE_NEXT_CHANGE);
+
+    /* 5. And it floors at the wire's minimum. Five seconds before a transition
+     * is a board that wakes, spends a Wi-Fi connect, and finds the old edition
+     * because the desk's clock is not the board's. */
+    cad(3600, NOW_SYNCED + 5, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, POWER_POLL_MIN_SECONDS);
+    CHECK_INT(g_cout.source, POWER_CADENCE_NEXT_CHANGE);
+
+    /* 6. An instant that has already passed is not a wake, it is a fact about
+     * the past. Strictly-future only: a cached payload with a baked
+     * `next_change` would otherwise pin the board at thirty seconds forever,
+     * which is the whole cell in a fortnight and no log line to say why. */
+    cad(3600, NOW_SYNCED - 60, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, 3600);
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 7. No clock, no targeted wake. This board has no RTC — the clock is SNTP
+     * or nothing — so before the sync lands `time(NULL)` is the epoch plus the
+     * uptime, and subtracting that from an absolute instant yields a wait of
+     * fifty-five years. The gate says so rather than arriving at the right
+     * answer by accident. */
+    cad(3600, NOW_SYNCED + 120, 1000, 900, 0);
+    CHECK_INT(g_cout.seconds, 3600);
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 8. `next_change` alone is enough. A desk may name the next transition
+     * without naming a cadence, and the transition is still the better answer
+     * than the board's own interval. */
+    cad(0, NOW_SYNCED + 120, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, 120);
+    CHECK_INT(g_cout.source, POWER_CADENCE_NEXT_CHANGE);
+
+    /* 9. The backoff multiplies whatever base results, and the source is still
+     * the desk's — a failing board is not a board that stopped being told. */
+    cad(900, 0, NOW_SYNCED, 900, 5);
+    CHECK_INT(g_cout.seconds, 3600);            /* 900 x 5 = 4500, capped */
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 10. Past ten failures, one hour, and it stays one hour however long the
+     * outage runs. */
+    cad(900, 0, NOW_SYNCED, 900, 11);
+    CHECK_INT(g_cout.seconds, 3600);
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 11. The cap never SHORTENS. A desk that asked for a daily poll keeps a
+     * daily poll while it is failing; a cap that also sped a board up would
+     * multiply the draw of a deliberately frugal setting at the exact moment
+     * the board has stopped working. */
+    cad(86400, 0, NOW_SYNCED, 900, 5);
+    CHECK_INT(g_cout.seconds, 86400);
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 12. A desk arithmetic error is clamped rather than believed. One second
+     * is not a cadence, it is a bug in somebody's schedule maths, and obeying
+     * it is a board that empties its cell in a day. */
+    cad(1, 0, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, POWER_POLL_MIN_SECONDS);
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 13. And at the other end. Past a day the board is not a newspaper any
+     * more, and NEWS_POLL_MAX is where the parser already stops believing it. */
+    cad(999999, 0, NOW_SYNCED, 900, 0);
+    CHECK_INT(g_cout.seconds, POWER_POLL_MAX_SECONDS);
+    CHECK_INT(g_cout.source, POWER_CADENCE_POLICY);
+
+    /* 14. THE DOCUMENTED CONSEQUENCE. A failing board multiplies the SHORTENED
+     * base and so overshoots the transition rather than hammering it. That is
+     * the deliberate choice: the alternative — back off first, then shorten —
+     * has a board whose network is down waking on the dot of every transition
+     * all night, which is the failure the curve exists to prevent. */
+    cad(900, NOW_SYNCED + 120, NOW_SYNCED, 900, 5);
+    CHECK_INT(g_cout.seconds, 600);             /* 120 x 5 */
+    CHECK_INT(g_cout.source, POWER_CADENCE_NEXT_CHANGE);
+}
+
+static void test_the_poll_bounds_agree_with_the_wire(void)
+{
+    /* Two headers cannot restate one range and be trusted to keep it. The
+     * parser clamps `policy.poll_seconds` to NEWS_POLL_MIN..NEWS_POLL_MAX on
+     * the way in; power_policy.h mirrors those numbers by hand, because it may
+     * not include news_model.h any more than it may include an ESP-IDF header.
+     * A hand-written mirror needs exactly one thing to stay honest, and this is
+     * it: if the wire's range ever moves, this line fails on a laptop rather
+     * than the board sleeping through an edition on a wall. */
+    CHECK_INT(POWER_POLL_MIN_SECONDS, NEWS_POLL_MIN);
+    CHECK_INT(POWER_POLL_MAX_SECONDS, NEWS_POLL_MAX);
+}
+
 /* --- classifying a poll --------------------------------------------------- */
 
 /*
@@ -518,6 +673,8 @@ int main(void)
     test_backoff_never_shortens_a_configured_sleep();
     test_the_fail_counter_saturates();
     test_not_attempted_is_treated_as_a_failure();
+    test_the_cadence_table();
+    test_the_poll_bounds_agree_with_the_wire();
     test_a_304_is_unchanged_and_stores_no_tag();
     test_changed_content_does_not_store_the_tag_yet();
     test_unchanged_content_stores_the_tag();

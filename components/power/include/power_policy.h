@@ -99,6 +99,86 @@ typedef struct {
  * a board asked to poll twice a day keeps polling twice a day. */
 #define POWER_BACKOFF_MAX_SECONDS 3600u
 
+/* --- the effective cadence ------------------------------------------------
+ *
+ * How long until the next wake, and who decided it. Three parties have an
+ * opinion and until this function there were three places that resolved them:
+ * the boot path's quiet sleep, `enter_sleep()` on the full path, and NewsTask's
+ * awake wait. Three copies of a rule this subtle is three chances to disagree,
+ * and the disagreement is invisible — a board that sleeps by one rule and polls
+ * by another is a board that works.
+ *
+ *   the desk    `policy.poll_seconds` is the cadence to use NOW, and
+ *               `next_change` the instant its answer will change. Both arrive
+ *               on the wire; both are the desk's business, not the board's.
+ *   the board   `local_seconds` — Kconfig, then NVS from the setup form, then
+ *               POST /api/sleep — already resolved and clamped by the caller.
+ *               It is the FALLBACK, for static hosting and for a mock with no
+ *               policy block, not a competing answer.
+ *   the curve   `consecutive_fails` slows a board whose polls are not working,
+ *               and it multiplies whatever base the two above settled on.
+ *
+ * The same rule governs a sleeping board and an awake one, which is the whole
+ * point: one cadence, two power modes.
+ */
+
+/* Mirrors news_policy_t (news_model.h) by hand, so this header stays free of
+ * news_model.h as well as of ESP-IDF — the same rule, for the same reason, as
+ * power_wake_t mirroring esp_sleep_source_t. The mirror is held honest by
+ * test_the_poll_bounds_agree_with_the_wire, which includes both headers and
+ * compares the two ranges. */
+typedef struct {
+    uint32_t poll_seconds;   /* 0 = the desk said nothing about cadence */
+    int64_t  next_change;    /* epoch seconds; 0 = none announced       */
+} power_policy_block_t;
+
+/* Who decided, which is reported to the companion app beside the number: an
+ * hourly interval set by a desk for the night ends by itself, and one compiled
+ * into the image does not. */
+typedef enum {
+    POWER_CADENCE_LOCAL = 0,      /* Kconfig / NVS / API, or the fallback */
+    POWER_CADENCE_POLICY,         /* the desk's poll_seconds              */
+    POWER_CADENCE_NEXT_CHANGE,    /* a targeted wake for a transition     */
+} power_cadence_src_t;
+
+typedef struct {
+    power_policy_block_t policy;
+    uint32_t local_seconds;       /* the local layer, already resolved       */
+    int64_t  now;                 /* time(NULL) — see POWER_CLOCK_SYNCED_EPOCH */
+    uint16_t consecutive_fails;
+} power_cadence_in_t;
+
+typedef struct {
+    uint32_t            seconds;
+    power_cadence_src_t source;
+} power_cadence_t;
+
+/* Total, integer-only, no clock of its own: *out is always fully written and
+ * `seconds` is never zero, whatever the inputs say. */
+void power_cadence(const power_cadence_in_t *in, power_cadence_t *out);
+
+/* The wire's range, mirrored by hand from news_model.h — see
+ * power_policy_block_t, and the test that holds the two together. */
+#define POWER_POLL_MIN_SECONDS      30      /* == NEWS_POLL_MIN */
+#define POWER_POLL_MAX_SECONDS   86400      /* == NEWS_POLL_MAX */
+
+/* Nobody said anything at all: no policy on the wire, no interval in NVS, no
+ * build-time default reaching us. Fifteen minutes is the knee of the battery
+ * curve and the same figure CLAUDEPOST_SLEEP_SECONDS defaults to. */
+#define POWER_POLL_FALLBACK_SECONDS 900
+
+/* Before this instant — 2024-01-01T00:00:00Z — `time(NULL)` is the epoch plus
+ * however long the board has been up, which is not a date. There is no RTC on
+ * this carrier: the clock is SNTP or nothing, and SNTP lands some seconds after
+ * the network does. `next_change` is an ABSOLUTE instant, so subtracting an
+ * unsynced clock from it yields a wait of roughly fifty-five years — the right
+ * answer, arrived at by accident. Testing for it says so, and makes a board
+ * whose SNTP never succeeds behave like one that was sent no policy at all.
+ *
+ * One definition, shared by the quiet path, the awake poll loop and this
+ * function; it used to be a second copy in user_app.cpp. */
+#define POWER_CLOCK_SYNCED_EPOCH 1704067200
+
 /*
  * Turn one poll's outcome into the `fetch` power_decide() wants, and decide
  * whether the server's ETag may be recorded.

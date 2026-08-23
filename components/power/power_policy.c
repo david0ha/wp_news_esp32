@@ -37,6 +37,84 @@ uint32_t power_backoff_seconds(uint32_t base, uint16_t fails)
     return (uint32_t)s;
 }
 
+/* Anything the desk or NVS can say, held to the range the parser already holds
+ * the wire to. A zero is not a short interval, it is "nobody said", and the
+ * caller decides what that means; every other value comes back inside
+ * [MIN, MAX]. */
+static uint32_t clamp_poll(uint32_t s)
+{
+    if (s < POWER_POLL_MIN_SECONDS) return POWER_POLL_MIN_SECONDS;
+    if (s > POWER_POLL_MAX_SECONDS) return POWER_POLL_MAX_SECONDS;
+    return s;
+}
+
+void power_cadence(const power_cadence_in_t *in, power_cadence_t *out)
+{
+    /* 1. The base, and the desk outranks the board.
+     *
+     * That order is the design and not a preference. `policy.poll_seconds` is
+     * the desk saying what the cadence is RIGHT NOW — it already knows about
+     * its own quiet window and its own publishing schedule — while the local
+     * interval is a number somebody typed once, months ago, into a form. The
+     * awake poll loop has obeyed the desk since the desk shipped; a sleeping
+     * board that did not would be the same board following two different rules
+     * depending on which power mode it happened to be in.
+     *
+     * The local layer is the FALLBACK, for a payload with no policy block at
+     * all: a file on a static web server, or the mock. And below that a
+     * constant, because there is no input to this function that may produce
+     * zero seconds — that arms a timer which fires immediately, and the board
+     * boot-loops at full power looking, from the outside, exactly like a board
+     * that will not start. */
+    uint32_t base = 0;
+    if (in->policy.poll_seconds) {
+        base        = clamp_poll(in->policy.poll_seconds);
+        out->source = POWER_CADENCE_POLICY;
+    } else {
+        base        = in->local_seconds ? clamp_poll(in->local_seconds)
+                                        : POWER_POLL_FALLBACK_SECONDS;
+        out->source = POWER_CADENCE_LOCAL;
+    }
+
+    /* 2. A targeted wake, when the desk named an instant that lands sooner than
+     * the next ordinary poll. A board on an hourly overnight cadence still
+     * catches the 06:00 edition at 06:00 rather than at 06:47, which is the
+     * whole reason `next_change` is on the wire at all.
+     *
+     * STRICTLY IN THE FUTURE, and that is not what "min(poll, next_change -
+     * now)" literally says. An instant that has already passed would floor at
+     * MIN and keep flooring there — a static payload with a baked
+     * `next_change`, or a cached copy of a live one, would pin the board at a
+     * wake every thirty seconds for as long as it stayed up. Having arrived at
+     * the instant, the ordinary cadence is the correct behaviour: whatever was
+     * going to change has changed, and this poll is the one that collected it.
+     *
+     * And only when the clock is synced — see POWER_CLOCK_SYNCED_EPOCH. */
+    if (in->policy.next_change > 0 &&
+        in->now >= (int64_t)POWER_CLOCK_SYNCED_EPOCH) {
+        const int64_t until = in->policy.next_change - in->now;
+        if (until > 0 && until < (int64_t)base) {
+            base = until > (int64_t)POWER_POLL_MIN_SECONDS
+                       ? (uint32_t)until
+                       : POWER_POLL_MIN_SECONDS;
+            out->source = POWER_CADENCE_NEXT_CHANGE;
+        }
+    }
+
+    /* 3. And the curve multiplies whatever the two above settled on. It is
+     * applied HERE and nowhere else: power_decide() receives the answer as
+     * `base_sleep_seconds` and takes it as final, so there is exactly one
+     * place a backoff can be applied and no way for two of them to compound.
+     *
+     * Note what this does to a shortened base — row 14 of the table. A failing
+     * board multiplies the 120-second targeted wake and overshoots the
+     * transition rather than hammering it. That is deliberate: backing off
+     * first and shortening second would have a board whose network is down
+     * waking on the dot of every transition all night, which is precisely the
+     * behaviour the curve exists to prevent. */
+    out->seconds = power_backoff_seconds(base, in->consecutive_fails);
+}
+
 void power_classify_fetch(bool ok, bool not_modified,
                           uint32_t new_hash, uint32_t old_hash,
                           power_classify_t *out)
