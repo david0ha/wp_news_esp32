@@ -705,6 +705,24 @@ class PublishDueTest(EditionTestCase):
         self.assertEqual(self.es.current_id(), r.edition_id)
         self.assertEqual(self.store.last_publish_at(), T0)
 
+    def test_a_staged_edition_that_is_no_longer_on_disk_is_left_staged(self):
+        # Retention protects both pointers, so a staged edition with no
+        # directory is a disk somebody went at by hand. The pointer is the
+        # record of what the desk was told to put up: it stays, nothing is
+        # published, and the tick says so ONCE -- publish_due runs every few
+        # seconds forever, and a warning per tick buries the one that matters.
+        self.store.set_hold(T0 + 3600)
+        r = self.es.commit(self.draft(1), IMMEDIATE, self.jump(T0))
+        self.assertEqual(r.state, "staged")
+        shutil.rmtree(os.path.join(self.root, "editions", r.edition_id))
+
+        with self.assertLogs("wpdesk.editions", "WARNING") as caught:
+            self.assertIsNone(self.es.publish_due(IMMEDIATE, self.jump(T0 + 3601)))
+            self.assertIsNone(self.es.publish_due(IMMEDIATE, self.jump(T0 + 3602)))
+        self.assertEqual(len(caught.output), 1, caught.output)
+        self.assertEqual(self.es.staged_id(), r.edition_id)
+        self.assertIsNone(self.es.current_id())
+
 
 # --------------------------------------------------------------------------
 # Promotion, retention

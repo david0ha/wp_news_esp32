@@ -21,12 +21,12 @@ thing on this path that was already tested.
 
 from __future__ import annotations
 
-import binascii
 import os
 import struct
 import zlib
 
 from .errors import BadRequest
+from .fsutil import atomic_write
 
 #: The BMP file header, then as much of the info header as this parser reads.
 _FILE_HEADER = 14
@@ -96,13 +96,10 @@ def convert_dir(path: str, remove_bmp: bool = True) -> list[str]:
         dst = os.path.join(path, name[:-4] + ".png")
         with open(src, "rb") as f:
             png = bmp24_to_png(f.read())
-        # Written under a temporary name and renamed, so a reader that lists
-        # the directory never opens a half-written sheet. The proof directory
-        # is served over HTTP while the gate is still running.
-        tmp = dst + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(png)
-        os.replace(tmp, dst)
+        # Through the one atomic write, so a reader that lists the directory
+        # never opens a half-written sheet: the proof directory is served over
+        # HTTP while the gate is still running.
+        atomic_write(dst, png)
         if remove_bmp:
             os.remove(src)
         out.append(dst)
@@ -164,4 +161,4 @@ def _parse_bmp_header(data: bytes) -> tuple[int, int, bool, int, int]:
 def _chunk(kind: bytes, payload: bytes) -> bytes:
     """One PNG chunk: length, type, payload, CRC32 over the type and payload."""
     return (struct.pack(">I", len(payload)) + kind + payload
-            + struct.pack(">I", binascii.crc32(kind + payload) & 0xFFFFFFFF))
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF))

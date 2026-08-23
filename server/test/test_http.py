@@ -25,7 +25,7 @@ import urllib.request
 from wpdesk import schedule as S
 from wpdesk.app import Config, Desk
 from wpdesk.clock import FixedClock
-from wpdesk.gates import StubGates
+from wpdesk.gates import GateResult, StubGates
 from wpdesk.http import make_server
 
 from test_schedule import at
@@ -59,10 +59,33 @@ def write_tokens(path: str) -> dict:
     return {t["scope"]: t["token"] for t in doc["tokens"]}
 
 
+class SheetGates(StubGates):
+    """A stub that leaves proof sheets on disk, like the render gate does.
+
+    One of each suffix, because that is what the real gate advertises: `sips`
+    on a Mac and the desk's own converter leave PNGs, and a render that failed
+    before conversion leaves the BMPs -- which is exactly the run whose sheets
+    somebody wants to look at.
+    """
+
+    def render(self, draft_dir, out_dir):
+        self.calls.append("render")
+        os.makedirs(out_dir, exist_ok=True)
+        for name, magic in (("A1.png", b"\x89PNG\r\n\x1a\n"), ("A2.bmp", b"BM")):
+            with open(os.path.join(out_dir, name), "wb") as f:
+                f.write(magic)
+        return GateResult(ok=self.render_ok, output=self.output,
+                          sheets=("A1.png", "A2.bmp"))
+
+
 class DeskTestCase(unittest.TestCase):
     """A desk on a loopback port, with stub gates and a clock the test drives."""
 
     START = at(2026, 8, 19, 9, 0)          # a Wednesday morning, outside quiet hours
+
+    #: The gates this case runs on. Overridden by the one class that needs
+    #: sheets on disk rather than a gate that touches none.
+    GATES = StubGates
 
     def setUp(self):
         self.root = tempfile.mkdtemp()
@@ -74,7 +97,7 @@ class DeskTestCase(unittest.TestCase):
         self.tokens = write_tokens(tokens_path)
 
         self.clock = FixedClock(self.START)
-        self.gates = StubGates(sheets=())
+        self.gates = self.GATES(sheets=())
         self.cfg = Config(data_dir=data, tokens_path=tokens_path,
                           repo_dir=self.root, host="127.0.0.1", port=0)
         self.desk = Desk(self.cfg, clock=self.clock, gates=self.gates)
@@ -238,6 +261,52 @@ class DevicePlaneTest(DeskTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(raw, b"")
         self.assertGreater(int(headers["Content-Length"]), 0)
+
+
+class SheetTest(DeskTestCase):
+    """The sheets the worker fetches back so that somebody looks at the paper."""
+
+    GATES = SheetGates
+
+    def proofed_draft(self) -> str:
+        """A draft that has been through the gates, with its sheets on disk."""
+        status, doc = self.api("POST", "/api/drafts", {}, "producer")
+        self.assertEqual(status, 200, doc)
+        draft = doc["draft_id"]
+        status, _, _ = self.call("PUT", "/api/drafts/%s/news.json" % draft, PAYLOAD,
+                                 self.tokens["producer"])
+        self.assertEqual(status, 200)
+        status, report = self.api("POST", "/api/drafts/%s/proof" % draft, {}, "producer")
+        self.assertEqual(status, 200, report)
+        self.assertEqual(report["sheets"], ["A1.png", "A2.bmp"])
+        return draft
+
+    def sheet(self, draft: str, name: str):
+        return self.call("GET", "/api/drafts/%s/proof/%s" % (draft, name),
+                         token=self.tokens["producer"])
+
+    def test_a_sheet_is_served_as_the_picture_its_suffix_says_it_is(self):
+        # The gate advertises .bmp as well as .png, and a route that knew only
+        # PNG refused exactly the sheets that matter: the ones a render left
+        # behind when it failed before conversion.
+        draft = self.proofed_draft()
+
+        status, raw, headers = self.sheet(draft, "A1.png")
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(raw[:4], b"\x89PNG")
+
+        status, raw, headers = self.sheet(draft, "A2.bmp")
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(headers["Content-Type"], "image/bmp")
+        self.assertEqual(raw[:2], b"BM")
+
+    def test_a_name_that_is_not_a_sheet_is_still_refused(self):
+        # The suffix is part of the rule, not decoration: the name becomes a
+        # path component under the draft's proof directory.
+        draft = self.proofed_draft()
+        for bad in ("A1.txt", "..", "A1.png.bak", "A1"):
+            self.assertEqual(self.sheet(draft, bad)[0], 400, bad)
 
 
 class ScopeTest(DeskTestCase):
@@ -469,6 +538,32 @@ class TickTest(DeskTestCase):
         _, doc = self.api("GET", "/api/commands")
         filings = [c for c in doc["commands"] if c["kind"] == "file_edition"]
         self.assertEqual(len(filings), 2)
+
+    def test_the_queue_is_reaped_on_the_housekeeping_pass_not_every_tick(self):
+        # A lease runs half an hour and a deadline is hours away; a write
+        # transaction every five seconds to ask whether either has passed is a
+        # transaction that finds nothing all day. It goes with the sweep and
+        # the prune, ten minutes apart, where the rest of the tidying lives.
+        from wpdesk.app import HOUSEKEEPING_SECONDS
+
+        self.desk.tick()                      # the first pass takes its housekeeping
+        status, doc = self.api("POST", "/api/commands",
+                               {"text": "look at the tape",
+                                "deadline_at": self.clock.now() + 60}, "producer")
+        self.assertEqual(status, 200, doc)
+        cid = doc["command"]["id"]
+
+        self.clock.advance(61)
+        self.assertNotIn("reaped:1", self.desk.tick())
+        self.assertEqual(self.command(cid)["status"], "pending")
+
+        self.clock.advance(HOUSEKEEPING_SECONDS)
+        self.assertIn("reaped:1", self.desk.tick())
+        self.assertEqual(self.command(cid)["status"], "expired")
+
+    def command(self, cid: str) -> dict:
+        _, doc = self.api("GET", "/api/commands")
+        return next(c for c in doc["commands"] if c["id"] == cid)
 
     def _publish_something(self):
         doc = S.schedule_to_dict(S.DEFAULT_SCHEDULE)

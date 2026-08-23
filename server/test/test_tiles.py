@@ -15,6 +15,13 @@ class TileIdTest(unittest.TestCase):
         for bad in ("", "../etc", "a/b", "a.bin", "a%2e", "x" * 16, "a b", "a\x00b"):
             self.assertFalse(tiles.valid_tile_id(bad), repr(bad))
 
+    def test_a_trailing_newline_is_not_an_id(self):
+        # \Z and not $, the rule editions.py states beside its own three
+        # regexes: $ also matches before a trailing newline, so "pic\n" would
+        # pass it and then become a path component.
+        self.assertFalse(tiles.valid_tile_id("abc\n"))
+        self.assertFalse(tiles.valid_tile_id("\n"))
+
     def test_rejects_what_is_not_a_string(self):
         for bad in (None, 3, b"ok"):
             self.assertFalse(tiles.valid_tile_id(bad), repr(bad))

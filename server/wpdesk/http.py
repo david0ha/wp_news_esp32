@@ -25,15 +25,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import policy, schedule as sched, tiles
-from .app import Desk
+from .app import Desk, as_int
 from .auth import require, scope_from_header
-from .errors import BadRequest, DeskError, Forbidden, NotFound, TooLarge
+from .editions import CommitResult, SHEET_RE
+from .errors import BadRequest, DeskError, Internal, NotFound, TooLarge, epoch_seconds
 
 LOG = logging.getLogger("wpdesk.http")
 
@@ -47,14 +49,19 @@ MAX_CONTROL_BODY = 64 * 1024
 #: noticed rather than held forever.
 MAX_CLAIM_WAIT = 90
 
-#: A proof sheet's filename, as produced by the simulator and reported by the
-#: render gate. Anchored, and no dot outside the extension, because this becomes
-#: a path component -- and ``\Z`` rather than ``$`` for the reason
-#: ``editions.py`` gives beside its own three: ``$`` also matches before a
-#: trailing newline, so ``"A1.png\n"`` would pass it.
-_SHEET_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.png\Z")
+#: A proof sheet's type, by the suffix ``editions.SHEET_RE`` has already
+#: allowed -- these two are that regex's two. The *name* rule comes from the
+#: module that writes the files rather than from a copy here: the copy was
+#: ``.png``-only, so the gates advertised the ``.bmp`` a render leaves when it
+#: fails before conversion and this route refused exactly those.
+_SHEET_TYPES = {".png": "image/png", ".bmp": "image/bmp"}
 
-_TILE_PATH_RE = re.compile(r"^/tiles/([A-Za-z0-9_-]{1,15})\.bin\Z")
+#: The tile id, likewise from the module that owns it: ``tiles.TILE_ID_RE`` is
+#: ``ui_tile.c``'s ``id_ok()`` restated once, and a second spelling of the
+#: character class here is a second thing to keep in step with the firmware.
+_TILE_ID = tiles.TILE_ID_RE.pattern.removeprefix("^").removesuffix(r"\Z")
+
+_TILE_PATH_RE = re.compile(r"^/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID)
 
 
 class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -111,7 +118,10 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             pass
         except Exception:                                          # noqa: BLE001
             LOG.exception("unhandled error on %s %s", method, path)
-            self._send_json(500, {"ok": False, "error": "internal"})
+            # The board's envelope for this one too: a client that can parse
+            # every refusal this desk gives can parse the desk breaking.
+            fault = Internal()
+            self._send_json(fault.status, fault.to_json())
 
     # -- the device plane -------------------------------------------------
     def _device(self, method: str, path: str) -> None:
@@ -120,34 +130,26 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         The 405 for other methods comes before the 404 for other paths on
         purpose: a ``POST /news.json`` is a client that has misunderstood this
         interface, and telling it so is more useful than pretending the URL does
-        not exist.
+        not exist. Matching the table first and asking about the method second
+        is what makes that fall out rather than be arranged.
         """
-        known = path in ("/news.json", "/healthz") or _TILE_PATH_RE.match(path) is not None
-        if method not in ("GET", "HEAD"):
-            if known:
-                self.send_response(405)
-                self.send_header("Allow", "GET, HEAD")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
+        for pattern, handler in _DEVICE_ROUTES:
+            match = pattern.match(path)
+            if match is not None:
+                break
+        else:
             raise NotFound()
 
-        if path == "/healthz":
-            self._send_json(200, {"ok": True, "service": "wpdesk"}, head=(method == "HEAD"))
+        if method not in ("GET", "HEAD"):
+            self._send_empty(405, Allow="GET, HEAD")
             return
+        handler(self, match, head=(method == "HEAD"))
 
-        if path == "/news.json":
-            self._serve_edition(head=(method == "HEAD"))
-            return
+    def _serve_healthz(self, _match, head: bool) -> None:
+        """That the process is up and answering. No token, and no state read."""
+        self._send_json(200, {"ok": True, "service": "wpdesk"}, head=head)
 
-        match = _TILE_PATH_RE.match(path)
-        if match:
-            self._serve_tile(match.group(1), head=(method == "HEAD"))
-            return
-
-        raise NotFound()
-
-    def _serve_edition(self, head: bool) -> None:
+    def _serve_edition(self, _match, head: bool) -> None:
         """The current edition, with the policy block spliced in at serve time.
 
         Computed per request rather than stored because ``next_change`` is an
@@ -168,10 +170,10 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
         self._send_bytes(200, body, "application/json", head=head)
 
-    def _serve_tile(self, tile_id: str, head: bool) -> None:
+    def _serve_tile(self, match, head: bool) -> None:
         desk = self.desk
         eid = desk.editions.current_id()
-        data = desk.editions.read_tile(eid, tile_id) if eid else None
+        data = desk.editions.read_tile(eid, match.group("tile")) if eid else None
         if data is None:
             # A missing tile is an ordinary front-page condition, not an error:
             # the module reflows without the picture and the page still prints.
@@ -189,10 +191,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                 continue
             entry = verbs.get(method)
             if entry is None:
-                self.send_response(405)
-                self.send_header("Allow", ", ".join(sorted(verbs)))
-                self.send_header("Content-Length", "0")
-                self.end_headers()
+                self._send_empty(405, Allow=", ".join(sorted(verbs)))
                 return
             needed, handler = entry
             require(needed, scope)
@@ -219,24 +218,29 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, **self.desk.editions.draft_info(match.group("draft"))})
 
     def h_proof(self, match, _query) -> None:
-        report = self.desk.editions.proof(match.group("draft"))
-        self._send_json(200, {"ok": report.get("ok", False), **report})
+        # The report is the response. It always carries "ok" -- a refusal is an
+        # answer here, not a status -- so there is nothing to put in front of it.
+        self._send_json(200, self.desk.editions.proof(match.group("draft")))
 
     def h_sheet(self, match, _query) -> None:
-        """A proof sheet, so the worker that filed the draft can look at it."""
+        """A proof sheet, so the worker that filed the draft can look at it.
+
+        The type comes from the suffix the name has already been checked
+        against, because both are pictures the gate may leave: a converted PNG,
+        or the BMP of a render that failed before conversion.
+        """
         name = match.group("name")
-        if not _SHEET_RE.match(name):
+        if not SHEET_RE.match(name):
             raise BadRequest(message="not a sheet name")
         data = self.desk.editions.read_sheet(match.group("draft"), name)
         if data is None:
             raise NotFound()
-        self._send_bytes(200, data, "image/png")
+        self._send_bytes(200, data, _SHEET_TYPES[os.path.splitext(name)[1]])
 
     def h_commit(self, match, _query) -> None:
         desk = self.desk
-        result = desk.editions.commit(match.group("draft"), desk.schedule, desk.clock.now())
-        self._send_json(200, {"ok": True, "edition_id": result.edition_id,
-                              "state": result.state, "reason": result.reason})
+        self._send_commit(desk.editions.commit(match.group("draft"), desk.schedule,
+                                               desk.clock.now()))
 
     # -- handlers: editions -----------------------------------------------
     def h_list_editions(self, _match, _query) -> None:
@@ -251,9 +255,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, "edition": doc})
 
     def h_promote(self, match, _query) -> None:
-        result = self.desk.editions.promote(match.group("eid"))
-        self._send_json(200, {"ok": True, "edition_id": result.edition_id,
-                              "state": result.state, "reason": result.reason})
+        self._send_commit(self.desk.editions.promote(match.group("eid")))
 
     # -- handlers: the queue ----------------------------------------------
     def h_enqueue(self, _match, _query) -> None:
@@ -288,9 +290,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
             remaining = deadline - desk.clock.monotonic()
             if remaining <= 0:
-                self.send_response(204)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
+                self._send_empty(204)
                 return
             with desk.queue_event:
                 desk.queue_event.wait(timeout=min(remaining, 5.0))
@@ -373,15 +373,14 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         if result is None:
             raise NotFound(message="nothing is staged")
         self.desk.store.audit("publish", {"edition": result.edition_id, "forced": True})
-        self._send_json(200, {"ok": True, "edition_id": result.edition_id,
-                              "state": result.state, "reason": result.reason})
+        self._send_commit(result)
 
     def h_hold(self, _match, _query) -> None:
         doc = self._json_body(required=False)
         until = _epoch_field(doc, "until")
         self.desk.store.set_hold(until)
         self.desk.store.audit("hold", {"until": until})
-        self._send_json(200, {"ok": True, "hold": _as_int(until)})
+        self._send_json(200, {"ok": True, "hold": as_int(until)})
 
     # -- bodies and responses ---------------------------------------------
     def _body(self, limit: int) -> bytes:
@@ -417,6 +416,29 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             raise BadRequest("bad_json", "the body must be a JSON object")
         return doc
 
+    def _send_commit(self, result: CommitResult) -> None:
+        """What became of an edition, in the one shape its three doors answer in.
+
+        A commit, a promotion and a forced publish are the same event to the
+        client reading them -- an edition, what happened to it, and why -- and
+        a client that had to tell three spellings apart would be reading the
+        door rather than the answer.
+        """
+        self._send_json(200, {"ok": True, "edition_id": result.edition_id,
+                              "state": result.state, "reason": result.reason})
+
+    def _send_empty(self, status: int, **headers: str) -> None:
+        """A response with no body: the 204 of an idle claim, the 405 of a verb.
+
+        ``Content-Length: 0`` explicitly. This server speaks HTTP/1.1 with
+        keep-alive, and a client not told the length waits for one.
+        """
+        self.send_response(status)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _send_json(self, status: int, doc: dict, head: bool = False) -> None:
         body = json.dumps(doc, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         self._send_bytes(status, body, "application/json", head=head)
@@ -437,7 +459,20 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-# -- the routing table ----------------------------------------------------
+# -- the device plane's routing table -------------------------------------
+#
+# Matched once, top to bottom, and "known" is "a pattern matched". There is no
+# fourth entry and no code that can serve a fourth path, which is what
+# ``docs/hosting-cloudflare.md``'s "the publish directory is the allowlist"
+# becomes when it is moved into a routing table.
+_DEVICE_ROUTES = (
+    (re.compile(r"^/news\.json\Z"), DeskHTTPRequestHandler._serve_edition),
+    (re.compile(r"^/healthz\Z"), DeskHTTPRequestHandler._serve_healthz),
+    (_TILE_PATH_RE, DeskHTTPRequestHandler._serve_tile),
+)
+
+
+# -- the control plane's routing table ------------------------------------
 #
 # Anchored patterns -- with ``\Z``, never ``$``, which also matches before a
 # trailing newline -- and every captured group is validated by the module that
@@ -461,7 +496,7 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_draft_info)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/news\.json\Z"), {
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_payload)}),
-    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/tiles/(?P<tile>[A-Za-z0-9_-]{1,15})\.bin\Z"), {
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID), {
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_tile)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_proof)}),
@@ -570,20 +605,12 @@ def _int_field(doc: dict, key: str, default: int, low: int, high: int) -> int:
 
 
 def _epoch_field(doc: dict, key: str) -> float | None:
-    """An absolute instant, in epoch seconds, or ``None``.
+    """One instant out of a JSON body, by the rule ``errors.py`` owns.
 
-    A string is refused rather than parsed. Every instant on this system's
-    wires is an integer, and accepting one spelling here would make the desk the
-    only place that has an opinion about date formats.
+    The rule itself is shared with the store, which is handed the same instants
+    through a keyword instead of a body -- see :func:`~wpdesk.errors.epoch_seconds`.
     """
-    value = doc.get(key)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise BadRequest(message="%s must be epoch seconds as a number" % key)
-    if value < 0:
-        raise BadRequest(message="%s must not be negative" % key)
-    return float(value)
+    return epoch_seconds(doc.get(key), key)
 
 
 def _query_int(query: dict, key: str, default: int) -> int:
@@ -596,9 +623,4 @@ def _query_int(query: dict, key: str, default: int) -> int:
         raise BadRequest(message="%s must be an integer" % key) from None
 
 
-def _as_int(value: float | None) -> int | None:
-    return None if value is None else int(value)
-
-
-__all__ = ["DeskHTTPRequestHandler", "DeskServer", "make_server", "serve_forever",
-           "Forbidden"]
+__all__ = ["DeskHTTPRequestHandler", "DeskServer", "make_server", "serve_forever"]

@@ -13,12 +13,18 @@ import tempfile
 import threading
 import unittest
 
+from test_schedule import at
+
 from wpdesk.clock import Clock, FixedClock
 from wpdesk.errors import BadRequest
 from wpdesk.store import Store
 
-# 2026-08-19 09:00 KST, an ordinary Wednesday morning, as an epoch second.
-T0 = 1755561600.0
+#: 2026-08-19 09:00 KST, an ordinary Wednesday morning. Through the same helper
+#: test_editions.py and test_http.py use, rather than as an epoch second with a
+#: date beside it in a comment: the number that was there said 2026 and meant
+#: 2025. Nothing in the store reads a calendar, so the year was harmless -- but
+#: a comment that has to be checked against a converter is one nobody checks.
+T0 = at(2026, 8, 19, 9, 0)
 
 
 class StoreTestCase(unittest.TestCase):
@@ -96,6 +102,16 @@ class AddCommandTest(StoreTestCase):
         for bad in (-1, 10):
             with self.assertRaises(BadRequest, msg=str(bad)):
                 self.file_edition(priority=bad)
+
+    def test_an_instant_that_is_not_one_is_refused(self):
+        # The same rule the HTTP door applies, because it is the same rule:
+        # a string is not parsed, True is not 1970, and an instant before the
+        # epoch is a typo rather than a deadline. The store had been taking
+        # the negative one, so a caller that reached it without going through
+        # a request body got a command no claim could ever find.
+        for bad in ("2026-08-19T09:00", True, -1, [T0]):
+            with self.assertRaises(BadRequest, msg=repr(bad)):
+                self.file_edition(deadline_at=bad)
 
 
 class ClaimOrderTest(StoreTestCase):

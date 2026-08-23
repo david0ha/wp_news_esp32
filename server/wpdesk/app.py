@@ -38,9 +38,10 @@ LOG = logging.getLogger("wpdesk.app")
 #: brought up at noon does not immediately file the morning paper.
 WAKE_GRACE_SECONDS = 30 * 60
 
-#: Sweeping drafts and pruning old editions are filesystem walks. They do not
-#: need to happen at the tick rate, and doing them there would put a directory
-#: scan between the clock and a publish.
+#: Sweeping drafts and pruning old editions are filesystem walks, and reaping
+#: the queue is a write transaction. None of the three needs to happen at the
+#: tick rate -- what they measure is hour-scale -- and doing them there would
+#: put a directory scan and a transaction between the clock and a publish.
 HOUSEKEEPING_SECONDS = 600
 
 
@@ -127,10 +128,6 @@ class Desk:
         # output -- and `set_schedule` has already applied anything a PUT
         # changed, in the same call that wrote the file.
 
-        expired = self.store.reap()
-        if expired:
-            did.append("reaped:%d" % expired)
-
         if self._fire_due_wake(t):
             did.append("wake")
 
@@ -141,6 +138,14 @@ class Desk:
 
         if t - self._last_housekeeping >= HOUSEKEEPING_SECONDS:
             self._last_housekeeping = t
+            # The reap goes here rather than on every tick because what it
+            # measures is slow: a lease is half an hour and a deadline is
+            # hour-scale, so a write transaction every five seconds to ask
+            # whether either has passed is a transaction that finds nothing
+            # all day -- on the same connection the publish path writes.
+            expired = self.store.reap()
+            if expired:
+                did.append("reaped:%d" % expired)
             swept = self.editions.sweep_drafts()
             pruned = self.editions.prune()
             if swept or pruned:
@@ -167,8 +172,8 @@ class Desk:
             "now": int(t),
             "current": current,
             "staged": staged,
-            "lastPublishAt": _as_int(self.store.last_publish_at()),
-            "hold": _as_int(hold if hold and hold > t else None),
+            "lastPublishAt": as_int(self.store.last_publish_at()),
+            "hold": as_int(hold if hold and hold > t else None),
             "scheduleSource": self.schedule_source,
             "schedule": sched.schedule_to_dict(self.schedule),
             "policy": {
@@ -272,6 +277,11 @@ def _last_wake_at(s: sched.Schedule, t: float) -> float | None:
     return last
 
 
-def _as_int(value: float | None) -> int | None:
-    """Epoch seconds as an integer, or ``None``. Nothing on this wire is a float."""
+def as_int(value: float | None) -> int | None:
+    """Epoch seconds as an integer, or ``None``. Nothing on this wire is a float.
+
+    Public because ``http.py`` answers a hold with the same shape ``state()``
+    reports one in, and two roundings of one instant is a state document and a
+    response that disagree by a second.
+    """
     return None if value is None else int(value)

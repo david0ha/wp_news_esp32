@@ -46,7 +46,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from .clock import Clock
-from .errors import BadRequest, Conflict, NotFound
+from .errors import BadRequest, Conflict, NotFound, epoch_seconds
 
 #: How long a claim is good for. A worker that dies mid-edition costs one
 #: retry, not a lost day -- but thirty minutes is long enough that a slow
@@ -189,12 +189,6 @@ class Store:
         # race with no losing side.
         self._db.executescript(_SCHEMA)
 
-        #: Notified whenever a command is added, so ``GET /api/commands/next``
-        #: can long-poll on a condition rather than spinning on a query. It is
-        #: a hint and never a substitute for claiming: a waiter that wakes must
-        #: still call :meth:`claim_command`, and may lose.
-        self.commands_changed = threading.Condition()
-
     def close(self) -> None:
         """Close the connection. Idempotent."""
         with self._lock:
@@ -226,7 +220,7 @@ class Store:
         now = self._clock.now()
         row = {"id": _new_id(), "kind": kind, "text": text, "priority": priority,
                "status": "pending", "source": source or "", "created_at": now,
-               "deadline_at": _as_time(deadline_at, "deadline_at"),
+               "deadline_at": epoch_seconds(deadline_at, "deadline_at"),
                "claimed_by": None, "claimed_at": None, "finished_at": None,
                "attempts": 0, "result": ""}
         with self._write():
@@ -235,8 +229,6 @@ class Store:
                     ", ".join(_COMMAND_COLUMNS),
                     ", ".join("?" * len(_COMMAND_COLUMNS))),
                 tuple(row[c] for c in _COMMAND_COLUMNS))
-        with self.commands_changed:
-            self.commands_changed.notify_all()
         return row
 
     def claim_command(self, worker: str) -> dict | None:
@@ -246,9 +238,13 @@ class Store:
         ``_CLAIM_SQL`` for why that is one statement and what the second
         statement would cost.
 
-        It deliberately does not reap first. Reaping is the scheduler's pass
-        (:meth:`reap`), and folding it in here would make the claim two
-        statements again to save a tick that runs every five seconds anyway.
+        It deliberately does not reap first. Reaping is the scheduler's
+        housekeeping pass (:meth:`reap`), and folding it in here would make the
+        claim two statements again to save a pass that runs anyway. That the
+        pass is ten minutes apart rather than five seconds costs this nothing:
+        the claim's own subquery already skips a command past its deadline, so
+        what waits for the reap is a lapsed lease -- which is half an hour old
+        by then and belongs to a worker that is not coming back.
         """
         now = self._clock.now()
         with self._write():
@@ -377,7 +373,7 @@ class Store:
         if len(rule) > MAX_DIRECTIVE_RULE:
             raise BadRequest(message=f"{len(rule)} characters, "
                                      f"limit {MAX_DIRECTIVE_RULE}")
-        expires_at = _as_time(expires_at, "expires_at")
+        expires_at = epoch_seconds(expires_at, "expires_at")
         if scope == "until" and expires_at is None:
             raise BadRequest(message="scope 'until' needs an expires_at")
         if scope == "always" and expires_at is not None:
@@ -427,9 +423,9 @@ class Store:
         """
         doc = dict(meta or {})
         doc["id"] = eid
-        created = _as_time(doc.get("created_at"), "created_at") or self._clock.now()
+        created = epoch_seconds(doc.get("created_at"), "created_at") or self._clock.now()
         doc["created_at"] = created
-        published = _as_time(doc.get("published_at"), "published_at")
+        published = epoch_seconds(doc.get("published_at"), "published_at")
         with self._write():
             self._db.execute(
                 "INSERT INTO editions (id, meta, created_at, published_at) "
@@ -462,7 +458,7 @@ class Store:
         The row goes in whether or not the edition is known here, because the
         publish is the fact and the metadata is the commentary.
         """
-        when = _as_time(at, "at")
+        when = epoch_seconds(at, "at")
         if when is None:
             raise BadRequest(message="a publish happens at an instant")
         with self._write():
@@ -491,7 +487,7 @@ class Store:
             with self._write():
                 self._db.execute("DELETE FROM meta WHERE key = 'hold_until'")
             return
-        self.set_meta("hold_until", repr(float(_as_time(until, "until"))))
+        self.set_meta("hold_until", str(epoch_seconds(until, "until")))
 
     def get_hold(self) -> float | None:
         """The instant the hold ends, or ``None`` when nothing is held.
@@ -577,15 +573,6 @@ class Store:
 def _new_id() -> str:
     """A random id. uuid4 because ids are handed to clients and must not count."""
     return uuid.uuid4().hex
-
-
-def _as_time(value: object, field: str) -> float | None:
-    """Coerce an instant, refusing the shapes JSON makes easy to send wrong."""
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise BadRequest(message=f"{field} is epoch seconds, not {type(value).__name__}")
-    return float(value)
 
 
 def _edition_dict(row: sqlite3.Row) -> dict:

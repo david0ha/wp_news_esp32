@@ -13,6 +13,12 @@ and the same shell scripts talk to both.
 ``detail`` is added only when there is something to say beyond the code. It is
 for a human reading a terminal, never for a client to branch on -- the code is
 the contract and the detail is prose.
+
+:func:`epoch_seconds` is here rather than beside either of its callers for the
+same reason the codes are: it is a rule about the wire that *raises*, and the
+two places an instant arrives -- a JSON body the HTTP layer reads, a keyword
+the store is handed -- had a copy each. Two answers to "is that a time" is how
+a deadline one door refuses gets in through the other.
 """
 
 from __future__ import annotations
@@ -93,3 +99,44 @@ class TooLarge(DeskError):
 
     default_code = "too_large"
     default_status = 413
+
+
+class Internal(DeskError):
+    """The desk broke, and it is not the caller's fault.
+
+    Raised nowhere: the HTTP layer turns an unhandled exception into one of
+    these so that a 500 leaves in the board's own envelope rather than in a
+    dict assembled by hand at the boundary. A client that can parse every
+    refusal can parse this one too.
+    """
+
+    default_code = "internal"
+    default_status = 500
+
+
+def epoch_seconds(value: object, field: str) -> float | None:
+    """An absolute instant in epoch seconds, or ``None``, or a refusal.
+
+    A string is refused rather than parsed. Every instant on this system's
+    wires is a number, and accepting one spelling here would make the desk the
+    only thing on the wire with an opinion about date formats. ``bool`` is
+    refused because ``True`` is an ``int`` to ``isinstance`` and 1970 to a
+    schedule.
+
+    A negative is refused too, which is the stricter of the two rules this
+    replaced: an instant before 1970 is a typo everywhere on this desk -- a
+    hold that ended fifty-six years ago, a deadline no command can meet -- and
+    the store had been taking them because only the HTTP door looked.
+
+    Raises:
+        BadRequest: naming ``field``, because the message is read by whoever
+            sent it.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BadRequest(message=f"{field} is epoch seconds as a number, "
+                                 f"not {type(value).__name__}")
+    if value < 0:
+        raise BadRequest(message=f"{field} must not be negative")
+    return float(value)

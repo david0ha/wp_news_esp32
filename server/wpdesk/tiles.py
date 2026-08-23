@@ -37,7 +37,11 @@ MAX_TILES = 16
 MAX_DRAFTS = 8
 
 #: Exactly ``ui_tile.c``'s ``id_ok()``: no dot, no slash, no percent.
-TILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,15}$")
+#:
+#: ``\Z`` and not ``$``, for the reason ``editions.py`` gives beside its own
+#: three: ``$`` also matches before a trailing newline, and this id becomes a
+#: path component on the desk and a URL on the board.
+TILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,15}\Z")
 
 
 def valid_tile_id(s: str) -> bool:

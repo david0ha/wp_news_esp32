@@ -81,7 +81,7 @@ class Tokens:
     """The token file, reloaded when it changes underneath the process.
 
     One instance is shared by every request thread. It is read-only after load,
-    so no lock is needed for :meth:`scope_for`; :meth:`reload_if_changed`
+    so no lock is needed for :meth:`entry_for`; :meth:`reload_if_changed`
     replaces the tuple in one assignment, which readers see whole or not at all.
 
     :meth:`reload_if_changed` raises on a malformed file rather than carrying
@@ -113,24 +113,18 @@ class Tokens:
         if self._stat() != self._stamp:
             self._load()
 
-    def scope_for(self, presented: str) -> str | None:
-        """The scope this token carries, or ``None`` if it carries none."""
-        entry = self._match(presented)
-        return entry.scope if entry is not None else None
+    def entry_for(self, presented: str) -> _Entry | None:
+        """The whole entry a token belongs to, or ``None``. One scan.
 
-    def name_for(self, presented: str) -> str | None:
-        """Who holds this token, for the audit log. ``None`` if nobody."""
-        entry = self._match(presented)
-        return entry.name if entry is not None else None
-
-    # -- internals ---------------------------------------------------------
-
-    def _match(self, presented: str) -> _Entry | None:
-        """Constant-time lookup: every entry is compared, every time.
-
-        The loop does not break on a match. Breaking would make the time taken
+        Constant-time: every entry is compared, every time. The loop does not
+        break on a match, because breaking would make the time taken
         proportional to the matching entry's position in the file, which is a
         side channel that says "you are close" to somebody guessing.
+
+        Whoever wants both halves asks once. Two calls would be two scans of
+        the token file per request, comparing every entry twice to answer one
+        question -- and the answers could in principle come from either side of
+        a reload.
         """
         if not isinstance(presented, str) or not presented:
             return None
@@ -140,6 +134,18 @@ class Tokens:
             if hmac.compare_digest(entry.token, want):
                 found = entry
         return found
+
+    def scope_for(self, presented: str) -> str | None:
+        """The scope this token carries, or ``None`` if it carries none."""
+        entry = self.entry_for(presented)
+        return entry.scope if entry is not None else None
+
+    def name_for(self, presented: str) -> str | None:
+        """Who holds this token, for the audit log. ``None`` if nobody."""
+        entry = self.entry_for(presented)
+        return entry.name if entry is not None else None
+
+    # -- internals ---------------------------------------------------------
 
     def _stat(self) -> tuple[int, int, int] | None:
         """The file's identity, as far as "has it changed" needs to know."""
@@ -223,13 +229,13 @@ def scope_from_header(tokens: Tokens, header: str | None) -> tuple[str, str]:
     if not isinstance(header, str):
         raise Unauthorized(message="no Authorization header")
     scheme, _, credential = header.strip().partition(" ")
-    if scheme.lower() != "bearer" or not credential.strip():
+    credential = credential.strip()
+    if scheme.lower() != "bearer" or not credential:
         raise Unauthorized(message="expected 'Authorization: Bearer <token>'")
-    entry_name = tokens.name_for(credential.strip())
-    scope = tokens.scope_for(credential.strip())
-    if entry_name is None or scope is None:
+    entry = tokens.entry_for(credential)
+    if entry is None:
         raise Unauthorized(message="unknown token")
-    return (entry_name, scope)
+    return (entry.name, entry.scope)
 
 
 def require(needed: str, have: str) -> None:

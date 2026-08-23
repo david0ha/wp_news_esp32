@@ -110,6 +110,11 @@ REASON_DUE = "due"
 REASON_PROMOTED = "promoted"
 REASON_UNCHANGED = "unchanged: identical to the edition already current"
 
+# ``\Z`` and not ``$`` in all three of the regexes below, and this is the
+# reason: ``$`` also matches before a trailing newline, and every one of these
+# strings becomes a path component. ``"0123456789abcdef\n"`` is not an edition
+# id.
+
 #: ``uuid4().hex``, which is also the shape ``http.py``'s draft routes match.
 _DRAFT_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
@@ -118,12 +123,10 @@ _EID_RE = re.compile(r"^[0-9a-f]{16}\Z")
 
 #: A proof sheet. ``.bmp`` as well as ``.png`` because a render that failed
 #: before conversion still leaves sheets somebody should be able to look at.
-_SHEET_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.(?:png|bmp)\Z")
-
-#: ``\Z`` and not ``$`` in all three, and this is the reason: ``$`` also matches
-#: before a trailing newline, and every one of these strings becomes a path
-#: component. ``"0123456789abcdef\n"`` is not an edition id.
-_PATTERNS = {"draft": _DRAFT_RE, "edition": _EID_RE, "sheet": _SHEET_RE}
+#: Public because ``http.py`` serves these bytes and must accept exactly the
+#: names this module will hand back -- two spellings of one rule is how a gate
+#: came to advertise a ``.bmp`` the sheet route then refused.
+SHEET_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.(?:png|bmp)\Z")
 
 
 @dataclass(frozen=True)
@@ -311,9 +314,7 @@ class EditionStore:
         if self._draft_payload(draft_dir) is None:
             raise BadRequest("no_payload", "a draft with no news.json cannot be proofed")
 
-        proof_dir = os.path.join(draft_dir, PROOF_DIR)
-        shutil.rmtree(proof_dir, ignore_errors=True)
-        os.makedirs(proof_dir, exist_ok=True)
+        proof_dir = _fresh_proof_dir(draft_dir)
 
         # Cheapest gate first, and the expensive one is not reached when the
         # cheap one has already answered: a render is minutes of a real
@@ -345,9 +346,8 @@ class EditionStore:
         raw = self._draft_payload(draft_dir)
         if raw is None:
             raise BadRequest("no_payload", "a draft with no news.json has no fingerprint")
-        stored, _dropped = _stored_payload(raw)
-        return _fingerprint_of(_content_of(stored),
-                               os.path.join(draft_dir, TILES_DIR))
+        eid, _stored, _dropped = _fingerprint_draft(draft_dir, raw)
+        return eid
 
     # -- the commit --------------------------------------------------------
     def commit(self, draft_id: str, schedule: Schedule, now: float) -> CommitResult:
@@ -402,11 +402,16 @@ class EditionStore:
                 self._clear_pointer(STAGED)
             return None
 
-        if self.read_payload(staged) is None:
+        # One syscall rather than a read: this runs every few seconds for as
+        # long as something is staged, and reading a 300 KB payload to answer
+        # "is it still there" is the whole edition, per tick, discarded. The
+        # read was never the stronger check either -- publishing is a pointer
+        # write, and the reader that resolves it comes afterwards.
+        if not os.path.isfile(os.path.join(self._edition_dir(staged), PAYLOAD_NAME)):
             if self._warned_staged != staged:
                 self._warned_staged = staged
-                LOG.warning("staged edition %s cannot be read; leaving it staged",
-                            staged)
+                LOG.warning("staged edition %s has no payload on disk; "
+                            "leaving it staged", staged)
             return None
 
         ok, _reason = self._schedule_gate(schedule, now, self._staged_at(staged))
@@ -463,13 +468,13 @@ class EditionStore:
         deleted -- means the same thing to the board, which is a 404 it treats
         as a missed fetch.
         """
-        if not _valid("edition", edition_id):
+        if not _valid(_EID_RE, edition_id):
             return None
         return _read_bytes(os.path.join(self._edition_dir(edition_id), PAYLOAD_NAME))
 
     def read_tile(self, edition_id: str, tile_id: str) -> bytes | None:
         """One tile of an edition, verbatim, or ``None``."""
-        if not _valid("edition", edition_id) or not tiles.valid_tile_id(tile_id):
+        if not _valid(_EID_RE, edition_id) or not tiles.valid_tile_id(tile_id):
             return None
         return _read_bytes(os.path.join(self._edition_dir(edition_id), TILES_DIR,
                                         tile_id + ".bin"))
@@ -481,11 +486,11 @@ class EditionStore:
         so a caller cannot ask for a draft's sheet by an edition's id and reach
         somewhere else. Anything that is neither shape reads nothing.
         """
-        if not _valid("sheet", name):
+        if not _valid(SHEET_RE, name):
             return None
-        if _valid("edition", owner_id):
+        if _valid(_EID_RE, owner_id):
             base = self._edition_dir(owner_id)
-        elif _valid("draft", owner_id):
+        elif _valid(_DRAFT_RE, owner_id):
             base = self._draft_dir(owner_id)
         else:
             return None
@@ -565,18 +570,14 @@ class EditionStore:
             raise BadRequest("gate_failed",
                              "gate 1 (validate) refused it:\n" + verdict.output)
 
-        proof_dir = os.path.join(draft_dir, PROOF_DIR)
-        shutil.rmtree(proof_dir, ignore_errors=True)
-        os.makedirs(proof_dir, exist_ok=True)
+        proof_dir = _fresh_proof_dir(draft_dir)
         render = self._gates.render(draft_dir, proof_dir)
         if not render.ok:
             raise BadRequest("gate_failed",
                              "gate 2 (render) refused it:\n" + render.output)
 
-        stored, dropped = _stored_payload(raw)
-        tiles_dir = os.path.join(draft_dir, TILES_DIR)
-        tile_ids = _tile_ids(tiles_dir)
-        eid = _fingerprint_of(_content_of(stored), tiles_dir)
+        eid, stored, dropped = _fingerprint_draft(draft_dir, raw)
+        tile_ids = _tile_ids(os.path.join(draft_dir, TILES_DIR))
 
         if eid == self.current_id():
             # The bytes are already on the glass and already on disk as an
@@ -829,7 +830,7 @@ class EditionStore:
             names = os.listdir(self._editions_root)
         except OSError:
             return []
-        return [n for n in names if _valid("edition", n)]
+        return [n for n in names if _valid(_EID_RE, n)]
 
     def _created_at(self, edition_id: str) -> float:
         """When an edition was built, from its own metadata.
@@ -885,7 +886,7 @@ class EditionStore:
             names = os.listdir(self._drafts_root)
         except OSError:
             return []
-        return sorted(n for n in names if _valid("draft", n))
+        return sorted(n for n in names if _valid(_DRAFT_RE, n))
 
     def _draft_stamp(self, draft_id: str) -> float:
         """When a draft was opened, from its stamp.
@@ -918,7 +919,7 @@ class EditionStore:
         that cannot exist does not exist, and ``BadRequest`` would tell whoever
         sent ``../editions`` that the traversal had been recognised.
         """
-        if not _valid("draft", draft_id):
+        if not _valid(_DRAFT_RE, draft_id):
             raise NotFound(message=f"no draft {draft_id!r:.64}")
         path = self._draft_dir(draft_id)
         if not os.path.isdir(path):
@@ -927,7 +928,7 @@ class EditionStore:
 
     def _require_edition(self, edition_id: str) -> str:
         """The edition's directory, or ``NotFound``. Same rule as a draft's."""
-        if not _valid("edition", edition_id):
+        if not _valid(_EID_RE, edition_id):
             raise NotFound(message=f"no edition {edition_id!r:.64}")
         path = self._edition_dir(edition_id)
         if not os.path.isdir(path):
@@ -951,7 +952,7 @@ class EditionStore:
                 eid = f.read(64).strip()
         except OSError:
             return None
-        return eid if _valid("edition", eid) else None
+        return eid if _valid(_EID_RE, eid) else None
 
     def _write_pointer(self, name: str, edition_id: str) -> None:
         """Point ``name`` at ``edition_id``, atomically."""
@@ -966,14 +967,16 @@ class EditionStore:
         fsync_dir(self.root)
 
 
-def _valid(kind: str, name: object) -> bool:
-    """Whether ``name`` is a well-formed id of ``kind``.
+def _valid(pattern: re.Pattern, name: object) -> bool:
+    """Whether ``name`` is a well-formed id of the shape ``pattern`` describes.
 
     Pure regex and no filesystem: this is the check that runs *before* a string
     is joined into a path, and it is the only reason ``os.path.join`` here is
-    safe.
+    safe. The regex is passed rather than named, so a caller that asks for a
+    shape this module does not have is a NameError at import rather than a
+    KeyError on the serving path.
     """
-    return isinstance(name, str) and _PATTERNS[kind].match(name) is not None
+    return isinstance(name, str) and pattern.match(name) is not None
 
 
 def _canonical(doc: dict) -> str:
@@ -1042,6 +1045,25 @@ def _fingerprint_of(content: bytes, tiles_dir: str) -> str:
     return h.hexdigest()[:FINGERPRINT_HEX]
 
 
+def _fingerprint_draft(draft_dir: str, raw: bytes) -> tuple[str, bytes, bool]:
+    """What a draft would be filed as: its id, its stored bytes, and what was dropped.
+
+    The one recipe -- strip the producer's policy block, canonicalise what is
+    left, hash it with every tile -- spelled once, because :meth:`fingerprint`
+    promises the caller the id :meth:`commit` will use. Two copies of four calls
+    would agree until one of them gained a step, and the symptom of that is a
+    producer told its edition is unchanged filing a different one.
+
+    ``raw`` is passed rather than read here: the commit path already holds the
+    payload it refused to gate without, and a second read of 300 KB to keep the
+    signature tidy is a read for nothing.
+    """
+    stored, dropped = _stored_payload(raw)
+    return (_fingerprint_of(_content_of(stored),
+                            os.path.join(draft_dir, TILES_DIR)),
+            stored, dropped)
+
+
 def _at(t: float | None, schedule: Schedule) -> str:
     """An instant as the schedule's own clock reads it, written for a person.
 
@@ -1105,13 +1127,31 @@ def _write_file(path: str, data: bytes) -> None:
         os.fsync(f.fileno())
 
 
+def _fresh_proof_dir(draft_dir: str) -> str:
+    """Empty a draft's proof directory and return it.
+
+    Cleared rather than added to, so what a caller gets back is this run's
+    sheets and not a previous run's left beside them -- a page that failed to
+    render at all would otherwise be reported with the sheets of the version
+    before it, which is the one arrangement worse than no sheets.
+
+    *When* it is called is each caller's decision and the two differ: a proof
+    clears before gate 1, a commit only once gate 1 has passed. Merging that
+    would make a refused payload throw away the sheets somebody is looking at.
+    """
+    proof_dir = os.path.join(draft_dir, PROOF_DIR)
+    shutil.rmtree(proof_dir, ignore_errors=True)
+    os.makedirs(proof_dir, exist_ok=True)
+    return proof_dir
+
+
 def _sheet_names(proof_dir: str) -> list[str]:
     """The proof sheets in a directory, by name, sorted."""
     try:
         names = os.listdir(proof_dir)
     except OSError:
         return []
-    return sorted(n for n in names if _valid("sheet", n))
+    return sorted(n for n in names if _valid(SHEET_RE, n))
 
 
 def _tile_ids(tiles_dir: str) -> list[str]:
