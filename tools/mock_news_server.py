@@ -44,7 +44,7 @@ Usage
     python3 tools/mock_news_server.py --validate <fixture> --tiles sim/tiles
 
 `--validate` looks for `<id>.bin` in a `tiles/` directory beside the payload, which is how
-tools/edition/file-edition.sh files an edition. `--tiles` overrides that base, and the committed
+agent/standalone/file-edition.sh files an edition. `--tiles` overrides that base, and the committed
 fixture is the one payload that needs it: its pictures live in `sim/tiles/` because that is where
 the simulator reads them from.
 
@@ -71,6 +71,13 @@ FIXTURE = os.path.join(ROOT, "components", "news_core", "test", "host",
 # that is where sim/ reads them from, so the fixture is the one payload whose tiles are NOT in a
 # tiles/ directory of its own — hence --tiles, and hence this constant for --write-fixture.
 SIM_TILES = os.path.join(ROOT, "sim", "tiles")
+
+# The tile id's charset, which is ui_tile.c's id_ok() and nothing else: the id IS the last path
+# segment of the URL the board fetches, so a character outside this set is a path that can climb
+# out of the tile directory. One constant because there are two callers — the handler that serves
+# a tile and the validator that looks for one — and two spellings of a path rule is one spelling
+# that gets forgotten.
+TILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,15}\Z")
 
 # The masthead’s own date. Fixed rather than taken from the clock: the fixture
 # is committed, and a payload whose dateline moved overnight would fail
@@ -972,10 +979,11 @@ class Handler(BaseHTTPRequestHandler):
         # reference PRODUCER has to be able to serve what its own payload names.
         if path.startswith("/tiles/") and path.endswith(".bin"):
             tile_id = path[len("/tiles/"):-len(".bin")]
-            # The tile layer's own id rule (ui_tile.c's id_ok()), enforced here
-            # so a path can never climb out of the tile directory.
-            if not tile_id or not all(
-                    c.isalnum() or c in "_-" for c in tile_id):
+            # The tile layer's own id rule, enforced before the join so a path
+            # can never climb out of the tile directory. Through TILE_ID_RE
+            # rather than str.isalnum(), which answers True for a letter in any
+            # alphabet and so allowed ids the firmware's id_ok() refuses.
+            if not TILE_ID_RE.match(tile_id):
                 self.send_error(404)
                 return
             blob = os.path.join(SIM_TILES, tile_id + ".bin")
@@ -1019,7 +1027,7 @@ class Handler(BaseHTTPRequestHandler):
 # --- validating somebody else’s edition ------------------------------------
 #
 # This file is the reference PRODUCER, so it is also the only place that knows the contract well
-# enough to say whether an arbitrary payload satisfies it. The scheduled agent in tools/edition/
+# enough to say whether an arbitrary payload satisfies it. The scheduled agent in agent/standalone/
 # calls this before it files: a page that the firmware would reject is a wasted cycle, and the
 # failure would show up hours later as a STALE badge with nothing to explain it.
 #
@@ -1296,23 +1304,111 @@ def _tile_problems(d, tiles_dir):
                             f"fetched, and news_parse drops it whole")
             continue
 
+        # Before the join, not after: this validator now runs on the desk over payloads that
+        # arrived from the internet, and its report goes back to whoever filed them. An id that
+        # is a path would otherwise make the two lines below an existence-and-size oracle for
+        # any *.bin on that machine.
+        if not isinstance(p["id"], str) or not TILE_ID_RE.match(p["id"]):
+            problems.append(f"{who}: id {p['id']!r} is not [A-Za-z0-9_-]{{1,15}} — "
+                            f"the device drops it")
+            continue
+
         tile = os.path.join(tiles_dir, p["id"] + ".bin")
         want = w * h // 2
+        # The basename rather than the path: the reader knows which directory they filed, and a
+        # container path in a report that leaves the machine is a disclosure for no benefit.
+        name = os.path.basename(tile)
         if not os.path.exists(tile):
-            problems.append(f"{who}: {tile} is missing — the slot renders empty")
+            problems.append(f"{who}: {name} is missing — the slot renders empty")
         elif os.path.getsize(tile) != want:
-            problems.append(f"{who}: {tile} is {os.path.getsize(tile)} bytes, "
+            problems.append(f"{who}: {name} is {os.path.getsize(tile)} bytes, "
                             f"{w}x{h} needs {want} — it will not be fetched")
     return problems
 
 
+# The clamp news_parse.c applies to `policy.poll_seconds`, and the firmware's own polling range.
+# Transcribed from NEWS_POLL_MIN and NEWS_POLL_MAX, and held against them by
+# check_caps_against_header() — which used to look at the byte caps only, so these two were the
+# transcription with nothing behind it.
+POLL_SECONDS_MIN, POLL_SECONDS_MAX = 30, 86400
+
+# What the device reads out of `policy`. Everything else under it is ignored, exactly as an unknown
+# key anywhere else on this wire is — but here it is worth SAYING, because a producer that wrote
+# `quiet_until` or `poll_interval` has a schedule it believes is in force and is not.
+POLICY_KEYS = ("poll_seconds", "next_change")
+
+
+def _policy_issues(d):
+    """Check the `policy` block. Returns (problems, warnings).
+
+    This is the one object on the wire that is not about the paper: how often the board should come
+    back, and when the server's answer will next change. See docs/news-contract.md.
+
+    The device CLAMPS everything here rather than rejecting — the block is not allowed to cost a
+    page — so nothing below changes whether the edition prints. That is exactly why it is checked:
+    a clamp is silent, and the symptom of a `poll_seconds` of 5 is a board that polls twelve times
+    a minute for as long as it stays powered, with nothing anywhere to say it was asked to.
+
+    `next_change` is EPOCH SECONDS as a JSON number and never an ISO-8601 string. That is this
+    wire's standing rule — a number the device reasons about is an integer — and it keeps a date
+    parser out of the firmware. A string here is the mistake worth catching loudest, because it
+    looks more correct than the thing that works.
+    """
+    problems, warnings = [], []
+
+    if "policy" not in d:
+        return problems, warnings          # absent is the normal case, not a thin one
+
+    p = d["policy"]
+    if not isinstance(p, dict):
+        problems.append(f"policy is {type(p).__name__}, not an object — the device reads it as "
+                        f"absent and polls at its compiled-in interval")
+        return problems, warnings
+
+    def _int(key):
+        """The value under `key` when it is a JSON integer, else None with the reason recorded."""
+        if key not in p:
+            return None
+        v = p[key]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            problems.append(f"policy.{key} is {v!r} — it must be a JSON number; the device reads "
+                            f"anything else as absent and this block silently does nothing")
+            return None
+        if v != int(v):
+            warnings.append(f"policy.{key} is {v} — the device rounds it to an integer, because "
+                            f"nothing on this wire that it reasons about is fractional")
+        return int(v)
+
+    poll = _int("poll_seconds")
+    if poll is not None and not POLL_SECONDS_MIN <= poll <= POLL_SECONDS_MAX:
+        problems.append(f"policy.poll_seconds is {poll} — the range is "
+                        f"{POLL_SECONDS_MIN}..{POLL_SECONDS_MAX} and the device clamps into it, "
+                        f"so the board will poll at a cadence you did not choose")
+
+    when = _int("next_change")
+    if when is not None and when < 0:
+        problems.append(f"policy.next_change is {when} — it is epoch seconds, so a negative one is "
+                        f"not an instant; the device reads it as absent")
+
+    for key in p:
+        if key not in POLICY_KEYS:
+            warnings.append(f"policy.{key} is not a field the device reads — it knows "
+                            f"{' and '.join(POLICY_KEYS)} and ignores everything else")
+
+    return problems, warnings
+
+
 def check_caps_against_header():
-    """Hold the cap table above against the #defines it is a transcription of.
+    """Hold the numbers above against the #defines they are a transcription of.
 
     Every cap in fields_with_caps() is a byte count copied out of news_model.h,
     and the docstring there says that where they disagree this file is the one
     that is wrong. This is what turns that from a statement into a test: it
-    parses the header's `#define NEWS_*_MAX` lines and compares.
+    parses the header's `#define NEWS_*_MAX` and `NEWS_*_MIN` lines and
+    compares. POLL_SECONDS_MIN and POLL_SECONDS_MAX are transcribed from the
+    same header and go through the same comparison -- they are a range in
+    seconds rather than a byte count, which is the only reason they need their
+    own two lines below rather than a row in the table.
 
     NOT a replacement for the transcription. The table stays written out, because
     a reader auditing a budget needs the number in front of them rather than a
@@ -1332,7 +1428,8 @@ def check_caps_against_header():
         return 0
 
     defines = {m.group(1): int(m.group(2)) for m in
-               re.finditer(r"^#define\s+(NEWS_[A-Z0-9_]*MAX)\s+(\d+)", text, re.M)}
+               re.finditer(r"^#define\s+(NEWS_[A-Z0-9_]*(?:MAX|MIN))\s+(\d+)",
+                           text, re.M)}
 
     # cap in the table above -> the #define it was copied from
     expect = {
@@ -1375,12 +1472,25 @@ def check_caps_against_header():
             seen.add(row)
             uniq.append(row)
 
+    # The poll bounds are not in `sample`, because nothing measures them: they
+    # are a clamp on a number the producer sends, not a length. They are the
+    # same transcription and drift the same way -- which is what this function
+    # exists to catch -- so they are compared here rather than not at all.
+    bounds = (("POLL_SECONDS_MIN", POLL_SECONDS_MIN, "NEWS_POLL_MIN"),
+              ("POLL_SECONDS_MAX", POLL_SECONDS_MAX, "NEWS_POLL_MAX"))
+    drifted = [(name, value, define, defines[define])
+               for name, value, define in bounds
+               if define in defines and defines[define] != value]
+
     for path, cap, name, want in uniq:
         print(f"  FAIL  cap table says {path} is {cap} bytes; news_model.h says "
               f"{name} is {want}. Fix this file, not the header.", file=sys.stderr)
-    if uniq:
-        print(f"the cap table has drifted from news_model.h in {len(uniq)} field(s)",
-              file=sys.stderr)
+    for name, value, define, want in drifted:
+        print(f"  FAIL  {name} is {value}; news_model.h says {define} is {want}. "
+              f"Fix this file, not the header.", file=sys.stderr)
+    if uniq or drifted:
+        print(f"this file has drifted from news_model.h in "
+              f"{len(uniq) + len(drifted)} place(s)", file=sys.stderr)
         return 1
     return 0
 
@@ -1519,6 +1629,10 @@ def validate_payload(d, tiles_dir):
             warnings.append(f"charts[{i}]: kind {c.get('kind')!r} with no close series "
                             f"— the device drops it and any story naming it loses its chart")
 
+    policy_problems, policy_warnings = _policy_issues(d)
+    problems += policy_problems
+    warnings += policy_warnings
+
     found = []
     _walk_strings(d, "", found)
     for where, s in found:
@@ -1534,7 +1648,7 @@ def validate_payload(d, tiles_dir):
 def default_tiles_dir(path):
     """Where a real edition keeps its pictures: beside the payload it filed.
 
-    tools/edition/file-edition.sh writes news.json and tiles/ into one directory
+    agent/standalone/file-edition.sh writes news.json and tiles/ into one directory
     and serves that directory, so this is the layout the device actually sees.
     The committed fixture is the exception and passes --tiles explicitly.
     """

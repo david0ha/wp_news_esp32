@@ -7,8 +7,8 @@
 # file plus some tiles. That is deliberate — the board polls a URL, and anything that can serve that
 # URL works, so the least machinery that can produce it wins.
 #
-#   ./tools/edition/file-edition.sh            # file now
-#   ./tools/edition/file-edition.sh --serve    # file now, then serve until interrupted
+#   ./agent/standalone/file-edition.sh            # file now
+#   ./agent/standalone/file-edition.sh --serve    # file now, then serve until interrupted
 #
 # Scheduled twice a day by com.wpnews.edition.plist; see README in this directory.
 set -euo pipefail

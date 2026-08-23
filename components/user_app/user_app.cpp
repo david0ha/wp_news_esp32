@@ -74,7 +74,22 @@ static prov_config_t s_cfg;
 #define CONFIG_WP_NEWS_FEED_URL ""
 #endif
 
-#define POLL_SECONDS       CONFIG_WP_NEWS_POLL_SECONDS
+/* The cadence a board boots at, and the one it falls back to. It is a default
+ * and no longer the answer: the payload may carry a `policy` block that says how
+ * often to come back, so the live figure is `s_poll_seconds` below. */
+#define POLL_SECONDS_DEFAULT  CONFIG_WP_NEWS_POLL_SECONDS
+
+/* Before this instant — 2024-01-01T00:00:00Z — `time(NULL)` is the epoch plus
+ * however long the board has been up, which is not a date.
+ *
+ * This board has no RTC: the clock is SNTP or nothing, and SNTP lands some
+ * seconds after the network does. `policy.next_change` is an ABSOLUTE instant,
+ * so subtracting an unsynced clock from it yields a wait of roughly fifty-five
+ * years, and the min() would silently keep the configured interval — which is
+ * the right answer, but arrived at by accident. Testing for it says so, and
+ * makes the one case where it matters (a board whose SNTP never succeeds)
+ * behave the same as one that was never sent a policy at all. */
+#define CLOCK_SYNCED_EPOCH  1704067200
 
 /* How often UiTask wakes to move the clock on IN THE FRAMEBUFFER. It does not
  * reach the glass on its own.
@@ -89,7 +104,7 @@ static prov_config_t s_cfg;
  * A front page carries a date, not a ticking clock — see docs/pages.md. */
 #define TICK_SECONDS       60
 
-/* A snapshot older than this gets the "오래됨" badge.
+/* A snapshot older than this gets the STALE badge.
  *
  * Two poll intervals rather than one: a single missed poll is a laptop closing
  * its lid, not a problem the user needs told about. But the badge answers a
@@ -98,10 +113,16 @@ static prov_config_t s_cfg;
  * would badge a front page that is fine because somebody's Wi-Fi hiccuped
  * during lunch. So the poll interval sets the shape and a floor sets the
  * meaning: a quarter of an hour is the point at which a reader would want to
- * know, whatever the device's cadence happens to be. */
+ * know, whatever the device's cadence happens to be.
+ *
+ * It stopped being a macro when the cadence stopped being a constant. A server
+ * that puts the board on an hourly poll overnight has ALSO said that a page an
+ * hour old is not stale — the badge answers "is what I am reading still
+ * current?", and the answer depends on how often the desk intended to speak. A
+ * frozen fifteen-minute threshold would badge every quiet-window sheet `STALE`
+ * by 00:45 and leave the mark on the wall until morning, which is the badge
+ * saying "the poll loop is behaving exactly as instructed". */
 #define STALE_FLOOR_SECONDS  900
-#define STALE_SECONDS \
-    (POLL_SECONDS * 2 > STALE_FLOOR_SECONDS ? POLL_SECONDS * 2 : STALE_FLOOR_SECONDS)
 
 /* How long the first sheet of a boot waits for real news before giving up and
  * printing the demo snapshot instead.
@@ -181,6 +202,35 @@ static bool     s_online = true;
 static bool     s_batt_present;
 static int      s_batt_pct;
 static int      s_batt_mv;
+
+/* --- the polling policy (guarded by s_mtx) --------------------------------
+ *
+ * How often this board comes back, and when it expects the answer to change.
+ * Both start at the compiled-in default and are replaced by whatever the last
+ * payload's `policy` block said.
+ *
+ * THESE ARE RAM AND NOTHING WRITES THEM TO NVS, WHICH IS THE POINT. A policy is
+ * a statement about right now — a quiet window, an edition due at 06:00 — and it
+ * is made by a server the board can reach. Persisting one would mean a desk that
+ * put the board on a daily poll at 00:30, and then went away, leaves it polling
+ * once a day forever with no way back short of the setup portal. A power cycle
+ * is the reset, and it costs nothing: the first poll after it re-adopts whatever
+ * the server is saying now.
+ *
+ * The URL, by contrast, IS persisted — because it is a statement about which
+ * desk this board reads, which is a decision its owner made. */
+static int      s_poll_seconds = POLL_SECONDS_DEFAULT;
+static int64_t  s_next_change;          /* epoch seconds; 0 = none announced */
+static bool     s_poll_from_policy;     /* what the companion app reports     */
+
+/* A snapshot older than this is badged STALE. Derived rather than stored so it
+ * follows the cadence the desk actually asked for — see STALE_FLOOR_SECONDS.
+ * Caller holds s_mtx. */
+static int stale_seconds_locked(void)
+{
+    int twice = s_poll_seconds * 2;
+    return twice > STALE_FLOOR_SECONDS ? twice : STALE_FLOOR_SECONDS;
+}
 
 /* Only ever touched by UiTask. */
 
@@ -269,8 +319,8 @@ static void present_full(void)
 /* --- content updates (UiTask only) ---------------------------------------- */
 
 /* The snapshot is copied out from under the mutex so LVGL is never touched while
- * holding it. The copy is static rather than automatic because news_t is 24 KB
- * — three times the whole of UiTask's 8 KB stack, so an automatic would not
+ * holding it. The copy is static rather than automatic because news_t is 33 KB
+ * — four times the whole of UiTask's 8 KB stack, so an automatic would not
  * overflow it, it would never fit on it — and this frame goes on to call into
  * LVGL, whose render (Lvgl_RenderNow -> lv_refr_now) runs on this same task. A
  * static is safe here precisely because of the rule the whole file is built on:
@@ -294,7 +344,7 @@ static void push_data_to_ui(void)
      * forever would look healthy. */
     if (s_last_ok_us != 0) {
         int64_t age_us = esp_timer_get_time() - s_last_ok_us;
-        st.stale = age_us > (int64_t)STALE_SECONDS * 1000000;
+        st.stale = age_us > (int64_t)stale_seconds_locked() * 1000000;
     } else {
         st.stale = s_cfg.news_url[0] != '\0';
     }
@@ -363,10 +413,20 @@ static void action_set_url(const char *url)
 {
     state_lock();
     strlcpy(s_cfg.news_url, url, sizeof(s_cfg.news_url));
+
+    /* A cadence belongs to the desk that asked for it, so pointing the board at
+     * a different one drops it. Carrying it over would let a desk that is no
+     * longer being read set the poll interval for the one that is — and a board
+     * moved from a server with a quiet window to a server without one would keep
+     * the window, which is the sort of fault nobody thinks to look for. */
+    s_poll_seconds     = POLL_SECONDS_DEFAULT;
+    s_next_change      = 0;
+    s_poll_from_policy = false;
+
     /* Clearing the URL means "go back to the demo screen", and it has to happen
      * here rather than by waiting for a poll — with no URL there is no poll, so
      * the board would otherwise sit on the last real snapshot indefinitely and
-     * then quietly badge it 오래됨, which is the opposite of what was asked. */
+     * then quietly badge it STALE, which is the opposite of what was asked. */
     bool to_demo = (url[0] == '\0');
     if (to_demo) {
         news_mock(&s_data);
@@ -615,7 +675,7 @@ static void notify_ui(app_cmd_kind_t kind)
     xQueueSend(s_cmd_queue, &c, 0);
 }
 
-/* Static for the same reason as s_ui_copy: 24 KB against a 16 KB stack that an
+/* Static for the same reason as s_ui_copy: 33 KB against a 16 KB stack that an
  * https:// URL also has to fit a synchronous TLS handshake into. NewsTask is the
  * only caller. */
 static news_t s_fetched;
@@ -662,6 +722,29 @@ static void NewsTask(void *arg)
                 }
                 s_last_ok_us = esp_timer_get_time();
                 s_online     = true;
+
+                /* The policy is adopted from every successful fetch, INCLUDING
+                 * one whose content was unchanged. It is not part of the page —
+                 * news_hash() deliberately cannot see it — so `changed` says
+                 * nothing about whether the cadence moved, and a board that only
+                 * read the block on the polls that happened to bring a new
+                 * edition would miss every quiet window that began on a quiet
+                 * day. That is precisely the case the block exists for.
+                 *
+                 * A zero is absent, and absent leaves the last cadence standing
+                 * rather than reverting to the compiled-in one. The two are not
+                 * the same statement: a payload with no policy is a server
+                 * saying nothing about cadence, and the failure of guessing
+                 * wrong is asymmetric — reverting would multiply the request
+                 * rate by sixty the first time a caching layer served a copy
+                 * with the block stripped. `next_change` is different and is
+                 * taken as it comes: it is an instant, and a stale one is worse
+                 * than none. */
+                if (s_fetched.policy.poll_seconds != 0) {
+                    s_poll_seconds     = s_fetched.policy.poll_seconds;
+                    s_poll_from_policy = true;
+                }
+                s_next_change = s_fetched.policy.next_change;
                 state_unlock();
 
                 if (changed) {
@@ -724,10 +807,35 @@ static void NewsTask(void *arg)
          * would guarantee it times out and prints the demo page for a server
          * that was about to answer. Past that window a retry can no longer
          * change which page got printed, so there is nothing left to buy. */
-        int wait_s = POLL_SECONDS;
         state_lock();
-        bool never_fetched = (s_last_ok_us == 0);
+        int     wait_s       = s_poll_seconds;
+        int64_t next_change  = s_next_change;
+        bool    never_fetched = (s_last_ok_us == 0);
         state_unlock();
+
+        /* Wake for the instant the desk said its answer would change, when that
+         * lands sooner than the next ordinary poll. A board on an hourly
+         * overnight cadence still catches the 06:00 edition at 06:00 rather than
+         * at 06:47, which is the whole reason `next_change` is on the wire.
+         *
+         * Only when it is still in the FUTURE, and that is not what "min(poll,
+         * next_change - now)" literally says. An instant that has already passed
+         * would floor at NEWS_POLL_MIN and keep flooring there — a static
+         * payload with a baked `next_change`, or a cached copy of a live one,
+         * would pin the board at a poll every thirty seconds for as long as it
+         * stayed up. Having arrived at the instant, the ordinary cadence is the
+         * correct behaviour: whatever was going to change has changed, and this
+         * fetch is the one that collected it.
+         *
+         * And only when the clock is synced. See CLOCK_SYNCED_EPOCH. */
+        int64_t now = (int64_t)time(NULL);
+        if (next_change > 0 && now >= (int64_t)CLOCK_SYNCED_EPOCH) {
+            int64_t until = next_change - now;
+            if (until > 0 && until < (int64_t)wait_s) {
+                wait_s = until > NEWS_POLL_MIN ? (int)until : NEWS_POLL_MIN;
+            }
+        }
+
         if (never_fetched && fast_retries < FIRST_RETRY_MAX) {
             fast_retries++;
             wait_s = FIRST_RETRY_SECONDS;
@@ -820,7 +928,11 @@ void user_app_snapshot(device_state_t *out)
     memset(out, 0, sizeof(*out));
     strlcpy(out->model, DEVICE_MODEL, sizeof(out->model));
     strlcpy(out->fw, DEVICE_FW, sizeof(out->fw));
-    out->poll_seconds       = POLL_SECONDS;
+    /* The compiled-in cadence, which is also the honest answer before TaskInit
+     * has run: nothing has polled, so nothing has been told otherwise. Both are
+     * overwritten with the live figures under the lock below. */
+    out->poll_seconds       = POLL_SECONDS_DEFAULT;
+    out->poll_from_policy   = false;
     out->refresh_ms         = epd6_last_refresh_ms();
     if (!s_mtx) {
         return;                     /* TaskInit has not run yet */
@@ -893,9 +1005,18 @@ void user_app_snapshot(device_state_t *out)
 
     strlcpy(out->news_url, s_cfg.news_url, sizeof(out->news_url));
     strlcpy(out->last_result, news_fetch_result_name(s_last_result), sizeof(out->last_result));
+
+    /* The EFFECTIVE cadence, and where it came from. Both, because the number
+     * alone cannot be acted on: a board reporting 3,600 has either been put on
+     * an hourly poll by its desk or been built with an hour in Kconfig, and the
+     * first is a quiet window that ends while the second is a firmware image
+     * that needs reflashing. */
+    out->poll_seconds     = s_poll_seconds;
+    out->poll_from_policy = s_poll_from_policy;
+
     if (s_last_ok_us != 0) {
         out->age_seconds = (int)((esp_timer_get_time() - s_last_ok_us) / 1000000);
-        out->stale = out->age_seconds > STALE_SECONDS;
+        out->stale = out->age_seconds > stale_seconds_locked();
     } else {
         out->age_seconds = -1;      /* never succeeded — not "zero seconds ago" */
         out->stale = s_cfg.news_url[0] != '\0';

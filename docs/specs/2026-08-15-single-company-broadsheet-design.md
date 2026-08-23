@@ -189,8 +189,9 @@ a sentence that nobody finds out about.
 So `tools/edition/render-check.sh` runs the **actual typesetter** — the same `news_core`, the same
 seven faces, the same compositor, the same six-ink quantizer the firmware runs — over the candidate
 payload at 1200 × 1600 and leaves both sheets as PNGs. The desk is required to run it, fix what it
-names, **look at the sheets**, and only then rename `news.json.tmp` into place. `file-edition.sh`
-re-runs it as a gate afterwards, because a standing instruction is a request and this is a check.
+names, **look at the sheets**, and only then rename `news.json.tmp` into place.
+`agent/standalone/file-edition.sh` re-runs it as a gate afterwards, because a standing instruction
+is a request and this is a check.
 
 `PROMPT.md` also now carries the **minimum research checklist** — valuation, per-share,
 profitability, balance sheet, dividend, six quarters of results, consensus and surprises, the

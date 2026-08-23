@@ -233,7 +233,7 @@ you somewhere different: [news-contract.md](news-contract.md) has them,
 [app-control.md](app-control.md) has the field.
 
 For the real thing — an agent that researches one listed company and files an edition twice a day —
-see `tools/edition/`.
+see `agent/standalone/`.
 
 ## Buttons
 

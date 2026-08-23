@@ -40,10 +40,14 @@ connection. It activates the IDF environment if you have not.
 
 ## Verify before claiming anything works
 
-Four layers, three of them runnable without hardware. Run them in this order — each is faster than
+Five layers, four of them runnable without hardware. Run them in this order — each is faster than
 the next and catches a different class of mistake.
 
 ```bash
+# 0) the desk and the worker, pure logic — no Docker, no network, no API key
+sh server/test/run.sh
+sh agent/test/run.sh
+
 # 1) pure logic — nine host tests: the wire format, the demo snapshot, the fetch
 #    layer, the companion-app JSON, the quantizer, the framebuffer repack,
 #    copyfitting, chart scaling, and the compositor's tiling invariants
@@ -191,10 +195,12 @@ sim/                      desktop simulator — renders the real UI to 1200x1600
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 tools/
   mock_news_server.py     the contract from a fixed payload — the reference producer
-  edition/                the real producer: an agent prompt, a shell driver, two launchd plists
+  edition/                the shared producer contract: PROMPT.md and the typesetting gate
   make_tile.py            a photograph -> a 4bpp tile the board blits verbatim
   gen_fonts.py            regenerates components/news_core/fonts/
   flash.sh                find the board and flash it
+server/                   the desk: command queue, directives, gates, editions, and the URL the board polls
+agent/                    an example worker that files into the desk, plus the standalone no-server producer
 ```
 
 ## Working rules
@@ -312,19 +318,31 @@ tools/
   *something* finished, fast, normally beats showing nothing. Here the something costs the same
   twenty-five seconds as the real thing and delays it by that much again, so "fill the screen early"
   is precisely backwards. Anything added to the boot path should be measured in refreshes first.
-- **`sizeof(news_t)` is 32,932 bytes** — measured, not estimated. That is four times `UiTask`'s whole
+- **`sizeof(news_t)` is 32,952 bytes** — measured, not estimated. That is four times `UiTask`'s whole
   8 KB stack, so all three snapshots in `user_app.cpp` — the state, the UI copy and the fetch buffer —
   are file-scope statics, safe only because the single-owner rule holds: `UiTask` is the only caller
-  of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown twice: 19,720 to
-  24,328 when both statements gained a numeric plane beside their printed cells, and 24,328 to 32,932
-  when `NEWS_BODY_MAX` went to 4,000. The second is the banner forme's bill — a lead across the whole
-  measure runs four legs down most of a 1,600 px sheet, which is about four thousand characters of
-  body, and at 2,400 the field truncated the copy mid-word and the legs came up short. Three statics
-  plus `news_parse()`'s heap scratch is about 130 KB at the peak of a poll, which is not what
-  constrains this board — the 960 KB framebuffer is — but a snapshot on a stack is still an instant
-  overflow. Measure it rather than trusting this line: the number has been wrong twice.
+  of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown three times:
+  19,720 to 24,328 when both statements gained a numeric plane beside their printed cells, 24,328 to
+  32,932 when `NEWS_BODY_MAX` went to 4,000, and 32,932 to 32,952 for the `policy` block. The second
+  is the banner forme's bill — a lead across the whole measure runs four legs down most of a 1,600 px
+  sheet, which is about four thousand characters of body, and at 2,400 the field truncated the copy
+  mid-word and the legs came up short. The third is sixteen bytes of policy and four of tail padding:
+  `next_change` is an `int64_t`, the first member of this struct wider than four bytes, so the whole
+  thing is now 8-aligned. That ended the argument that used to guarantee the host and the device
+  agreed about the layout — every member being four bytes or narrower — which is why `news_model.c`'s
+  `_Static_assert` is now a measurement on each target rather than a note. Three statics plus
+  `news_parse()`'s heap scratch is about 130 KB at the peak of a poll, which is not what constrains
+  this board — the 960 KB framebuffer is — but a snapshot on a stack is still an instant overflow.
+  Measure it rather than trusting this line: the number has been wrong twice.
 - **`sdkconfig` holds per-developer values and is gitignored — never commit it.** Wi-Fi passwords live
   in NVS via the portal, never in Kconfig.
+- **Nothing personal belongs in this repository.** No home paths, no real hostnames, no vault paths,
+  no watchlist, no standing editorial instruction. Whatever makes a paper sound like somebody's own —
+  a rotation, a house style, a list of things that must never print — is read at runtime from an
+  `AGENT_CONTEXT_DIR` the operator points at their own directory (see `agent/README.md`'s "Bring your
+  own continuity"), never checked in. The repository ships templates only — `*.example` files and
+  `agent/context.example/` — and a repository about to be public is the wrong place to discover that
+  a path or a hostname was somebody's own.
 - The mDNS hostname is `wpnews` and the AP prefix `"WP News"` — deliberately **not** the
   `tickerboard` / `"Ticker Board"` of the project this forked from, whose shipped app resolves those
   names.
@@ -338,6 +356,7 @@ tools/
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/hosting-cloudflare.md](docs/hosting-cloudflare.md) — serving the edition from a domain instead of a Mac on the LAN: what must be published, what must not, and what changes on the device once the URL is `https://`
+- [docs/desk-server.md](docs/desk-server.md) — the desk server behind the URL the board polls: `server/` serves it and owns every gate, `agent/` files the editions and holds the credentials
 - [docs/pages.md](docs/pages.md) — A1 and A2, the grid, the bands, the font decision
 - [docs/epaper-13in3.md](docs/epaper-13in3.md) — the dual-UC8179 driver, the refresh policy, the self-test
 - [docs/graphics.md](docs/graphics.md) — six-ink rendering: the two palettes, the dither, the halftone

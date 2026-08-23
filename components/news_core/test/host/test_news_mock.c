@@ -26,7 +26,7 @@
 
 #include <stdlib.h>
 
-/* ~24 KB apiece; file-static so no frame ever carries two. */
+/* ~33 KB apiece; file-static so no frame ever carries two. */
 static news_t g_mock, g_wire;
 
 /* --- the two descriptions of one page ------------------------------------- */

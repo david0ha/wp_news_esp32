@@ -15,7 +15,7 @@
   filing more often costs nothing but rarely buys anything either.
 
   Install:
-      cp tools/edition/com.wpnews.edition.plist ~/Library/LaunchAgents/
+      cp agent/standalone/com.wpnews.edition.plist ~/Library/LaunchAgents/
       launchctl load  ~/Library/LaunchAgents/com.wpnews.edition.plist
       launchctl start com.wpnews.edition            # file one now, to check it works
 
@@ -30,17 +30,17 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ggrrm/Documents/wp_news_esp32/tools/edition/file-edition.sh</string>
+        <string>/Users/YOUR-USERNAME/Documents/wp_news_esp32/agent/standalone/file-edition.sh</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/ggrrm/.local/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/YOUR-USERNAME/.local/bin</string>
         <key>HOME</key>
-        <string>/Users/ggrrm</string>
+        <string>/Users/YOUR-USERNAME</string>
         <key>EDITION_DIR</key>
-        <string>/Users/ggrrm/.wpnews/edition</string>
+        <string>/Users/YOUR-USERNAME/.wpnews/edition</string>
     </dict>
 
     <key>StartCalendarInterval</key>
@@ -56,8 +56,8 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/ggrrm/.wpnews/edition/log/launchd.out</string>
+    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/launchd.out</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ggrrm/.wpnews/edition/log/launchd.err</string>
+    <string>/Users/YOUR-USERNAME/.wpnews/edition/log/launchd.err</string>
 </dict>
 </plist>

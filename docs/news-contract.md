@@ -32,7 +32,7 @@ That is also why the badge order in `ui_news.c` is `OFFLINE`, then `STALE`, then
 the obvious one: a configured board whose server is unreachable would otherwise badge itself `DEMO`
 — true, and useless.
 
-The scratch is not on the stack, because `sizeof(news_t)` is **24,328 bytes** — measured, against
+The scratch is not on the stack, because `sizeof(news_t)` is **32,952 bytes** — measured, against
 `NewsTask`'s 16 KB and `UiTask`'s 8 KB. That is a hard constraint rather than a preference: an
 automatic `news_t` overflows either stack before it is even filled in. An allocation failure is a
 rejection like any other, which keeps the rule true on that path too.
@@ -41,6 +41,7 @@ rejection like any other, which keeps the rule true on that path too.
 
 ```
 GET <news_url>          every CONFIG_WP_NEWS_POLL_SECONDS, default 60, range 30..86400
+                        — unless a payload's `policy` block says otherwise
 ```
 
 No headers are required and none are checked. The response must carry a **2xx status** — checked
@@ -51,11 +52,14 @@ is wrong" are different messages in the log (`news_service.c`). The device port 
 
 The poll is also woken early by KEY1, by `POST /api/refresh`, and by a URL change.
 
-A snapshot older than **twice the poll interval, or a quarter of an hour, whichever is longer**, is
-badged `STALE` (`STALE_SECONDS` in `user_app.cpp`). The floor is what keeps the badge meaningful at a
-short cadence: it answers a question about the news, not about the poll loop, and at the default
-sixty-second interval "twice" alone would badge a perfectly good front page because somebody's Wi-Fi
-hiccuped for two minutes. Polling itself costs nothing visible: `news_hash()` fingerprints everything that
+A snapshot older than **twice the poll interval in force, or a quarter of an hour, whichever is
+longer**, is badged `STALE` (`stale_seconds_locked()` in `user_app.cpp`). The floor is what keeps the
+badge meaningful at a short cadence: it answers a question about the news, not about the poll loop,
+and at the default sixty-second interval "twice" alone would badge a perfectly good front page
+because somebody's Wi-Fi hiccuped for two minutes. *In force* is the other half of it: a server that
+puts the board on an hourly poll overnight has also said that a page an hour old is not stale, so the
+threshold follows the cadence rather than being frozen at fifteen minutes and marking every
+quiet-window sheet by 00:45. Polling itself costs nothing visible: `news_hash()` fingerprints everything that
 reaches the glass and `NewsTask` compares before it notifies `UiTask`, so an unchanged poll does not
 touch the panel. On this panel a refresh is twenty-five to thirty seconds of flashing, so that is
 not an optimisation, it is the difference between a paper on a wall and a nuisance.
@@ -142,7 +146,9 @@ Tiles are fetched from beside the snapshot; see [Photographs](#photographs).
   "thumbs": [
     { "id": "sndk_chip", "w": 170, "h": 120,
       "caption": "A 218-layer die.", "credit": "COMPANY" }
-  ]
+  ],
+
+  "policy": { "poll_seconds": 900, "next_change": 1755561000 }
 }
 ```
 
@@ -178,6 +184,7 @@ plus the terminator.
 | `charts[]` | array of chart | 2 | named by index from a story |
 | `indices[]` | array of quote | 5 | the tape, one line of small caps |
 | `thumbs[]` | array of photo | 2 | the small pictures at the foot |
+| `policy` | object | one | **not drawn.** How often to come back. The only block here that is not about the paper — see below |
 
 ## Two kinds of number, and only two
 
@@ -674,6 +681,78 @@ gamma of 0.72 — a tile that comes out as a silhouette wants those, not a diffe
 Look at `--preview` before filing. An unreadable picture is worse than no picture, and a story with
 no picture is normal.
 
+## `policy` — how often to come back
+
+```json
+"policy": { "poll_seconds": 3600, "next_change": 1755561000 }
+```
+
+Optional, and **absent is the normal case**: the demo edition carries none, the committed fixture
+carries none, and a board that never receives one behaves exactly as one built before the block
+existed. It is the only object on this wire that is not about the paper.
+
+| key | type | clamp | meaning |
+|---|---|---|---|
+| `poll_seconds` | number | 30..86400 | the cadence to use **now** |
+| `next_change` | number | ≥ 0, epoch seconds | the instant your answer will change; 0 or absent = none known |
+
+It goes in the payload rather than at a second URL for the same reason the tile base is derived
+rather than configured: **a second thing to configure is a second thing to get wrong**, and the board
+is meant to hold exactly one URL.
+
+**`poll_seconds` is the cadence for right now, not a schedule.** You have already decided whether
+now is inside a quiet window; the device does not need to know that it is. It carries no calendar, no
+timezone database and no RTC, and a quiet window is not a firmware feature — it is a server declining
+to change its answer, and saying so here so the board stops asking sixty times an hour while it does.
+
+**`next_change` is epoch seconds as a JSON number, never an ISO-8601 string.** That is this wire's
+standing rule — [a number the device reasons about is an integer](#two-kinds-of-number-and-only-two)
+— and it keeps a date parser out of the firmware, which is a whole class of bug bought for nothing. A
+string here is the mistake worth catching loudest, because it looks *more* correct than the thing
+that works; `--validate` fails on it. The device waits `min(poll_seconds, next_change − now)`, floored
+at 30 s, so a board on an hourly overnight cadence still catches the 06:00 edition at 06:00 rather
+than at 06:47.
+
+Four properties, each of them a test:
+
+- **The fingerprint cannot see it.** `news_hash()` covers everything that reaches the glass and this
+  reaches nothing. `next_change` moves at every transition of your schedule, several times a day,
+  forever — fingerprinted, it would spend twenty-five seconds of the whole sheet flashing to report
+  that a timestamp advanced, which is the exact failure `news_hash()` exists to prevent.
+  `test_policy_is_not_fingerprinted` asserts that two payloads differing only here hash identically,
+  and `news_model.c` says why at the omission.
+- **It clamps, never rejects.** Out of range goes to the bound; a string, a `null`, a `policy` that is
+  an array, all go to absent. This block cannot cost you a page. That is also why `--validate`
+  reports the ones that clamp: a clamp is silent, and the symptom of a `poll_seconds` of 5 is a board
+  polling twelve times a minute with nothing anywhere to say it was asked to.
+- **It does not survive a reboot.** Nothing writes it to NVS. A desk that put the board on a daily
+  poll and then went away must not leave it polling once a day forever; a power cycle is the reset,
+  and the first poll after it adopts whatever you are saying then. Pointing the board at a different
+  URL drops it too — a cadence belongs to the desk that asked for it.
+- **It is ignored when the clock is not synced.** `next_change` is absolute and this board has no RTC:
+  the clock is SNTP or nothing. Before 2024-01-01 `time()` is the epoch plus the uptime, which is not
+  a date, so `next_change` is ignored and `poll_seconds` alone governs.
+
+Two smaller rules that follow from "it clamps":
+
+- A `poll_seconds` you send is adopted on **every** successful fetch, including one whose content was
+  unchanged — the block is not part of the page, so "did the edition change" says nothing about
+  whether the cadence did, and a board that only read it on the polls that brought a new edition
+  would miss every quiet window that began on a quiet day.
+- A payload with **no** `policy` leaves the last cadence standing rather than reverting to the
+  compiled-in one. "The server said nothing" and "the server said 60" are different statements, and
+  guessing wrong is asymmetric: reverting would multiply the request rate by sixty the first time a
+  caching layer served a copy with the block stripped. `next_change` is the exception and is taken as
+  it comes, because it is an instant and a stale one is worse than none.
+
+The effective cadence and where it came from are both reported to the companion app as
+`source.pollSeconds` and `source.pollSource` (`"config"` or `"policy"`). Both, because the number
+alone cannot be acted on: an hourly poll set by the desk ends at 06:00 and an hourly poll compiled
+into the image does not.
+
+The server half of this — the schedule it is computed from, and why the block is computed per request
+rather than stored — is [docs/desk-server.md](desk-server.md).
+
 ## The capacities are display capacities, and they are bigger than the page
 
 | array | capacity | | array | capacity |
@@ -807,7 +886,8 @@ Before the parser is even reached: transport failure, and any status outside 200
 **Clamped:** everything else. A negative width, a 900-entry array, a string where a number belongs, a
 chart with no bars, a rank of 4,000, a spark value of 12,000, a photo id with no dimensions, a story
 naming chart 7, a `bar` of 1,400, an `emph` of 9, a `render` word nobody has heard of, a `bars_line`
-table one number short of a full plane. Each goes to a default or a bound, and the page prints.
+table one number short of a full plane, a `poll_seconds` of 5 or of a week. Each goes to a default or
+a bound, and the page prints.
 
 The last two are worth saying plainly, because they are the ones a producer will hit while the
 payload still looks perfectly reasonable: **an unknown `render` prints, and a `render` the plane
@@ -923,7 +1003,7 @@ $ python3 tools/mock_news_server.py --validate components/news_core/test/host/fi
 validate: …/fixtures/news.json — ok (4 stories, 22 figures, 6 briefs, tiles from sim/tiles, 0 warning(s))
 ```
 
-The scheduled desk in [`tools/edition/`](../tools/edition/README.md) runs this before it files,
+The scheduled producer in [`agent/standalone/`](../agent/standalone/README.md) runs this before it files,
 because a page the firmware would reject is a wasted cycle whose failure shows up hours later as a
 `STALE` badge with nothing to explain it.
 

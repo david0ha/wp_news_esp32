@@ -29,12 +29,15 @@ shots/
 # host test/sim run logs
 *.log
 
-# Assembled by tools/edition/publish.sh from the current edition, and rebuilt
+# Assembled by agent/standalone/publish.sh from the current edition, and rebuilt
 # from empty every run. A build product of the desk, not source.
-tools/edition/public/
+agent/standalone/public/
 
 # local secrets — never commit
 .env
 .env.*
+# ...except the template, which is the file that documents every knob and holds
+# no value for any of them. It has to be committed or nobody knows what to set.
+!.env.example
 
 .worktrees/

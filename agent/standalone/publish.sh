@@ -6,9 +6,9 @@
 # board cannot tell the difference and needs no rebuild either way; see
 # docs/hosting-cloudflare.md.
 #
-#   ./tools/edition/publish.sh              # validate, assemble, deploy
-#   ./tools/edition/publish.sh --dry-run    # validate and assemble, do not deploy
-#   EDITION_DIR=/tmp/try ./tools/edition/publish.sh
+#   ./agent/standalone/publish.sh              # validate, assemble, deploy
+#   ./agent/standalone/publish.sh --dry-run    # validate and assemble, do not deploy
+#   EDITION_DIR=/tmp/try ./agent/standalone/publish.sh
 #
 # Credentials: interactively, `npx wrangler login` once is enough. Under launchd
 # there is no browser and no keychain prompt, so put a token in
@@ -30,7 +30,7 @@ DRY_RUN=0
 
 if [ ! -f "$EDITION_DIR/news.json" ]; then
     echo "publish: no edition at $EDITION_DIR/news.json" >&2
-    echo "publish: file one first — ./tools/edition/file-edition.sh" >&2
+    echo "publish: file one first — ./agent/standalone/file-edition.sh" >&2
     exit 1
 fi
 

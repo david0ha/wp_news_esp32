@@ -25,7 +25,7 @@ config WP_NEWS_POLL_SECONDS
       against a quarter-hour's 3.8. On USB it makes no difference at all.
 
       A snapshot older than twice this interval — or a quarter of an hour,
-      whichever is longer — is badged "오래됨".
+      whichever is longer — is badged STALE.
 
 config WP_NEWS_FEED_URL
     string "Fallback news URL"

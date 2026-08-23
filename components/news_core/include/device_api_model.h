@@ -152,6 +152,21 @@ typedef struct {
     /* --- how it got there --- */
     char news_url[DEV_URL_MAXLEN];
     char last_result[DEV_RESULT_MAXLEN];  /* news_fetch_result_name()        */
+
+    /* The cadence in force, and whether the board chose it or was told it.
+     *
+     * `poll_seconds` is the EFFECTIVE figure, not the compiled-in one: a payload
+     * may carry a `policy` block setting it (see news_model.h), so the number
+     * here is what the poll loop is actually waiting.
+     *
+     * Which is why the flag beside it is not redundant. A board reporting an
+     * hourly poll has either been put there by its desk for the night or been
+     * built that way in Kconfig, and those need opposite responses — the first
+     * ends by itself, the second needs a firmware image. The number alone cannot
+     * be acted on. It travels as the word "config" or "policy" rather than as a
+     * boolean, because that is what an app puts on a screen; it is a bool here
+     * because two spellings of the same fact is one spelling too many. */
+    bool poll_from_policy;
     int  poll_seconds;
     int  age_seconds;                     /* since the last SUCCESSFUL fetch  */
     bool stale;

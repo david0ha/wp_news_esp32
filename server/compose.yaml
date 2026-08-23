@@ -1,0 +1,79 @@
+# The desk and the tunnel.
+#
+#   docker network create wpnews            # once; the worker joins it too
+#   cp server/.env.example server/.env      # then fill it in
+#   docker compose -f server/compose.yaml up -d
+#
+# Two services, and the boundary between them is the design:
+#
+#   desk        holds the current edition and answers the board. Reachable from
+#               the internet. Holds no credential of the owner's beyond the
+#               bearer tokens that authorise writing to itself, and knows
+#               nothing about where an agent keeps its notes.
+#   cloudflared publishes exactly one hostname at exactly one container port.
+#
+# The worker is deliberately not here. It runs wherever its API key already
+# lives -- see agent/README.md -- and reaches the desk with a producer token
+# over the network below, which is the same thing an agent on another machine
+# does over the tunnel. Keeping it out of this file is what lets this file be
+# published: nothing in it names a path, a key or a person.
+#
+# The desk publishes to 127.0.0.1 rather than 0.0.0.0 because the tunnel is the
+# intended way in and a second, unauthenticated way in on the LAN is a second
+# thing to reason about. 8790 because 8787-8789 are the existing MCP tunnels.
+
+name: wpnews
+
+services:
+  desk:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: wpnews-desk:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8790:8080"
+    networks: [wpnews]
+    volumes:
+      # Serving state: the database, the editions, and the schedule the
+      # operator last PUT. A named volume rather than a bind mount, so a
+      # newspaper on a wall does not depend on any disk being plugged in.
+      - wpnews-data:/data
+      # Tokens. Read-only, and outside the repository, because the repository
+      # is public and git history is permanent.
+      - ${HOME}/.wpnews:/run/secrets:ro
+    environment:
+      WPDESK_KEEP_EDITIONS: ${WPDESK_KEEP_EDITIONS:-30}
+      WPDESK_LOG_LEVEL: ${WPDESK_LOG_LEVEL:-INFO}
+      TZ: ${TZ:-UTC}
+    security_opt:
+      - no-new-privileges:true
+    read_only: false          # /data and /repo/sim/build are written at runtime
+    tmpfs:
+      - /tmp
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      desk:
+        condition: service_healthy
+    networks: [wpnews]
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/wpnews.yml", "run"]
+    volumes:
+      # The named tunnel's credentials and the ingress file. Read-only: the
+      # tunnel needs to present a certificate, not to manage one.
+      - ${HOME}/.cloudflared:/etc/cloudflared:ro
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  wpnews-data:
+
+networks:
+  # Declared external rather than created here, because the worker joins it
+  # from its own side and neither compose file owns the other. Created once,
+  # by hand:
+  #   docker network create wpnews — see agent/README.md
+  wpnews:
+    external: true

@@ -24,7 +24,7 @@ extern "C" {
  * news URL beside a full company name is not a hypothetical; it is one paste
  * away.
  *
- * Measured worst case is **4,111 bytes** (test_api_json.c prints it on every
+ * Measured worst case is **4,133 bytes** (test_api_json.c prints it on every
  * run), and the multiplier that gets it there is the escape: a C0 control with
  * no short form becomes `\u00XX`, six bytes out of one, and cJSON hands the
  * parser a raw 0x01 for any producer that wrote one. Sizing for the two-byte
