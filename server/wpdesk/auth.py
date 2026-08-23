@@ -28,10 +28,10 @@ split exists to withhold.
 
 **Why the file holds tokens rather than hashes.** The posture is a 0600 file in
 ``~/.wpnews/`` on a machine whose owner is its only user, mounted read-only into
-the container. An attacker who can read that file can also read the vault it
-sits beside and the database the desk writes, so hashing the tokens would move
-no boundary -- it would only add a rotation story and a work-factor decision to
-maintain. If the day comes when the token file lives somewhere the desk's data
+the container. An attacker who can read that file can also read the database the
+desk writes and everything else in that home directory, so hashing the tokens
+would move no boundary -- it would only add a rotation story and a work-factor
+decision to maintain. If the day comes when the token file lives somewhere the desk's data
 does not, hash them then, and the reason will be a real one.
 
 The file, ``~/.wpnews/tokens.json``::

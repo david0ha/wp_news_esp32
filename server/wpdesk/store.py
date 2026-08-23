@@ -535,8 +535,8 @@ class Store:
         """Append to the audit log.
 
         Never put a credential in ``detail``. This log is served to any
-        ``operator`` token and copied into the vault, so it is the least
-        private place in the desk that still looks like a private one.
+        ``operator`` token, so it is the least private place in the desk that
+        still looks like a private one.
         """
         with self._write():
             self._db.execute(

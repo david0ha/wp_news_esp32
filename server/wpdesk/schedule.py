@@ -89,7 +89,7 @@ class QuietWindow:
 
     ``end <= start`` wraps midnight; ``end == start`` is empty. Both are stored
     as ``"HH:MM"`` strings rather than as minutes because this is exactly what
-    the document says, and a schedule that round-trips through the vault
+    the document says, and a schedule that round-trips through the file
     unchanged is one a human can keep editing.
     """
 
@@ -114,10 +114,10 @@ class WakeTime:
 class Schedule:
     """One owner's answer to "what happens at six", parsed and validated.
 
-    Frozen because it is read from several threads -- the tick, the HTTP
-    handlers, the vault poller -- and a schedule that can be mutated in place
-    is one that can be half-applied while a publish decision is being made
-    against it. Replacing the whole object is the only way it changes.
+    Frozen because it is read from several threads -- the tick and every HTTP
+    handler that reasons about time -- and a schedule that can be mutated in
+    place is one that can be half-applied while a publish decision is being
+    made against it. Replacing the whole object is the only way it changes.
     """
 
     timezone: str
@@ -154,9 +154,9 @@ DEFAULT_SCHEDULE = Schedule(
 def _bad(path: str, why: str) -> NoReturn:
     """Refuse the document, naming the field.
 
-    The message is what lands in ``schedule.errors.md`` in the vault, where the
-    only reader is the person who mistyped it. A message without a field name
-    is a message nobody can act on.
+    The message is what lands in the log and in the 400 body, where the only
+    reader is the person who mistyped it. A message without a field name is a
+    message nobody can act on.
     """
     raise BadRequest("bad_schedule", f"{path}: {why}")
 
@@ -319,7 +319,7 @@ def schedule_to_dict(s: Schedule) -> dict:
     A wake on all seven days is written as the bare ``"HH:MM"`` string rather
     than as an object with a seven-name ``days`` list, because that is the form
     a human wrote it in and this is the function that writes ``schedule.json``
-    back into the vault.
+    back to disk.
     """
     wake: list = []
     for w in s.wake:

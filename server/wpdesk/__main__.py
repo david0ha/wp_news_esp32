@@ -24,7 +24,7 @@ from .http import serve_forever
 def _configure_logging() -> None:
     """One line format, level from the environment.
 
-    INFO is one line per publish and one per vault-availability transition.
+    INFO is one line per publish, plus a handful at startup.
     DEBUG adds a line per request, which against a board polling every fifteen
     minutes forever is a great many lines saying that nothing happened.
     """
@@ -42,8 +42,7 @@ def main() -> int:
     desk = Desk(cfg)
 
     log.info("data %s", cfg.data_dir)
-    log.info("vault %s (%s)", cfg.vault_dir,
-             "available" if desk.vault.available() else "UNAVAILABLE")
+    log.info("schedule %s (%s)", desk.schedule_path, desk.schedule_source)
     log.info("tokens %s (%d)", cfg.tokens_path, desk.tokens.count())
     if desk.tokens.count() == 0:
         # Not fatal: the device plane still serves, which is the half that keeps

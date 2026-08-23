@@ -818,8 +818,8 @@ class ReadTest(EditionTestCase):
         self.assertIsNone(self.es.read_payload("0" * 16))
 
     def test_an_edition_id_that_is_a_path_reads_nothing(self):
-        # This is the one that reads the vault if it is wrong: the desk runs in
-        # a container with the owner's notes mounted beside the data root.
+        # This is the one that reads somebody else's file if it is wrong: an
+        # edition id becomes a path component under the data root.
         self.file(1)
         for bad in ("../drafts", "..", "a/b", "/etc/passwd", "", "ZZZZ",
                     "0123456789abcdef/../../etc"):

@@ -69,15 +69,13 @@ class DeskTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, True)
 
         data = os.path.join(self.root, "data")
-        vault = os.path.join(self.root, "vault")
         os.makedirs(data)
-        os.makedirs(vault)
         tokens_path = os.path.join(self.root, "tokens.json")
         self.tokens = write_tokens(tokens_path)
 
         self.clock = FixedClock(self.START)
         self.gates = StubGates(sheets=())
-        self.cfg = Config(data_dir=data, vault_dir=vault, tokens_path=tokens_path,
+        self.cfg = Config(data_dir=data, tokens_path=tokens_path,
                           repo_dir=self.root, host="127.0.0.1", port=0)
         self.desk = Desk(self.cfg, clock=self.clock, gates=self.gates)
         self.addCleanup(self.desk.close)
@@ -97,11 +95,10 @@ class DeskTestCase(unittest.TestCase):
         # desk, and `test_editions.OnWakeTest` holds the desk to the other
         # behaviour.
         #
-        # Through the API rather than onto `desk.schedule`, because the desk
-        # re-reads its schedule whenever the file behind it changes, and the
-        # first tick writes a default one -- so an attribute would be reverted
-        # under exactly the tests that tick. The classes that are about the
-        # calendar PUT their own schedule over this one.
+        # Through the API rather than onto `desk.schedule`, because that is
+        # the path an operator has and the only one that writes the file a
+        # restart reads. The classes that are about the calendar PUT their own
+        # schedule over this one.
         doc = S.schedule_to_dict(S.DEFAULT_SCHEDULE)
         doc["publish"] = {"policy": "immediate", "min_gap_minutes": 0}
         status, body = self.api("PUT", "/api/schedule", doc)
@@ -153,13 +150,14 @@ class DevicePlaneTest(DeskTestCase):
     """What a board can reach, and the much longer list of what it cannot."""
 
     def test_nothing_but_the_edition_and_its_tiles_is_reachable(self):
-        # This is docs/hosting-cloudflare.md's `find tools/edition/public -type f`
-        # made executable. Every one of these is a real file or a real endpoint
-        # somewhere in this system, and none of them is on this plane.
-        for path in ("/", "/index.html", "/watchlist.json", "/standing.md",
-                     "/schedule.json", "/desk.sqlite", "/data/desk.sqlite",
-                     "/editions", "/log/2026-08-19.json", "/tiles/", "/tiles/pic",
-                     "/tiles/pic.bin.bak", "/vault/standing.md",
+        # This is docs/hosting-cloudflare.md's
+        # `find agent/standalone/public -type f` made executable. Every one of
+        # these is a real file or a real endpoint somewhere in this system, and
+        # none of them is on this plane.
+        for path in ("/", "/index.html", "/schedule.json", "/desk.sqlite",
+                     "/data/desk.sqlite", "/editions", "/editions/",
+                     "/log/2026-08-19.json", "/tiles/", "/tiles/pic",
+                     "/tiles/pic.bin.bak",
                      "/../etc/passwd", "/tiles/../news.json"):
             status, _, _ = self.call("GET", path)
             self.assertIn(status, (400, 404), "%s answered %d" % (path, status))
@@ -352,6 +350,25 @@ class ControlPlaneTest(DeskTestCase):
         self.assertEqual(current["schedule"]["poll"]["active_seconds"],
                          S.DEFAULT_SCHEDULE.poll_active_seconds)
 
+    def test_an_edited_schedule_survives_a_restart(self):
+        # The point of the file: the desk that comes up tomorrow is the one
+        # that was told what to do today. A schedule held only in memory would
+        # revert to the default on every `docker compose up`, silently, and the
+        # symptom would be a paper arriving at the wrong hour.
+        doc = S.schedule_to_dict(S.DEFAULT_SCHEDULE)
+        doc["publish"] = {"policy": "immediate", "min_gap_minutes": 45}
+        status, body = self.api("PUT", "/api/schedule", doc)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["source"], "file")
+
+        path = os.path.join(self.cfg.data_dir, "schedule.json")
+        self.assertTrue(os.path.exists(path), path)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertEqual(second.schedule_source, "file")
+        self.assertEqual(second.schedule.min_gap_minutes, 45)
+
     def test_schedule_next_lists_transitions_in_both_clocks(self):
         status, doc = self.api("GET", "/api/schedule/next?count=4")
         self.assertEqual(status, 200)
@@ -364,9 +381,9 @@ class ControlPlaneTest(DeskTestCase):
         self.file_edition()
         status, doc = self.api("GET", "/api/state")
         self.assertEqual(status, 200)
-        self.assertEqual(doc["vault"], "available")
+        self.assertNotIn("vault", doc)
         self.assertIsNotNone(doc["current"])
-        self.assertIn(doc["scheduleSource"], ("vault", "cache", "default"))
+        self.assertIn(doc["scheduleSource"], ("file", "default"))
         self.assertIsInstance(doc["policy"]["pollSeconds"], int)
 
     def test_an_unknown_api_route_is_not_found_rather_than_a_crash(self):
@@ -423,7 +440,7 @@ class PublishGatingTest(DeskTestCase):
 
 
 class TickTest(DeskTestCase):
-    """The scheduler pass: idempotent, and it does not need the vault to run."""
+    """The scheduler pass: idempotent, and it touches nothing it need not."""
 
     def test_a_wake_enqueues_exactly_one_filing_however_often_it_ticks(self):
         self.clock.set(at(2026, 8, 19, 12, 40) + 5)     # just past a default wake
@@ -452,30 +469,6 @@ class TickTest(DeskTestCase):
         _, doc = self.api("GET", "/api/commands")
         filings = [c for c in doc["commands"] if c["kind"] == "file_edition"]
         self.assertEqual(len(filings), 2)
-
-    def test_the_desk_survives_the_vault_disappearing(self):
-        # Pulling the SSD must not be able to blank a newspaper.
-        self._publish_something()
-        shutil.rmtree(self.cfg.vault_dir)
-
-        self.clock.advance(60)
-        self.desk.tick()
-
-        self.assertEqual(self.call("GET", "/news.json")[0], 200)
-        _, state = self.api("GET", "/api/state")
-        self.assertEqual(state["vault"], "unavailable")
-
-    def test_the_vault_layout_is_written_and_never_overwritten(self):
-        self.desk.tick()
-        standing = os.path.join(self.cfg.vault_dir, "standing.md")
-        self.assertTrue(os.path.exists(standing))
-
-        with open(standing, "w", encoding="utf-8") as f:
-            f.write("mine\n")
-        self.clock.advance(60)
-        self.desk.tick()
-        with open(standing, encoding="utf-8") as f:
-            self.assertEqual(f.read(), "mine\n")
 
     def _publish_something(self):
         doc = S.schedule_to_dict(S.DEFAULT_SCHEDULE)

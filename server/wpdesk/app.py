@@ -20,13 +20,12 @@ import threading
 from dataclasses import dataclass
 from typing import Mapping
 
-from . import schedule as sched
+from . import schedule as sched, schedulefile
 from .auth import Tokens
 from .clock import Clock
 from .editions import EditionStore
 from .gates import Gates, SubprocessGates
 from .store import Store
-from .vault import Vault
 
 LOG = logging.getLogger("wpdesk.app")
 
@@ -50,7 +49,6 @@ class Config:
     """Where everything is. The only place the environment is read."""
 
     data_dir: str
-    vault_dir: str
     tokens_path: str
     repo_dir: str
     host: str = "0.0.0.0"
@@ -63,7 +61,6 @@ class Config:
         secrets = env.get("WPDESK_SECRETS", "/run/secrets")
         return Config(
             data_dir=env.get("WPDESK_DATA", "/data"),
-            vault_dir=env.get("WPDESK_VAULT", "/vault"),
             tokens_path=os.path.join(secrets, "tokens.json"),
             repo_dir=env.get("WPDESK_REPO", "/repo"),
             host=env.get("WPDESK_HOST", "0.0.0.0"),
@@ -76,10 +73,10 @@ class Desk:
     """The whole service, minus the HTTP surface.
 
     Construction is cheap and side-effect-light on purpose: it creates the data
-    directory and opens the database, and everything else -- reading the vault,
-    reaping the queue, publishing anything overdue -- happens on the first
-    :meth:`tick`. A constructor that reached for a removable disk would make the
-    process fail to start because an SSD was asleep.
+    directory, opens the database and reads the schedule; everything else --
+    reaping the queue, publishing anything overdue, sweeping drafts -- happens
+    on the first :meth:`tick`. A constructor that walked the edition tree would
+    make the process slow to start for work nobody is waiting on.
     """
 
     def __init__(self, cfg: Config, clock: Clock | None = None,
@@ -90,13 +87,15 @@ class Desk:
         os.makedirs(cfg.data_dir, exist_ok=True)
 
         self.store = Store(os.path.join(cfg.data_dir, "desk.sqlite"), self.clock)
-        self.vault = Vault(cfg.vault_dir,
-                           os.path.join(cfg.data_dir, "schedule.cache.json"),
-                           self.clock)
         self.gates = gates or SubprocessGates(cfg.repo_dir)
         self.editions = EditionStore(cfg.data_dir, self.gates, self.store, self.clock,
                                      keep=cfg.keep_editions)
         self.tokens = Tokens(cfg.tokens_path)
+
+        #: Not a Config field, because no environment variable chooses it: the
+        #: schedule belongs to the serving root the same way the database does,
+        #: and a desk with two data roots is two desks.
+        self.schedule_path = os.path.join(cfg.data_dir, "schedule.json")
 
         self.schedule = sched.DEFAULT_SCHEDULE
         self.schedule_source = "default"
@@ -107,9 +106,8 @@ class Desk:
         self.queue_event = threading.Condition()
 
         self._last_housekeeping = 0.0
-        self._vault_was_available: bool | None = None
 
-        self._load_schedule(first=True)
+        self._load_schedule()
 
     # -- the periodic pass ------------------------------------------------
     def tick(self, now: float | None = None) -> list[str]:
@@ -124,11 +122,10 @@ class Desk:
 
         self.tokens.reload_if_changed()
 
-        if self.vault.poll():
-            self._load_schedule()
-            did.append("schedule:" + self.schedule_source)
-
-        self._note_vault_transition()
+        # No re-read of the schedule here. The desk is the only writer of
+        # schedule.json, so polling it would be the desk watching its own
+        # output -- and `set_schedule` has already applied anything a PUT
+        # changed, in the same call that wrote the file.
 
         expired = self.store.reap()
         if expired:
@@ -146,7 +143,6 @@ class Desk:
             self._last_housekeeping = t
             swept = self.editions.sweep_drafts()
             pruned = self.editions.prune()
-            self.vault.prune_archive()
             if swept or pruned:
                 did.append("housekeeping:%d/%d" % (swept, pruned))
 
@@ -173,7 +169,6 @@ class Desk:
             "staged": staged,
             "lastPublishAt": _as_int(self.store.last_publish_at()),
             "hold": _as_int(hold if hold and hold > t else None),
-            "vault": "available" if self.vault.available() else "unavailable",
             "scheduleSource": self.schedule_source,
             "schedule": sched.schedule_to_dict(self.schedule),
             "policy": {
@@ -188,47 +183,40 @@ class Desk:
             "editions": self.store.list_editions(limit=5),
         }
 
+    def set_schedule(self, s: sched.Schedule) -> None:
+        """Write ``s`` down, then put it in force -- in that order.
+
+        The file first: it is what the next desk reads, so a crash between the
+        write and the assignment loses nothing, while the other order would
+        lose the whole edit. A write that fails raises out of here and out of
+        the PUT that called it -- the schedule in force is then still the old
+        one, which is exactly what the operator will find on disk.
+
+        This exists so that no caller sets ``schedule`` and ``schedule_source``
+        by hand. Two attributes of another object, assigned from a request
+        handler, is one refactor away from a desk running on a schedule nobody
+        wrote down.
+        """
+        schedulefile.save(self.schedule_path, s)
+        self.schedule = s
+        self.schedule_source = "file"
+
     def close(self) -> None:
         """Release the database. Serving state on disk is already durable."""
         self.store.close()
 
     # -- internals --------------------------------------------------------
-    def _load_schedule(self, first: bool = False) -> None:
-        """Re-read the schedule, remembering where it came from."""
-        self.schedule, self.schedule_source = self.vault.load_schedule()
-        if first:
-            LOG.info("schedule from %s: %s, publish=%s, quiet=%s",
-                     self.schedule_source, self.schedule.timezone,
-                     self.schedule.publish_policy,
-                     [(w.start, w.end) for w in self.schedule.quiet])
+    def _load_schedule(self) -> None:
+        """Read the schedule off disk, and say in the log what came back.
 
-    def _note_vault_transition(self) -> None:
-        """Log the vault appearing or disappearing once, not once per tick.
-
-        A line per tick would bury the one that matters. A line per transition
-        is the answer to "when did the SSD go away", which is the only question
-        anybody asks about it.
-
-        Reappearing is also when the layout is written, because a disk that was
-        plugged in after the desk started is exactly the case where the vault
-        exists and its files do not. ``ensure_layout`` never overwrites
-        anything, so running it again on every reconnection is free and means
-        there is no ordering between mounting a disk and starting a container.
+        Called once, from the constructor: nothing else re-reads the file,
+        because nothing else writes it.
         """
-        available = self.vault.available()
-        if available == self._vault_was_available:
-            return
-        if self._vault_was_available is not None:
-            LOG.warning("vault is now %s (%s)",
-                        "available" if available else "UNAVAILABLE", self.cfg.vault_dir)
-        if available:
-            try:
-                self.vault.ensure_layout()
-            except OSError as e:
-                # A read-only or full disk. The desk keeps serving; only filing
-                # is affected, and the next transition will try again.
-                LOG.warning("could not write the vault layout: %s", e)
-        self._vault_was_available = available
+        self.schedule, self.schedule_source = schedulefile.load(self.schedule_path)
+        LOG.info("schedule from %s: %s, publish=%s, quiet=%s",
+                 self.schedule_source, self.schedule.timezone,
+                 self.schedule.publish_policy,
+                 [(w.start, w.end) for w in self.schedule.quiet])
 
     def _fire_due_wake(self, t: float) -> bool:
         """Enqueue one ``file_edition`` command per wake instant, at most once.

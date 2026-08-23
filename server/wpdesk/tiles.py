@@ -3,8 +3,8 @@
 The id rule is ``ui_tile.c``'s ``id_ok()`` -- letters, digits, underscore and
 hyphen, fifteen bytes -- restated here because the id becomes a path component
 on this side too. "The device would have rejected it anyway" is not a defence
-against a traversal on the desk, and the desk is the machine with the vault
-mounted.
+against a traversal on the desk, and the desk is the machine that answers a
+tunnel.
 
 The byte counts are transport limits and nothing more. Whether a tile's length
 agrees with the ``w * h / 2`` its payload declared is gate 1's question, and

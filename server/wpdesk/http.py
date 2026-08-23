@@ -4,20 +4,21 @@ The device plane serves three paths and answers 404 to everything else. That is
 ``docs/hosting-cloudflare.md``'s *"the publish directory is the allowlist"*
 moved into a routing table, and the reason for moving it is that a directory
 allowlist only holds while somebody keeps assembling the directory --
-``publish.sh`` rebuilds ``public/`` from empty on every run precisely because a
-list of exclusions drifts. A routing table holds because there is no code that
-can serve a fourth path. ``test_http.py`` asserts exactly that, which is the
-``find agent/standalone/public -type f`` check made executable.
+``agent/standalone/publish.sh`` rebuilds ``public/`` from empty on every run
+precisely because a list of exclusions drifts. A routing table holds because
+there is no code that can serve a fourth path. ``test_http.py`` asserts exactly
+that, which is the ``find agent/standalone/public -type f`` check made
+executable.
 
 The control plane is everything under ``/api/`` and every route on it is behind
 a bearer token. The split is by prefix and it is checked once, at the top of
 :meth:`_dispatch`, so a route added to the wrong table is a route that fails
-loudly rather than one that quietly serves the vault.
+loudly rather than one that quietly serves the control plane to anyone.
 
 Paths are matched against anchored regular expressions and the captured groups
 are validated before they are used, never joined to a directory as they
-arrived. This service is reachable from the internet through a tunnel and the
-machine it runs on has a vault mounted.
+arrived. This service is reachable from the internet through a tunnel, which
+is the whole reason the rule is a rule rather than a habit.
 """
 
 from __future__ import annotations
@@ -335,16 +336,17 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                               "schedule": sched.schedule_to_dict(self.desk.schedule)})
 
     def h_put_schedule(self, _match, _query) -> None:
-        """Validate the whole document, then write it to the vault.
+        """Validate the whole document, then put it in force and write it down.
 
-        There is no partial schedule: a document that fails validation leaves
-        the one in force untouched. The vault file is the source of truth and
-        this writes it, so an edit made here and an edit made in Obsidian are
-        the same edit to the same file.
+        There is no partial schedule: a document that fails validation is
+        refused whole and leaves the one in force untouched, so an operator
+        never has to work out which half of an edit landed. The file under
+        ``/data`` is the record and this endpoint is its only writer, which is
+        what makes the schedule survive a restart without the desk having to
+        watch a file it wrote itself.
         """
         parsed = sched.parse_schedule(self._json_body())
-        self.desk.vault.save_schedule(parsed)
-        self.desk.schedule, self.desk.schedule_source = self.desk.vault.load_schedule()
+        self.desk.set_schedule(parsed)
         self.desk.store.audit("schedule", {"source": self.desk.schedule_source})
         self._send_json(200, {"ok": True, "source": self.desk.schedule_source,
                               "schedule": sched.schedule_to_dict(self.desk.schedule)})
