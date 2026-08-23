@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,12 @@ MAX_BACKOFF = 300
 #: What ``AGENT_WRITE_BRIEFS`` accepts as yes. Anything else -- including the
 #: default -- is no.
 _TRUTHY = ("1", "true", "yes", "on")
+
+#: A proof sheet's name, which is ``editions.SHEET_RE`` on the desk's side of
+#: the token. The desk basenames what it reports, so this is not what stands
+#: between a name and the filesystem today -- it is what stands there when the
+#: desk answering is not the one this was written against.
+SHEET_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.(?:png|bmp)\Z")
 
 
 @dataclass(frozen=True)
@@ -181,10 +188,21 @@ def upload(desk: DeskClient, workdir: str) -> str:
 
 
 def fetch_sheets(desk: DeskClient, draft: str, names, into: str):
-    """Bring the proof sheets back so the next turn can look at them."""
+    """Bring the proof sheets back so the next turn can look at them.
+
+    A name is checked where it is joined rather than where it was reported,
+    which is the only place the check holds: these two containers are on
+    opposite sides of a bearer token, and a worker that depended on the desk
+    remembering ``os.path.basename`` would write wherever a desk told it to.
+    """
     os.makedirs(into, exist_ok=True)
     paths = []
     for name in names:
+        if not isinstance(name, str) or not SHEET_NAME_RE.match(name):
+            # Not fetched either: a name that cannot be written is not a name
+            # worth spending a request on.
+            LOG.warning("not a sheet name, skipping: %r", name)
+            continue
         try:
             data = desk.fetch_sheet(draft, name)
         except RuntimeError as e:

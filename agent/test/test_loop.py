@@ -77,6 +77,49 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(loop.Settings.from_env({"AGENT_TOOLS": mine}).tools, mine)
 
 
+class FetchSheetsTest(unittest.TestCase):
+    """The sheet names, which arrive from the desk and become paths.
+
+    The desk applies ``os.path.basename`` to them before it reports them, so
+    today every name is already a bare one. That is the desk remembering, and
+    this is the worker not depending on it: the two containers are on opposite
+    sides of a token, and a name is checked where it is joined.
+    """
+
+    class Desk:
+        """Enough of :class:`deskclient.DeskClient` to answer ``fetch_sheet``."""
+
+        def __init__(self):
+            self.asked = []
+
+        def fetch_sheet(self, draft, name):
+            self.asked.append(name)
+            return b"\x89PNG\r\n\x1a\n"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_sheet_name_that_is_a_path_is_not_written(self):
+        into = os.path.join(self.tmp, "proof")
+        desk = self.Desk()
+        paths = loop.fetch_sheets(desk, "d", ["../escaped.png", "sub/A1.png",
+                                              "/etc/A1.png", "A1.png"], into)
+
+        self.assertEqual(paths, [os.path.join(into, "A1.png")])
+        self.assertEqual(os.listdir(into), ["A1.png"])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "escaped.png")))
+        # And nothing was even asked for: a name that cannot be written is a
+        # name there is no point fetching.
+        self.assertEqual(desk.asked, ["A1.png"])
+
+    def test_the_names_the_desk_really_sends_are_written(self):
+        into = os.path.join(self.tmp, "proof")
+        paths = loop.fetch_sheets(self.Desk(), "d", ["A1.png", "A2.bmp"], into)
+        self.assertEqual(sorted(os.path.basename(p) for p in paths),
+                         ["A1.png", "A2.bmp"])
+
+
 class WriteBriefTest(unittest.TestCase):
     """The one write into a directory this repository does not own."""
 

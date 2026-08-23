@@ -25,6 +25,10 @@ import deskclient
 
 TOKEN = "test-token-never-in-a-message"
 
+#: What the desk mints for a command: ``uuid4().hex``, and the only shape the
+#: worker will accept back -- the id becomes a path under the scratch.
+CID = "0123456789abcdef0123456789abcdef"
+
 
 class _Response:
     """What ``urllib.request.urlopen`` hands back, minus the socket."""
@@ -91,8 +95,8 @@ class ClaimTest(unittest.TestCase):
         self.assertIsNone(desk.claim())
 
     def test_a_command_comes_back_as_a_dict(self):
-        desk, _ = client((200, json.dumps({"id": "abc", "text": "NVDA"}).encode()))
-        self.assertEqual(desk.claim()["id"], "abc")
+        desk, _ = client((200, json.dumps({"id": CID, "text": "NVDA"}).encode()))
+        self.assertEqual(desk.claim()["id"], CID)
 
     def test_a_200_that_is_not_json_raises_so_the_loop_backs_off(self):
         # A proxy in front of the tunnel serving an HTML error page. It reaches
@@ -112,6 +116,21 @@ class ClaimTest(unittest.TestCase):
         for body in (b"[]", b'[{"id":"abc"}]'):
             desk, _ = client((200, body))
             with self.assertRaises(RuntimeError, msg=repr(body)):
+                desk.claim()
+
+    def test_an_id_that_is_not_the_shape_the_desk_mints_raises(self):
+        # The id becomes a directory under the scratch and then the argument to
+        # `shutil.rmtree`, so this is where the desk's answer stops being
+        # something to trust and starts being a path. The desk mints
+        # `uuid4().hex` and nothing else; a worker that took `../..` on its word
+        # would delete its way out of the scratch, and the compromised desk that
+        # sent it is the precondition, not the exploit.
+        for bad in ("../..", "abc", "", "0123456789abcdef",
+                    "0123456789abcdef0123456789abcdeg",         # 32, but not hex
+                    "0123456789abcdef0123456789abcdef\n",       # why \Z and not $
+                    "0123456789ABCDEF0123456789ABCDEF"):        # uuid4().hex is lower
+            desk, _ = client((200, json.dumps({"id": bad, "text": "NVDA"}).encode()))
+            with self.assertRaises(RuntimeError, msg=repr(bad)):
                 desk.claim()
 
     def test_a_200_dict_without_an_id_raises(self):

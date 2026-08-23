@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -38,6 +39,14 @@ LOG = logging.getLogger("worker.desk")
 #: free on both sides and it is the difference between reacting in a second and
 #: reacting on a poll interval.
 CLAIM_WAIT = 60
+
+#: What the desk mints for a command -- ``uuid4().hex``, and nothing else ever.
+#: Checked here because :func:`loop.handle` joins the id to the scratch
+#: directory and hands the result to ``shutil.rmtree``: this is the line where
+#: the desk's answer stops being a document and becomes a path. ``\Z`` and not
+#: ``$``, for the reason the desk gives at ``editions.py`` -- ``$`` also matches
+#: before a trailing newline, and that is not a directory name.
+COMMAND_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 class DeskClient:
@@ -125,6 +134,14 @@ class DeskClient:
         second to five minutes. Every other method keeps the envelope, because
         for those "the desk answered HTML" is a report and not a crash.
 
+        The id is checked for its shape as well as its presence. It is not a
+        name here for long: the loop makes a directory of it and empties that
+        directory with ``shutil.rmtree``, so an id of ``../..`` from a desk
+        this worker should not have trusted -- a compromised one, a
+        misconfigured ``WPNEWS_DESK``, a MITM on plain HTTP -- deletes its way
+        out of the scratch. The precondition is real enough to check for: this
+        container is the one holding the API key.
+
         Returns:
             The instruction, or ``None`` when there was nothing to claim.
 
@@ -139,6 +156,8 @@ class DeskClient:
             raise self._fail("claim failed", status, doc)
         if not isinstance(doc, dict) or "id" not in doc:
             raise self._fail("claim answered with no instruction", status, doc)
+        if not isinstance(doc["id"], str) or not COMMAND_ID_RE.match(doc["id"]):
+            raise self._fail("claim answered with a malformed id", status, doc)
         return doc
 
     def finish(self, cid: str, ok: bool, result: str) -> None:

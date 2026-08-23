@@ -72,6 +72,13 @@ FIXTURE = os.path.join(ROOT, "components", "news_core", "test", "host",
 # tiles/ directory of its own — hence --tiles, and hence this constant for --write-fixture.
 SIM_TILES = os.path.join(ROOT, "sim", "tiles")
 
+# The tile id's charset, which is ui_tile.c's id_ok() and nothing else: the id IS the last path
+# segment of the URL the board fetches, so a character outside this set is a path that can climb
+# out of the tile directory. One constant because there are two callers — the handler that serves
+# a tile and the validator that looks for one — and two spellings of a path rule is one spelling
+# that gets forgotten.
+TILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,15}\Z")
+
 # The masthead’s own date. Fixed rather than taken from the clock: the fixture
 # is committed, and a payload whose dateline moved overnight would fail
 # test_news_mock every morning for no reason.
@@ -972,10 +979,11 @@ class Handler(BaseHTTPRequestHandler):
         # reference PRODUCER has to be able to serve what its own payload names.
         if path.startswith("/tiles/") and path.endswith(".bin"):
             tile_id = path[len("/tiles/"):-len(".bin")]
-            # The tile layer's own id rule (ui_tile.c's id_ok()), enforced here
-            # so a path can never climb out of the tile directory.
-            if not tile_id or not all(
-                    c.isalnum() or c in "_-" for c in tile_id):
+            # The tile layer's own id rule, enforced before the join so a path
+            # can never climb out of the tile directory. Through TILE_ID_RE
+            # rather than str.isalnum(), which answers True for a letter in any
+            # alphabet and so allowed ids the firmware's id_ok() refuses.
+            if not TILE_ID_RE.match(tile_id):
                 self.send_error(404)
                 return
             blob = os.path.join(SIM_TILES, tile_id + ".bin")
@@ -1296,12 +1304,24 @@ def _tile_problems(d, tiles_dir):
                             f"fetched, and news_parse drops it whole")
             continue
 
+        # Before the join, not after: this validator now runs on the desk over payloads that
+        # arrived from the internet, and its report goes back to whoever filed them. An id that
+        # is a path would otherwise make the two lines below an existence-and-size oracle for
+        # any *.bin on that machine.
+        if not isinstance(p["id"], str) or not TILE_ID_RE.match(p["id"]):
+            problems.append(f"{who}: id {p['id']!r} is not [A-Za-z0-9_-]{{1,15}} — "
+                            f"the device drops it")
+            continue
+
         tile = os.path.join(tiles_dir, p["id"] + ".bin")
         want = w * h // 2
+        # The basename rather than the path: the reader knows which directory they filed, and a
+        # container path in a report that leaves the machine is a disclosure for no benefit.
+        name = os.path.basename(tile)
         if not os.path.exists(tile):
-            problems.append(f"{who}: {tile} is missing — the slot renders empty")
+            problems.append(f"{who}: {name} is missing — the slot renders empty")
         elif os.path.getsize(tile) != want:
-            problems.append(f"{who}: {tile} is {os.path.getsize(tile)} bytes, "
+            problems.append(f"{who}: {name} is {os.path.getsize(tile)} bytes, "
                             f"{w}x{h} needs {want} — it will not be fetched")
     return problems
 
