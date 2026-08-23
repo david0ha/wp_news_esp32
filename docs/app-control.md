@@ -249,9 +249,10 @@ measurement, with no instruments and no serial cable.
   which is the very thing these counters exist to fix. A total that silently contained a guess would
   defeat the purpose of reporting counters at all. Expect the real figure to be higher; how much
   higher is what a day on a wall is for.
-- Both are `0` until the board has slept at least once, because neither has an input yet: nothing
-  has been accumulated into `awakeMsTotal` for `meanAwakeMs` to average, and `estMahPerDay` has no
-  interval to divide into a day. Not an error, and not a real figure either.
+- Both are `0` until the board has slept at least once, because neither has an input yet: the
+  board's `awake_ms_total` counter — charged on the way into a sleep, and not itself reported here —
+  is what `meanAwakeMs` averages, and `estMahPerDay` has no interval to divide into a day. Not an
+  error, and not a real figure either.
 - `sleepSeconds` is the interval this board will **actually sleep for** when the window closes, not
   the one it was built or configured with. It is `power_cadence()`'s answer, computed from the same
   inputs the board is about to sleep on: the news server's `policy` block if it sent one, otherwise

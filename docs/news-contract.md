@@ -47,9 +47,10 @@ GET <news_url>          every CONFIG_CLAUDEPOST_POLL_SECONDS, default 60, range 
 The device sends at most one request header **of its own** — `If-None-Match` — beside the ordinary
 `Host`, `User-Agent` and `Accept` that `esp_http_client` frames, and reads at most one response
 header — `ETag`. Both are optional on both sides, and a server that implements neither is fully
-supported; see [Asking again](#asking-again-etag-and-304). Nothing else is required or checked. The response must carry a **2xx status** — checked
-before the body is parsed, not after, because a 404 page and a captive-portal redirect are both
-perfectly good documents that happen not to be a front page, and "your URL is wrong" and "your JSON
+supported; see [Asking again](#asking-again-etag-and-304). Nothing else is required or checked.
+The response must carry a **2xx status** — checked before the body is parsed, not after, because a
+404 page and a captive-portal redirect are both perfectly good documents that happen not to be a
+front page, and "your URL is wrong" and "your JSON
 is wrong" are different messages in the log (`news_service.c`). The device port caps a response at
 **320 KB** and times out at **15 s**.
 

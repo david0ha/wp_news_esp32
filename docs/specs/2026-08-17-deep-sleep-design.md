@@ -425,9 +425,11 @@ brick.
 
 ## 8. The button wake keeps the companion app alive
 
-A TIMER wake sleeps again immediately. An **EXT1 wake means a person is standing
-in front of the frame**, so the full path stays up for `AWAKE_WINDOW_SECONDS`
-(120) with `device_api` and mDNS serving, then sleeps.
+A TIMER wake's awake window is zero — it sleeps the moment its one page is on
+the paper, or the moment `NewsTask` reports that none is coming. An **EXT1 wake
+means a person is standing in front of the frame**, so the full path stays up
+for `AWAKE_WINDOW_SECONDS` (120) with `device_api` and mDNS serving, then
+sleeps.
 
 About **5.7 mAh per press**, incurred only when someone presses. The standing
 cost is zero. Without this the companion app is effectively dead on a sleeping

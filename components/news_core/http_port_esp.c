@@ -138,7 +138,7 @@ static esp_http_client_handle_t client_new(const char *url) {
         .url               = url,
         .event_handler     = on_evt,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms        = 15000,
+        .timeout_ms        = HTTP_TIMEOUT_MS,
         .buffer_size       = 4096,
         .keep_alive_enable = true,   /* TCP keepalive: detect dead idle sockets */
 #if CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS

@@ -139,33 +139,6 @@ static int s_btn_count;
  * than a blank panel, and the real one lands on the next poll anyway. */
 #define FIRST_PAINT_WAIT_MS 15000
 
-/* The same wait on a TIMER wake, where it is a BACKSTOP rather than a budget.
- *
- * A timer wake reaches the full path only because the quiet path found new
- * content, so it is here to print exactly one page and then sleep — and the
- * moment it may sleep is when the first fetch has RESOLVED, not when a
- * stopwatch says so. NewsTask says which of the two happened: APP_CMD_DATA
- * when it has a page, APP_CMD_FETCH_FAILED when it has given up. Either ends
- * this wait, so on every ordinary wake the number below is never reached.
- *
- * Fifteen seconds cannot be the answer here. The quiet path already spent a
- * connect and a fetch, NewsTask then re-fetches the JSON and every photograph
- * in the edition — the cache did not survive the sleep — and on a slow network
- * that lands past fifteen seconds. What used to happen then was the failure
- * this constant exists to remove: the wait timed out, the loop's zero-length
- * window fired on its first pass, and the APP_CMD_DATA that arrived a moment
- * later was discarded. The edition never reached the glass, the wake counted a
- * failure, and the next wake did the same thing — hourly, forever, with every
- * log line reading `fetch=changed -> refresh`.
- *
- * Two minutes, derived rather than picked: the definitive-failure path is
- * five attempts at the port's 15,000 ms timeout plus four FIRST_RETRY_SECONDS
- * waits, which is 87 seconds, and the success path's tail is at most
- * UI_TILE_SLOTS photographs against the same timeout. Past two minutes
- * NewsTask is not slow, it is stuck, and a board that printed nothing is
- * better than a board that never sleeps again. */
-#define FIRST_PAINT_WAIT_TIMER_MS 120000
-
 /* Poll interval used for the first few attempts of a boot, so a first fetch
  * that lands a moment before the server does is not punished with a whole
  * interval of blank panel.
@@ -177,9 +150,68 @@ static int s_btn_count;
  * milliamp-hours of them. Four attempts covers the twelve seconds inside
  * FIRST_PAINT_WAIT_MS where a retry can still change which page gets printed,
  * which is the entire benefit; after that the normal interval is the correct
- * behaviour for a server that is not there. */
+ * behaviour for a server that is not there.
+ *
+ * Both numbers now have a second job: they decide WHEN the first fetch of a
+ * boot is declared over, because APP_CMD_FETCH_FAILED is posted the moment
+ * they are spent — and FIRST_PAINT_WAIT_TIMER_MS below is derived against
+ * them. That derivation is why they are not just a pair of tuning knobs any
+ * more: raise either one without the backstop following, and a timer wake
+ * starts reporting the failure by timing out instead of by being told, which
+ * is the shape of the bug that discarded editions in silence. Deriving it
+ * rather than restating it is what makes "raise them" safe. */
 #define FIRST_RETRY_SECONDS 3
 #define FIRST_RETRY_MAX     4
+
+/* The same first-paint wait on a TIMER wake, where it is a BACKSTOP rather
+ * than a budget — and where it is DERIVED rather than picked.
+ *
+ * A timer wake reaches the full path only because the quiet path found new
+ * content, so it is here to print exactly one page and then sleep, and the
+ * moment it may sleep is when the first fetch has RESOLVED. NewsTask says
+ * which way: APP_CMD_DATA when it has a page, APP_CMD_FETCH_FAILED when it has
+ * given up. Either ends the wait, so on every ordinary wake this number is
+ * never reached at all.
+ *
+ * What it must outlast is the longest a boot can honestly take to reach one of
+ * those two answers, and that is a sum of things named elsewhere rather than a
+ * round number:
+ *
+ *   (FIRST_RETRY_MAX + 1) x HTTP_TIMEOUT_MS   every attempt the fast-retry
+ *                                             budget allows, each able to time
+ *                                             out; the last of them is the one
+ *                                             that may instead succeed
+ *   FIRST_RETRY_MAX x FIRST_RETRY_SECONDS     the waits between them
+ *   (NEWS_STORIES_MAX + NEWS_THUMBS_MAX)      every photograph an edition can
+ *     x HTTP_TIMEOUT_MS                       carry, fetched before UiTask is
+ *                                             notified, on a cache that did not
+ *                                             survive the sleep
+ *
+ * The three terms add rather than compete, because the worst case really is
+ * all of them: four attempts time out, the fifth succeeds, and then seven
+ * tiles time out one after another before the page is posted. Fifteen seconds
+ * cannot be the answer here and neither can two minutes — at 120,000 ms a
+ * board whose tiles all time out posts its page at 192 s, after the backstop
+ * fired, and the edition is discarded exactly as it was before this constant
+ * existed: never printed, counted a failure, refetched next wake, hourly,
+ * forever, with every log line reading `fetch=changed -> refresh`.
+ *
+ * Past this, NewsTask is not slow, it is stuck, and a board that printed
+ * nothing is better than a board that never sleeps again. */
+#define FIRST_PAINT_WAIT_TIMER_MS                                              \
+    ((FIRST_RETRY_MAX + 1) * HTTP_TIMEOUT_MS +                                 \
+     FIRST_RETRY_MAX * FIRST_RETRY_SECONDS * 1000 +                            \
+     (NEWS_STORIES_MAX + NEWS_THUMBS_MAX) * HTTP_TIMEOUT_MS)
+
+/* The one thing the derivation must never stop being true of: the backstop
+ * outlasts the retry budget, so a definitively failed fetch is always reported
+ * by NewsTask rather than discovered by a stopwatch. It cannot fail while the
+ * expression above is written in terms of the same constants — which is the
+ * point of writing it that way, and of asserting it anyway. */
+static_assert(FIRST_PAINT_WAIT_TIMER_MS >
+                  (FIRST_RETRY_MAX + 1) * HTTP_TIMEOUT_MS +
+                      FIRST_RETRY_MAX * FIRST_RETRY_SECONDS * 1000,
+              "a timer wake's backstop must outlast its own fast-retry budget");
 
 /* KEY2 held this long forces Wi-Fi setup mode — the escape hatch when the board
  * is stuck on a network the user can no longer reach. */
@@ -1104,8 +1136,12 @@ static void UiTask(void *arg)
     } else if (deadline_us) {
         /* The zero-window timer wake. It used to log "staying reachable for
          * 0s", which is the line a bench operator reads on the wake that
-         * matters most and it said the opposite of what happens. */
-        ESP_LOGI(TAG, "printing, then sleeping");
+         * matters most and said the opposite of what happens — and then said
+         * "printing, then sleeping", which is wrong in the other direction:
+         * by the time this runs the printing is already done, and on the arm
+         * where NewsTask gave up there was none. What is true of both is the
+         * window. The accounting is the enter_sleep() line a moment later. */
+        ESP_LOGI(TAG, "zero-length window — sleeping as soon as this wake is done");
     }
 
     for (;;) {

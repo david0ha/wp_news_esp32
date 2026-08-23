@@ -164,8 +164,11 @@ whether a URL is configured:
   point: the demo snapshot is a complete front page, not a placeholder.
 - **A URL.** `UiTask` holds the refresh open for up to fifteen seconds waiting for the first
   snapshot, so the real front page is what lands on the glass — the demo is never printed at all. If
-  nothing arrives in time you get `W app: no snapshot within 15000 ms — printing the demo page` and
-  the demo goes up instead, with the real one following on the next poll.
+  nothing arrives in time you get `W app: no snapshot within 15000 ms — printing the demo page`, and
+  if the desk refuses the connection outright you get `W app: the first fetch of this boot failed —
+  printing the demo page` a few seconds sooner: a refused connect fails in milliseconds, so the four
+  fast retries are spent at about twelve seconds and `NewsTask` says so rather than letting the
+  stopwatch run out. Either way the demo goes up, with the real one following on the next poll.
 
 Between power-on and that refresh the glass keeps whatever it was last left holding. A board being
 re-flashed therefore shows yesterday's front page for the twenty or so seconds before the new one
@@ -359,10 +362,12 @@ I main: content changed — printing without a second connect
 I app: awake window closed — sleeping 900s from policy (fetched page printed yes, fails 0)
 ```
 
-and between those the boot proceeds through the whole of §2 — `epd6`, `LvglPort`, the refresh — before
-sleeping. `printing, then sleeping` is the line that says this wake has a zero-length window: it got
-up to print one page and will sleep the moment that page is on the paper. This is the expensive kind, and on a normal day there should be about two of them. The last
-line is where the accounting happens rather than at the decision: `fetched page printed yes` is what
+and between those the boot proceeds through the whole of §2 — `epd6`, `LvglPort`, the refresh —
+before sleeping. `zero-length window — sleeping as soon as this wake is done` is the line that says
+this wake has no awake window at all: it got up to resolve one fetch, and it sleeps the moment that
+fetch has resolved one way or the other. This is the expensive kind, and on a normal day there
+should be about two of them. The last line is where the accounting happens rather than at the
+decision: `fetched page printed yes` is what
 clears the failure count, because a wake that decided to print and then failed to fetch anything has
 printed nothing, and a board that called that healthy would go on doing it every fifteen minutes. It
 says *fetched* because a page swap, the self-test pattern and the demo page all reach the glass
@@ -416,9 +421,12 @@ Two lines say which:
 - `the first fetch of this boot failed — leaving the printed edition on the glass` — the desk
   answered the quiet path and then did not answer `NewsTask`. `fails` climbing across wakes is the
   correct behaviour and the backoff will slow the board down.
-- `no snapshot within 120000 ms — …` — `NewsTask` neither succeeded nor gave up inside the backstop,
-  which means it is stuck rather than slow. Two minutes covers five attempts at the port's 15 s
-  timeout plus every photograph in the edition, so this line is a bug report, not a slow network.
+- `no snapshot within 192000 ms — …` — `NewsTask` neither succeeded nor gave up inside the backstop,
+  which means it is stuck rather than slow. That figure is derived rather than chosen: five attempts
+  at the port's 15 s timeout, the four three-second waits between them, and the seven photographs an
+  edition can carry against the same timeout — the worst case a boot can honestly reach before it
+  either has a page or has said it has none. Past it, this line is a bug report and not a slow
+  network.
 
 What must **never** appear is that pair with no reason line at all between them, and the glass
 unchanged wake after wake with `fetch=changed` every time. That was the shape of the bug the zero

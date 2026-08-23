@@ -25,6 +25,21 @@
 extern "C" {
 #endif
 
+/* How long one request may take before the port gives up on it.
+ *
+ * It lives in the header rather than beside the config that sets it because it
+ * is no longer only the transport's business: user_app.cpp sizes a timer wake's
+ * backstop against it — how long a boot may spend on its first fetch is
+ * (attempts x this) — and a number that moved here without moving there would
+ * reopen a bug that discards editions in silence. The device port is the only
+ * one that applies it; the simulator's libcurl handle has no timeout at all,
+ * which is correct for a desktop and irrelevant to the derivation.
+ *
+ * Fifteen seconds is a slow home network and a server that is slow rather than
+ * absent. Shorter starts failing polls that would have succeeded; longer is a
+ * board holding a radio open for a server that is not answering. */
+#define HTTP_TIMEOUT_MS 15000
+
 /* Call once before any http_get(), from a single thread, before the fetch tasks
  * start. Creates the global TLS-connect gate (device port) so concurrent first
  * handshakes serialize; a no-op where the port needs no gate (simulator). */
