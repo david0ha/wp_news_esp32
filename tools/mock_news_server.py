@@ -987,9 +987,19 @@ class Handler(BaseHTTPRequestHandler):
     # here to prevent, so sort_keys canonicalises the order and the hash is
     # taken over the result.
     #
-    # sha1 truncated to sixteen hex digits: the device treats the tag as an
+    # sha256 truncated to sixteen hex digits: the device treats the tag as an
     # opaque string, so this is a change detector and not a security boundary,
-    # and sixty-four bits is a collision every few billion editions.
+    # and sixty-four bits is a collision every few billion editions. The digest
+    # is sha256 because `server/claudepost/http.py`'s `_etag()` is, and there is
+    # one recipe rather than two — a board must not be able to tell the desk and
+    # the reference producer apart by the shape of a tag.
+    #
+    # The two share the RECIPE and not the INPUT, which is the part worth
+    # saying: the desk hashes the exact bytes it is about to write, policy block
+    # spliced in, so its tag moves at a schedule transition. This server hashes
+    # the canonical dump of the snapshot it made up, which carries no policy at
+    # all. Same shape, same digest, different question — and neither tag is ever
+    # compared against the other's.
     #
     # NOTE this is deliberately NOT news_hash(). That one fingerprints the
     # parsed model — what reaches the glass — and remains the sole authority on
@@ -1000,7 +1010,7 @@ class Handler(BaseHTTPRequestHandler):
     def etag_for(payload):
         canonical = json.dumps(payload, sort_keys=True,
                                ensure_ascii=False).encode("utf-8")
-        return '"' + hashlib.sha1(canonical).hexdigest()[:16] + '"'
+        return '"' + hashlib.sha256(canonical).hexdigest()[:16] + '"'
 
     def do_GET(self):
         path = self.path.split("?")[0]
