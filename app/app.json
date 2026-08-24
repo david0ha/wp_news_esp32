@@ -11,7 +11,9 @@
       "bundleIdentifier": "com.claudepost.app",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Claude Post connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
-        "NSBonjourServices": ["_http._tcp"],
+        "NSBonjourServices": [
+          "_http._tcp"
+        ],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         }
@@ -43,6 +45,13 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "183e1b34-47e8-4392-9f41-be6f070e1e89"
+      }
+    },
+    "icon": "./assets/icon.png"
   }
 }
