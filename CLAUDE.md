@@ -64,9 +64,10 @@ Five layers, four of them runnable without hardware. Run them in this order — 
 the next and catches a different class of mistake.
 
 ```bash
-# 0) the desk and the worker, pure logic — no Docker, no network, no API key
+# 0) the desk, the worker and the phone app, pure logic — no Docker, no network, no API key
 sh server/test/run.sh
 sh agent/test/run.sh
+(cd app && npm test && npm run typecheck)   # the client, the PNG decoder, the formatters
 
 # 1) pure logic — ten host tests: the wire format, the demo snapshot, the fetch
 #    layer, the companion-app JSON, the quantizer, the framebuffer repack,
@@ -243,7 +244,7 @@ components/
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
   power/                  the wake decision (pure, host-tested), RTC-retained state, the shutdown
-app/                      React Native companion app — setup + control over the LAN
+app/                      React Native companion app — setup, control, and the page on the glass; ships via EAS/TestFlight
 sim/                      desktop simulator — renders the real UI to 1200x1600 and asserts on it
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 tools/

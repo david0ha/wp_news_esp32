@@ -2,11 +2,10 @@ import { StyleSheet, Text, View } from 'react-native'
 import { colors, radius } from '../theme'
 
 /**
- * One big number with a label, and an optional footnote under it. Four of these make the
- * dashboard's counter grid (notes / links / orphans / tags).
+ * One big number with a label, and an optional footnote under it. Sized to sit two per row.
  *
- * `tone` colours the number: the counter grid uses it for orphans, where a large number is the
- * one thing on the tile the user might want to act on.
+ * `tone` colours the number, for the case where a large value is the one thing on the tile the
+ * user might want to act on.
  */
 export function StatTile({
   label,

@@ -4,13 +4,15 @@ A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S
 over your home Wi-Fi. No cloud, no accounts, no API keys — the app talks **directly** to the board
 over plain HTTP on the LAN.
 
-It does two things:
+It does three things:
 
 1. **Onboarding** over the board's setup Wi-Fi (SoftAP): pick your home Wi-Fi, enter the password
-   and the news snapshot URL, and the board reboots onto your network.
-2. **Live control** over the LAN: a dashboard that polls the board, shows what it is displaying and
-   how its last poll went, switches the page on the panel, changes the snapshot URL, and runs the
-   panel self-test.
+   and the edition URL, and the board reboots onto your network.
+2. **Live control** over the LAN: a dashboard that polls the board, shows the company today's
+   edition is about, how the last poll went, and what the board's power counters say — and
+   switches the page, changes the URL, sets the sleep interval and runs the panel self-test.
+3. **Seeing the glass**: a preview rendered from the board's own framebuffer, in the measured
+   Spectra 6 inks.
 
 The HTTP/JSON contract it implements is documented in [`../docs/app-control.md`](../docs/app-control.md).
 `src/lib/esp32.ts` is the TypeScript mirror of that document and the only file in the app that
@@ -18,31 +20,58 @@ knows a field name.
 
 ## What the dashboard shows
 
-Not the news — the *board*. The full snapshot is on the URL the board polls, which the phone can
-open too; what a companion app is for is the half-metre of air between the user and a device with
-no keyboard:
+Not the whole edition — the *board*. Both sheets are at the URL in `source.url`, which the phone
+can fetch as easily as the board can; what a companion app is for is the half-metre of air between
+the user and a device with no keyboard:
 
-- **Status** — how the last poll went, whether what's on the glass is demo data or stale, battery.
-- **Counters** — notes, links, orphans, tags, with link density and orphan rate derived.
-- **Agents & queue** — how many agents are running, and how deep the note/inbox queues are.
-- **On the panel** — which page is showing (with the board's own Korean title for it), and a
-  switcher. A page change is a full refresh of a 5.83" panel, so the control stays on the page you
-  asked for until the board confirms it, rather than snapping back and looking like a lost tap.
-- **Source** — the URL, the last result, when it last succeeded, how often it polls. The three
-  failure codes (`transport` / `http_status` / `bad_payload`) each get their own sentence, because
-  they send you to three different places.
-- **Panel** — the measured full/partial refresh times. The refresh policy for this panel is meant
-  to be chosen from measurement, and this is how you read the measurements off a board on a shelf
-  instead of holding a serial cable to it.
-- **Quick memo** — type something and it lands in the news's inbox, so the queue on the panel is
-  somewhere you can add to from the sofa. Saving also asks the board to poll, which is what makes
-  the memo appear on the glass while you are still looking at it.
+- **Status** — how the last poll went, whether the glass has the demo edition or a stale one,
+  whether this board sleeps, and the battery when there is one.
+- **The company** — every edition is about one listed company, so the symbol, the name, the price
+  and the change *are* what the board is printing today. A new symbol or a new `generatedAt` is the
+  cheapest "did the edition change" check there is.
+- **The tape** — up to five index cells, symbol and direction.
+- **Headlines** — what the board actually set, in its order, and under them the `counts`: what
+  arrived **after parsing**. That line is the difference between "the desk filed a thin day" and
+  "the parser dropped something", which is a distinction no other field can make.
+- **On the panel** — which page is showing (with the board's own title for it: `FRONT PAGE` /
+  `MARKETS`), a switcher, what the last refresh actually cost, and the way through to the preview.
+  A page change is a full refresh of a 13.3" Spectra 6 panel, so the control stays on the page you
+  asked for until the board confirms it rather than snapping back and looking like a lost tap.
+- **Source** — the URL, the last result, when it last succeeded, and the cadence **with who set
+  it**. `not_modified` is a success, not a failure: it is a 304 against the board's ETag, and on a
+  board polling all day it is the most common outcome there is.
+- **Power** — deep sleep on or off, the interval the board will *actually* sleep for and which of
+  the four layers decided it, the wake counters, and the awake-time mAh estimate. The sleep-interval
+  editor writes `POST /api/sleep`; when the desk's `policy` block is driving, no preset is shown as
+  selected, because the stored value is waiting rather than in force.
 
-The memo box is the one thing here that does **not** talk to the board. `POST /capture` is served
-by whatever is producing the snapshot — `tools/news_server.py --allow-capture` does, most
-producers will not — so the app derives its address from the snapshot URL the board reports, and
-treats "this server doesn't do capture" as an ordinary answer with its own sentence. The boundary
-is why it lives in `src/lib/capture.ts` and not in `src/lib/esp32.ts`.
+## Seeing the page on the glass
+
+`GET /api/screen` hands over the framebuffer verbatim — 960,000 bytes, portrait 1200 × 1600 at
+4 bpp, two pixels per byte, the panel's own six wire codes as the nibble values. `src/lib/screen.ts`
+turns that into an **indexed PNG** on the phone: `pako` for the IDAT, a hand-rolled CRC-32 and
+base64, and a 16-entry palette so the pixel byte written *is* the nibble read.
+
+Two decisions worth knowing:
+
+- The palette is `wp_palette_ink[]` — the **measured** "as paper" table, the one the simulator draws
+  its screenshots with — not the saturated `wp_palette_rgb[]` the UI draws with. A preview in
+  primaries would flatter the design into a decision nobody could make from the real sheet.
+- The ten nibble values the panel cannot make (`0x04`, `0x07`..`0x0F`) render as **magenta**, which
+  is not one of the six inks and cannot be. A contract drift that rendered as plausible paper is a
+  drift nobody would report.
+
+A frame caught mid-render can show part of one edition and part of the next. That is the download,
+not the panel — the UI task is not locked out of its framebuffer while a phone reads it, and
+locking would cost the board the length of a download to spare one imperfect preview of a page that
+flashes for twenty-five seconds whenever it changes for real.
+
+**And it only answers while the board is awake.** A board on a battery with deep sleep on wakes for
+about three seconds, asks its desk one conditional question and goes back down without running a
+server at all. A timeout against it is the feature working, so the app says so — press a button on
+the board, which holds it awake for a couple of minutes, and every request restarts that clock.
+`humanError()` in `src/lib/esp32.ts` owns that sentence, and it is why a timeout is a separate error
+code from a network failure rather than being folded into "check your Wi-Fi".
 
 ## Why not Expo Go?
 
@@ -66,7 +95,7 @@ npm install
 
 ### 1. Develop against the mock (no hardware needed)
 
-A Node mock implements **both** board APIs (provisioning + control):
+A Node mock implements **both** board APIs (provisioning + control), including `/api/screen`:
 
 ```bash
 npm run mock                      # http://localhost:8080  (PORT=9000 to change)
@@ -78,20 +107,24 @@ EXPO_PUBLIC_ESP32_BASE_URL=http://localhost:8080 npx expo start
 routes straight to the dashboard). Open it in the iOS Simulator (which can reach the host's
 `localhost`) or an Android emulator (use `http://10.0.2.2:8080` instead of `localhost`).
 
-The mock is not a stub. Give it a real snapshot URL and it fetches it and summarises it exactly as
-the firmware would, including the three distinct failure codes — so the whole chain the board walks
-is exercised, with only the panel missing:
+The mock is not a stub. Give it a real edition URL and it fetches it **with an `If-None-Match`**,
+so a 304 is a real `not_modified` and not a simulated one, and summarises the payload exactly as
+`components/news_core/device_api_json.c` would — cents, basis points, counts and all:
 
 ```bash
 python3 ../tools/mock_news_server.py --port 8123     # the news contract, as a server
 curl -X POST http://localhost:8080/api/news -d '{"url":"http://localhost:8123/news.json"}'
+curl -s http://localhost:8080/api/state | jq .news.subject
+curl -X POST http://localhost:8080/api/refresh       # again -> lastResult becomes not_modified
 ```
 
-To exercise the memo box too, serve a real (or throwaway) news with capture enabled instead:
+`GET /api/screen` on the mock serves a **deterministic synthetic page** in the device's own
+framebuffer format — the 30 px margin, a masthead bar, one keylined stripe per ink, the six-column
+grid at 170 + 24, a screened block for a photograph and a drawn curve. Anything that decodes it
+wrong decodes it obviously wrong:
 
 ```bash
-python3 ../tools/news_server.py ~/some/news --port 8123 --allow-capture
-curl -X POST http://localhost:8080/api/news -d '{"url":"http://localhost:8123/news.json"}'
+curl -s http://localhost:8080/api/screen | wc -c     # 960000
 ```
 
 Provisioning test knobs in the mock: enter password **`wrong`** to exercise the auth-failure path;
@@ -108,25 +141,31 @@ Then follow the in-app onboarding:
 1. **Turn on** the board (USB-C). In your phone's Wi-Fi settings, join the network named
    `Claude Post-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
 2. **Pick your Wi-Fi** from the scanned list (or "Other…" for a hidden SSID).
-3. **Enter the snapshot URL** — or skip it, and the board runs on its built-in demo data. A URL you
-   do type is validated against the firmware's own rule before anything is sent, because the
-   board's rejection would otherwise arrive on the far side of a ~45s join.
+3. **Enter the edition URL** — or skip it, and the board runs on its built-in demo edition, which is
+   a complete configuration rather than a placeholder. A URL you do type is validated against the
+   firmware's own rule before anything is sent, because the board's rejection would otherwise arrive
+   on the far side of a ~45s join.
 4. **Enter the Wi-Fi password.** The app `POST`s to `/api/provision` and polls `/api/status` until
    the board confirms it joined.
 5. **Setup complete** — reconnect your phone to the same home Wi-Fi, then open the dashboard. The
    board is reached at `http://claudepost.local` (mDNS) or its IP; you can override the address
    in **Settings** if mDNS isn't available on your network.
 
+Provisioning sends exactly the three fields `prov_portal.c` reads: `ssid`, `password`, `news_url`.
+Its optional `sleep_seconds` is deliberately **not** sent — an absent field keeps whatever interval
+is stored, where an empty one would clear it, and onboarding must not silently reset an interval set
+from the dashboard.
+
 ## Onboarding → control flow
 
 ```
 [AP setup]                                    [home LAN control]
 turn-on  ─ join "Claude Post-XXXX"     dashboard ─ GET /api/state (poll)
-wifi-list ─ GET /api/scan                       │           POST /api/{page,refresh,display/test}
-news    ─ (validate locally)                   └─ settings ─ GET /api/info + /api/state
-password ─ POST /api/provision (ssid, pass,                   POST /api/news, change host,
-           news_url) → poll GET /api/status                  re-onboard
-complete ─ save board base URL
+wifi-list ─ GET /api/scan                       │           POST /api/{page,refresh,sleep,display/test}
+news    ─ (validate locally)                    ├─ preview  ─ GET /api/screen → indexed PNG
+password ─ POST /api/provision (ssid, pass,     └─ settings ─ GET /api/info + /api/state
+           news_url) → poll GET /api/status                   POST /api/news, change host,
+complete ─ save board base URL                                re-onboard
 ```
 
 ## Scripts
@@ -143,37 +182,64 @@ complete ─ save board base URL
 
 The web export is also the cheapest way to actually *look* at the app without a native build: serve
 the bundle and the mock board behind one origin (a small proxy forwarding `/api/*` to the board and
-`/news.json` + `/capture` to the news server) and the whole dashboard runs in a browser. Doing it
-that way rather than adding CORS headers to the mock keeps a browser-only problem out of the repo —
-React Native has no CORS.
+`/news.json` to the desk) and the whole dashboard runs in a browser. Doing it that way rather than
+adding CORS headers to the mock keeps a browser-only problem out of the repo — React Native has no
+CORS.
+
+## Releasing (EAS → TestFlight)
+
+`eas.json` carries three profiles — `development` (dev client), `preview` (internal
+distribution) and `production` (store). The production profile has `autoIncrement` on with the
+version source remote: the build number lives with EAS, so nothing here needs bumping per build.
+
+```sh
+npm install -g eas-cli && eas login    # once
+eas build -p ios --profile production
+eas submit -p ios                      # or `npx testflight` — build + submit in one
+```
+
+The first run asks for an Apple Developer sign-in interactively. That is where Apple identifiers
+live — in EAS's credential store and, if you want the prompts gone, in `EXPO_APPLE_ID` /
+`EXPO_APPLE_TEAM_ID` in your shell — never in a committed file, which is why `eas.json` carries
+no `appleId` or `ascAppId`. TestFlight needs the app to exist in App Store Connect with the
+matching bundle id (`com.claudepost.app`); `eas submit` offers to create it.
+
+**Forks:** `app.json`'s `extra.eas.projectId` names *this* app's Expo project. Run `eas init`
+in your fork to claim your own before the first build.
 
 ## Project layout
 
 ```
 app/
-├─ app.json            Expo config (local-networking + cleartext + Bonjour, dark UI)
+├─ app.json            Expo config (local-networking + cleartext + Bonjour, dark UI, icon)
+├─ eas.json            EAS build/submit profiles — carries no Apple identifiers, on purpose
+├─ assets/
+│  └─ icon.png         generated — regenerate with python3 tools/make_icon.py (repo root)
 ├─ babel.config.js
 ├─ jest.setup.js       mocks @react-native-async-storage for tests
 ├─ scripts/
-│  └─ mock-esp32.js    Node mock for BOTH board APIs — really fetches the snapshot URL
+│  └─ mock-esp32.js    Node mock for BOTH board APIs — really fetches the edition URL,
+│                      and serves a synthetic 960,000-byte /api/screen
 └─ src/
    ├─ theme.ts         dark design tokens
    ├─ app/             expo-router file-based routes
    │  ├─ _layout.tsx       providers (DeviceProvider)
    │  ├─ index.tsx         entry → onboarding or dashboard
    │  ├─ dashboard.tsx     live dashboard (polls getState)
-   │  ├─ settings.tsx      board info, snapshot URL, host override, re-onboard
+   │  ├─ preview.tsx       the page on the glass, decoded from /api/screen
+   │  ├─ settings.tsx      board info, edition URL, host override, re-onboard
    │  └─ onboarding/       turn-on → wifi-list → news → password → complete
    ├─ components/      Screen, Button, Card, Chip, SegmentedControl, StatTile, InfoRow, …
    ├─ lib/
    │  ├─ esp32.ts          the board client (both API surfaces) + types  ← core
    │  ├─ esp32.test.ts     thorough unit tests with a fake fetch
+   │  ├─ screen.ts         framebuffer → indexed PNG, in the measured inks
+   │  ├─ screen.test.ts    round-trips a synthetic page through an independent PNG reader
    │  ├─ discovery.ts      base-URL normalize/validate/resolve (pure)
    │  ├─ store.ts          AsyncStorage: board base URL + onboarding flag
    │  ├─ device.tsx        app-wide board connection context
-   │  ├─ newsurl.ts       snapshot-URL validation mirroring the firmware
-   │  ├─ capture.ts        writing a memo — to the news server, NOT the board
-   │  └─ format.ts         count / age / ms / fetch-result display helpers
+   │  ├─ newsurl.ts        edition-URL validation mirroring the firmware
+   │  └─ format.ts         money / change / age / interval / fetch-result display helpers
    └─ onboarding/      flow.ts (step logic) + OnboardingContext
 ```
 
@@ -181,7 +247,7 @@ app/
 
 There is **no** Supabase / AWS / MQTT / cloud auth anywhere in this app. The only network calls it
 makes are direct HTTP requests to the board's IP / `claudepost.local`. Wi-Fi credentials and the
-snapshot URL live on the board (NVS); the app persists only the board's base URL and an
+edition URL live on the board (NVS); the app persists only the board's base URL and an
 onboarding-complete flag in `AsyncStorage`.
 
 Those two AsyncStorage keys are namespaced `claudepost.*`. A phone that once ran the fortune
