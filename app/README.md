@@ -186,11 +186,35 @@ the bundle and the mock board behind one origin (a small proxy forwarding `/api/
 adding CORS headers to the mock keeps a browser-only problem out of the repo — React Native has no
 CORS.
 
+## Releasing (EAS → TestFlight)
+
+`eas.json` carries three profiles — `development` (dev client), `preview` (internal
+distribution) and `production` (store). The production profile has `autoIncrement` on with the
+version source remote: the build number lives with EAS, so nothing here needs bumping per build.
+
+```sh
+npm install -g eas-cli && eas login    # once
+eas build -p ios --profile production
+eas submit -p ios                      # or `npx testflight` — build + submit in one
+```
+
+The first run asks for an Apple Developer sign-in interactively. That is where Apple identifiers
+live — in EAS's credential store and, if you want the prompts gone, in `EXPO_APPLE_ID` /
+`EXPO_APPLE_TEAM_ID` in your shell — never in a committed file, which is why `eas.json` carries
+no `appleId` or `ascAppId`. TestFlight needs the app to exist in App Store Connect with the
+matching bundle id (`com.claudepost.app`); `eas submit` offers to create it.
+
+**Forks:** `app.json`'s `extra.eas.projectId` names *this* app's Expo project. Run `eas init`
+in your fork to claim your own before the first build.
+
 ## Project layout
 
 ```
 app/
-├─ app.json            Expo config (local-networking + cleartext + Bonjour, dark UI)
+├─ app.json            Expo config (local-networking + cleartext + Bonjour, dark UI, icon)
+├─ eas.json            EAS build/submit profiles — carries no Apple identifiers, on purpose
+├─ assets/
+│  └─ icon.png         generated — regenerate with python3 tools/make_icon.py (repo root)
 ├─ babel.config.js
 ├─ jest.setup.js       mocks @react-native-async-storage for tests
 ├─ scripts/

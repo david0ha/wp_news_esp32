@@ -448,4 +448,6 @@ Two things in the app are worth knowing about when changing this contract:
 
 `app/scripts/mock-esp32.js` implements this whole contract in Node, including really fetching a
 snapshot URL and summarising it — so the app can be developed against it, and the contract has a
-second implementation to disagree with. It needs the same update.
+second implementation to disagree with. It was updated with the app: it serves the committed
+fixture's edition and streams `/api/screen` chunked exactly as the board does, so a change here is
+a change there too.

@@ -614,7 +614,11 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true })
   }
 
-  sendJson(res, 404, { ok: false, error: 'not_found' })
+  // A bare 404, deliberately not the JSON envelope: the board answers an unknown URI with
+  // esp_http_server's default page, not a {ok,error} body, and inventing a 'not_found' code
+  // here would put a word in the mock's vocabulary that the board can never say.
+  res.writeHead(404, { 'Content-Type': 'text/plain' })
+  res.end('not found\n')
 })
 
 // Poll on the board's own schedule too, so a dashboard left open sees the age tick and reset.
