@@ -1,15 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native'
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Screen } from '../components/Screen'
@@ -18,32 +8,58 @@ import { Chip } from '../components/Chip'
 import { Button } from '../components/Button'
 import { InfoRow } from '../components/InfoRow'
 import { SegmentedControl } from '../components/SegmentedControl'
-import { StatTile } from '../components/StatTile'
 import { ScreenMessage } from '../components/ScreenMessage'
 import { useDevice } from '../lib/device'
-import { Esp32Error, type DeviceState } from '../lib/esp32'
-import { captureErrorMessage, captureMemo, captureUrlFor } from '../lib/capture'
+import {
+  Esp32Error,
+  humanError,
+  SLEEP_SECONDS_DEFAULT,
+  type DeviceState,
+  type PowerInfo,
+} from '../lib/esp32'
 import { DEFAULT_HOST, discoverDevice } from '../lib/discovery'
 import { getDeviceBaseUrl } from '../lib/store'
 import {
   PAGE_LABELS,
+  changeTone,
   fetchResultLabel,
   fetchResultMessage,
   fetchResultTone,
   formatAge,
+  formatCents,
+  formatChange,
   formatCount,
-  formatDelta,
-  formatDensity,
+  formatGeneratedAt,
   formatInterval,
   formatMs,
-  formatRatio,
+  pollSourceLabel,
+  sleepPresetInForce,
+  sleepSourceLabel,
 } from '../lib/format'
 import { colors, layout, radius, space } from '../theme'
 
-// The board polls its source every few minutes and only redraws when something changed, so there
+// The board polls its desk every few minutes and only redraws when the edition changed, so there
 // is nothing to gain from polling it fast. This is "keep the phone screen roughly current", not a
-// live feed.
+// live feed. It is also what holds a sleeping board awake while the app is open: every request
+// restarts the board's awake window (docs/app-control.md).
 const POLL_MS = 5000
+
+/**
+ * The sleep intervals offered.
+ *
+ * The board clamps to [60, 86400] and takes 0 for "use the build-time default", so these are
+ * points inside that range rather than a limit on it. They are clustered around the knee the
+ * deep-sleep design names — 15 to 30 minutes, past which a longer interval buys progressively less
+ * because the refreshes and the standing current start to dominate.
+ */
+const SLEEP_PRESETS: ReadonlyArray<{ label: string; seconds: number }> = [
+  { label: '5m', seconds: 300 },
+  { label: '15m', seconds: 900 },
+  { label: '30m', seconds: 1800 },
+  { label: '1h', seconds: 3600 },
+  { label: '6h', seconds: 21600 },
+  { label: 'Default', seconds: SLEEP_SECONDS_DEFAULT },
+]
 
 export default function Dashboard() {
   const router = useRouter()
@@ -55,8 +71,8 @@ export default function Dashboard() {
   // Disable controls briefly while a write command is in flight so taps can't race.
   const [busy, setBusy] = useState(false)
   // A page the user asked for that the board has not confirmed yet. A page change is a full
-  // refresh of a 5.83" panel — seconds, not milliseconds — so without this the segmented control
-  // snaps back to the old page and looks like the tap was lost.
+  // refresh of a 13.3" Spectra 6 panel — twenty to thirty seconds — so without this the segmented
+  // control snaps back to the old page and looks like the tap was lost.
   const [pendingPage, setPendingPage] = useState<number | null>(null)
   const focused = useRef(true)
 
@@ -151,7 +167,8 @@ export default function Dashboard() {
     )
   }
 
-  const { news, source, battery, panel } = state
+  const { news, source, battery, panel, power } = state
+  const { subject } = news
   const shownPage = pendingPage ?? state.page
 
   return (
@@ -164,16 +181,17 @@ export default function Dashboard() {
           <RefreshControl refreshing={refreshing} onRefresh={onPullRefresh} tintColor={colors.accent} />
         }
       >
-        {/* Status chips: how the last poll went, whether what's on the glass is demo/stale, and
-            the battery when there is one. */}
+        {/* Status chips: how the last poll went, whether what's on the glass is the demo edition or
+            stale, whether the board sleeps, and the battery when there is one. */}
         <View style={styles.chipRow}>
           <Chip
             label={fetchResultLabel(source.lastResult)}
             icon="cloud-download"
             tone={fetchResultTone(source.lastResult)}
           />
-          {news.demo ? <Chip label="demo data" icon="flask" tone="warn" /> : null}
+          {news.demo ? <Chip label="demo edition" icon="flask" tone="warn" /> : null}
           {source.stale ? <Chip label="stale" icon="time" tone="warn" /> : null}
+          {power.deepSleep ? <Chip label="sleeps" icon="moon" tone="accent" /> : null}
           {battery.present ? (
             <Chip
               label={`${battery.percent}%`}
@@ -183,65 +201,85 @@ export default function Dashboard() {
           ) : null}
         </View>
 
-        {/* The news, as the board understands it. */}
+        {/* The company the edition is about. Every story on both sheets is about this one, so this
+            is the whole of what the board is printing today — and a new symbol or a new
+            generatedAt is the cheapest "did the edition change" check there is. */}
         <Card style={styles.hero}>
-          <Text style={styles.heroName} numberOfLines={1}>
-            {news.name || 'No news'}
-          </Text>
-          <Text style={styles.heroMeta}>
-            {news.valid
-              ? `snapshot ${news.generatedAt || '—'} · ${formatAge(source.ageSeconds)}`
-              : 'no snapshot yet'}
-          </Text>
+          {news.valid ? (
+            <>
+              <Text style={styles.heroSymbol}>{subject.symbol || '—'}</Text>
+              <Text style={styles.heroName} numberOfLines={2}>
+                {subject.name}
+              </Text>
+              <View style={styles.heroPriceRow}>
+                <Text style={styles.heroPrice}>{formatCents(subject.lastCents)}</Text>
+                <Text style={[styles.heroChange, toneText(changeTone(subject.changeBp))]}>
+                  {formatChange(subject.changeBp)}
+                </Text>
+              </View>
+              <Text style={styles.heroMeta}>
+                {[subject.exchange, subject.sector].filter(Boolean).join(' · ') || '—'}
+              </Text>
+              <Text style={styles.heroMeta}>
+                {[news.edition, formatGeneratedAt(news.generatedAt)].filter(Boolean).join(' · ')}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.heroName}>No edition yet</Text>
+              <Text style={styles.heroMeta}>
+                The board has not parsed an edition since it started. Everything below describes
+                the board, not a page.
+              </Text>
+            </>
+          )}
         </Card>
 
-        <View style={styles.tiles}>
-          <StatTile
-            label="Notes"
-            value={formatCount(news.notes)}
-            footnote={`${formatDelta(news.addedToday)} today · ${formatDelta(news.added7d)} this week`}
-          />
-          <StatTile
-            label="Links"
-            value={formatCount(news.links)}
-            footnote={`${formatDensity(news.links, news.notes)} per note`}
-          />
-          <StatTile
-            label="Orphans"
-            value={formatCount(news.orphans)}
-            footnote={`${formatRatio(news.orphans, news.notes)} of the news`}
-            tone={news.orphans > 0 ? 'warn' : 'neutral'}
-          />
-          <StatTile label="Tags" value={formatCount(news.tags)} />
-        </View>
+        {/* The tape: up to five cells, symbol and direction only. The board has a label for each
+            already, so the name is not repeated. */}
+        {news.indices.length > 0 ? (
+          <View style={styles.chipRow}>
+            {news.indices.map((cell) => (
+              <Chip
+                key={cell.symbol}
+                label={`${cell.symbol} ${formatChange(cell.changeBp)}`}
+                tone={changeTone(cell.changeBp)}
+              />
+            ))}
+          </View>
+        ) : null}
 
-        {/* Capture. Only offered when the board has a snapshot URL, because that URL is the
-            address this writes to — a board on demo data has nowhere to put a memo. */}
-        {captureUrlFor(source.url) ? (
-          <Section title="Quick memo">
-            <MemoBox
-              sourceUrl={source.url}
-              // The board polls every few minutes; asking it to poll now is what makes a memo
-              // typed on the sofa appear on the panel while you are still looking at it.
-              onSaved={() => command(() => client.refresh())}
-            />
+        {news.headlines.length > 0 ? (
+          <Section title="Headlines">
+            <Card style={styles.rows}>
+              {news.headlines.map((h, i) => (
+                <View
+                  key={`${h.rank}-${i}`}
+                  style={[styles.headline, i < news.headlines.length - 1 && styles.headlineRule]}
+                >
+                  <Text style={styles.headlineRank}>{h.rank}</Text>
+                  <Text style={styles.headlineText}>{h.headline}</Text>
+                </View>
+              ))}
+            </Card>
+            {/* What ARRIVED, after parsing. It is the difference between "the desk filed a thin
+                day" and "the parser dropped something" — a distinction no other field can make. */}
+            <Text style={styles.counts}>
+              {[
+                `${formatCount(news.counts.stories)} stories`,
+                `${formatCount(news.counts.figures)} figures`,
+                `${formatCount(news.counts.briefs)} briefs`,
+                `${formatCount(news.counts.peers)} peers`,
+                `${formatCount(news.counts.tables)} tables`,
+                `${formatCount(news.counts.charts)} charts`,
+                `${formatCount(news.counts.thumbs)} photos`,
+              ].join(' · ')}
+            </Text>
           </Section>
         ) : null}
 
-        <Section title="Agents & queue">
-          <Card style={styles.rows}>
-            <InfoRow
-              label="Agents running"
-              value={`${news.agentsRunning} of ${news.agents}`}
-              tone={news.agentsRunning > 0 ? 'up' : 'dim'}
-            />
-            <InfoRow label="Recent notes" value={formatCount(news.recent)} />
-            <InfoRow label="Inbox" value={formatCount(news.inbox)} last />
-          </Card>
-        </Section>
-
-        {/* Page control. The board's own title for the page it is showing sits underneath, in its
-            UI language — that is the ground truth for what is on the glass. */}
+        {/* Page control. The board's own title for the page it is showing sits underneath — that is
+            the ground truth for what is on the glass. */}
         <Section title="On the panel">
           <SegmentedControl
             segments={[...PAGE_LABELS]}
@@ -252,14 +290,19 @@ export default function Dashboard() {
               command(() => client.setPage(page))
             }}
           />
-          <Text style={styles.pageNote}>
+          <Text style={styles.note}>
             {pendingPage !== null && pendingPage !== state.page
-              ? 'Switching… a page change is a full refresh, which takes a few seconds.'
-              : `Showing “${state.pageTitle || PAGE_LABELS[state.page] || '—'}”.`}
+              ? 'Switching… a page change is a full refresh, which takes twenty to thirty seconds.'
+              : `Showing “${state.pageTitle || PAGE_LABELS[state.page] || '—'}”. A refresh of this panel last took ${formatMs(panel.refreshMs)}.`}
           </Text>
+          <Button
+            label="See the page on the glass"
+            variant="secondary"
+            onPress={() => router.push('/preview')}
+          />
         </Section>
 
-        {/* Where the data comes from, and how the last poll went. */}
+        {/* Where the edition comes from, and how the last poll went. */}
         <Section title="Source">
           <Card style={styles.rows}>
             <InfoRow label="URL" value={source.url || 'not set (demo)'} tone={source.url ? 'neutral' : 'dim'} />
@@ -269,20 +312,34 @@ export default function Dashboard() {
               tone={fetchResultTone(source.lastResult) === 'down' ? 'down' : 'neutral'}
             />
             <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
-            <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
+            <InfoRow
+              label="Polls"
+              value={`${formatInterval(source.pollSeconds)}, ${pollSourceLabel(source.pollSource)}`}
+              last
+            />
           </Card>
           {source.lastResult !== 'ok' ? (
-            <Text style={styles.sourceNote}>{fetchResultMessage(source.lastResult)}</Text>
+            <Text style={styles.note}>{fetchResultMessage(source.lastResult)}</Text>
           ) : null}
+          <Button
+            label="Change the news URL"
+            variant="secondary"
+            onPress={() => router.push('/settings')}
+          />
         </Section>
 
-        {/* Measured panel timings — the numbers the refresh policy is meant to be chosen from. */}
-        <Section title="Panel">
-          <Card style={styles.rows}>
-            <InfoRow label="Full refresh" value={formatMs(panel.fullRefreshMs)} />
-            <InfoRow label="Partial refresh" value={formatMs(panel.partialRefreshMs)} />
-            <InfoRow label="Partials since full" value={String(panel.partialChain)} last />
-          </Card>
+        <Section title="Power">
+          <PowerCard
+            power={power}
+            batteryPresent={battery.present}
+            batteryPercent={battery.percent}
+            batteryMv={battery.millivolts}
+          />
+          <SleepEditor
+            power={power}
+            disabled={busy}
+            onPick={(seconds) => command(() => client.setSleep(seconds))}
+          />
         </Section>
 
         <View style={styles.actions}>
@@ -301,9 +358,9 @@ export default function Dashboard() {
             style={styles.actionBtn}
           />
         </View>
-        <Text style={styles.actionsNote}>
-          Polling only redraws the panel if the snapshot changed. The self-test sweeps the panel for
-          about a minute.
+        <Text style={styles.note}>
+          Polling only redraws the panel if the edition changed. The self-test sweeps the panel for
+          about a minute and a half, and the board answers nothing else while it does.
         </Text>
 
         {error ? <Text style={styles.errorLine}>{error}</Text> : null}
@@ -312,18 +369,129 @@ export default function Dashboard() {
   )
 }
 
-function humanError(e: Esp32Error): string {
-  switch (e.code) {
-    case 'network_error':
-      return 'Couldn’t reach the board. Check it’s powered on and on the same Wi-Fi.'
-    case 'page_range':
-      return 'That page doesn’t exist on the board.'
-    case 'news_url_invalid':
-      return 'The board wouldn’t accept that address.'
-    case 'busy':
-      return 'The board is busy redrawing. Try again in a moment.'
+/**
+ * The counters the deep-sleep design measures itself with, and the battery they are about.
+ *
+ * `sleepSeconds` is the interval the board will ACTUALLY sleep for, not the one it was configured
+ * with — so it is shown next to who decided it, or the pair says nothing: a desk in its quiet
+ * window puts an hour here beside a stored value of half of that, and that is the two fields
+ * working rather than a setting that failed to save.
+ */
+function PowerCard({
+  power,
+  batteryPresent,
+  batteryPercent,
+  batteryMv,
+}: {
+  power: PowerInfo
+  batteryPresent: boolean
+  batteryPercent: number
+  batteryMv: number
+}) {
+  // Both derived numbers are 0 until the board has slept at least once, because neither has an
+  // input yet. That is not an error and it is not a real figure either, so it is said in words.
+  const measured = power.wakes > 0 && power.meanAwakeMs > 0
+
+  return (
+    <>
+      <Card style={styles.rows}>
+        <InfoRow
+          label="Deep sleep"
+          value={power.deepSleep ? 'on' : 'off'}
+          tone={power.deepSleep ? 'neutral' : 'dim'}
+        />
+        <InfoRow
+          label="Wakes"
+          value={`${formatInterval(power.sleepSeconds)}, ${sleepSourceLabel(power.sleepSource)}`}
+        />
+        <InfoRow
+          label="Since last unplug"
+          value={
+            power.wakes > 0
+              ? `${formatCount(power.wakes)} wakes, ${formatCount(power.quietWakes)} of them quiet`
+              : 'has not slept yet'
+          }
+        />
+        <InfoRow label="Awake each time" value={measured ? formatMs(power.meanAwakeMs) : '—'} />
+        <InfoRow
+          label="Battery"
+          value={
+            batteryPresent ? `${batteryPercent}% · ${(batteryMv / 1000).toFixed(2)} V` : 'not fitted'
+          }
+          tone={batteryPresent && batteryPercent < 20 ? 'down' : 'neutral'}
+          last
+        />
+      </Card>
+      <Text style={styles.note}>
+        {measured
+          ? `About ${formatCount(power.estMahPerDay)} mAh a day — awake time only. It does not include the 2.3 mAh a refresh costs, or the standing sleep current, because nobody has measured that on this board yet. Expect the real figure to be higher.`
+          : 'No estimate yet: the board has to sleep at least once before there is anything to average. Read these after a day on a wall, not after a minute.'}
+      </Text>
+    </>
+  )
+}
+
+/**
+ * The sleep interval, as a row of the values the board can actually run on.
+ *
+ * A selection is only shown when a LOCAL layer is in force — and "the board's own built-in
+ * interval" is one of those, so the "Default" chip lights like any other. When the desk is driving
+ * — the payload carried a `policy` block — the stored value is not the one in effect, and
+ * highlighting it would claim a setting that is only waiting. Saying so is the honest version, and
+ * it is the one thing `sleepSource` exists for. `sleepPresetInForce()` owns that decision, because
+ * getting it from the number alone is impossible: the compiled-in default is 900, which is also
+ * exactly the "15m" chip.
+ */
+function SleepEditor({
+  power,
+  disabled,
+  onPick,
+}: {
+  power: PowerInfo
+  disabled: boolean
+  onPick: (seconds: number) => void
+}) {
+  const inForce = sleepPresetInForce(power.sleepSource, power.sleepSeconds)
+
+  return (
+    <View style={styles.sleep}>
+      <Text style={styles.sleepTitle}>How often it wakes</Text>
+      <View style={styles.chipRow}>
+        {SLEEP_PRESETS.map((p) => (
+          <Chip
+            key={p.label}
+            label={p.label}
+            active={p.seconds === inForce}
+            disabled={disabled}
+            onPress={() => onPick(p.seconds)}
+          />
+        ))}
+      </View>
+      <Text style={styles.note}>
+        {power.sleepSource === 'policy'
+          ? 'The desk is setting the cadence at the moment, so your value is stored and waiting rather than in force.'
+          : 'This is the fallback the board uses when its desk says nothing about cadence. Below fifteen minutes the cell drains noticeably faster; “Default” hands it back to the firmware.'}
+      </Text>
+      {!power.deepSleep ? (
+        <Text style={styles.note}>
+          Deep sleep is off on this board — on USB with a console attached it never sleeps at all,
+          so this setting is stored for the day it runs on a cell.
+        </Text>
+      ) : null}
+    </View>
+  )
+}
+
+function toneText(tone: 'up' | 'down' | 'warn' | 'neutral') {
+  switch (tone) {
+    case 'up':
+      return { color: colors.up }
+    case 'down':
+      return { color: colors.down }
+    case 'warn':
+      return { color: colors.warn }
     default:
-      return 'That command failed. Please try again.'
+      return { color: colors.text }
   }
 }
 
@@ -340,64 +508,6 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
         <Ionicons name="settings-outline" size={22} color={colors.text} />
       </Pressable>
     </View>
-  )
-}
-
-/**
- * Type a memo, write it into the news.
- *
- * The write goes to the machine serving the snapshot, not to the board — see src/lib/capture.ts.
- * Most producers will not accept it, so "this server doesn't do capture" is an ordinary answer
- * and gets its own sentence rather than a generic failure.
- */
-function MemoBox({ sourceUrl, onSaved }: { sourceUrl: string; onSaved: () => void }) {
-  const [text, setText] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const save = async () => {
-    if (saving || !text.trim()) return
-    setSaving(true)
-    setSaved(null)
-    setError(null)
-    try {
-      const { path } = await captureMemo(sourceUrl, text)
-      setText('')
-      setSaved(path || 'Saved to your inbox.')
-      onSaved()
-    } catch (e) {
-      setError(captureErrorMessage(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <TextInput
-        value={text}
-        onChangeText={(t) => {
-          setText(t)
-          setSaved(null)
-          setError(null)
-        }}
-        placeholder="Something to deal with later…"
-        placeholderTextColor={colors.textFaint}
-        multiline
-        style={styles.memoInput}
-        editable={!saving}
-      />
-      {error ? <Text style={styles.memoError}>{error}</Text> : null}
-      {saved ? <Text style={styles.memoSaved}>Saved · {saved}</Text> : null}
-      <Button
-        label="Add to inbox"
-        variant="secondary"
-        disabled={!text.trim()}
-        loading={saving}
-        onPress={save}
-      />
-    </KeyboardAvoidingView>
   )
 }
 
@@ -452,20 +562,37 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingVertical: 20,
   },
+  heroSymbol: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 2,
+    color: colors.textDim,
+  },
   heroName: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '700',
     color: colors.text,
+    textAlign: 'center',
+  },
+  heroPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 10,
+    marginTop: 2,
+  },
+  heroPrice: {
+    fontSize: 30,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  heroChange: {
+    fontSize: 16,
+    fontWeight: '700',
   },
   heroMeta: {
     fontSize: 12,
     color: colors.textFaint,
-  },
-  tiles: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    justifyContent: 'space-between',
+    textAlign: 'center',
   },
   section: {
     gap: 10,
@@ -480,41 +607,50 @@ const styles = StyleSheet.create({
   rows: {
     padding: 0,
   },
-  pageNote: {
+  headline: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  headlineRule: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  headlineRank: {
+    fontSize: 12,
+    lineHeight: 20,
+    color: colors.textFaint,
+    width: 14,
+  },
+  headlineText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.text,
+  },
+  counts: {
     fontSize: 12,
     color: colors.textFaint,
-    lineHeight: 16,
+    lineHeight: 18,
   },
-  memoInput: {
-    minHeight: 84,
-    borderRadius: radius.md,
+  note: {
+    fontSize: 12,
+    color: colors.textFaint,
+    lineHeight: 17,
+  },
+  sleep: {
+    gap: 10,
+    borderRadius: radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     backgroundColor: colors.surface,
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 12,
+    padding: space.lg,
+  },
+  sleepTitle: {
+    fontSize: 14,
+    fontWeight: '600',
     color: colors.text,
-    fontSize: 16,
-    textAlignVertical: 'top',
-    marginBottom: 10,
-  },
-  memoError: {
-    fontSize: 12,
-    color: colors.down,
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  memoSaved: {
-    fontSize: 12,
-    color: colors.up,
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  sourceNote: {
-    fontSize: 12,
-    color: colors.textDim,
-    lineHeight: 16,
   },
   actions: {
     flexDirection: 'row',
@@ -522,12 +658,6 @@ const styles = StyleSheet.create({
   },
   actionBtn: {
     flex: 1,
-  },
-  actionsNote: {
-    fontSize: 12,
-    color: colors.textFaint,
-    lineHeight: 16,
-    marginTop: -8,
   },
   errorLine: {
     fontSize: 13,

@@ -2,9 +2,9 @@ import { StyleSheet, Pressable, Text, View } from 'react-native'
 import { colors, radius } from '../theme'
 
 /**
- * A horizontal segmented selector — used by the dashboard to switch the on-screen page
- * (Stats / Graph / Agents / Notes). The selected segment is highlighted; `onChange` fires the
- * index. `disabled` blocks interaction while a command is in flight.
+ * A horizontal segmented selector — used by the dashboard to switch the page on the panel
+ * (A1, the front page / A2, the accounts). The selected segment is highlighted; `onChange` fires
+ * the index. `disabled` blocks interaction while a command is in flight.
  */
 export function SegmentedControl({
   segments,
