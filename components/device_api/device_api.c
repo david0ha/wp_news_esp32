@@ -173,16 +173,20 @@ _Static_assert(EPD6_H == 1600, "X-Screen-Height no longer describes the framebuf
 _Static_assert(EPD6_FB_STRIDE == 600, "X-Screen-Stride no longer describes the framebuffer");
 _Static_assert(EPD6_FB_STRIDE * 8 == EPD6_W * 4, "X-Screen-Bpp is no longer 4");
 
-/* Seven response headers leave with a screen: Connection, the CORS one, and the five
- * X-Screen-* below. Content-Type is not among them — it goes in the status line and
- * costs no slot. This is the widest any handler in this file gets, so start_http()
- * sizes httpd's header table from it, for the same reason max_uri_handlers is counted
- * rather than chosen: httpd_resp_set_hdr() returns ESP_ERR_HTTPD_RESP_HDR once that
- * table is full, nothing here checks it, and a budget one short is therefore not a
- * build failure but a header that silently never arrives — on the one route whose
- * correctness depends on its headers arriving, since they are the only thing that
- * says what shape the 960,000 bytes are. Adding an X-Screen-* means changing this. */
-#define SCREEN_RESP_HEADERS 7
+/* Eight response headers leave with a screen: Connection, the two CORS ones, and the
+ * five X-Screen-* below. Content-Type is not among them — it goes in the status line
+ * and costs no slot. Expose-Headers earns its slot because a browser shows JS only
+ * the safelisted response headers: without it a web build reads all five X-Screen-*
+ * as null, and the claudepost-6ink-v1 version guard — the whole reason the token
+ * exists — silently stops guarding there. This is the widest any handler in this
+ * file gets, so start_http() sizes httpd's header table from it, for the same reason
+ * max_uri_handlers is counted rather than chosen: httpd_resp_set_hdr() returns
+ * ESP_ERR_HTTPD_RESP_HDR once that table is full, nothing here checks it, and a
+ * budget one short is therefore not a build failure but a header that silently never
+ * arrives — on the one route whose correctness depends on its headers arriving,
+ * since they are the only thing that says what shape the 960,000 bytes are.
+ * Adding an X-Screen-* means changing this. */
+#define SCREEN_RESP_HEADERS 8
 
 // GET /api/screen — the framebuffer verbatim: EPD6_FB_SIZE bytes, portrait 1200x1600
 // at 4bpp, nibble order and palette codes exactly as epd6_transpose.h defines them.
@@ -225,6 +229,8 @@ static esp_err_t api_screen_get(httpd_req_t *req)
     httpd_resp_set_hdr(req, "X-Screen-Stride", "600");
     httpd_resp_set_hdr(req, "X-Screen-Bpp",    "4");
     httpd_resp_set_hdr(req, "X-Screen-Format", "claudepost-6ink-v1");
+    httpd_resp_set_hdr(req, "Access-Control-Expose-Headers",
+                       "X-Screen-Width, X-Screen-Height, X-Screen-Stride, X-Screen-Bpp, X-Screen-Format");
 
     for (size_t off = 0; off < EPD6_FB_SIZE; off += SCREEN_CHUNK_SZ) {
         size_t n = EPD6_FB_SIZE - off;
