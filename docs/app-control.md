@@ -17,6 +17,7 @@ device holds no credentials worth stealing, and the only actions are "show the o
 |---|---|---|---|
 | GET | `/api/info` | — | discovery probe |
 | GET | `/api/state` | — | what the board is doing (not what the paper says) |
+| GET | `/api/screen` | — | the framebuffer itself — 960,000 bytes of what is on the glass |
 | POST | `/api/refresh` | — | poll the news source now |
 | POST | `/api/page` | `{"page":0\|1}` | switch page — **a full refresh, twenty to thirty seconds** |
 | POST | `/api/news` | `{"url":"http://..."}` | change the snapshot URL (persisted, live) |
@@ -24,12 +25,15 @@ device holds no credentials worth stealing, and the only actions are "show the o
 | POST | `/api/display/test` | — | run the panel self-test sweep |
 
 Writes reply `{"ok":true}` or `{"ok":false,"error":"<code>"}` with a 400. Error codes: `bad_json`,
-`too_large`, `read_error`, `page_range`, `news_url_invalid`, `sleep_seconds_invalid`, `busy`.
+`too_large`, `read_error`, `page_range`, `news_url_invalid`, `sleep_seconds_invalid`, `busy`. One
+code belongs to a read instead and carries a **503**: `no_framebuffer`, from `/api/screen`. Same
+shape, different question — the request was fine, the board had not finished coming up.
 
 Every write posts a command onto the app's queue and returns immediately; the UI task applies it
-through the same code path as a button press. Nothing here touches LVGL or the panel directly —
-exactly one task is allowed to start a refresh, because a refresh of this panel takes twenty to
-thirty seconds, flashes the whole sheet, and cannot be interleaved with another. `/api/display/test`
+through the same code path as a button press. Nothing here touches LVGL, and the only route that
+touches the panel layer at all is `GET /api/screen`, which reads its framebuffer and sends it no
+traffic — exactly one task is allowed to start a refresh, because a refresh of this panel takes
+twenty to thirty seconds, flashes the whole sheet, and cannot be interleaved with another. `/api/display/test`
 in particular replies as soon as it is queued and then blocks the UI task for about a minute and a
 half.
 
@@ -277,6 +281,54 @@ measurement, with no instruments and no serial cable.
   `"nvs"`, which is where it now lives; a flag that survived would go on claiming a phone had just
   set it, months later.
 
+## `GET /api/screen`: seeing the page
+
+The framebuffer, verbatim: `200`, `Content-Type: application/octet-stream`, body exactly **960,000
+bytes**. Nothing inside the body says what shape it is, so five headers do.
+
+| header | value |
+|---|---|
+| `X-Screen-Width` | `1200` |
+| `X-Screen-Height` | `1600` |
+| `X-Screen-Stride` | `600` |
+| `X-Screen-Bpp` | `4` |
+| `X-Screen-Format` | `claudepost-6ink-v1` |
+
+`X-Screen-Format` is the version handle. The geometry is the panel's and does not move, but if it
+ever does, the token moves with it rather than leaving a client to decode last month's shape in
+silence.
+
+**The transfer is chunked, so there is no `Content-Length`.** Unlike every other route here, this
+response does not declare its own size: the body is streamed with `Transfer-Encoding: chunked`. A
+client's only two sources for the expected length are `X-Screen-Width × X-Screen-Height ÷ 2` and the
+count of bytes it actually assembled — **check that those agree before decoding.** A transfer cut
+short mid-body arrives as a shorter body, not as an error status, so a decoder that does not count
+will read a truncated page as a valid one.
+
+**The layout itself is defined in
+[`components/port_bsp/epd6_transpose.h`](../components/port_bsp/epd6_transpose.h)** — row-major, two
+pixels per byte, even `x` in the high nibble, and the six palette codes that are also the panel's
+wire codes. Read it there. A second copy of it in this document is a second thing to keep true, and
+the headers above are already enough to check that what arrived is the shape they describe.
+
+Why the raw bytes rather than a PNG from the device or a proof from the desk: this is the literal
+glass. It answers on a board with no desk at all, demo edition included, and it costs the firmware
+no image codec — the handler is a loop that streams PSRAM to a socket in 8 KB pieces, allocating
+nothing.
+
+**A frame may be torn.** The UI task owns the framebuffer and is not locked out of it while a phone
+downloads it, so a request that lands during a render sees part of the edition going up and part of
+the one coming down. That is a preview artifact rather than a defect: locking would cost the UI task
+the length of a download to spare a reader one imperfect frame of a page that flashes for twenty-five
+seconds whenever it changes for real. Fetch it again.
+
+**It answers only while the board is awake** — the same rule as every route here, and for the same
+reason; see [`power`](#power-and-the-thing-a-client-must-be-told-before-it-files-a-bug). The one
+failure it has of its own is `503 {"ok":false,"error":"no_framebuffer"}`, which is a board that is
+answering but has not finished coming up. It should be unreachable — this server starts from the
+boot path that has already allocated the framebuffer — and it is named rather than assumed away
+because the alternative leaves a client staring at a body it cannot parse.
+
 ## `POST /api/sleep`
 
 ```json
@@ -343,6 +395,9 @@ curl -X POST http://claudepost.local/api/sleep -d '{"seconds":0}'
 # what a refresh actually costs on this board
 curl -s http://claudepost.local/api/state | jq .panel
 
+# the page on the glass, as bytes — 960,000 of them, 4bpp portrait 1200x1600
+curl -s http://claudepost.local/api/screen -o screen.bin -D -
+
 # which company is on the glass — the cheapest "did the edition change" check there is
 curl -s http://claudepost.local/api/state | jq '.news.subject.symbol, .news.generatedAt'
 
@@ -358,6 +413,7 @@ curl -s http://claudepost.local/api/state | jq .news.counts
 | the serializer | `components/news_core/device_api_json.c` — writes bytes directly, no cJSON |
 | the buffer sizes | `device_api_json.h`, so the host test can assert the worst case fits |
 | the routes | `components/device_api/device_api.c` |
+| the screen format | `components/port_bsp/epd6_transpose.h` — the bytes `/api/screen` sends |
 | the bridge into the app | `components/user_app/user_app_api.h` — reads copy under the state lock, writes post a command |
 | the test | `components/news_core/test/host/test_api_json.c` |
 
