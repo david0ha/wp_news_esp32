@@ -305,7 +305,7 @@ tools/
   flash.sh                find the board and flash it
 server/                   the desk: command queue, directives, gates, editions, and the URL the board polls
 agent/                    an example worker that files into the desk, plus the standalone no-server producer
-app/                      React Native companion app — setup + control over the LAN
+app/                      React Native companion app — setup, control, and the page on the glass; ships via EAS/TestFlight
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 ```
 

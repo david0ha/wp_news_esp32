@@ -432,12 +432,10 @@ collects the Wi-Fi credentials and the news URL, saves them to NVS, and reboots.
 is the TypeScript mirror of this document and the only file in the app that knows a field name, so a
 change here is a change there.
 
-> **`app/src/lib/esp32.ts` has not been updated for any of this.** Its `NewsSummary` still parses
-> `notes`, `links`, `orphans`, `agents`, `recent` and `inbox` out of `state.news`, its `PanelInfo`
-> still declares `partialChain` / `fullRefreshMs` / `partialRefreshMs`, and it still documents `page`
-> as `0=stats 1=graph 2=agents 3=notes`. Against the current firmware every one of those reads `0`
-> and the page names are wrong. It has never seen `subject`, `counts` or `headlines`. This document
-> describes what the device serves; the app is the thing that has to catch up.
+> The app caught up on 2026-08-24: `esp32.ts` now types `subject`, `counts`, `headlines`,
+> `source`, `battery`, `panel` and `power` exactly as this document describes, pages are `0` and
+> `1`, and `POST /api/sleep` and `GET /api/screen` have callers. If this document and that file
+> disagree, one of them changed without the other — treat it as a bug in whichever moved.
 
 Two things in the app are worth knowing about when changing this contract:
 
