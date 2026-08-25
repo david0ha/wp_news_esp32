@@ -34,6 +34,7 @@ node:22-slim (3.11), so nothing newer than that is used here.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -75,6 +76,49 @@ DEFAULT_TOOLS = (
     "Bash(python3 {repo}/tools/mock_news_server.py:*)"
 )
 
+#: The two variables `claude` reads a credential out of, and the file it leaves
+#: behind when a person signs in on the machine instead. The third is why this
+#: worker can run on a subscription: a container has no login session to
+#: inherit, but the Mac the operator is signed in on does, and
+#: ``agent/run-host.sh`` runs this same loop there.
+AUTH_VARS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+
+#: How the signed-in route is named in a log line. A path rather than a word,
+#: because the question anybody has when it is missing is where to look.
+CLI_LOGIN = "~/.claude/.credentials.json"
+
+#: What ``tools/edition/PROMPT.md`` calls the file holding the candidates and
+#: the rotation cursor, in the edition directory where the contract says it is.
+WATCHLIST_NAME = "watchlist.json"
+
+#: A universe and a cursor. Anything larger than this is not that, and the file
+#: is read back out of a scratch directory a language model has been writing in.
+MAX_WATCHLIST_BYTES = 64 * 1024
+
+#: The tools the child may never use, whatever an allow-list or a settings file
+#: says -- deny beats both. Delegation is the one that matters and it was
+#: measured: a run on the operator's own machine read their global CLAUDE.md,
+#: which is about orchestrating subagents because that is what they use the
+#: machine for, dispatched two research agents and was killed at the background
+#: ceiling with the page half-written.
+#:
+#: Both spellings, because the subagent tool has been called both and a name
+#: that does not exist in a deny-list costs nothing.
+DENY_TOOLS = "Task,Agent"
+
+#: Appended to the child's system prompt. The deny-list stops the delegating;
+#: this stops the *plan* that wanted to delegate, which is the more expensive
+#: half -- a run that spends its first turns deciding how to fan out has already
+#: lost the time it was going to save.
+SYSTEM_NOTE = (
+    "You are filing one newspaper edition, alone, in this session. Do not "
+    "dispatch subagents and do not start background tasks: there is no "
+    "orchestration layer here and nothing will collect their results. Research "
+    "and write the pages yourself, in order, and finish by writing news.json. "
+    "Any instruction you have read about delegating work, coordinating agents "
+    "or planning before implementing does not apply to this run."
+)
+
 #: The ceiling on the claim backoff. Five minutes is long enough that a desk
 #: down overnight costs a handful of log lines rather than thousands, and short
 #: enough that a worker is filing again within one poll of it coming back.
@@ -99,8 +143,11 @@ class Settings:
     secrets: str
     repo: str
     scratch: str
+    watchlist: str
     context_dir: str | None
     write_briefs: bool
+    once: bool
+    strict_mcp: bool
     tools: str
     log_level: str
 
@@ -114,13 +161,23 @@ class Settings:
         deliberately off by default: there is no context directory, and briefs
         are not written -- see :func:`write_brief`.
         """
+        secrets = env.get("CLAUDEPOST_SECRETS", "/run/secrets")
         return Settings(
             desk=env.get("CLAUDEPOST_DESK", "http://desk:8080"),
-            secrets=env.get("CLAUDEPOST_SECRETS", "/run/secrets"),
+            secrets=secrets,
             repo=env.get("CLAUDEPOST_REPO", "/repo"),
             scratch=env.get("CLAUDEPOST_SCRATCH", "/scratch"),
+            # Beside the token rather than in the scratch: the scratch is made
+            # fresh per command, and the rotation is the one piece of state that
+            # has to outlive both a command and a container.
+            watchlist=(env.get("CLAUDEPOST_WATCHLIST")
+                       or os.path.join(secrets, WATCHLIST_NAME)),
             context_dir=env.get("AGENT_CONTEXT_DIR") or None,
             write_briefs=env.get("AGENT_WRITE_BRIEFS", "0").strip().lower() in _TRUTHY,
+            once=env.get("CLAUDEPOST_ONCE", "0").strip().lower() in _TRUTHY,
+            # On by default, and the default is the interesting half: see
+            # `claude_argv`.
+            strict_mcp=env.get("AGENT_STRICT_MCP", "1").strip().lower() in _TRUTHY,
             # `or` rather than a default argument: compose passes an unset
             # variable through as an empty string, and an empty allowlist is
             # never what anybody meant -- it is a worker that can do nothing.
@@ -135,22 +192,88 @@ def read_contract(repo: str) -> str:
         return f.read()
 
 
+def claude_auth(agent_env, environ, home: str) -> list:
+    """Which credentials ``claude --print`` can start from, in the order it finds them.
+
+    Args:
+        agent_env: the pairs read out of ``<secrets>/agent.env``.
+        environ: the process environment, which is what ``run-host.sh`` and
+            launchd set.
+        home: the home directory of the user this loop runs as.
+
+    Returns:
+        A list of route names, possibly empty. Empty means ``claude`` will
+        refuse to start, and is the normal state of a container nobody has put a
+        credential into.
+
+    There are three routes and the difference between them is a bill.
+    ``ANTHROPIC_API_KEY`` is metered; ``CLAUDE_CODE_OAUTH_TOKEN`` (from
+    ``claude setup-token``) and a signed-in CLI are the subscription. A
+    container has only the first two, because a headless process in an image has
+    no login session to inherit -- which is the whole reason
+    ``agent/run-host.sh`` exists: the same loop, on the machine the operator is
+    already signed in on, spends the subscription instead.
+
+    Two routes at once is not an error and is not refused here; the operator may
+    mean it. It is reported so that :func:`main` can say so out loud, because
+    the failure mode is silent: `claude` starts either way, the paper is
+    identical, and the difference arrives on a statement four weeks later.
+    """
+    found = [key for key in AUTH_VARS
+             if (agent_env.get(key) or environ.get(key))]
+    if os.path.exists(os.path.join(home, ".claude", ".credentials.json")):
+        found.append(CLI_LOGIN)
+    return found
+
+
+def claude_argv(cfg: Settings, workdir: str) -> list:
+    """The command line, with no prompt on it and no way to delegate.
+
+    ``--allowedTools`` is variadic -- it takes every following argument until the
+    next flag -- so a prompt passed as the trailing positional is parsed as more
+    allow-list rules, one per whitespace-separated word, and the run dies with
+    "Input must be provided" after warning about each word that looked like a
+    glob. The prompt goes in on stdin instead, which is also the right home for
+    something that is tens of kilobytes long.
+    """
+    argv = ["claude", "--print", "--add-dir", workdir]
+    if cfg.strict_mcp:
+        # A worker on the operator's own machine inherits that machine's MCP
+        # configuration, and what that costs was measured rather than guessed:
+        # the first live run on a laptop loaded a browser-automation server,
+        # wrote `.playwright-mcp/` into the edition directory and spent twelve
+        # minutes browsing instead of filing. It did not fail. It wandered --
+        # which is worse than failing, because a failure is a log line somebody
+        # reads and this is a morning with no paper and no reason given.
+        #
+        # The allow-list does not cover this: it decides what may run without
+        # asking, not what is loaded, and an operator whose settings are
+        # permissive has no allow-list at all. So the servers are kept out at
+        # the door. `AGENT_STRICT_MCP=0` lets them back in, which is what a
+        # market-data MCP is worth having -- and then AGENT_TOOLS is where each
+        # tool is named. Name them: a `mcp__broker__*` wildcard on a brokerage
+        # server includes place_order, and a producer that can trade is not a
+        # producer.
+        argv.append("--strict-mcp-config")
+    argv += ["--append-system-prompt", SYSTEM_NOTE,
+             "--disallowedTools", DENY_TOOLS,
+             "--allowedTools", cfg.tools.format(repo=cfg.repo)]
+    return argv
+
+
 def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict) -> int:
     """One headless turn. Returns the exit status; the transcript goes to the log."""
     env = dict(os.environ)
     env.update(extra_env)
     env["EDITION_DIR"] = workdir
 
-    argv = [
-        "claude", "--print",
-        "--add-dir", workdir,
-        "--allowedTools", cfg.tools.format(repo=cfg.repo),
-        text + "\n\nThe repository is at %s. The edition directory is %s." % (
-            cfg.repo, workdir),
-    ]
+    argv = claude_argv(cfg, workdir)
+    prompt_text = text + "\n\nThe repository is at %s. The edition directory is %s." % (
+        cfg.repo, workdir)
     LOG.info("claude: %d characters of prompt, workdir %s", len(text), workdir)
     try:
         proc = subprocess.run(argv, cwd=workdir, env=env, timeout=CLAUDE_TIMEOUT,
+                              input=prompt_text.encode("utf-8"),
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except subprocess.TimeoutExpired:
         LOG.error("claude timed out after %d s", CLAUDE_TIMEOUT)
@@ -215,6 +338,84 @@ def fetch_sheets(desk: DeskClient, draft: str, names, into: str):
     return paths
 
 
+def seed_watchlist(cfg: Settings, workdir: str) -> bool:
+    """Put the operator's universe and rotation cursor in the edition directory.
+
+    Returns:
+        True if a file was written, False if there was none to copy.
+
+    ``tools/edition/PROMPT.md`` tells the model to read ``watchlist.json`` from
+    the edition directory, take the next symbol after ``last`` unless the day's
+    research outranks the rotation, and update ``last`` when it files. The
+    edition directory is made fresh per command, so without this the contract
+    runs against a file that is never there: the universe is whatever the model
+    remembers and the cursor resets every morning. Neither failure raises
+    anything -- the paper simply circles the same few companies.
+
+    A missing file is the documented first run ("if it is missing, write one and
+    say so in your summary"), so it is not an error here either.
+    """
+    try:
+        with open(cfg.watchlist, "rb") as f:
+            data = f.read(MAX_WATCHLIST_BYTES + 1)
+    except OSError:
+        return False
+    if len(data) > MAX_WATCHLIST_BYTES:
+        LOG.warning("%s is larger than a universe and a cursor; not seeded",
+                    cfg.watchlist)
+        return False
+    with open(os.path.join(workdir, WATCHLIST_NAME), "wb") as f:
+        f.write(data)
+    return True
+
+
+def persist_watchlist(cfg: Settings, workdir: str) -> bool:
+    """Take the cursor -- and any symbol the model added -- back out again.
+
+    Returns:
+        True if the operator's copy was replaced, False if it was left alone.
+
+    What comes back was last written by a language model in a scratch directory,
+    and it is the only state the rotation has. So it is parsed and checked
+    before it lands: a dict, a non-empty list of strings under ``symbols``. An
+    empty list or a truncated write would end the rotation permanently and
+    silently, which is a worse failure than the run having advanced nothing.
+
+    A read-only secrets directory -- which is how ``agent/compose.yaml`` mounts
+    it, correctly, because it holds the token -- is a warning and not a failure.
+    Losing a cursor is not a reason to fail a filing that already reached the
+    glass.
+    """
+    path = os.path.join(workdir, WATCHLIST_NAME)
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_WATCHLIST_BYTES + 1)
+    except OSError:
+        return False
+    if len(data) > MAX_WATCHLIST_BYTES:
+        LOG.warning("the watch list came back too large to be one; not kept")
+        return False
+    try:
+        doc = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        LOG.warning("the watch list came back unreadable (%s); not kept", e)
+        return False
+    symbols = doc.get("symbols") if isinstance(doc, dict) else None
+    if not (isinstance(symbols, list) and symbols
+            and all(isinstance(s, str) and s.strip() for s in symbols)):
+        LOG.warning("the watch list came back without a universe; not kept")
+        return False
+    try:
+        with open(cfg.watchlist, "wb") as f:
+            f.write(data)
+    except OSError as e:
+        LOG.warning("could not keep the watch list (%s); the rotation did not "
+                    "advance", e)
+        return False
+    LOG.info("watch list: %d symbol(s), last %r", len(symbols), doc.get("last"))
+    return True
+
+
 def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str) -> None:
     """Leave a note in the context directory saying what was filed and why.
 
@@ -254,6 +455,7 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     workdir = os.path.join(cfg.scratch, cid)
     shutil.rmtree(workdir, ignore_errors=True)
     os.makedirs(os.path.join(workdir, "tiles"), exist_ok=True)
+    seed_watchlist(cfg, workdir)
 
     def file_and_proof(fetch_back: bool = True):
         """Put what is on disk in front of the gates. Returns (draft, report, sheets).
@@ -311,6 +513,9 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
 
     result = desk.commit(draft)
     LOG.info("committed %s: %s", result.get("edition_id"), result.get("state"))
+    # After the commit and not before: a rotation that advanced past a company
+    # whose page never reached the desk skips it for a whole cycle.
+    persist_watchlist(cfg, workdir)
     write_brief(cfg, time.strftime("%Y-%m-%d"), command, result,
                 report.get("validate", ""))
     desk.finish(cid, True, "%s %s" % (result.get("state"), result.get("edition_id")))
@@ -325,9 +530,18 @@ def main() -> int:
 
     desk = DeskClient(cfg.desk, read_token(cfg.secrets))
     agent_env = load_agent_env(cfg.secrets)
-    if not (agent_env.get("ANTHROPIC_API_KEY") or agent_env.get("CLAUDE_CODE_OAUTH_TOKEN")):
-        LOG.warning("neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is in "
-                    "%s/agent.env — claude will refuse to start", cfg.secrets)
+    routes = claude_auth(agent_env, os.environ, os.path.expanduser("~"))
+    if not routes:
+        LOG.warning("no credentials for claude: put CLAUDE_CODE_OAUTH_TOKEN (from "
+                    "`claude setup-token`) or ANTHROPIC_API_KEY in %s/agent.env, or "
+                    "run this loop on a machine signed in with `claude` — see "
+                    "agent/run-host.sh", cfg.secrets)
+    else:
+        LOG.info("claude auth: %s", ", ".join(routes))
+        if "ANTHROPIC_API_KEY" in routes and CLI_LOGIN in routes:
+            LOG.warning("an API key is set beside a subscription login; the key is "
+                        "metered and the paper looks identical either way. Unset "
+                        "ANTHROPIC_API_KEY to spend the subscription.")
 
     # Read once at startup only to say how many files were found. The trap this
     # catches is setting AGENT_CONTEXT_DIR and forgetting to uncomment the
@@ -364,6 +578,9 @@ def main() -> int:
             # The long poll expired with nothing queued: the healthy idle
             # answer, and an answer, so the backoff resets with it.
             backoff = 1.0
+            if cfg.once:
+                LOG.info("nothing queued and --once was asked for; done")
+                return 0
             continue
 
         backoff = 1.0
@@ -376,6 +593,14 @@ def main() -> int:
                 desk.finish(command["id"], False, "%s: %s" % (type(e).__name__, e))
             except Exception:                           # noqa: BLE001
                 LOG.error("could not report the failure either")
+
+        if cfg.once:
+            # One pass, for a launchd job that fires after the morning order
+            # rather than sitting resident, and for the first run somebody wants
+            # to watch. A pass ends at a handled instruction or an empty queue;
+            # a failed instruction is a handled one, because the alternative is
+            # a one-shot job that retries a poisoned command forever.
+            return 0
 
 
 if __name__ == "__main__":

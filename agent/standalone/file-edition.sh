@@ -47,14 +47,20 @@ echo "filing into $EDITION_DIR  (log: $LOG)"
 # that — only setting the type catches it — so the desk is given the typesetter and told to look at
 # what it produced before filing. It is the one tool here that changes what gets written rather
 # than what gets read.
+#
+# The prompt goes in on stdin and not as a trailing argument. --allowedTools is
+# variadic: it eats every following argument until the next flag, so a prompt
+# after it is read as more allow-list rules -- one per whitespace-separated word
+# -- and the run exits with "Input must be provided", having first warned about
+# every word of the contract that contained an asterisk. Nothing in that names
+# the cause.
+printf '%s\n\nThe repository is at %s. The edition directory is %s.\n' \
+    "$(cat "$REPO/tools/edition/PROMPT.md")" "$REPO" "$EDITION_DIR" |
 EDITION_DIR="$EDITION_DIR" \
 claude --print \
     --add-dir "$EDITION_DIR" \
     --allowedTools \
         "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,mcp__claude_ai_Alpaca__*,Bash(python3 $REPO/tools/make_tile.py:*),Bash(python3 $REPO/tools/mock_news_server.py:*),Bash($REPO/tools/edition/render-check.sh:*)" \
-    "$(cat "$REPO/tools/edition/PROMPT.md")
-
-The repository is at $REPO. The edition directory is $EDITION_DIR." \
     2>&1 | tee "$LOG"
 
 if [ ! -s "$EDITION_DIR/news.json" ]; then

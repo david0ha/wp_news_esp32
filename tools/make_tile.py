@@ -41,10 +41,21 @@ per row — which is why `w` and the destination x must both be even.
 
     python3 tools/make_tile.py photo.jpg --out tiles/lead.bin  -W 1140 -H 320 --halftone
     python3 tools/make_tile.py thumb.jpg --out tiles/inside.bin -W 364 -H 204 --halftone
+
+The image may be an `https://` URL, which is downloaded to a temporary file and deleted
+afterwards. That is here rather than left to the caller because of who the caller is: a producing
+agent runs with a narrow tool allow-list, and the alternative to this is granting it a general
+`curl`, which is a much larger permission than "may fetch one picture". https only, and capped —
+see MAX_IMAGE_BYTES.
 """
 
 import argparse
+import contextlib
+import os
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 
 try:
     from PIL import Image, ImageEnhance
@@ -204,10 +215,60 @@ def preview(tile, w, h, names, path):
     img.save(path)
 
 
+#: The ceiling on a downloaded picture. A tile is at most 1140x320 of somebody
+#: else's photograph and a press wire JPEG is a couple of megabytes; anything
+#: past this is not a news picture, and the thing at the other end of the link
+#: was chosen by a language model reading a web page.
+MAX_IMAGE_BYTES = 24 * 1024 * 1024
+
+#: Long enough for a slow wire service, short enough that a filing run does not
+#: park on a dead host for the length of its own timeout.
+FETCH_TIMEOUT = 30
+
+
+@contextlib.contextmanager
+def sourced(image):
+    """Yield a local path for `image`, fetching it first when it is a URL.
+
+    `http://` is refused rather than followed. The URL here was found by a model
+    on a page it was reading, and the one thing that can be said for the https
+    version is that the bytes arriving are the bytes the host sent.
+    """
+    if not image.startswith(("http://", "https://")):
+        yield image
+        return
+    if image.startswith("http://"):
+        sys.exit("make_tile: refusing http:// — use https, or download it yourself")
+
+    req = urllib.request.Request(image, headers={"User-Agent": "claudepost-make-tile/1"})
+    fd, tmp = tempfile.mkstemp(suffix=".img")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            try:
+                with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+                    data = r.read(MAX_IMAGE_BYTES + 1)
+            except (urllib.error.URLError, OSError) as e:
+                sys.exit(f"make_tile: could not fetch {image}: {e}")
+            if len(data) > MAX_IMAGE_BYTES:
+                sys.exit(f"make_tile: {image} is larger than {MAX_IMAGE_BYTES} bytes")
+            if not data:
+                sys.exit(f"make_tile: {image} answered with nothing")
+            out.write(data)
+        # Whether it is an image at all is Pillow's question, not a content-type
+        # header's: a header is what the host claims and the decoder is what has
+        # to survive it.
+        yield tmp
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("image")
+    ap.add_argument("image", help="a local path, or an https:// URL to fetch")
     ap.add_argument("--out", "-o", required=True, help="the .bin the board fetches")
     ap.add_argument("--width", "-W", type=int, required=True, help="must be even")
     ap.add_argument("--height", "-H", type=int, required=True)
@@ -222,10 +283,11 @@ def main():
     ap.add_argument("--preview", help="also write a PNG of what the panel will show")
     args = ap.parse_args()
 
-    tile, names = make_tile(args.image, args.width, args.height,
-                            color=not args.halftone, saturation=args.saturation,
-                            black_point=args.black_point, white_point=args.white_point,
-                            gamma=args.gamma)
+    with sourced(args.image) as path:
+        tile, names = make_tile(path, args.width, args.height,
+                                color=not args.halftone, saturation=args.saturation,
+                                black_point=args.black_point, white_point=args.white_point,
+                                gamma=args.gamma)
 
     expect = args.width * args.height // 2
     assert len(tile) == expect, f"packed {len(tile)} bytes, contract says {expect}"

@@ -233,10 +233,13 @@ an empty box, and the render check will fail you for it.
 picture across the top and two small ones at the foot.
 
 ```bash
-python3 tools/make_tile.py <image> --out "$EDITION_DIR/tiles/<id>.bin" \
+python3 tools/make_tile.py <image-or-https-url> --out "$EDITION_DIR/tiles/<id>.bin" \
         --width 1140 --height 320 --halftone --preview /tmp/check.png
 ```
 
+- **The image may be an `https://` URL.** It is fetched, used and deleted. You do not have a
+  general downloader in your allow-list and do not need one: pass the picture's address straight
+  to this script. `http://` is refused.
 - **Width must be even.** A tile packs two pixels to a byte.
 - The lead picture is cut at **1140 × 320** and the page centre-crops it when the day's make-up is
   narrower. The two small ones are **364 × 204**.

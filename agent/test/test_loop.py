@@ -24,6 +24,7 @@ did not ask for.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -47,9 +48,13 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(cfg.scratch, "/scratch")
         self.assertEqual(cfg.log_level, "INFO")
         self.assertEqual(cfg.tools, loop.DEFAULT_TOOLS)
-        # Off by default, both of them: no context directory, and no writing.
+        # Off by default, all three: no context directory, no writing, and a
+        # loop that does not stop -- a resident worker is the arrangement both
+        # compose files describe.
         self.assertIsNone(cfg.context_dir)
         self.assertFalse(cfg.write_briefs)
+        self.assertFalse(cfg.once)
+        self.assertTrue(loop.Settings.from_env({"CLAUDEPOST_ONCE": "1"}).once)
 
         # An empty string is the same as absent, because that is the shape
         # compose produces from `${AGENT_CONTEXT_DIR}` with nothing in .env, and
@@ -168,6 +173,243 @@ class WriteBriefTest(unittest.TestCase):
         self.assertIn("AAPL", text)
         self.assertIn("aaa", text)
         self.assertIn("bbb", text)
+
+
+class AuthRouteTest(unittest.TestCase):
+    """Which credentials `claude --print` can start from, and the expensive tie.
+
+    This worker was written for a container, where the only way in is a key or a
+    token in ``agent.env``: a headless process in an image has no desktop login
+    session to inherit. Run the same loop on the machine the operator is signed
+    in on -- which is the whole point of ``agent/run-host.sh`` -- and there is a
+    third route, and it is the one that costs a subscription rather than a
+    metered key.
+
+    The tie is what this is really for. With an API key in the environment
+    *beside* a subscription login, `claude` starts either way and the bill is
+    the difference. That is invisible from the log, invisible from the paper,
+    and shows up on a statement four weeks later.
+    """
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, True)
+
+    def login(self):
+        """Lay down what a signed-in CLI leaves on disk."""
+        os.makedirs(os.path.join(self.home, ".claude"), exist_ok=True)
+        with open(os.path.join(self.home, ".claude", ".credentials.json"), "w") as f:
+            f.write("{}")
+
+    def test_a_container_with_nothing_in_agent_env_has_no_route(self):
+        self.assertEqual(loop.claude_auth({}, {}, self.home), [])
+
+    def test_a_signed_in_machine_is_a_route_with_no_key_anywhere(self):
+        self.login()
+        self.assertEqual(loop.claude_auth({}, {}, self.home), [loop.CLI_LOGIN])
+
+    def test_either_variable_counts_from_either_place(self):
+        # agent.env is what a human edits; the process environment is what
+        # run-host.sh and launchd set. Both reach the child the same way.
+        self.assertEqual(loop.claude_auth({"CLAUDE_CODE_OAUTH_TOKEN": "x"}, {}, self.home),
+                         ["CLAUDE_CODE_OAUTH_TOKEN"])
+        self.assertEqual(loop.claude_auth({}, {"ANTHROPIC_API_KEY": "x"}, self.home),
+                         ["ANTHROPIC_API_KEY"])
+
+    def test_a_key_beside_a_login_is_reported_as_two(self):
+        # Not an error -- the operator may mean it. But main() can only warn
+        # about an ambiguity it can see, and this is where it becomes visible.
+        self.login()
+        self.assertEqual(loop.claude_auth({"ANTHROPIC_API_KEY": "x"}, {}, self.home),
+                         ["ANTHROPIC_API_KEY", loop.CLI_LOGIN])
+
+    def test_an_empty_variable_is_not_a_route(self):
+        # Same trap as AGENT_TOOLS: compose turns an unset variable into an
+        # empty string, and an empty key is not a credential.
+        self.assertEqual(loop.claude_auth({"ANTHROPIC_API_KEY": ""}, {}, self.home), [])
+
+
+class ArgvTest(unittest.TestCase):
+    """Where the prompt goes, which is not on the command line.
+
+    ``--allowedTools`` is variadic: it consumes every following argument until
+    the next flag. A prompt passed as the trailing positional is therefore read
+    as more allow-list rules, one per whitespace-separated word, and the CLI
+    then exits with "Input must be provided" -- having first printed a warning
+    for every word of the prompt that happened to contain an asterisk.
+
+    Nothing about that failure names the cause. It cost a filing run to find,
+    and the fix is one line, so the shape of the command line is pinned here.
+    """
+
+    def test_the_prompt_is_not_an_argument(self):
+        cfg = loop.Settings.from_env({"CLAUDEPOST_REPO": "/repo"})
+        argv = loop.claude_argv(cfg, "/work")
+        self.assertEqual(argv[0], "claude")
+        self.assertIn("--print", argv)
+        # The last flag is the allow-list and nothing follows its value: that is
+        # what keeps a variadic option from reaching the prompt.
+        self.assertEqual(argv[-2], "--allowedTools")
+        self.assertEqual(argv[-1], loop.DEFAULT_TOOLS.format(repo="/repo"))
+
+    def test_the_operators_own_mcp_servers_are_kept_out_by_default(self):
+        # A worker running on somebody's laptop inherits that laptop's MCP
+        # configuration, and the first live run proved what that costs: the
+        # child loaded a browser-automation server, wrote .playwright-mcp/ into
+        # the edition directory and spent twelve minutes browsing instead of
+        # filing. It did not fail -- it wandered, which is worse, because a
+        # failure is a log line and this is a morning with no paper.
+        cfg = loop.Settings.from_env({})
+        self.assertTrue(cfg.strict_mcp)
+        self.assertIn("--strict-mcp-config", loop.claude_argv(cfg, "/work"))
+
+    def test_the_operator_can_let_their_own_servers_back_in(self):
+        # A market-data MCP is a real reason to want them, and whose data to
+        # trust is the reader's decision -- so this is a switch and not a rule.
+        cfg = loop.Settings.from_env({"AGENT_STRICT_MCP": "0"})
+        self.assertFalse(cfg.strict_mcp)
+        self.assertNotIn("--strict-mcp-config", loop.claude_argv(cfg, "/work"))
+
+    def test_the_child_may_not_delegate(self):
+        # The third live run failed here and produced nothing but a skeleton:
+        # the child read the operator's own global CLAUDE.md -- which is about
+        # orchestrating subagents, because that is what the operator uses this
+        # machine for -- dispatched two research agents, and was killed at their
+        # background ceiling with the page half-written. Its own last line said
+        # so: "the two research agents, which are still running".
+        #
+        # An allow-list cannot express this. Only a deny-list can, because deny
+        # beats allow and beats a permissive settings file too.
+        argv = loop.claude_argv(loop.Settings.from_env({}), "/work")
+        self.assertIn("--disallowedTools", argv)
+        denied = argv[argv.index("--disallowedTools") + 1]
+        self.assertIn("Task", denied)
+        self.assertIn("Agent", denied)
+
+    def test_the_child_is_told_what_it_is_in_the_system_prompt(self):
+        # Belt and braces, and the braces are the interesting half: the deny
+        # list stops the delegation, this stops the *plan* that wanted to
+        # delegate. A run that spends its first turns deciding how to fan out
+        # has already lost the time it was going to save.
+        argv = loop.claude_argv(loop.Settings.from_env({}), "/work")
+        self.assertIn("--append-system-prompt", argv)
+        appended = argv[argv.index("--append-system-prompt") + 1]
+        self.assertIn("subagent", appended.lower())
+
+    def test_the_repository_is_substituted_into_the_allowlist(self):
+        cfg = loop.Settings.from_env({
+            "CLAUDEPOST_REPO": "/srv/claudepost",
+            "AGENT_TOOLS": "Read,Bash(python3 {repo}/tools/make_tile.py:*)"})
+        self.assertIn("Bash(python3 /srv/claudepost/tools/make_tile.py:*)",
+                      loop.claude_argv(cfg, "/work")[-1])
+
+
+class WatchlistTest(unittest.TestCase):
+    """The universe and the rotation cursor, across a scratch directory that dies.
+
+    ``tools/edition/PROMPT.md`` tells the worker to read ``watchlist.json`` from
+    the edition directory, take the next symbol after ``last``, and update
+    ``last`` when it files. The edition directory is made fresh per command and
+    deleted with the next one, so without these two functions that contract runs
+    against a file that never exists: the model invents a universe every morning
+    and the rotation never advances. The symptom is not an error -- it is a
+    paper that covers the same four companies forever.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.work = os.path.join(self.tmp, "work")
+        os.makedirs(self.work)
+        self.path = os.path.join(self.tmp, "watchlist.json")
+
+    def settings(self, **env) -> loop.Settings:
+        env.setdefault("CLAUDEPOST_WATCHLIST", self.path)
+        return loop.Settings.from_env(env)
+
+    def write(self, doc) -> None:
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+
+    def in_work(self):
+        with open(os.path.join(self.work, "watchlist.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def back(self):
+        with open(self.path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_the_default_lives_beside_the_token_not_in_the_scratch(self):
+        # <secrets>/watchlist.json: the operator's own directory, which survives
+        # a container being rebuilt and a scratch volume being pruned. The
+        # rotation is the one piece of worker state that must outlive both.
+        self.assertEqual(loop.Settings.from_env({}).watchlist,
+                         "/run/secrets/watchlist.json")
+
+    def test_no_watchlist_anywhere_is_not_an_error(self):
+        # The contract already covers this: "if it is missing, write one and say
+        # so in your summary". A first run on a fresh machine is that case.
+        self.assertFalse(loop.seed_watchlist(self.settings(), self.work))
+        self.assertEqual(os.listdir(self.work), [])
+
+    def test_it_is_seeded_into_the_edition_directory(self):
+        self.write({"symbols": ["NVDA", "AAPL"], "last": "NVDA"})
+        self.assertTrue(loop.seed_watchlist(self.settings(), self.work))
+        self.assertEqual(self.in_work(), {"symbols": ["NVDA", "AAPL"], "last": "NVDA"})
+
+    def test_the_cursor_the_model_moved_comes_back(self):
+        self.write({"symbols": ["NVDA", "AAPL"], "last": "NVDA"})
+        loop.seed_watchlist(self.settings(), self.work)
+        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["NVDA", "AAPL"], "last": "AAPL"}, f)
+
+        self.assertTrue(loop.persist_watchlist(self.settings(), self.work))
+        self.assertEqual(self.back()["last"], "AAPL")
+
+    def test_a_symbol_the_model_added_comes_back_too(self):
+        # The rotation is not only the reader's to edit. A worker that found a
+        # company worth following writes it into the file it was handed, and
+        # tomorrow's run starts from the wider universe.
+        self.write({"symbols": ["NVDA"], "last": "NVDA"})
+        loop.seed_watchlist(self.settings(), self.work)
+        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["NVDA", "ETN"], "last": "ETN"}, f)
+
+        loop.persist_watchlist(self.settings(), self.work)
+        self.assertEqual(self.back()["symbols"], ["NVDA", "ETN"])
+
+    def test_junk_does_not_replace_a_good_universe(self):
+        # The file that comes back was last written by a language model in a
+        # scratch directory, and it is the only state the rotation has. An empty
+        # list, a string, a truncated write: each of them silently ends the
+        # rotation, so none of them is allowed to land.
+        good = {"symbols": ["NVDA", "AAPL"], "last": "NVDA"}
+        for junk in ('not json at all', '[]', '{"symbols": []}',
+                     '{"symbols": "NVDA"}', '{"last": "NVDA"}',
+                     '{"symbols": [1, 2]}'):
+            with self.subTest(junk=junk):
+                self.write(good)
+                with open(os.path.join(self.work, "watchlist.json"), "w",
+                          encoding="utf-8") as f:
+                    f.write(junk)
+                self.assertFalse(loop.persist_watchlist(self.settings(), self.work))
+                self.assertEqual(self.back(), good)
+
+    def test_a_read_only_secrets_mount_is_a_warning_not_a_failure(self):
+        # The container mounts ~/.claudepost read-only, which is right: it holds
+        # the token. Losing a rotation cursor is not a reason to fail a filing
+        # that has already reached the glass.
+        self.write({"symbols": ["NVDA"], "last": "NVDA"})
+        loop.seed_watchlist(self.settings(), self.work)
+        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["NVDA"], "last": "AAPL"}, f)
+        # The file rather than the directory: opening an existing file for
+        # writing never consults the directory's mode, so a test that chmodded
+        # the directory would pass while proving nothing.
+        os.chmod(self.path, 0o444)
+        self.addCleanup(os.chmod, self.path, 0o600)
+        self.assertFalse(loop.persist_watchlist(self.settings(), self.work))
+        self.assertEqual(self.back()["last"], "NVDA")
 
 
 if __name__ == "__main__":
