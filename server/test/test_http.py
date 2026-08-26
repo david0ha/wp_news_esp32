@@ -32,7 +32,7 @@ from claudepost.clock import FixedClock
 from claudepost.errors import NotFound, Upstream
 from claudepost.gates import GateResult, StubGates
 from claudepost.http import MAX_CONTROL_BODY, DeskHTTPRequestHandler, make_server
-from claudepost.quotes import MAX_SYMBOLS
+from claudepost.quotes import MAX_SYMBOLS, QuoteService
 
 from test_schedule import at
 
@@ -1091,6 +1091,26 @@ class QuotesTest(DeskTestCase):
     `symbols` parameter, the envelope, and the boundary between a 400 the
     route decides and an absence `QuoteService` decides silently."""
 
+    def test_the_desk_wires_a_real_quote_service_not_only_a_stub(self):
+        """No `StubQuoteService` here, deliberately -- every other test in
+        this class replaces `self.desk.quotes` before it ever calls the
+        route, which would pass identically if `Desk.__init__` built the
+        wrong class, read the wrong `Config` field, or never built one at
+        all. This is the one test that walks through the real wiring:
+        `self.cfg.alpaca_path` is `""` (DeskTestCase's `Config` never sets
+        one), so the real `Credentials` finds no key and the real
+        `QuoteService.quotes` raises `NotFound("no_quotes")` before it asks
+        anything of anybody -- `test_quotes.py`'s
+        `test_no_credentials_is_no_quotes` already holds that no-upstream-call
+        guarantee for the class itself; what this test adds is that the desk
+        actually reaches that class through the route rather than a double
+        standing in for it.
+        """
+        self.assertIsInstance(self.desk.quotes, QuoteService)
+        status, doc = self.api("GET", "/api/quotes?symbols=ACME", scope="producer")
+        self.assertEqual(status, 404, doc)
+        self.assertEqual(doc["error"], "no_quotes")
+
     def test_without_a_credential_the_route_is_a_404_the_app_can_hide_on(self):
         self.desk.quotes = StubQuoteService(error=NotFound("no_quotes"))
         status, doc = self.api("GET", "/api/quotes?symbols=ACME", scope="producer")
@@ -1116,6 +1136,15 @@ class QuotesTest(DeskTestCase):
         exactly = ",".join("S%d" % i for i in range(MAX_SYMBOLS))
         status, doc = self.api("GET", "/api/quotes?symbols=" + exactly, scope="producer")
         self.assertEqual(status, 200, doc)
+
+        # The cap applies to the deduplicated count, not the raw token count
+        # off the wire: forty tokens, twenty of them repeats, must not 400.
+        stub = StubQuoteService()
+        self.desk.quotes = stub
+        forty_raw = ",".join("S%d" % (i % 20) for i in range(40))
+        status, doc = self.api("GET", "/api/quotes?symbols=" + forty_raw, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(len(stub.calls[0]), 20)
 
     def test_a_symbol_that_is_not_one_is_refused(self):
         self.desk.quotes = StubQuoteService()
