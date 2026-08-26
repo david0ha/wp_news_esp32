@@ -458,10 +458,17 @@ Everything above is the LAN-only channel to the board itself. When a
 [desk server](desk-server.md) is in the picture, the phone has a second
 channel — straight to it, the same `Authorization: Bearer` control plane a
 worker speaks. There is no client for it in `app/` yet; this section is what
-the app will call and against which token, drawn from
+the app will call and against which token.
+
+**These are the routes a phone client uses, not the desk's whole surface.**
+The drafts family — opening one, uploading a payload and its tiles, proofing,
+committing — and the queue's claim and `done`/`fail` belong to the worker that
+files editions, not to a reader on a phone, and they are listed in
+[`server/README.md`](../server/README.md)'s route table. The scopes below were
+transcribed from
 [`server/claudepost/http.py`](../server/claudepost/http.py)'s `_ROUTES` table,
-the only place the split is decided — quoted here rather than re-derived, so
-the two cannot drift apart silently.
+the only place the split is actually decided, as it stood on this branch;
+`_ROUTES` is what to read when this and the desk disagree.
 
 **Two tokens, and the split is real.** `producer` reads everything below and
 may queue an instruction or file a note; `operator` additionally changes what
@@ -470,7 +477,7 @@ directives, a forced publish, a hold, a promotion. A phone carrying only a
 `producer` token can see everything and ask for work; it cannot change the
 rules.
 
-`producer` scope:
+`producer` scope — the reads and the one write a phone makes:
 
 | | |
 |---|---|
@@ -490,7 +497,8 @@ Unauthenticated, and not under `/api/*` at all — the device plane, open to
 anything that can reach the desk: `GET /news.json`, the same edition the
 board polls, fetchable by the app exactly as the board fetches it.
 
-`operator` scope — the writes a `producer` token cannot make:
+`operator` scope — the writes a `producer` token cannot make, and the ones a
+phone would offer:
 
 | | |
 |---|---|

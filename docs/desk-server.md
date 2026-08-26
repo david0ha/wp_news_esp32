@@ -153,6 +153,27 @@ forever. Hanging both off `/api/editions/<something>/` would put two different
 kinds of identifier in one path position, told apart only by the verb after
 them, which is a thing to get wrong at three in the morning.
 
+### The proof sheets
+
+Gate 2 keeps what it rendered, and two routes serve it — `GET
+/api/drafts/<id>/proof/<name>` and `GET /api/editions/<id>/proof/<name>`, both
+`producer` scope. `POST /api/drafts/<id>/proof` answers with the names, so a
+client asks for what is there rather than guessing: the gate leaves two PNGs on
+a pass and a BMP where the render died before conversion, and both are pictures
+somebody should be able to look at.
+
+`<name>` must match `[A-Za-z0-9_-]{1,40}\.(png|bmp)` — anything else is
+`400 bad_request` before a path is joined, and a name that is well-formed but
+names no sheet is `404`. The `Content-Type` comes from the suffix that pattern
+already allowed: `image/png` or `image/bmp`.
+
+**The two routes exist because the edition's sheets outlive the draft's.** A
+draft is deleted the moment it commits, so the draft route can only ever answer
+for paper nobody has published — which is exactly what the worker wants while
+there is still time to change it. Anything showing the edition that actually
+went to the wall — the reader site, an operator checking what went out — asks by
+the id the edition kept.
+
 ### The dossier
 
 `PUT /api/drafts/<id>/notes.md` files the research behind a page beside the
@@ -215,6 +236,13 @@ nothing done yet to write down. Claimed, done, failed, expired or cancelled
 all take one. The same 256 KB / UTF-8 cap applies, and `GET /api/commands` and
 `GET /api/state`'s `queue.recent` both carry `has_notes` on every row, the way
 a draft and an edition do.
+
+A command's note is kept for as long as the command row is, and nothing sweeps
+either: the housekeeping pass reaps *statuses* — a deadline passed, a lease
+lapsed — and never deletes a row, so a note filed on a command stays readable
+at its own URL indefinitely. That is the opposite of a draft's, which goes with
+the draft within the hour, and it is the reason a research turn can file its
+whole deliverable there.
 
 ## Two storage roots
 
@@ -396,13 +424,23 @@ response instead, indistinguishable from a symbol the upstream itself skipped.
 
 Every number is an integer — cents and basis points, the units
 `docs/app-control.md` already uses for the board's own wire — and `bars` is at
-most thirty daily closes, oldest first. A desk with no Alpaca key answers
-`404 no_quotes`: a tab the app can hide behind rather than an error it has to
-explain, and a complete configuration for an owner with no Alpaca account.
-Anything the upstream itself does — a refusal, a timeout, a body that parses
-as neither envelope — is `502 upstream`, and its message never carries the
-credential; `quotes.py`'s module docstring is where that redaction rule is
-argued and held.
+most thirty daily closes, oldest first. `asOf` is the desk's own clock at the
+moment it answered, not the instant the prices were fetched: an answer served
+wholly from the cache carries an `asOf` of now and prices up to sixty seconds
+old. A desk with no Alpaca key answers `404 no_quotes`: a tab the app can hide
+behind rather than an error it has to explain, and a complete configuration for
+an owner with no Alpaca account.
+
+**The two upstream calls fail differently, and it is worth knowing which.** A
+**snapshot** outage — a refusal, a timeout, a body that parses as neither
+envelope — is `502 upstream`: the price is the answer and there is nothing to
+serve without it. A **bars** outage is not: the prices are already in hand, so
+the sparkline goes missing rather than the page, and every affected symbol comes
+back with `"bars": []` — indistinguishable from a symbol with no daily history,
+which is a case the phone already draws. The failure is cached for a minute
+rather than the bars' hour, so an outage costs one upstream call a minute and
+the sparklines return on their own. Neither message carries the credential;
+`quotes.py`'s module docstring is where that redaction rule is argued and held.
 
 The key lives at `<secrets>/alpaca.json`, beside `tokens.json` and mounted the
 same read-only way, carrying exactly two fields:
