@@ -50,12 +50,30 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           {/* DeviceProvider resolves the control-API base URL once and shares a client app-wide. */}
           <DeviceProvider>
+            {/* The root stack holds four things and no launch gate — plan Decisions D7. `(tabs)`
+                is the app; `settings` is pushed over it from the gear each tab carries, so it
+                covers the tab bar and comes back to the tab you were on; the two form sheets are
+                raised over whatever is underneath and dismissed by dragging down. The pairing
+                wizard is not here: it lives under `settings/pair`, reached from Settings. */}
             <Stack
               screenOptions={{
                 headerShown: false,
                 contentStyle: { backgroundColor: colors.bg },
               }}
-            />
+            >
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              {/* `settings/index`, not `settings`: there is no `settings/_layout.tsx`, so the
+                  directory is flattened into this stack rather than becoming a navigator of its
+                  own. `settings/pair` *is* one — its `_layout` carries the wizard's state across
+                  the five steps — so it appears here as a single screen. */}
+              <Stack.Screen name="settings/index" />
+              <Stack.Screen name="settings/pair" />
+              {/* A sheet of paper, full size and zoomable, and the composer that files an order.
+                  `formSheet` is the platform's own: it keeps what raised it visible behind, which
+                  is the point — you are looking *at* a sheet, not navigating away to one. */}
+              <Stack.Screen name="sheet/[source]" options={{ presentation: 'formSheet' }} />
+              <Stack.Screen name="compose" options={{ presentation: 'formSheet' }} />
+            </Stack>
           </DeviceProvider>
         </QueryClientProvider>
       </SafeAreaProvider>

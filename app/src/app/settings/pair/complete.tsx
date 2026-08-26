@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
-import { Screen } from '../../components/Screen'
-import { Button } from '../../components/Button'
-import { IconBadge } from '../../components/IconBadge'
-import { useOnboarding } from '../../onboarding/OnboardingContext'
-import { useDevice } from '../../lib/device'
-import { markOnboardingComplete } from '../../lib/store'
-import { DEFAULT_BASE_URL } from '../../lib/discovery'
-import { colors, layout } from '../../theme'
+import { Screen } from '../../../components/Screen'
+import { Button } from '../../../components/Button'
+import { IconBadge } from '../../../components/IconBadge'
+import { useOnboarding } from '../../../onboarding/OnboardingContext'
+import { useDevice } from '../../../lib/device'
+import { DEFAULT_BASE_URL } from '../../../lib/discovery'
+import { colors, layout } from '../../../theme'
 
 export default function Complete() {
   const router = useRouter()
@@ -20,15 +19,16 @@ export default function Complete() {
     if (busy) return
     setBusy(true)
 
-    // The board has rebooted into station mode. Persist a control base URL for the dashboard:
+    // The board has rebooted into station mode. Persist a control base URL for the Board tab:
     // prefer the station IP it reported (most reliable, no mDNS needed), else fall back to the
-    // mDNS hostname. The dashboard will refine this once it can reach the device on the LAN.
+    // mDNS hostname. The Board tab will refine this once it can reach the device on the LAN.
     const ip = deviceInfo?.ip?.trim()
     const baseUrl = ip ? `http://${ip}` : DEFAULT_BASE_URL
     await setBaseUrl(baseUrl)
-    await markOnboardingComplete()
     reset()
-    router.replace('/dashboard')
+    // Back to Settings, which is where the wizard was started from. Nothing is recorded about
+    // "having onboarded": the app has no launch gate to unlock, only a board address to keep.
+    router.dismissTo('/settings')
   }
 
   return (
@@ -42,12 +42,12 @@ export default function Complete() {
             : 'Your board is connected.'}
         </Text>
         <Text style={styles.guidance}>
-          Reconnect your phone to that same Wi-Fi network, then tap Open Dashboard to control your
-          board over the local network.
+          Reconnect your phone to that same Wi-Fi network, then tap Done to control your board
+          over the local network.
         </Text>
       </View>
 
-      <Button label={busy ? 'OPENING…' : 'OPEN DASHBOARD'} onPress={getStarted} loading={busy} />
+      <Button label={busy ? 'FINISHING…' : 'DONE'} onPress={getStarted} loading={busy} />
     </Screen>
   )
 }

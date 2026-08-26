@@ -1,11 +1,11 @@
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useRouter } from 'expo-router'
-import { StepScaffold } from '../../components/StepScaffold'
-import { IconBadge } from '../../components/IconBadge'
-import { useOnboarding } from '../../onboarding/OnboardingContext'
-import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../onboarding/flow'
-import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
-import { colors, radius } from '../../theme'
+import { StepScaffold } from '../../../components/StepScaffold'
+import { IconBadge } from '../../../components/IconBadge'
+import { useOnboarding } from '../../../onboarding/OnboardingContext'
+import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../../onboarding/flow'
+import { validateNewsUrl, newsUrlErrorMessage } from '../../../lib/newsurl'
+import { colors, radius } from '../../../theme'
 
 // Where the board fetches its news snapshot from. Collected BEFORE the Wi-Fi handover so it is
 // written to NVS at provisioning time and the board's very first poll after joining already has

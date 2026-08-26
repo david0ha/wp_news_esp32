@@ -4,9 +4,6 @@ import {
   __resetStoreCacheForTests,
   clearDeviceBaseUrl,
   getDeviceBaseUrl,
-  isOnboardingComplete,
-  markOnboardingComplete,
-  resetOnboarding,
   setDeviceBaseUrl,
 } from './store'
 
@@ -46,21 +43,19 @@ describe('device base URL', () => {
   })
 })
 
-describe('onboarding flag', () => {
-  it('is false until marked complete', async () => {
-    expect(await isOnboardingComplete()).toBe(false)
-  })
-
-  it('persists complete and reads it back across a cache reset', async () => {
-    await markOnboardingComplete()
+describe('the pre-redesign onboarding key', () => {
+  // There is no launch gate any more: the app opens on Today and pairing lives under Settings.
+  // An upgraded phone still carries `claudepost.onboardingComplete` from the old build; this
+  // module must neither read it nor write it, and must go on honouring the base URL beside it.
+  it('is never written, and never blocks the stored base URL', async () => {
+    await AsyncStorage.setItem('claudepost.onboardingComplete', 'true')
+    await setDeviceBaseUrl('http://192.168.0.42')
     __resetStoreCacheForTests()
-    expect(await isOnboardingComplete()).toBe(true)
-  })
 
-  it('resetOnboarding clears the flag', async () => {
-    await markOnboardingComplete()
-    await resetOnboarding()
-    __resetStoreCacheForTests()
-    expect(await isOnboardingComplete()).toBe(false)
+    expect(await getDeviceBaseUrl()).toBe('http://192.168.0.42')
+    // Left exactly as the old build wrote it — untouched, not cleaned up.
+    expect(await AsyncStorage.getItem('claudepost.onboardingComplete')).toBe('true')
+    await clearDeviceBaseUrl()
+    expect(await AsyncStorage.getItem('claudepost.onboardingComplete')).toBe('true')
   })
 })

@@ -10,18 +10,19 @@ import {
   View,
 } from 'react-native'
 import { useRouter } from 'expo-router'
-import { Screen } from '../components/Screen'
-import { BackButton } from '../components/BackButton'
-import { Button } from '../components/Button'
-import { Card } from '../components/Card'
-import { InfoRow } from '../components/InfoRow'
-import { useDevice } from '../lib/device'
-import { Esp32Error, type DeviceInfo, type DeviceState } from '../lib/esp32'
-import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../lib/discovery'
-import { clearDeviceBaseUrl, getDeviceBaseUrl, resetOnboarding } from '../lib/store'
-import { validateNewsUrl, newsUrlErrorMessage } from '../lib/newsurl'
-import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../lib/format'
-import { colors, layout, radius, space } from '../theme'
+import { Screen } from '../../components/Screen'
+import { BackButton } from '../../components/BackButton'
+import { Button } from '../../components/Button'
+import { Card } from '../../components/Card'
+import { InfoRow } from '../../components/InfoRow'
+import { useDevice } from '../../lib/device'
+import { Esp32Error, type DeviceInfo, type DeviceState } from '../../lib/esp32'
+import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
+import { clearDeviceBaseUrl, getDeviceBaseUrl } from '../../lib/store'
+import { ONBOARDING_ROUTES } from '../../onboarding/flow'
+import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
+import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
+import { colors, layout, radius, space } from '../../theme'
 
 export default function Settings() {
   const router = useRouter()
@@ -103,10 +104,11 @@ export default function Settings() {
   }
 
   const reonboard = async () => {
-    // Drop the saved board + onboarding flag, then restart the wizard.
+    // Drop the saved board, then walk the pairing wizard. A push, not a replace: the wizard now
+    // lives under Settings rather than in front of the app, so backing out of it has to land
+    // here again — there is no launch gate left to fall back to.
     await clearDeviceBaseUrl()
-    await resetOnboarding()
-    router.replace('/onboarding/turn-on')
+    router.push(ONBOARDING_ROUTES['turn-on'])
   }
 
   return (
@@ -215,7 +217,7 @@ export default function Settings() {
             <Button label="Find board" variant="secondary" loading={reconnecting} onPress={reconnect} />
           </Section>
 
-          {/* Re-run onboarding */}
+          {/* Pair a board — the wizard, now a push from here */}
           <Section title="Setup">
             <Button label="Set up a different board" variant="ghost" onPress={reonboard} />
           </Section>

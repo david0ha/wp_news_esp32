@@ -8,13 +8,17 @@ export const ONBOARDING_STEPS = ['turn-on', 'wifi-list', 'news', 'password', 'co
 
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number]
 
-/** Route path for a step, as registered under `src/app/onboarding/`. */
+/**
+ * Route path for a step, as registered under `src/app/settings/pair/`. The wizard is no longer a
+ * launch gate — it is reached from Settings > "Pair a board" — so every path carries that prefix;
+ * the step order and the gating below are untouched by the move.
+ */
 export const ONBOARDING_ROUTES: Record<OnboardingStep, string> = {
-  'turn-on': '/onboarding/turn-on',
-  'wifi-list': '/onboarding/wifi-list',
-  news: '/onboarding/news',
-  password: '/onboarding/password',
-  complete: '/onboarding/complete',
+  'turn-on': '/settings/pair/turn-on',
+  'wifi-list': '/settings/pair/wifi-list',
+  news: '/settings/pair/news',
+  password: '/settings/pair/password',
+  complete: '/settings/pair/complete',
 }
 
 export function stepIndex(step: OnboardingStep): number {

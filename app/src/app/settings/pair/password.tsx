@@ -12,13 +12,13 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import { Screen } from '../../components/Screen'
-import { BackButton } from '../../components/BackButton'
-import { useOnboarding } from '../../onboarding/OnboardingContext'
-import { ONBOARDING_ROUTES } from '../../onboarding/flow'
-import { esp32, Esp32Error } from '../../lib/esp32'
-import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
-import { colors, layout, radius } from '../../theme'
+import { Screen } from '../../../components/Screen'
+import { BackButton } from '../../../components/BackButton'
+import { useOnboarding } from '../../../onboarding/OnboardingContext'
+import { ONBOARDING_ROUTES } from '../../../onboarding/flow'
+import { esp32, Esp32Error } from '../../../lib/esp32'
+import { validateNewsUrl, newsUrlErrorMessage } from '../../../lib/newsurl'
+import { colors, layout, radius } from '../../../theme'
 
 // Map a provisioning failure to a short, user-facing reason.
 function failureMessage(e: unknown): string {
