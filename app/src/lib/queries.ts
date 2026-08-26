@@ -361,14 +361,16 @@ export function useHold() {
 export function usePublish() {
   return useDeskMutation<void, Awaited<ReturnType<DeskClient['publish']>>>(
     (client) => client.publish(),
-    () => [deskKeys.state(), deskKeys.editions(), deskKeys.audit()],
+    // Publishing changes what /news.json serves — a Today screen left open must not keep
+    // showing the old edition until its next unrelated refetch.
+    () => [deskKeys.state(), deskKeys.editions(), deskKeys.audit(), deskKeys.news()],
   )
 }
 
 export function usePromote() {
   return useDeskMutation<string, Awaited<ReturnType<DeskClient['promote']>>>(
     (client, eid) => client.promote(eid),
-    () => [deskKeys.state(), deskKeys.editions(), deskKeys.audit()],
+    () => [deskKeys.state(), deskKeys.editions(), deskKeys.audit(), deskKeys.news()],
   )
 }
 

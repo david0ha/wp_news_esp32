@@ -857,9 +857,25 @@ async function handleControl(req, res, method, pathname, query) {
     if (m && method === 'POST') {
       const ed = desk.editions[m[1]]
       if (!ed) return sendError(res, 404, 'not_found')
+      if (ed.id === desk.current) {
+        // editions.py's promote(): promoting what is already current is not a refresh — no
+        // pointer write, no publish row, no audit row, or a promote-on-promote would restart
+        // the minimum gap for nothing.
+        return sendJson(res, 200, {
+          ok: true,
+          edition_id: ed.id,
+          state: 'unchanged',
+          reason: 'unchanged: identical to the edition already current',
+        })
+      }
       desk.current = ed.id
+      // editions.py's _publish(): the STAGED pointer clears when the edition it named just
+      // became current, so a promote of the staged edition cannot leave the same id sitting as
+      // both current and staged — a state the real desk never produces.
+      if (desk.staged === ed.id) desk.staged = null
+      ed.published_at = nowSec()
       desk.lastPublishAt = nowSec()
-      pushAudit('promote', { edition: ed.id })
+      pushAudit('publish', { edition: ed.id, reason: 'promoted' })
       return sendJson(res, 200, { ok: true, edition_id: ed.id, state: 'published', reason: 'promoted' })
     }
 
