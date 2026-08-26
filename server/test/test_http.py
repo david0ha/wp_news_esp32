@@ -165,7 +165,13 @@ class DeskTestCase(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.status, resp.read(), dict(resp.headers)
         except urllib.error.HTTPError as e:
-            return e.code, e.read(), dict(e.headers)
+            # Closed rather than left to the collector. An HTTPError is a
+            # response with a socket behind it, and reading one without closing
+            # it makes CPython print a ResourceWarning into the middle of the
+            # test output -- which here is not a rare event but the normal one,
+            # because every 4xx this desk sends is an answer a test asked for.
+            with e:
+                return e.code, e.read(), dict(e.headers)
 
     def api(self, method, path, doc=None, scope="operator"):
         body = json.dumps(doc).encode() if doc is not None else None
@@ -637,6 +643,82 @@ class DraftNotesTest(DeskTestCase):
         status, doc = self.api("GET", "/api/drafts/%s" % draft, scope="producer")
         self.assertEqual(status, 200, doc)
         self.assertTrue(doc["has_notes"])
+
+
+class EditionNotesTest(DeskTestCase):
+    """The dossier after the commit, which is where the phone actually reads it.
+
+    The draft route can only ever answer for paper nobody has published: a
+    draft is deleted the moment it commits. So the note the owner reads next to
+    the page on the wall is the copy the edition kept, asked for by the id the
+    edition kept.
+    """
+
+    NOTE = "# SNDK\n\nThe fab is the story; the guidance was a consequence.\n".encode()
+
+    def payload(self, edition: str) -> bytes:
+        """:data:`PAYLOAD` under another edition name, and therefore another id.
+
+        Committing identical bytes twice answers ``unchanged`` and hands back
+        the first edition's id, so a test wanting two editions and filing one
+        payload twice would quietly be asserting about one of them.
+        """
+        doc = json.loads(PAYLOAD)
+        doc["edition"] = edition
+        return json.dumps(doc).encode()
+
+    def filed(self, note: bytes | None = NOTE,
+              edition: str = "SEMICONDUCTORS") -> str:
+        """One edition all the way through, carrying a note unless told not to."""
+        status, doc = self.api("POST", "/api/drafts", {}, "producer")
+        self.assertEqual(status, 200, doc)
+        draft = doc["draft_id"]
+
+        status, _, _ = self.call("PUT", "/api/drafts/%s/news.json" % draft,
+                                 self.payload(edition), self.tokens["producer"])
+        self.assertEqual(status, 200)
+        if note is not None:
+            status, _, _ = self.call("PUT", "/api/drafts/%s/notes.md" % draft, note,
+                                     self.tokens["producer"], "text/markdown")
+            self.assertEqual(status, 200)
+
+        status, result = self.api("POST", "/api/drafts/%s/commit" % draft, {}, "producer")
+        self.assertEqual(status, 200, result)
+        return result["edition_id"]
+
+    def get_notes(self, eid: str):
+        return self.call("GET", "/api/editions/%s/notes.md" % eid,
+                         token=self.tokens["producer"])
+
+    def test_an_editions_metadata_says_whether_it_carries_a_note(self):
+        # Beside "sheets" and for the same reason: a client should be able to
+        # tell there is a dossier without fetching a quarter of a megabyte to
+        # find out there is not.
+        eid = self.filed()
+        status, doc = self.api("GET", "/api/editions/%s" % eid, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertTrue(doc["has_notes"])
+
+        bare = self.filed(note=None, edition="DISPLAYS")
+        self.assertNotEqual(bare, eid)
+        status, doc = self.api("GET", "/api/editions/%s" % bare, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertFalse(doc["has_notes"])
+
+    def test_an_editions_note_is_served_as_markdown(self):
+        eid = self.filed()
+
+        status, raw, headers = self.get_notes(eid)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+        # An edition nobody annotated, and an id no edition has: both are the
+        # 404 a missing tile gets, because the phone shows the page without a
+        # dossier rather than an error. Sixteen hex on the second, so it is the
+        # store refusing it and not the router.
+        self.assertEqual(self.get_notes(self.filed(note=None, edition="DISPLAYS"))[0], 404)
+        self.assertEqual(self.get_notes("0" * 16)[0], 404)
 
 
 class ScopeTest(DeskTestCase):

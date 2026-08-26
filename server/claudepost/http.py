@@ -483,17 +483,8 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True})
 
     def h_get_draft_notes(self, match, _query) -> None:
-        """The notes filed with a draft, as the markdown they arrived as.
-
-        A draft with none is a 404, and an ordinary one -- the answer a missing
-        tile gets, for the same reason: the reader shows the page without a
-        dossier rather than an error, so there is nothing here that an empty
-        body could usefully mean.
-        """
-        data = self.desk.editions.read_draft_notes(match.group("draft"))
-        if data is None:
-            raise NotFound()
-        self._send_bytes(200, data, _NOTES_TYPE)
+        """The notes filed with a draft, as the markdown they arrived as."""
+        self._send_notes(self.desk.editions.read_draft_notes(match.group("draft")))
 
     def h_draft_info(self, match, _query) -> None:
         self._send_json(200, {"ok": True, **self.desk.editions.draft_info(match.group("draft"))})
@@ -517,6 +508,33 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         that is this route rather than a flag on that one.
         """
         self._send_sheet(match.group("eid"), match.group("name"))
+
+    def h_edition_notes(self, match, _query) -> None:
+        """A published edition's notes.
+
+        The draft route can only ever answer for paper nobody has seen -- a
+        draft is deleted the moment it commits -- so the dossier the owner
+        reads beside the page actually on the wall is this one, asked for by
+        the id the edition kept. The same split, and the same reason, as the
+        two proof-sheet routes above.
+        """
+        self._send_notes(self.desk.editions.read_edition_notes(match.group("eid")))
+
+    def _send_notes(self, data: bytes | None) -> None:
+        """One dossier, or the 404 that "there is not one" means here.
+
+        An ordinary condition rather than an error -- the answer a missing tile
+        gets, for the same reason: the reader shows the page without a dossier,
+        so there is nothing an empty body could usefully mean instead.
+
+        Shared by the draft's route and the edition's, the way
+        :meth:`_send_sheet` is shared by the two proof routes. What differs
+        between them is which kind of id was asked about, and that belongs in
+        the handler that matched it rather than here.
+        """
+        if data is None:
+            raise NotFound()
+        self._send_bytes(200, data, _NOTES_TYPE)
 
     def _send_sheet(self, owner: str, name: str) -> None:
         """One sheet, by the id of whatever owns it.
@@ -553,11 +571,16 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         if doc is None:
             raise NotFound()
         # Beside the store's row rather than inside it: the row is the
-        # publication record and never changes, where the sheets are files on
-        # disk that prune() can take away. Reading them per request keeps the
-        # answer true instead of merely recorded.
+        # publication record and never changes, where the sheets and the note
+        # are files on disk that prune() can take away. Reading them per
+        # request keeps the answer true instead of merely recorded.
+        #
+        # The flag rather than the note, the way `draft_info` does it: a client
+        # asking what an edition holds should not be sent a quarter of a
+        # megabyte of markdown to find out there was none.
         self._send_json(200, {"ok": True, "edition": doc,
-                              "sheets": self.desk.editions.sheet_names(eid)})
+                              "sheets": self.desk.editions.sheet_names(eid),
+                              "has_notes": self.desk.editions.has_notes(eid)})
 
     def h_promote(self, match, _query) -> None:
         self._send_commit(self.desk.editions.promote(match.group("eid")))
@@ -884,6 +907,8 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_list_editions)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_get_edition)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/notes\.md\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_notes)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/proof/(?P<name>[^/]{1,60})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_edition_sheet)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote\Z"), {

@@ -171,6 +171,28 @@ dossier. `GET /api/drafts/<id>` carries `has_notes`, so a client can tell
 whether there is one without fetching a quarter of a megabyte to find out
 there is not.
 
+**The note rides the commit into the edition.** It is copied in beside the
+proof sheets and just as leniently, and served afterwards by `GET
+/api/editions/<eid>/notes.md`, with `has_notes` beside `sheets` on `GET
+/api/editions/<eid>`. That copy is the one a phone actually reads: a draft is
+deleted the moment it commits, so the draft route can only ever answer for
+paper nobody has published.
+
+**The paper decides its own identity and the note follows it.** That is what
+"never fingerprinted" above buys, and the copy step is where it would be
+easiest to lose: hash the note along with the edition it rides into, and a
+worker who corrected a typo in their research has
+filed a second edition — twenty-five seconds of the whole sheet flashing to
+report that nothing on it changed.
+
+The consequence looks like a bug the first time it is met, so it is worth
+stating plainly: **a commit that answers `unchanged` or `staged` throws its
+note away with the draft.** Both answers mean the edition is already built,
+and an edition directory never changes after it appears — so there is nowhere
+to put a second note, and the edition keeps the one filed with the bytes it
+actually is. Correcting a dossier therefore means filing another draft, the
+same as correcting a headline.
+
 ## Two storage roots
 
 | Root | Where | Holds |

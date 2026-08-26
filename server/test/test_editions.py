@@ -330,6 +330,101 @@ class SheetTest(EditionTestCase):
         self.assertIsNone(self.es.read_sheet("0" * 16, "A1.png"))
 
 
+class NotesTest(EditionTestCase):
+    """The dossier riding the commit, and the identity it must not touch.
+
+    A note travels like a proof sheet -- copied into the edition leniently,
+    kept for as long as the edition is -- with one difference that is the whole
+    of this class: the paper decides its own identity and the note follows it.
+    Fingerprint the note and a worker who fixed a typo in their research has
+    filed a new edition, which is twenty-five seconds of the whole sheet
+    flashing to report that nothing on it changed.
+    """
+
+    ONE = b"# SNDK\n\nThe fab is the story.\n"
+    TWO = b"# SNDK\n\nOn reflection, the guidance was.\n"
+
+    def noted(self, note: bytes, n: int = 1) -> str:
+        """A complete draft carrying a note."""
+        d = self.draft(n)
+        self.es.put_draft_notes(d, note)
+        return d
+
+    def second_desk(self) -> EditionStore:
+        """Another desk entirely: its own data root, its own database.
+
+        Committing the same payload twice into one desk answers ``unchanged``
+        on the second, which is a different fact from the one being asserted.
+        Two desks make both commits real builds, so the ids being equal is the
+        fingerprint agreeing rather than a commit declining to run.
+        """
+        store = Store(os.path.join(self.dir.name, "desk2.sqlite"), self.clock)
+        self.addCleanup(store.close)
+        return EditionStore(os.path.join(self.dir.name, "data2"),
+                            self.GATES(), store, self.clock)
+
+    def test_a_note_does_not_change_the_edition_it_describes(self):
+        # The same payload and the same tile, filed twice on two desks, with a
+        # note on one of them. Identical bytes on the glass, therefore one
+        # edition id -- a note is evidence about the paper and not part of it.
+        other = self.second_desk()
+
+        d = other.open_draft()
+        other.put_payload(d, payload(1))
+        other.put_tile(d, "pic", b"\x01\x02\x03\x04")
+        plain = other.commit(d, IMMEDIATE, self.clock.now())
+
+        annotated = self.es.commit(self.noted(self.ONE), IMMEDIATE, self.clock.now())
+
+        self.assertEqual(annotated.edition_id, plain.edition_id)
+        self.assertEqual(self.es.read_edition_notes(annotated.edition_id), self.ONE)
+        self.assertIsNone(other.read_edition_notes(plain.edition_id))
+
+    def test_the_note_survives_the_draft_that_carried_it(self):
+        # The draft is deleted the moment it commits, so a note that stayed
+        # behind would be readable for exactly as long as nobody wanted it.
+        d = self.noted(self.ONE)
+        r = self.es.commit(d, IMMEDIATE, self.clock.now())
+
+        self.assertEqual(r.state, "published")
+        self.assertEqual(self.es.read_edition_notes(r.edition_id), self.ONE)
+        self.assertTrue(self.es.has_notes(r.edition_id))
+        self.assertIsNone(self.es.read_draft_notes(d))
+
+    def test_an_unchanged_commit_discards_its_note(self):
+        # An unchanged commit has nowhere to put anything: the edition it
+        # matched is immutable and already on the glass. So the second note
+        # goes with the draft, and the edition keeps the note that was filed
+        # with the bytes it actually is.
+        first = self.es.commit(self.noted(self.ONE), IMMEDIATE, self.clock.now())
+        self.assertEqual(first.state, "published")
+
+        again = self.es.commit(self.noted(self.TWO), IMMEDIATE, self.clock.now())
+        self.assertEqual(again.state, "unchanged")
+        self.assertEqual(again.edition_id, first.edition_id)
+        self.assertEqual(self.es.read_edition_notes(first.edition_id), self.ONE)
+
+    def test_a_recommit_of_a_staged_edition_discards_its_note(self):
+        # The same fact one gate earlier: an edition waiting for the schedule
+        # is already built and already immutable, so the second commit's note
+        # has nowhere to go either.
+        self.store.set_hold(T0 + 3600)
+        first = self.es.commit(self.noted(self.ONE), IMMEDIATE, self.jump(T0))
+        self.assertEqual(first.state, "staged")
+
+        again = self.es.commit(self.noted(self.TWO), IMMEDIATE, self.jump(T0))
+        self.assertEqual(again.state, "staged")
+        self.assertEqual(again.edition_id, first.edition_id)
+        self.assertEqual(self.es.read_edition_notes(first.edition_id), self.ONE)
+
+    def test_an_edition_without_a_note_reports_so(self):
+        # Nobody has to have filed one. A commit with no note is an ordinary
+        # commit and the edition simply carries nothing.
+        r = self.file(1)
+        self.assertFalse(self.es.has_notes(r.edition_id))
+        self.assertIsNone(self.es.read_edition_notes(r.edition_id))
+
+
 # --------------------------------------------------------------------------
 # Gate 3 — the fingerprint
 # --------------------------------------------------------------------------

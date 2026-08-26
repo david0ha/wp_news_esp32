@@ -525,6 +525,19 @@ class EditionStore:
             return None
         return notes.read(self._draft_dir(draft_id))
 
+    def read_edition_notes(self, edition_id: str) -> bytes | None:
+        """An edition's notes, or ``None``.
+
+        Guarded and non-raising like :meth:`read_draft_notes` above it, and it
+        is this one a phone actually reads: a draft is deleted the moment it
+        commits, so the copy that outlives the publication is the one the
+        edition kept. Immutable with the rest of the directory -- correcting a
+        note means filing another draft, the same as correcting a headline.
+        """
+        if not _valid(_EID_RE, edition_id):
+            return None
+        return notes.read(self._edition_dir(edition_id))
+
     def has_notes(self, owner_id: str) -> bool:
         """Whether a draft or an edition carries a note.
 
@@ -822,6 +835,20 @@ class EditionStore:
                 data = _read_bytes(os.path.join(source_proof, name))
                 if data is not None:
                     _write_file(os.path.join(proof_dir, name), data)
+
+            # The note rides in beside them and just as leniently, being the
+            # same kind of thing: evidence about an edition rather than part of
+            # one.
+            #
+            # And, unlike everything above it here, not fingerprinted -- which
+            # is the arrangement rather than an omission. The paper decides its
+            # own identity and the note follows it; hash the note too and a
+            # worker who corrected a typo in their research has filed a second
+            # edition, which is twenty-five seconds of the whole sheet flashing
+            # to report that nothing on it changed.
+            note = notes.read(draft_dir)
+            if note is not None:
+                _write_file(os.path.join(tmp, notes.NOTES_NAME), note)
 
             _write_file(os.path.join(tmp, META_NAME),
                         _canonical(meta).encode("utf-8"))
