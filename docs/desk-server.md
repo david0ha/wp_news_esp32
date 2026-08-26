@@ -354,6 +354,61 @@ looks like a private one. `GET /api/state` carries only a summary —
 a client checking whether the desk has one yet should not have to fetch the
 whole document, thesis notes included, to find out.
 
+## Quotes
+
+`GET /api/quotes?symbols=ACME,SNDK` answers the phone's own question about the
+companies on its watchlist: a last price, the day's change and up to thirty
+daily closes, fetched from Alpaca with a key the phone never sees (see
+[`quotes.py`](../server/claudepost/quotes.py)'s module docstring for why the
+key never leaves this machine). `producer` scope — it is read-only, and the
+phone and a worker already hold that token.
+
+`symbols` is a comma-separated list: split, stripped, upper-cased and
+deduplicated preserving order. Empty — the parameter missing, or nothing
+survives that normalisation — is `400 bad_request`, and so is more than
+thirty-two, the same cap `watchlist.py` puts on the list this reads from and
+more companies than one watchlist carries. Each survivor is checked against
+the *watchlist's own*, wider shape (`^[A-Z0-9.\-]{1,12}\Z` — digits admitted,
+because a KR listing is numeric) rather than the narrower one Alpaca itself
+accepts, and only a string that cannot be a symbol at all is refused this way.
+A symbol that passes this check but the provider cannot quote — a KR listing
+against a feed of US equities — is not a `400` either: the phone sends its
+whole watchlist in one call, and a single holding this provider does not carry
+must not cost every other company its price. It is silently absent from the
+response instead, indistinguishable from a symbol the upstream itself skipped.
+
+```json
+{ "ok": true, "asOf": 1755702000, "feed": "iex",
+  "quotes": {
+    "ACME": { "lastCents": 24160, "prevCloseCents": 23184, "changeBp": 421,
+              "bars": [ { "t": "2026-08-01", "c": 24000 } ] } } }
+```
+
+Every number is an integer — cents and basis points, the units
+`docs/app-control.md` already uses for the board's own wire — and `bars` is at
+most thirty daily closes, oldest first. A desk with no Alpaca key answers
+`404 no_quotes`: a tab the app can hide behind rather than an error it has to
+explain, and a complete configuration for an owner with no Alpaca account.
+Anything the upstream itself does — a refusal, a timeout, a body that parses
+as neither envelope — is `502 upstream`, and its message never carries the
+credential; `quotes.py`'s module docstring is where that redaction rule is
+argued and held.
+
+The key lives at `<secrets>/alpaca.json`, beside `tokens.json` and mounted the
+same read-only way, carrying exactly two fields:
+
+```json
+{ "key_id": "<your Alpaca key id>", "secret_key": "<your Alpaca secret key>" }
+```
+
+A missing or malformed file is not an error — the desk answers `no_quotes` for
+either, and reloads the file if it changes underneath the process, so a key
+dropped into the mount or rotated in place takes effect on the next request.
+Snapshots are cached for a minute and daily bars for an hour, per symbol
+rather than per request, so a phone pulling to refresh does not spend the
+upstream's rate limit — see `quotes.py`'s module docstring for the full
+argument.
+
 ## The `policy` block
 
 One optional top-level object on the wire, documented in full in

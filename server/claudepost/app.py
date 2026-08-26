@@ -21,7 +21,7 @@ import threading
 from dataclasses import dataclass
 from typing import Mapping
 
-from . import schedule as sched, schedulefile, watchlist as wl
+from . import quotes as Q, schedule as sched, schedulefile, watchlist as wl
 from .auth import Tokens
 from .clock import Clock
 from .editions import EditionStore
@@ -65,6 +65,11 @@ class Config:
     host: str = "0.0.0.0"
     port: int = 8080
     keep_editions: int = 30
+    #: Beside `tokens_path`, mounted the same read-only way. Defaulted to ""
+    #: rather than left required: a desk with no key is a complete
+    #: configuration (see `quotes.py`'s module docstring), and `Credentials("")`
+    #: already resolves that to "no key" without a caller having to say so.
+    alpaca_path: str = ""
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Config":
@@ -77,6 +82,7 @@ class Config:
             host=env.get("CLAUDEPOST_HOST", "0.0.0.0"),
             port=int(env.get("CLAUDEPOST_PORT", "8080")),
             keep_editions=int(env.get("CLAUDEPOST_KEEP_EDITIONS", "30")),
+            alpaca_path=os.path.join(secrets, "alpaca.json"),
         )
 
 
@@ -102,6 +108,13 @@ class Desk:
         self.editions = EditionStore(cfg.data_dir, self.gates, self.store, self.clock,
                                      keep=cfg.keep_editions)
         self.tokens = Tokens(cfg.tokens_path)
+
+        #: The phone's prices, fetched with a key the phone never sees -- see
+        #: `quotes.py`'s module docstring. `Credentials` reloads on change and
+        #: never raises, so a desk with no `alpaca.json` is a complete
+        #: configuration: `/api/quotes` answers `no_quotes` rather than the
+        #: constructor failing.
+        self.quotes = Q.QuoteService(Q.Credentials(cfg.alpaca_path), self.clock)
 
         # A command has no directory of its own the way a draft or an edition
         # does -- it is a row in `self.store` -- so its notes need somewhere to

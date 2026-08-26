@@ -22,14 +22,17 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from unittest import mock
 
 from claudepost import schedule as S
 from claudepost.app import Config, Desk
 from claudepost.clock import FixedClock
+from claudepost.errors import NotFound, Upstream
 from claudepost.gates import GateResult, StubGates
 from claudepost.http import MAX_CONTROL_BODY, DeskHTTPRequestHandler, make_server
+from claudepost.quotes import MAX_SYMBOLS
 
 from test_schedule import at
 
@@ -1060,6 +1063,119 @@ class WatchlistTest(DeskTestCase):
         event = doc["events"][0]
         self.assertEqual(event["event"], "watchlist")
         self.assertEqual(event["detail"], {"items": 1, "source": "vault"})
+
+
+class StubQuoteService:
+    """A `quotes.QuoteService` double: returns a fixed map or raises a fixed
+    error, and remembers what it was asked -- so a test can hold the route's
+    own normalisation (upper-cased, deduplicated, order preserved) apart from
+    anything `QuoteService.quotes` itself does, which `test_quotes.py` already
+    covers and this module has no business re-proving."""
+
+    def __init__(self, result: dict | None = None, error: Exception | None = None) -> None:
+        self.result = {} if result is None else result
+        self.error = error
+        self.calls: list[list[str]] = []
+
+    def quotes(self, symbols):
+        self.calls.append(list(symbols))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class QuotesTest(DeskTestCase):
+    """`/api/quotes`: the phone's watchlist prices, proxied through the desk
+    so the Alpaca key never reaches it. `quotes.py`'s own cache, parsing and
+    redaction are `test_quotes.py`'s job; this class holds the route: the
+    `symbols` parameter, the envelope, and the boundary between a 400 the
+    route decides and an absence `QuoteService` decides silently."""
+
+    def test_without_a_credential_the_route_is_a_404_the_app_can_hide_on(self):
+        self.desk.quotes = StubQuoteService(error=NotFound("no_quotes"))
+        status, doc = self.api("GET", "/api/quotes?symbols=ACME", scope="producer")
+        self.assertEqual(status, 404, doc)
+        self.assertEqual(doc["error"], "no_quotes")
+
+    def test_symbols_are_required(self):
+        self.desk.quotes = StubQuoteService()
+        for qs in ("/api/quotes", "/api/quotes?symbols=", "/api/quotes?symbols=,,,"):
+            status, doc = self.api("GET", qs, scope="producer")
+            self.assertEqual(status, 400, doc)
+            self.assertEqual(doc["error"], "bad_request")
+        self.assertEqual(self.desk.quotes.calls, [])
+
+    def test_more_than_thirty_two_symbols_is_a_bad_request(self):
+        self.desk.quotes = StubQuoteService()
+        too_many = ",".join("S%d" % i for i in range(MAX_SYMBOLS + 1))
+        status, doc = self.api("GET", "/api/quotes?symbols=" + too_many, scope="producer")
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(self.desk.quotes.calls, [])
+
+        # Exactly the cap is fine -- this is a boundary, not a round number.
+        exactly = ",".join("S%d" % i for i in range(MAX_SYMBOLS))
+        status, doc = self.api("GET", "/api/quotes?symbols=" + exactly, scope="producer")
+        self.assertEqual(status, 200, doc)
+
+    def test_a_symbol_that_is_not_one_is_refused(self):
+        self.desk.quotes = StubQuoteService()
+        status, doc = self.api("GET", "/api/quotes?symbols=BAD%20SYMBOL", scope="producer")
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(doc["error"], "bad_request")
+        self.assertIn("BAD SYMBOL", doc["detail"])
+        self.assertEqual(self.desk.quotes.calls, [])
+
+    def test_the_wire_carries_integers_only(self):
+        stub = StubQuoteService(result={
+            "ACME": {"lastCents": 24160, "prevCloseCents": 23184, "changeBp": 421,
+                     "bars": [{"t": "2026-08-01", "c": 24000}]},
+        })
+        self.desk.quotes = stub
+        status, doc = self.api("GET", "/api/quotes?symbols=acme", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertTrue(doc["ok"])
+        self.assertEqual(doc["feed"], "iex")
+        self.assertIsInstance(doc["asOf"], int)
+        row = doc["quotes"]["ACME"]
+        for value in (row["lastCents"], row["prevCloseCents"], row["changeBp"],
+                      row["bars"][0]["c"]):
+            self.assertIsInstance(value, int)
+            self.assertNotIsInstance(value, bool)
+        # lower-cased on the wire, normalised to upper before it ever reaches
+        # the service.
+        self.assertEqual(stub.calls, [["ACME"]])
+
+    def test_symbols_are_split_stripped_deduped_and_order_preserved(self):
+        stub = StubQuoteService()
+        self.desk.quotes = stub
+        status, doc = self.api(
+            "GET", "/api/quotes?symbols=" + urllib.parse.quote("tsla, acme ,TSLA,acme"),
+            scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(stub.calls, [["TSLA", "ACME"]])
+
+    def test_an_upstream_failure_is_a_502_carrying_no_secret(self):
+        self.desk.quotes = StubQuoteService(
+            error=Upstream(message="snapshots: RuntimeError: HTTP 403 for ..."))
+        status, doc = self.api("GET", "/api/quotes?symbols=ACME", scope="producer")
+        self.assertEqual(status, 502, doc)
+        self.assertEqual(doc["error"], "upstream")
+        self.assertNotIn("secret", json.dumps(doc).lower())
+
+    def test_a_numeric_symbol_is_accepted_and_absent_when_the_service_skips_it(self):
+        # `005930` is a KR listing: `watchlist.SYMBOL_RE` (this route's own
+        # check) admits digits, `quotes.SYMBOL_RE` (Alpaca's) does not -- so
+        # the route must pass it through rather than 400 the whole watchlist
+        # over one holding this provider cannot quote. The service (stubbed
+        # here; the real one is `test_quotes.py`'s job) silently omits it.
+        stub = StubQuoteService(result={"ACME": {
+            "lastCents": 100, "prevCloseCents": 100, "changeBp": 0, "bars": []}})
+        self.desk.quotes = stub
+        status, doc = self.api("GET", "/api/quotes?symbols=005930,ACME", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(stub.calls, [["005930", "ACME"]])
+        self.assertNotIn("005930", doc["quotes"])
+        self.assertIn("ACME", doc["quotes"])
 
 
 class PublishGatingTest(DeskTestCase):

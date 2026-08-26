@@ -49,7 +49,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import notes, policy, schedule as sched, tiles, watchlist as wl
+from . import notes, policy, quotes as Q, schedule as sched, tiles, watchlist as wl
 from .app import COMMAND_ID_RE, Desk, as_int
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
@@ -737,6 +737,19 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                                             "source": doc["source"]})
         self._send_json(200, {"ok": True, "watchlist": self.desk.watchlist})
 
+    # -- handlers: quotes ---------------------------------------------------
+    def h_quotes(self, _match, query) -> None:
+        """Last price, day's change and a sparkline, proxied so the phone
+        never sees the Alpaca key -- see `quotes.py`'s module docstring.
+
+        A symbol the route accepts but `QuoteService` cannot answer for is
+        simply absent from `quotes`, never a 400: see `_parse_symbols`.
+        """
+        symbols = _parse_symbols(query)
+        answer = self.desk.quotes.quotes(symbols)
+        self._send_json(200, {"ok": True, "asOf": int(self.desk.clock.now()),
+                              "feed": Q.FEED, "quotes": answer})
+
     # -- handlers: operations ---------------------------------------------
     def h_state(self, _match, _query) -> None:
         self._send_json(200, self.desk.state())
@@ -993,6 +1006,9 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_get_watchlist),
         "PUT": ("operator", DeskHTTPRequestHandler.h_put_watchlist)}),
 
+    (re.compile(r"^/api/quotes\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_quotes)}),
+
     (re.compile(r"^/api/state\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_state)}),
     (re.compile(r"^/api/publish\Z"), {
@@ -1078,6 +1094,36 @@ def _epoch_field(doc: dict, key: str) -> float | None:
     :func:`~claudepost.errors.epoch_seconds`.
     """
     return epoch_seconds(doc.get(key), key)
+
+
+def _parse_symbols(query: dict) -> list[str]:
+    """The ``symbols`` query parameter as a normalised, capped list.
+
+    Split on commas, stripped, upper-cased and deduplicated preserving order
+    -- the same normalisation :func:`watchlist._symbol` applies to one
+    ticker, done here for a whole comma list, because the phone sends its
+    entire watchlist in one call rather than one request per company.
+
+    Validated against :data:`watchlist.SYMBOL_RE`, the *wider* shape a
+    watchlist item may take -- a KR listing is numeric -- and deliberately
+    not :data:`quotes.SYMBOL_RE`, which is narrower because it decides only
+    what is worth asking Alpaca about. A single Korean holding among the
+    tickers must not turn the whole request into a 400 and cost every other
+    company its price, so this only refuses a string that cannot be a
+    symbol *at all*; a symbol this route accepts but the provider cannot
+    quote is `QuoteService.quotes`'s to drop silently, not this function's.
+    """
+    raw = (query.get("symbols") or [""])[0]
+    symbols = list(dict.fromkeys(
+        s for s in (part.strip().upper() for part in raw.split(",")) if s))
+    if not symbols:
+        raise BadRequest(message="symbols is required")
+    if len(symbols) > Q.MAX_SYMBOLS:
+        raise BadRequest(message="%d symbols at most" % Q.MAX_SYMBOLS)
+    for symbol in symbols:
+        if not wl.SYMBOL_RE.match(symbol):
+            raise BadRequest(message="%r is not a symbol" % symbol)
+    return symbols
 
 
 def _query_int(query: dict, key: str, default: int) -> int:
