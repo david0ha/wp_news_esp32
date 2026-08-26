@@ -364,6 +364,65 @@ export interface AuditEntry {
   detail: Record<string, unknown>
 }
 
+export type WatchlistGrade = 'red' | 'yellow' | 'green' | 'none'
+
+const WATCHLIST_GRADES: readonly string[] = ['red', 'yellow', 'green', 'none']
+
+/**
+ * One tracked company (`GET`/`PUT /api/watchlist`, docs/desk-server.md § The watchlist).
+ *
+ * Every field carries the wire's own default, mirroring `watchlist.py`'s `_item` — a field this
+ * client cannot read as intended (a garbage grade, say) lands in a case the UI already handles
+ * rather than crashing the screen a thesis note is shown on.
+ */
+export interface WatchlistItem {
+  symbol: string
+  name: string
+  market: string
+  /** `"none"` is a fourth grade, not the absence of one — see `watchlist.py`'s own docstring. */
+  grade: WatchlistGrade
+  reasons: string[]
+  thesis_status: string
+  note: string
+  printable: boolean
+  last_printed: string | null
+  events: string[]
+  held: boolean
+}
+
+/** The document itself, or `null` off `getWatchlist()` when nobody has told the desk one. */
+export interface Watchlist {
+  updated_at: number | null
+  source: string
+  items: WatchlistItem[]
+  universe: string[]
+}
+
+/** One quoted bar — a daily close. */
+export interface QuoteBar {
+  t: string
+  c: number
+}
+
+/** One symbol's answer off `GET /api/quotes` — docs/desk-server.md § Quotes. */
+export interface Quote {
+  lastCents: number
+  prevCloseCents: number
+  changeBp: number
+  /** Oldest first, at most thirty. Empty on a bars-only upstream outage, not a symbol's absence. */
+  bars: QuoteBar[]
+}
+
+/**
+ * The whole answer off `GET /api/quotes?symbols=...`, or `null` off `getQuotes()` — the 404
+ * `no_quotes` case, a desk with no Alpaca key configured.
+ */
+export interface Quotes {
+  asOf: number
+  feed: string
+  quotes: Record<string, Quote>
+}
+
 /** The live snapshot the dashboard polls (`GET /api/state`). */
 export interface DeskState {
   /** The desk's own clock. Every other instant here is to be read against this one, not the phone's. */
@@ -742,6 +801,74 @@ function parseAudit(raw: unknown): AuditEntry[] {
     event: asStr(e.event),
     detail: asObj(e.detail),
   }))
+}
+
+/** Strings out of an array, in order. Anything else in it is not a symbol or a reason. */
+function asStrArr(v: unknown): string[] {
+  return asArr(v).filter((s): s is string => typeof s === 'string')
+}
+
+function parseWatchlistItem(raw: Record<string, unknown>): WatchlistItem {
+  return {
+    symbol: asStr(raw.symbol),
+    name: asStr(raw.name),
+    market: asStr(raw.market),
+    grade: asEnum<WatchlistGrade>(raw.grade, WATCHLIST_GRADES, 'none'),
+    reasons: asStrArr(raw.reasons),
+    thesis_status: asStr(raw.thesis_status),
+    note: asStr(raw.note),
+    printable: asBool(raw.printable),
+    last_printed: asIdOrNull(raw.last_printed),
+    events: asStrArr(raw.events),
+    held: asBool(raw.held),
+  }
+}
+
+/** Rows with no symbol are dropped: `watchlist.py` never stores one, so there is nothing to show. */
+function parseWatchlistItems(raw: unknown): WatchlistItem[] {
+  return asRows(raw)
+    .filter((i) => asStr(i.symbol) !== '')
+    .map(parseWatchlistItem)
+}
+
+function parseWatchlist(doc: Record<string, unknown>): Watchlist {
+  return {
+    updated_at: asInstant(doc.updated_at),
+    source: asStr(doc.source),
+    items: parseWatchlistItems(doc.items),
+    universe: asStrArr(doc.universe),
+  }
+}
+
+/**
+ * A wire number, truncated to an integer — every field on this envelope is cents or bp already.
+ * `typeof v !== 'number'`, same test `wireScaled()` makes above: a numeric STRING is still not
+ * the number this wire promises, and defaulting it silently is the honest reading, not `Number(v)`
+ * coercing it into one.
+ */
+function asInt(v: unknown, fallback = 0): number {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : fallback
+}
+
+function parseQuoteBar(raw: Record<string, unknown>): QuoteBar {
+  return { t: asStr(raw.t), c: asInt(raw.c) }
+}
+
+function parseQuote(raw: Record<string, unknown>): Quote {
+  return {
+    lastCents: asInt(raw.lastCents),
+    prevCloseCents: asInt(raw.prevCloseCents),
+    changeBp: asInt(raw.changeBp),
+    bars: asRows(raw.bars).map(parseQuoteBar),
+  }
+}
+
+function parseQuotes(doc: Record<string, unknown>): Quotes {
+  const quotes: Record<string, Quote> = {}
+  for (const [sym, v] of Object.entries(asObj(doc.quotes))) {
+    quotes[sym] = parseQuote(asObj(v))
+  }
+  return { asOf: asInt(doc.asOf), feed: asStr(doc.feed), quotes }
 }
 
 function parseDeskState(doc: Record<string, unknown>): DeskState {
@@ -1261,6 +1388,45 @@ export function createDeskClient(opts: DeskClientOptions) {
     return parseAudit((await call('GET', `/api/audit?limit=${limit}`)).events)
   }
 
+  /**
+   * `null` on a desk nobody has told — see docs/desk-server.md § The watchlist. `producer` scope,
+   * same as the read the phone already holds a token for.
+   */
+  async function getWatchlist(): Promise<Watchlist | null> {
+    const doc = await call('GET', '/api/watchlist')
+    return doc.watchlist === null || doc.watchlist === undefined ? null : parseWatchlist(asObj(doc.watchlist))
+  }
+
+  /**
+   * A last price, the day's change and up to thirty daily closes, or `null` when the desk has no
+   * Alpaca key — `404 no_quotes`, a tab the app can hide behind rather than an error it has to
+   * explain (docs/desk-server.md § Quotes). Every other refusal, 404 included, still throws.
+   *
+   * The body is read once here rather than through `httpFailure()`, which would read it a second
+   * time and fail against a real `Response` — a stream a `fetch` only lets a caller consume once.
+   */
+  async function getQuotes(symbols: string[]): Promise<Quotes | null> {
+    const list = Array.from(new Set(symbols.map((s) => s.trim().toUpperCase()).filter((s) => s !== '')))
+    const path = `/api/quotes?symbols=${encodeURIComponent(list.join(','))}`
+    const res = await request(path)
+    if (!res.ok) {
+      let doc: Record<string, unknown> = {}
+      try {
+        doc = asObj(await res.json())
+      } catch {
+        // A tunnel with nothing behind it answers HTML. The status alone still classifies it.
+      }
+      if (res.status === 404 && asStr(doc.error) === 'no_quotes') return null
+      const detail = [asStr(doc.error), asStr(doc.detail)].filter((s) => s !== '').join(': ')
+      throw new DeskError(
+        codeForStatus(res.status),
+        redact(`${path} answered ${res.status}${detail === '' ? '' : ` — ${detail}`}`),
+        res.status,
+      )
+    }
+    return parseQuotes(await jsonOf(res, path))
+  }
+
   return {
     baseUrl,
     // the device plane
@@ -1277,6 +1443,8 @@ export function createDeskClient(opts: DeskClientOptions) {
     getSchedule,
     getScheduleNext,
     getAudit,
+    getWatchlist,
+    getQuotes,
     // producer writes
     postCommand,
     // operator writes

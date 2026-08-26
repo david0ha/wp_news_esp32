@@ -805,6 +805,191 @@ describe('desk client — audit', () => {
 })
 
 // =====================================================================================
+// GET /api/watchlist — the vault's document, or null when nobody has said.
+// =====================================================================================
+
+describe('desk client — watchlist', () => {
+  it('answers null on a desk nobody has told', async () => {
+    const { client: c, calls } = client([{ body: { ok: true, watchlist: null } }])
+    await expect(c.getWatchlist()).resolves.toBeNull()
+    expect(calls[0].url).toBe(`${BASE}/api/watchlist`)
+  })
+
+  it('parses the documented shape', async () => {
+    const { client: c } = client([
+      {
+        body: {
+          ok: true,
+          watchlist: {
+            updated_at: 1755702000,
+            source: 'vault',
+            items: [
+              {
+                symbol: 'SNDK',
+                name: 'Sandisk Corp.',
+                market: 'NASDAQ',
+                grade: 'yellow',
+                reasons: ['guidance cut', 'inventory glut'],
+                thesis_status: 'watching',
+                note: 'markdown, up to 16 KiB',
+                printable: true,
+                last_printed: '2026-08-19',
+                events: ['2026-09-03'],
+                held: false,
+              },
+            ],
+            universe: ['SNDK', 'MU', 'WDC'],
+          },
+        },
+      },
+    ])
+    const wl = await c.getWatchlist()
+    expect(wl).not.toBeNull()
+    expect(wl!.updated_at).toBe(1755702000)
+    expect(wl!.source).toBe('vault')
+    expect(wl!.universe).toEqual(['SNDK', 'MU', 'WDC'])
+    expect(wl!.items).toHaveLength(1)
+    expect(wl!.items[0]).toEqual({
+      symbol: 'SNDK',
+      name: 'Sandisk Corp.',
+      market: 'NASDAQ',
+      grade: 'yellow',
+      reasons: ['guidance cut', 'inventory glut'],
+      thesis_status: 'watching',
+      note: 'markdown, up to 16 KiB',
+      printable: true,
+      last_printed: '2026-08-19',
+      events: ['2026-09-03'],
+      held: false,
+    })
+  })
+
+  it('defaults missing fields and turns an unknown grade into "none"', async () => {
+    const { client: c } = client([
+      {
+        body: {
+          ok: true,
+          watchlist: {
+            items: [{ symbol: 'ACME', grade: 'purple' }, { name: 'no symbol, dropped' }],
+          },
+        },
+      },
+    ])
+    const wl = await c.getWatchlist()
+    expect(wl!.updated_at).toBeNull()
+    expect(wl!.source).toBe('')
+    expect(wl!.universe).toEqual([])
+    expect(wl!.items).toHaveLength(1)
+    expect(wl!.items[0]).toEqual({
+      symbol: 'ACME',
+      name: '',
+      market: '',
+      grade: 'none',
+      reasons: [],
+      thesis_status: '',
+      note: '',
+      printable: false,
+      last_printed: null,
+      events: [],
+      held: false,
+    })
+  })
+
+  it('sends the bearer token, same as any other control-plane read', async () => {
+    const { client: c, calls } = client([{ body: { ok: true, watchlist: null } }])
+    await c.getWatchlist()
+    expect(bearerOf(calls[0].init)).toBe(`Bearer ${TOKEN}`)
+  })
+})
+
+// =====================================================================================
+// GET /api/quotes — last price, change and bars, or null when the desk has no Alpaca key.
+// =====================================================================================
+
+describe('desk client — quotes', () => {
+  it('joins symbols into the query string', async () => {
+    const { client: c, calls } = client([{ body: { ok: true, asOf: 1, feed: 'iex', quotes: {} } }])
+    await c.getQuotes(['acme', 'sndk'])
+    expect(calls[0].url).toBe(`${BASE}/api/quotes?symbols=ACME%2CSNDK`)
+  })
+
+  it('parses the documented shape, every number an integer', async () => {
+    const { client: c } = client([
+      {
+        body: {
+          ok: true,
+          asOf: 1755702000,
+          feed: 'iex',
+          quotes: {
+            ACME: {
+              lastCents: 24160,
+              prevCloseCents: 23184,
+              changeBp: 421,
+              bars: [{ t: '2026-08-01', c: 24000 }],
+            },
+          },
+        },
+      },
+    ])
+    const qs = await c.getQuotes(['ACME'])
+    expect(qs).not.toBeNull()
+    expect(qs!.asOf).toBe(1755702000)
+    expect(qs!.feed).toBe('iex')
+    expect(qs!.quotes.ACME).toEqual({
+      lastCents: 24160,
+      prevCloseCents: 23184,
+      changeBp: 421,
+      bars: [{ t: '2026-08-01', c: 24000 }],
+    })
+  })
+
+  it('truncates a garbage numeric field to an integer rather than passing a float through', async () => {
+    const { client: c } = client([
+      {
+        body: {
+          ok: true,
+          asOf: 1755702000.9,
+          feed: 'iex',
+          quotes: {
+            ACME: {
+              lastCents: 24160.7,
+              prevCloseCents: '23184',
+              changeBp: null,
+              bars: [{ t: '2026-08-01', c: 24000.4 }],
+            },
+          },
+        },
+      },
+    ])
+    const qs = await c.getQuotes(['ACME'])
+    expect(qs!.asOf).toBe(1755702000)
+    expect(qs!.quotes.ACME.lastCents).toBe(24160)
+    expect(qs!.quotes.ACME.prevCloseCents).toBe(0)
+    expect(qs!.quotes.ACME.changeBp).toBe(0)
+    expect(qs!.quotes.ACME.bars[0].c).toBe(24000)
+  })
+
+  it('resolves null on a 404 no_quotes — a tab to hide, not an error to explain', async () => {
+    const { client: c } = client([
+      { status: 404, ok: false, body: { ok: false, error: 'no_quotes' } },
+    ])
+    await expect(c.getQuotes(['ACME'])).resolves.toBeNull()
+  })
+
+  it('still throws on any other refusal, 404 included', async () => {
+    const { client: c } = client([
+      { status: 404, ok: false, body: { ok: false, error: 'not_found' } },
+    ])
+    await expect(c.getQuotes(['ACME'])).rejects.toMatchObject({ code: 'not_found' })
+
+    const { client: c2 } = client([
+      { status: 502, ok: false, body: { ok: false, error: 'upstream' } },
+    ])
+    await expect(c2.getQuotes(['ACME'])).rejects.toMatchObject({ code: 'server' })
+  })
+})
+
+// =====================================================================================
 // GET /news.json — the edition itself, off the anonymous plane.
 // =====================================================================================
 
