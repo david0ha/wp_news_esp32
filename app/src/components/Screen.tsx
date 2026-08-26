@@ -2,9 +2,9 @@ import { type ReactNode } from 'react'
 import { StyleSheet, View, type ViewStyle } from 'react-native'
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar'
-import { colors } from '../theme'
+import { colors } from '../theme/index'
 
-/** Full-bleed dark screen base used by every route. */
+/** Full-bleed desk-chrome screen base used by every route (plan Design > Direction). */
 export function Screen({
   children,
   edges = ['top', 'bottom'],
@@ -27,7 +27,7 @@ export function Screen({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: colors.desk,
   },
   safe: {
     flex: 1,
