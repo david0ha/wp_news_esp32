@@ -321,6 +321,18 @@ accounts.
 
 ## Before you finish
 
+### Write `notes.md` beside `news.json`
+
+It is not the paper — nothing in it reaches the board, nothing in it is fingerprinted, and a note
+the desk refuses does not hold back the edition. It is what the paper was made from: what you
+found, every source with its own URL, and what you chose not to print and why — a quarter you had
+no room for, a headline you rejected, a figure two sources disagreed on and which one you trusted
+and why. The owner reads it on a phone next to the page it explains, so "why isn't X on the front
+page" is a question it answers before anyone has to ask.
+
+Keep it to 2,000 words. It is a dossier, not a second story — and if the instruction was to look
+into something rather than to file a page, `notes.md` is the only thing you produce.
+
 - `python3 tools/mock_news_server.py --validate "$EDITION_DIR/news.json"`
 - `tools/edition/render-check.sh` passed, and you looked at both sheets.
 - Every headline and deck counted against the budget. Count the characters; do not estimate.
@@ -336,5 +348,7 @@ accounts.
   printed, so moving it on every run reprints the whole sheet on every poll for nothing a reader
   can see. `indices[].spark` changed only if the tape did.
 - `watchlist.json`'s `last` updated to the company you filed.
+- `notes.md` written beside `news.json` — what you found, every source's URL, what you left out
+  and why, ≤ 2,000 words.
 - A one-screen summary: the company, the lead, what you could not find out, and what the render
   check said.

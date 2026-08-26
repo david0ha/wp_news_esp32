@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 import prompt
-from deskclient import DeskClient, load_agent_env, read_token
+from deskclient import DeskClient, MAX_NOTES_BYTES, load_agent_env, read_token
 
 LOG = logging.getLogger("worker")
 
@@ -162,8 +162,31 @@ def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict) -> int:
     return proc.returncode
 
 
+def read_notes(workdir: str) -> str | None:
+    """``workdir/notes.md`` -- the dossier behind whatever else the run wrote.
+
+    Capped at :data:`deskclient.MAX_NOTES_BYTES`, the same quarter-megabyte
+    the desk itself refuses past: reading further into memory only to have
+    it truncated again on the way there buys nothing.
+
+    Returns:
+        The note's text, or ``None`` when there is no ``notes.md``. That is
+        the ordinary case rather than a failure -- a turn with nothing worth
+        writing down left nothing behind, the way an edition with no picture
+        is still a normal edition. Never raises: a directory that vanished
+        between the write and this read is not a reason to lose the payload
+        it sits beside.
+    """
+    try:
+        with open(os.path.join(workdir, "notes.md"), "rb") as f:
+            data = f.read(MAX_NOTES_BYTES)
+    except OSError:
+        return None
+    return data.decode("utf-8", "replace")
+
+
 def upload(desk: DeskClient, workdir: str) -> str:
-    """Open a draft and PUT the payload and every tile beside it."""
+    """Open a draft and PUT the payload, every tile, and any notes beside it."""
     payload_path = os.path.join(workdir, "news.json")
     if not os.path.exists(payload_path):
         raise RuntimeError("no news.json was produced")
@@ -183,6 +206,18 @@ def upload(desk: DeskClient, workdir: str) -> str:
             with open(os.path.join(tiles_dir, name), "rb") as f:
                 desk.put_tile(draft, name[:-4], f.read())
             count += 1
+
+    text = read_notes(workdir)
+    if text:
+        try:
+            desk.put_notes(text, draft=draft)
+        except RuntimeError as e:
+            # A note is evidence about the page, not the page: the desk
+            # having refused it -- too large, some transient failure -- is
+            # not a reason to hold back an edition that already passed
+            # every gate that matters.
+            LOG.warning("could not file notes on draft %s: %s", draft, e)
+
     LOG.info("draft %s: %d bytes and %d tile(s)", draft, len(payload), count)
     return draft
 
@@ -249,8 +284,16 @@ def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str)
 
 
 def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> None:
-    """One instruction, from claim to commit."""
+    """One instruction, from claim to commit -- or, for a command that files no
+    page, from claim to a note left on the command itself.
+
+    ``kind`` defaults to ``"file_edition"`` here rather than being required:
+    the desk always sends one (:data:`store.COMMAND_KINDS` has no fourth
+    option), and a missing key is treated as the kind this loop has always
+    assumed, not as a new one.
+    """
     cid = command["id"]
+    kind = command.get("kind", "file_edition")
     workdir = os.path.join(cfg.scratch, cid)
     shutil.rmtree(workdir, ignore_errors=True)
     os.makedirs(os.path.join(workdir, "tiles"), exist_ok=True)
@@ -277,6 +320,20 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     status = run_claude(cfg, text, workdir, agent_env)
     if status != 0:
         desk.finish(cid, False, "claude exited %d" % status)
+        return
+
+    if kind != "file_edition":
+        # "Look into this" and a one-off ask have no page to file, so
+        # there is no draft to open and nothing for file_and_proof() to
+        # upload -- the note the model wrote is the deliverable, and the
+        # only place it can go is the command it answers.
+        note = read_notes(workdir)
+        if note:
+            try:
+                desk.put_notes(note, command=cid)
+            except RuntimeError as e:
+                LOG.warning("could not file notes on command %s: %s", cid, e)
+        desk.finish(cid, True, note or "done, no notes.md was written")
         return
 
     draft, report, sheets = file_and_proof()
