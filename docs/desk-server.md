@@ -40,22 +40,32 @@ and the idle tick in `user_app.cpp` deliberately does *not* refresh. So a page
 going stale at 3 a.m. does not light the wall either. The badge rides out with
 the next refresh that had a reason.
 
-**2. The desk holds nothing personal.** It answers the internet, so what it
-can be made to leak matters: `~/.claudepost`, mounted read-only, holds bearer
-tokens and nothing else of the owner's, and `/data` holds only the editions it
-has typeset and the schedule it was told to keep. A house style, a rotation, a
-list of things that must never print — what makes a paper sound like
-somebody's own — lives wherever the *worker's* `AGENT_CONTEXT_DIR` points, a
-directory this container never sees; see
-[`agent/README.md`](../agent/README.md). So a compromised desk loses bearer
-tokens and a schedule, never anybody's opinions.
+**2. The desk holds tokens, and now a few opinions too — but never the
+standing voice.** It answers the internet, so what it can be made to leak
+matters: `~/.claudepost`, mounted read-only, holds bearer tokens and an
+Alpaca key and nothing else of the owner's. `/data` used to hold only the
+editions it had typeset and the schedule it was told to keep; it now also
+holds the worker's own research notes on each one and, once an operator has
+PUT one, the watchlist — grades, reasons and a thesis note on a handful of
+tickers. That is real content to lose, and the watchlist section below is
+explicit about why its schema caps what can be put in it rather than
+pretending the document holds nothing. What still never reaches the desk is
+the *standing* voice: a house style, a rotation, a list of things that must
+never print — what makes every page sound like the same person's — lives
+wherever the *worker's* `AGENT_CONTEXT_DIR` points, a directory this
+container never sees; see [`agent/README.md`](../agent/README.md). So a
+compromised desk loses bearer tokens, a schedule, a handful of tickers'
+grades and the research behind recent editions — never the opinions that
+shape every page it prints.
 
 **3. This repository is public and the owner's editorial voice is not.** The
 contract belongs in the open — [`tools/edition/PROMPT.md`](../tools/edition/PROMPT.md)
 is how anybody builds a producer. The watchlist, the standing instructions, the
 blocklist, the daily briefs and every token do not. The boundary is drawn once,
-at the filesystem — tokens in `~/.claudepost`, editorial opinions in whatever
-directory the worker's `AGENT_CONTEXT_DIR` names — rather than as a
+at the filesystem — tokens in `~/.claudepost`, the watchlist in the desk's own
+`/data` (private because a Docker volume is not source control, not because
+of a special case written for it), and the standing editorial opinions in
+whatever directory the worker's `AGENT_CONTEXT_DIR` names — rather than as a
 `.gitignore` rule: nothing private is ever inside the repository to be
 accidentally added.
 
@@ -210,8 +220,8 @@ a draft and an edition do.
 
 | Root | Where | Holds |
 |---|---|---|
-| **Serving** | Docker volume → `/data` | `current`, `staged`, `editions/<id>/…`, `desk.sqlite`, `schedule.json` |
-| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env` |
+| **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json` |
+| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` |
 
 **Secrets are not in the repository, the image, or any synced directory.**
 `~/.claudepost/` sits outside all three — the repository is public and git history
@@ -560,6 +570,21 @@ short, a headline broken on the wrong word, a page that is grey because nothing
 on it is set larger than a deck, a photograph that halftoned to mush.
 
 Two revisions, then it reports the failure with the validator's own words.
+
+**`kind` decides where the turn's `notes.md` goes, and one of the three kinds
+decides it from the disk rather than from itself.** `"file_edition"` always
+takes the draft path above, and if the run left a `notes.md` in its workdir it
+rides beside the draft (`PUT .../notes.md`) — the dossier behind the page,
+filed the same way whether or not one seemed worth writing. `"research"`
+never opens a draft at all: "look into this" has no page to typeset, so its
+prompt tail asks for `notes.md` alone and the note goes straight onto the
+command (`PUT /api/commands/<id>/notes.md`). `"custom"` is the operator's own
+text and can be either kind of instruction, so the worker trusts what actually
+landed over the label: a `news.json` in the workdir means it was an order and
+the note follows the draft; no `news.json` means it was a look and the note
+follows the command. A turn that left no `notes.md` files nothing — that is
+the ordinary case, not a gap, the same way an edition with no photograph is
+still a complete one.
 
 ## Cloudflare
 
