@@ -35,7 +35,7 @@ import os
 import re
 
 from .errors import BadRequest, NotFound, TooLarge
-from .fsutil import atomic_write
+from .fsutil import atomic_write, read_bytes
 
 #: A quarter of a megabyte of markdown. Not derived from the device's limits
 #: like ``tiles.MAX_PAYLOAD_BYTES`` is -- the board never sees a note -- but
@@ -88,16 +88,12 @@ def write(owner_dir: str, data: bytes) -> None:
 def read(owner_dir: str) -> bytes | None:
     """The note in ``owner_dir``, or ``None``. Never raises.
 
-    ``editions.py``'s split between a read that answers ``None`` and one that
-    raises, for its reason: this read feeds a response, and every way of
-    failing -- no note, no directory, an owner pruned a second ago -- is the
-    same 404 to whoever asked.
+    ``fsutil.read_bytes`` and therefore ``editions.py``'s split between a read
+    that answers ``None`` and one that raises, for its reason: this read feeds
+    a response, and every way of failing -- no note, no directory, an owner
+    pruned a second ago -- is the same 404 to whoever asked.
     """
-    try:
-        with open(os.path.join(owner_dir, NOTES_NAME), "rb") as f:
-            return f.read()
-    except OSError:
-        return None
+    return read_bytes(os.path.join(owner_dir, NOTES_NAME))
 
 
 def present(owner_dir: str) -> bool:

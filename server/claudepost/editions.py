@@ -46,7 +46,7 @@ from zoneinfo import ZoneInfo
 from . import notes, tiles
 from .clock import Clock
 from .errors import BadRequest, Conflict, Internal, NotFound
-from .fsutil import atomic_write, fsync_dir
+from .fsutil import atomic_write, fsync_dir, read_bytes
 from .gates import Gates
 from .policy import dropped_producer_policy
 from .schedule import Schedule, is_quiet, next_wake, quiet_ends_at
@@ -488,31 +488,47 @@ class EditionStore:
         """
         if not _valid(_EID_RE, edition_id):
             return None
-        return _read_bytes(os.path.join(self._edition_dir(edition_id), PAYLOAD_NAME))
+        return read_bytes(os.path.join(self._edition_dir(edition_id), PAYLOAD_NAME))
 
     def read_tile(self, edition_id: str, tile_id: str) -> bytes | None:
         """One tile of an edition, verbatim, or ``None``."""
         if not _valid(_EID_RE, edition_id) or not tiles.valid_tile_id(tile_id):
             return None
-        return _read_bytes(os.path.join(self._edition_dir(edition_id), TILES_DIR,
+        return read_bytes(os.path.join(self._edition_dir(edition_id), TILES_DIR,
                                         tile_id + ".bin"))
+
+    def _owner_dir(self, owner_id: str) -> str | None:
+        """The directory an id names, whichever of the two kinds it is.
+
+        A proof sheet and a note both belong to *either* a draft or the edition
+        it became, and the id itself is what says which -- the two shapes are
+        disjoint (sixteen hex against thirty-two), so the regexes tell them
+        apart and no caller has to pass a flag saying which it meant. That is
+        the safety argument as much as the convenience one: a flag can be
+        wrong, and a caller that asked after a draft by an edition's id would
+        be answered from the wrong tree. An id of neither shape names nothing.
+
+        ``None`` rather than a raise, because both callers are on the serving
+        path where an id that cannot exist and one that merely does not are
+        the same 404 to whoever asked.
+        """
+        if _valid(_EID_RE, owner_id):
+            return self._edition_dir(owner_id)
+        if _valid(_DRAFT_RE, owner_id):
+            return self._draft_dir(owner_id)
+        return None
 
     def read_sheet(self, owner_id: str, name: str) -> bytes | None:
         """A proof sheet, from the edition that carries it or the draft that made it.
 
-        The two id shapes are told apart by their regexes rather than by a flag,
-        so a caller cannot ask for a draft's sheet by an edition's id and reach
-        somewhere else. Anything that is neither shape reads nothing.
+        The id decides which tree is read; see :meth:`_owner_dir`. Anything
+        that is neither shape, and any name that is not a sheet's, reads
+        nothing.
         """
-        if not _valid(SHEET_RE, name):
+        base = self._owner_dir(owner_id) if _valid(SHEET_RE, name) else None
+        if base is None:
             return None
-        if _valid(_EID_RE, owner_id):
-            base = self._edition_dir(owner_id)
-        elif _valid(_DRAFT_RE, owner_id):
-            base = self._draft_dir(owner_id)
-        else:
-            return None
-        return _read_bytes(os.path.join(base, PROOF_DIR, name))
+        return read_bytes(os.path.join(base, PROOF_DIR, name))
 
     def read_draft_notes(self, draft_id: str) -> bytes | None:
         """A draft's notes, or ``None``.
@@ -541,18 +557,12 @@ class EditionStore:
     def has_notes(self, owner_id: str) -> bool:
         """Whether a draft or an edition carries a note.
 
-        The two id shapes are told apart by their regexes rather than by a
-        flag, the way :meth:`read_sheet` does it, so a caller cannot ask after
-        a draft's note by an edition's id and be answered from somewhere else.
-        Anything that is neither shape carries nothing.
+        The id decides which tree is asked, the way :meth:`read_sheet` does it
+        and for :meth:`_owner_dir`'s reason. Anything that is neither shape
+        carries nothing.
         """
-        if _valid(_EID_RE, owner_id):
-            base = self._edition_dir(owner_id)
-        elif _valid(_DRAFT_RE, owner_id):
-            base = self._draft_dir(owner_id)
-        else:
-            return False
-        return notes.present(base)
+        base = self._owner_dir(owner_id)
+        return base is not None and notes.present(base)
 
     def sheet_names(self, edition_id: str) -> list[str]:
         """The proof sheets an edition carries, by name, sorted.
@@ -580,7 +590,7 @@ class EditionStore:
                 answers from the operator reading them.
         """
         path = os.path.join(self._require_edition(edition_id), META_NAME)
-        raw = _read_bytes(path)
+        raw = read_bytes(path)
         if raw is None:
             raise NotFound(message=f"edition {edition_id} has no metadata")
         try:
@@ -832,7 +842,7 @@ class EditionStore:
                 # somebody looked at the paper, not part of the edition. It is
                 # not fingerprinted and not counted, so losing one costs a
                 # picture in a diagnostic view and nothing on the wall.
-                data = _read_bytes(os.path.join(source_proof, name))
+                data = read_bytes(os.path.join(source_proof, name))
                 if data is not None:
                     _write_file(os.path.join(proof_dir, name), data)
 
@@ -957,7 +967,7 @@ class EditionStore:
 
     def _draft_payload(self, draft_dir: str) -> bytes | None:
         """A draft's ``news.json``, or ``None`` when nothing has been pushed."""
-        return _read_bytes(os.path.join(draft_dir, PAYLOAD_NAME))
+        return read_bytes(os.path.join(draft_dir, PAYLOAD_NAME))
 
     def _drop_draft(self, draft_id: str) -> None:
         """Delete a draft that has become an edition.
@@ -984,7 +994,7 @@ class EditionStore:
         a draft whose own record of itself is gone is a draft nothing is going
         to finish.
         """
-        raw = _read_bytes(os.path.join(self._draft_dir(draft_id), STAMP_NAME))
+        raw = read_bytes(os.path.join(self._draft_dir(draft_id), STAMP_NAME))
         if raw is None:
             return 0.0
         try:
@@ -1200,23 +1210,16 @@ def _clip(output: str) -> str:
     return output[:MAX_META_OUTPUT] + "\n... [cut]"
 
 
-def _read_bytes(path: str) -> bytes | None:
-    """A whole file, or ``None``. The serving path's one way of failing."""
-    try:
-        with open(path, "rb") as f:
-            return f.read()
-    except OSError:
-        return None
-
-
 def _read_or_raise(path: str) -> bytes:
     """A whole file, or the ``OSError`` that stopped it reaching the caller.
 
-    The counterpart to :func:`_read_bytes`, and the split is the module's rule:
-    a read on the serving path answers ``None`` because every way of failing
-    means one thing to the board, while a read feeding a *write* must raise --
-    an edition is immutable, so a byte lost on the way in is lost for as long
-    as the edition is kept.
+    The counterpart to :func:`claudepost.fsutil.read_bytes`, and the split is
+    the module's rule: a read on the serving path answers ``None`` because
+    every way of failing means one thing to the board, while a read feeding a
+    *write* must raise -- an edition is immutable, so a byte lost on the way in
+    is lost for as long as the edition is kept. It stays here rather than
+    moving to ``fsutil`` beside its counterpart because this module is its only
+    caller, and the argument for that module is a second one.
     """
     with open(path, "rb") as f:
         return f.read()

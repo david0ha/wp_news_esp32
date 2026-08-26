@@ -190,6 +190,35 @@ def read_notes(workdir: str) -> str | None:
     return data.decode("utf-8", "ignore")
 
 
+def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
+               command: str | None = None) -> None:
+    """File ``workdir/notes.md`` on a draft or a command, best effort.
+
+    Best effort is the whole of it. A note is evidence about a page, not the
+    page: a desk that refused one -- too large, some transient failure -- is
+    not a reason to hold back an edition that has already passed every gate
+    that matters, nor to report a turn that did the work as failed. So the
+    refusal is a log line and nothing else, and a turn that wrote no
+    ``notes.md`` is the ordinary case rather than a failure to report.
+
+    One function rather than the same shape at each of the two places a note is
+    filed, because "best effort" is a *policy*, and a policy written down twice
+    is one that can be half-changed -- the two would then disagree about
+    whether a refused note costs the work it was filed beside.
+
+    ``ValueError`` is deliberately not caught: naming both or neither of
+    ``draft``/``command`` is a bug in this file, not a desk that said no.
+    """
+    text = read_notes(workdir)
+    if not text:
+        return
+    try:
+        desk.put_notes(text, draft=draft, command=command)
+    except RuntimeError as e:
+        owner = f"draft {draft}" if draft is not None else f"command {command}"
+        LOG.warning("could not file notes on %s: %s", owner, e)
+
+
 def upload(desk: DeskClient, workdir: str) -> str:
     """Open a draft and PUT the payload, every tile, and any notes beside it."""
     payload_path = os.path.join(workdir, "news.json")
@@ -212,16 +241,7 @@ def upload(desk: DeskClient, workdir: str) -> str:
                 desk.put_tile(draft, name[:-4], f.read())
             count += 1
 
-    text = read_notes(workdir)
-    if text:
-        try:
-            desk.put_notes(text, draft=draft)
-        except RuntimeError as e:
-            # A note is evidence about the page, not the page: the desk
-            # having refused it -- too large, some transient failure -- is
-            # not a reason to hold back an edition that already passed
-            # every gate that matters.
-            LOG.warning("could not file notes on draft %s: %s", draft, e)
+    file_notes(desk, workdir, draft=draft)
 
     LOG.info("draft %s: %d bytes and %d tile(s)", draft, len(payload), count)
     return draft
@@ -332,17 +352,28 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         """File whatever ``notes.md`` holds directly on the command, and finish.
 
         The path for a turn that never opened a draft: there is nothing to
-        attach a note *to* except the command that asked for the turn, so
-        that is where it goes, best effort, the same way :func:`upload`
-        attaches one to a draft -- a desk that refuses it is not a reason to
-        report the turn itself as failed.
+        attach a note *to* except the command that asked for the turn, so that
+        is where it goes, best effort, the same way :func:`upload` attaches one
+        to a draft.
+
+        **:func:`write_brief` is not called here, and that is not an
+        oversight.** On this path the desk note *is* the brief -- the same text,
+        filed against the instruction it answers rather than into a folder --
+        and it is durable where a brief is not: the context directory is
+        somebody's own mount, off unless configured twice, and absent entirely
+        on a worker running without one, where a research turn's whole
+        deliverable would then exist nowhere. The edition path keeps its brief
+        because there the note describes a *page*, and what the brief records
+        is what was filed and why, which is a different sentence.
+
+        The note is read twice -- once by :func:`file_notes` and once here --
+        because the desk gets the dossier and the operator gets the same text
+        back as the command's result. It is one bounded file, already read, and
+        the alternative is a helper whose contract is "file this, and also hand
+        it back".
         """
+        file_notes(desk, workdir, command=cid)
         note = read_notes(workdir)
-        if note:
-            try:
-                desk.put_notes(note, command=cid)
-            except RuntimeError as e:
-                LOG.warning("could not file notes on command %s: %s", cid, e)
         desk.finish(cid, True, note or "done, no notes.md was written")
 
     text = prompt.build_prompt(

@@ -68,7 +68,6 @@ import datetime
 import json
 import logging
 import math
-import os
 import re
 import threading
 import urllib.request
@@ -76,6 +75,7 @@ from collections.abc import Callable, Sequence
 
 from .clock import Clock
 from .errors import NotFound, Upstream
+from .fsutil import file_stamp
 
 LOG = logging.getLogger("claudepost.quotes")
 
@@ -164,9 +164,9 @@ def _redact(text: str, key_id: str, secret: str) -> str:
 class Credentials:
     """``alpaca.json``, re-read when it changes underneath the process.
 
-    Modelled on :class:`claudepost.auth.Tokens` -- the same stat stamp, the
-    same rule that a missing file is not an error -- with one difference that
-    matters. ``Tokens`` raises on a malformed file and is reloaded from the
+    Modelled on :class:`claudepost.auth.Tokens` -- literally the same stat
+    stamp, :func:`claudepost.fsutil.file_stamp`, and the same rule that a
+    missing file is not an error -- with one difference that matters. ``Tokens`` raises on a malformed file and is reloaded from the
     scheduler tick, where an exception becomes a log line. :meth:`get` is
     called on the request path instead, so it **never raises**: a half-written
     file must be "no quotes today", which is a 404 the app already handles,
@@ -192,20 +192,12 @@ class Credentials:
         the next request rather than on the next restart.
         """
         stamp, pair = self._state
-        if self._stat() != stamp:
+        if file_stamp(self._path) != stamp:
             self._load()
             _, pair = self._state
         return pair
 
     # -- internals ---------------------------------------------------------
-
-    def _stat(self) -> tuple[int, int, int] | None:
-        """The file's identity, as far as "has it changed" needs to know."""
-        try:
-            st = os.stat(self._path)
-        except OSError:
-            return None
-        return (st.st_ino, st.st_size, st.st_mtime_ns)
 
     def _load(self) -> None:
         """Read the file, or decide there is no key. Cannot fail.
@@ -220,7 +212,7 @@ class Credentials:
         leak the rest of this module is built to prevent. The path and the
         class of failure are the half a human needs to fix it.
         """
-        stamp = self._stat()
+        stamp = file_stamp(self._path)
         pair: tuple[str, str] | None = None
         if stamp is not None:
             try:

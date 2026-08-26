@@ -45,10 +45,10 @@ from __future__ import annotations
 
 import hmac
 import json
-import os
 from typing import NamedTuple
 
 from .errors import DeskError, Forbidden, Unauthorized
+from .fsutil import file_stamp
 
 #: The two scopes, least authority first.
 SCOPES: tuple[str, ...] = ("producer", "operator")
@@ -111,7 +111,7 @@ class Tokens:
         swallows the exception is left authorising nobody rather than
         authorising whoever the last good file said.
         """
-        if self._stat() != self._stamp:
+        if file_stamp(self._path) != self._stamp:
             self._load()
 
     def entry_for(self, presented: str) -> _Entry | None:
@@ -148,17 +148,9 @@ class Tokens:
 
     # -- internals ---------------------------------------------------------
 
-    def _stat(self) -> tuple[int, int, int] | None:
-        """The file's identity, as far as "has it changed" needs to know."""
-        try:
-            st = os.stat(self._path)
-        except OSError:
-            return None
-        return (st.st_ino, st.st_size, st.st_mtime_ns)
-
     def _load(self) -> None:
         """Read and validate the file. Clears the table before it can fail."""
-        stamp = self._stat()
+        stamp = file_stamp(self._path)
         self._entries = ()
         self._stamp = stamp
         if stamp is None:
