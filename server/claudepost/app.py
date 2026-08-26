@@ -29,12 +29,12 @@ from .gates import Gates, SubprocessGates
 from .notes import NoteStore
 from .store import Store
 
-#: The shape of a command id, in one place so the route in `http.py` and the
-#: store this desk hands notes to cannot drift apart. `commands` table ids and
-#: `/api/commands/<cid>/...` both already use `[0-9a-f]{8,64}` -- editions'
-#: shape, because a command shares the queue's table with nothing that has a
-#: shorter or longer id -- so this is that pattern named once rather than
-#: spelled twice.
+#: The shape of a command id: `commands` table ids, the `NoteStore` this desk
+#: hands their notes to, and every `/api/commands/<cid>/...` route in
+#: `http.py` -- which imports this constant and builds its routes from it
+#: rather than spelling `[0-9a-f]{8,64}` a second time, so the three cannot
+#: drift apart. Editions' shape, because a command shares the queue's table
+#: with nothing that has a shorter or longer id.
 COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
 
 LOG = logging.getLogger("claudepost.app")

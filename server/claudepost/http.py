@@ -50,7 +50,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import notes, policy, schedule as sched, tiles
-from .app import Desk, as_int
+from .app import COMMAND_ID_RE, Desk, as_int
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
 from .errors import BadRequest, Conflict, DeskError, Internal, NotFound, TooLarge, epoch_seconds
@@ -109,6 +109,12 @@ _SHEET_TYPES = {".png": "image/png", ".bmp": "image/bmp"}
 _TILE_ID = tiles.TILE_ID_RE.pattern.removeprefix("^").removesuffix(r"\Z")
 
 _TILE_PATH_RE = re.compile(r"^/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID)
+
+#: The command id, likewise from the module that owns it: `app.COMMAND_ID_RE`
+#: is what `Desk.notes` accepts, so every `/api/commands/<cid>/...` route
+#: below is built from this rather than a second `[0-9a-f]{8,64}` that could
+#: quietly stop matching what the store does.
+_CID = COMMAND_ID_RE.pattern.removeprefix("^").removesuffix(r"\Z")
 
 #: What a note is served as. Named rather than written at the handler because
 #: the charset is not decoration -- it is exactly the promise
@@ -636,13 +642,14 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                               "commands": self.desk.commands(status=status)})
 
     def h_put_command_notes(self, match, _query) -> None:
-        """File a note on a command -- what a worker found doing it.
+        """File a note on a command -- what came of the instruction.
 
-        Refused `409` while the command is still `pending`: nobody has
-        claimed it, so there is nothing done yet for a note to be about.
-        Claimed, done, failed, expired or cancelled all take one -- a note
-        is a record of what happened, and every one of those states means
-        something did.
+        Refused `409` only while the command is still `pending`: nothing has
+        happened to it yet for a note to be about. Every other status takes
+        one: claimed, done or failed describe a worker's own report, and
+        expired or cancelled describe an outcome the queue or an operator
+        settled without a worker ever touching it -- which is exactly the
+        kind of thing worth writing down too.
         """
         cid = match.group("cid")
         command = self.desk.store.get_command(cid)
@@ -941,11 +948,11 @@ _ROUTES = [
         "POST": ("producer", DeskHTTPRequestHandler.h_enqueue)}),
     (re.compile(r"^/api/commands/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_claim)}),
-    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})\Z"), {
+    (re.compile(r"^/api/commands/(?P<cid>%s)\Z" % _CID), {
         "DELETE": ("operator", DeskHTTPRequestHandler.h_cancel)}),
-    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})/(?P<verb>done|fail)\Z"), {
+    (re.compile(r"^/api/commands/(?P<cid>%s)/(?P<verb>done|fail)\Z" % _CID), {
         "POST": ("producer", DeskHTTPRequestHandler.h_finish)}),
-    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})/notes\.md\Z"), {
+    (re.compile(r"^/api/commands/(?P<cid>%s)/notes\.md\Z" % _CID), {
         "GET": ("producer", DeskHTTPRequestHandler.h_get_command_notes),
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_command_notes)}),
 
