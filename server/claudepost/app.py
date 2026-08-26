@@ -14,6 +14,7 @@ every few seconds; the tests call it at whatever instant they want to examine.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import re
@@ -141,7 +142,7 @@ class Desk:
         #: until an operator PUTs one, and stays `None` on a desk nobody has
         #: told, forever.
         self.watchlist_path = os.path.join(cfg.data_dir, "watchlist.json")
-        self.watchlist: dict | None = wl.load(self.watchlist_path)
+        self.watchlist: dict | None = None
 
         #: Notified whenever a command is enqueued, so a long poll wakes on the
         #: instruction rather than on its next timeout. The queue is in SQLite
@@ -151,6 +152,7 @@ class Desk:
         self._last_housekeeping = 0.0
 
         self._load_schedule()
+        self._load_watchlist()
 
     # -- the periodic pass ------------------------------------------------
     def tick(self, now: float | None = None) -> list[str]:
@@ -241,7 +243,14 @@ class Desk:
             },
             "nextTransition": ({"at": int(nxt[0]), "what": nxt[1]} if nxt else None),
             "watchlist": {
-                "updatedAt": (as_int(self.watchlist["updated_at"])
+                # `or None`, because a watchlist written by something other
+                # than this desk's own PUT carries no `updated_at` and
+                # `wl.load` fails that field soft, to `0`. On this wire `0` is
+                # not "no instant", it is the Unix epoch -- a client rendering
+                # it shows 1 January 1970 as the day the list was last touched.
+                # `int|null`, and `null` is what "there is no instant here"
+                # actually says.
+                "updatedAt": ((self.watchlist["updated_at"] or None)
                               if self.watchlist else None),
                 "count": len(self.watchlist["items"]) if self.watchlist else 0,
             },
@@ -299,6 +308,27 @@ class Desk:
                  self.schedule.publish_policy,
                  [(w.start, w.end) for w in self.schedule.quiet])
 
+    def _load_watchlist(self) -> None:
+        """Read the watchlist off disk, and say in the log what came back.
+
+        Called once, from the constructor, for :meth:`_load_schedule`'s reason:
+        the desk is the only writer of the file, so nothing re-reads it.
+
+        The line earns its place more than the schedule's does. ``wl.load``
+        answers ``None`` both for a desk nobody has ever told and for a file it
+        refused, with only a ``claudepost.watchlist`` warning to tell them
+        apart -- so without this, a desk that came up having silently dropped
+        somebody's watchlist reads in its own log exactly like a desk that
+        never had one. Those are different things to go and fix.
+        """
+        self.watchlist = wl.load(self.watchlist_path)
+        if self.watchlist is None:
+            LOG.info("watchlist: none at %s", self.watchlist_path)
+            return
+        LOG.info("watchlist %s (%d items, updated %s)",
+                 self.watchlist_path, len(self.watchlist["items"]),
+                 _stamp(self.watchlist["updated_at"]))
+
     def _fire_due_wake(self, t: float) -> bool:
         """Enqueue one ``file_edition`` command per wake instant, at most once.
 
@@ -351,6 +381,23 @@ def _last_wake_at(s: sched.Schedule, t: float) -> float | None:
         last = nxt
         cursor = nxt
     return last
+
+
+def _stamp(when: int) -> str:
+    """An epoch second as a UTC timestamp, for a log line a human reads.
+
+    Spelled the way ``schedule.describe`` spells its ``utc`` field, so the two
+    places this desk prints an instant for a person print it the same way.
+
+    ``0`` is ``"never"`` rather than 1 January 1970. A watchlist written by
+    something other than this desk's own PUT carries no instant, and a date is
+    a worse answer than the absence of one -- the same distinction
+    :meth:`Desk.state` makes by sending ``null``.
+    """
+    if not when:
+        return "never"
+    return datetime.datetime.fromtimestamp(
+        when, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def as_int(value: float | None) -> int | None:

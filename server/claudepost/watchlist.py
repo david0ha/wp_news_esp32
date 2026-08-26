@@ -38,6 +38,15 @@ each carrying a note at its own cap is a megabyte, four times over
 :data:`MAX_DOC_BYTES`. So the aggregate is checked too, on the way out of
 :func:`parse_watchlist`, as a backstop the per-field caps cannot provide on
 their own.
+
+That aggregate is weighed in the form the file is *written* in, not in some
+other serialisation of the same document -- :func:`_serialised` is the single
+spelling of it, used by the cap and by :func:`save` both. A cap that weighed
+one form while the writer wrote a longer one is a document accepted by a
+``PUT`` and refused by :func:`load` on the next boot, which is the one failure
+this module has no way to report: ``None`` is what ``load`` answers for a file
+it will not take, and ``None`` is also what it answers for a desk nobody has
+told.
 """
 
 from __future__ import annotations
@@ -97,6 +106,37 @@ _ITEM_KEYS = frozenset({
     "symbol", "name", "market", "grade", "reasons", "thesis_status", "note",
     "printable", "last_printed", "events", "held",
 })
+
+#: The instant the caller stamps over :func:`parse_watchlist`'s ``updated_at``
+#: placeholder, at its widest. The backstop weighs a document whose instant is
+#: still the placeholder ``0`` while :func:`save` writes one carrying ten
+#: digits, so weighing the placeholder itself would leave the cap nine bytes
+#: short of what lands on disk. Ten digits is every epoch second until 2286.
+_WIDEST_STAMP = 9_999_999_999
+
+
+# --------------------------------------------------------------------------
+# The written form
+# --------------------------------------------------------------------------
+
+def _serialised(doc: dict) -> bytes:
+    """The document exactly as it goes on disk.
+
+    One function rather than a spelling at each end, because the aggregate cap
+    in :func:`parse_watchlist` and the bytes :func:`save` writes have to be
+    weighing the same thing. They were not: the cap weighed a compact
+    serialisation and ``save`` wrote an indented one, and sixty-four items are
+    seven hundred-odd lines -- thousands of bytes of indenting. So a document
+    could be accepted by a ``PUT``, written, and then refused by :func:`load`
+    on the next boot for being over a cap the ``PUT`` had said it was under.
+    Silently, too: ``load`` answers ``None`` for a file it will not take, and
+    ``None`` is also its answer for a desk nobody has ever told.
+
+    Indented and newline-terminated for :func:`save`'s reason: every byte of
+    this file exists to be read by someone debugging why the app shows what it
+    shows.
+    """
+    return (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -279,8 +319,11 @@ def parse_watchlist(doc: object) -> dict:
     }
 
     # The aggregate backstop -- see the module docstring for why the per-field
-    # caps above cannot provide this on their own.
-    size = len(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+    # caps above cannot provide this on their own. Weighed as the file will be
+    # written, and with the instant the caller is about to stamp, so that what
+    # this accepts is what `load` takes back on the next boot rather than
+    # something a little smaller than it.
+    size = len(_serialised({**out, "updated_at": _WIDEST_STAMP}))
     if size > MAX_DOC_BYTES:
         _bad("watchlist", f"{size} bytes serialised, at most {MAX_DOC_BYTES}")
 
@@ -367,9 +410,8 @@ def save(path: str, doc: dict) -> None:
 
     ``doc`` is trusted to already be normalised -- the caller's job is
     ``parse_watchlist(body)`` followed by stamping ``updated_at``, in that
-    order, before this is called. Indented and newline-terminated for the
-    same reason ``schedulefile.save`` is: every byte of this file exists to
-    be read by someone debugging why the app shows what it shows.
+    order, before this is called. The bytes come from :func:`_serialised`,
+    which is also what the aggregate cap weighed on the way in; see its
+    docstring for what happened when the two were spelled separately.
     """
-    text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
-    atomic_write(path, text.encode("utf-8"))
+    atomic_write(path, _serialised(doc))

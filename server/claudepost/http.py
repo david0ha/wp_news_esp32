@@ -67,7 +67,15 @@ MAX_CONTROL_BODY = 64 * 1024
 #: a request inside the limits never costs its connection, and a longer one is
 #: already past anything the desk would have taken -- so the socket goes
 #: instead of the bytes.
-MAX_DRAIN_BYTES = max(MAX_CONTROL_BODY, tiles.MAX_PAYLOAD_BYTES, tiles.MAX_TILE_BYTES)
+#:
+#: Every cap is named in the ``max()`` rather than the largest of them being
+#: written down, which is what makes the sentence above true *by construction*
+#: instead of by arithmetic somebody did once. A note is the newest of them and
+#: is comfortably under the tile that decides the figure today -- so leaving it
+#: out changed nothing, and would go on changing nothing right up until the day
+#: a cap moved and this line quietly stopped meaning what it says.
+MAX_DRAIN_BYTES = max(MAX_CONTROL_BODY, notes.MAX_NOTES_BYTES,
+                      tiles.MAX_PAYLOAD_BYTES, tiles.MAX_TILE_BYTES)
 
 #: The longest a claim may park. Long enough that an idle worker makes one
 #: request a minute and a half; short enough that a stalled connection is

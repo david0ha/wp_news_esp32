@@ -115,6 +115,16 @@ FEED = "iex"
 #: a request that hangs here still answers well inside both.
 UPSTREAM_TIMEOUT = 6.0
 
+#: The most of an upstream answer the desk will read into memory. A timeout
+#: bounds how long a fetch may take and this bounds how much it may cost: a
+#: body that never ends would otherwise be read until the desk ran out of
+#: memory, with the newspaper going down alongside the sparkline that asked
+#: for it. Four megabytes is far more than the largest legitimate answer --
+#: thirty-two symbols of sixty daily bars is tens of kilobytes -- so nothing
+#: real is near it, and a body that reaches it is truncated JSON, which is to
+#: say a 502 like any other body this module cannot parse.
+MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
+
 SNAPSHOTS_URL = "https://data.alpaca.markets/v2/stocks/snapshots"
 BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
 
@@ -239,10 +249,17 @@ def _urlopen_fetch(url: str, headers: dict[str, str]) -> bytes:
     method so that every test in this module runs without a network, a socket
     or a mock of the standard library -- and so that the code holding the
     credential can be read without reading anything about HTTP.
+
+    The read is bounded by :data:`MAX_UPSTREAM_BYTES` and the cap is not
+    checked afterwards, because there is nothing useful to say about a body
+    that hit it: the bytes are truncated JSON either way, and the caller's
+    parse turns them into the same 502 an unparseable body has always been.
+    A ``Content-Length`` is not trusted for this -- it is the upstream's claim
+    about a body the upstream is also sending.
     """
     request = urllib.request.Request(url, headers=headers, method="GET")
     with urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT) as response:
-        return response.read()
+        return response.read(MAX_UPSTREAM_BYTES)
 
 
 def _headers(key_id: str, secret: str) -> dict[str, str]:
@@ -414,9 +431,13 @@ class QuoteService:
         Raises:
             ~claudepost.errors.NotFound: code ``no_quotes``, when the desk
                 holds no Alpaca key. Nothing is asked of anybody first.
-            ~claudepost.errors.Upstream: 502, for anything the upstream does
-                -- refusing, timing out, or answering with a body that is
-                neither envelope. Its message carries no credential.
+            ~claudepost.errors.Upstream: 502, for anything the *snapshots*
+                call does -- refusing, timing out, or answering with a body
+                that is neither envelope. Its message carries no credential.
+                A **bars** failure is not one of these: the prices are the
+                answer and the sparkline is decoration, so an outage there is
+                logged and served as empty ``bars``. See the two blocks below,
+                which are kept apart for exactly this reason.
         """
         pair = self._creds.get()
         if pair is None:
@@ -446,7 +467,27 @@ class QuoteService:
 
         series, stale = self._cached(self._bars, wanted, now)
         if stale:
-            fresh_bars = self._get_bars(stale, key_id, secret)
+            try:
+                fresh_bars = self._get_bars(stale, key_id, secret)
+            except Upstream as exc:
+                # The prices are already in hand. A 502 here would throw them
+                # away to report that a chart is missing -- and a symbol with
+                # no daily history is a case this service already serves, as an
+                # empty `bars` list beside a real price. So the outage is served
+                # as the thing it looks like: every stale symbol misses, which
+                # `_remember` below caches at the miss TTL, so a phone pulling
+                # to refresh through an outage makes one upstream call a minute
+                # and the sparklines return of their own accord.
+                #
+                # Redacted although `_get` has already redacted this message,
+                # because the rule this module holds is that no string built
+                # from an upstream failure becomes a log line without passing
+                # through `_redact` -- and a rule that holds only where somebody
+                # remembered the string was clean is not one.
+                LOG.warning("bars: unavailable, serving prices without "
+                            "sparklines (%s)",
+                            _redact(str(exc), key_id, secret))
+                fresh_bars = {}
             self._remember(self._bars, stale, fresh_bars,
                            now + BARS_TTL, now + SNAPSHOT_TTL)
             series.update(fresh_bars)

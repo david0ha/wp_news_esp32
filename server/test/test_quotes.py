@@ -105,10 +105,18 @@ class Fetches:
     """
 
     def __init__(self, snapshots: dict | None = None, bars: dict | None = None,
-                 raises: BaseException | None = None) -> None:
+                 raises: BaseException | None = None,
+                 bars_raises: BaseException | None = None) -> None:
         self.snapshots = {} if snapshots is None else snapshots
         self.bars = {"bars": {}} if bars is None else bars
         self.raises = raises
+        #: One endpoint failing while the other answers, which `raises` cannot
+        #: express -- snapshots are fetched first, so a stub that raises for
+        #: everything never reaches the bars call at all. The desk's two
+        #: endpoints have different failure policies (a price is the answer, a
+        #: sparkline is decoration), and a stub that cannot fail them
+        #: separately cannot show the difference.
+        self.bars_raises = bars_raises
         self.urls: list[str] = []
         self.headers: list[dict] = []
 
@@ -117,8 +125,11 @@ class Fetches:
         self.headers.append(dict(headers))
         if self.raises is not None:
             raise self.raises
-        doc = self.snapshots if url.startswith(Q.SNAPSHOTS_URL) else self.bars
-        return json.dumps(doc).encode("utf-8")
+        if url.startswith(Q.SNAPSHOTS_URL):
+            return json.dumps(self.snapshots).encode("utf-8")
+        if self.bars_raises is not None:
+            raise self.bars_raises
+        return json.dumps(self.bars).encode("utf-8")
 
     def count(self, prefix: str) -> int:
         return sum(1 for u in self.urls if u.startswith(prefix))
@@ -408,10 +419,66 @@ class UpstreamTest(QuoteTestCase):
         self.write_credentials()
 
     def test_an_upstream_that_raises_is_a_502(self):
+        # The snapshots call is the one that decides this. It is the answer --
+        # a price and a change -- and there is nothing to serve without it, so
+        # its failure is the desk saying which side is broken. The bars call is
+        # the sparkline underneath and fails differently; the test below is
+        # that asymmetry, and this one is the half that must not drift into it.
         fetch = Fetches(raises=OSError("connection reset"))
         with self.assertRaises(DeskError) as caught:
             self.service(fetch).quotes(["ACME"])
         self.assertEqual(caught.exception.code, "upstream")
+        self.assertEqual(caught.exception.status, 502)
+
+    def test_a_bars_outage_serves_prices_without_sparklines(self):
+        # The prices are already in hand when the bars call fails, and a 502
+        # here would throw them away to report that a chart is missing. A
+        # symbol with no daily history is a case this service already serves
+        # -- an empty `bars` list beside a real price -- so an outage on that
+        # endpoint is served as the thing it looks like rather than as an
+        # error the phone has to explain.
+        #
+        # The error carries the credential, because the redaction rule holds on
+        # every string built from an upstream failure and this is a new one.
+        boom = RuntimeError(f"HTTP 500 with APCA-API-SECRET-KEY: {SECRET}")
+        fetch = Fetches(snapshots=bare(ACME=snapshot()), bars_raises=boom)
+        svc = self.service(fetch)
+
+        with self.assertLogs("claudepost.quotes", level="WARNING") as caught:
+            row = svc.quotes(["ACME"])["ACME"]
+        self.assertEqual(row["lastCents"], 24160)
+        self.assertEqual(row["bars"], [])
+        for line in caught.output:
+            self.assertNotIn(SECRET, line)
+            self.assertNotIn(KEY_ID, line)
+
+        # Cached like any other miss, so a phone pulling to refresh through an
+        # outage does not turn one failure into one upstream call per pull.
+        svc.quotes(["ACME"])
+        self.assertEqual(fetch.bar_calls, 1)
+
+        # ...at the miss TTL -- a minute, not the bar cache's hour -- so the
+        # sparklines come back on their own when the upstream does, rather than
+        # an hour after it.
+        self.clock.advance(Q.SNAPSHOT_TTL + 1)
+        with self.assertLogs("claudepost.quotes", level="WARNING"):
+            svc.quotes(["ACME"])
+        self.assertEqual(fetch.bar_calls, 2)
+
+    def test_the_upstream_body_is_bounded_and_a_cut_one_is_a_502(self):
+        # An upstream that never stops sending must not become the desk's
+        # memory: the read is capped. Four megabytes is generous for the
+        # largest legitimate answer -- thirty-two symbols of sixty daily bars.
+        self.assertGreaterEqual(Q.MAX_UPSTREAM_BYTES, 4 * 1024 * 1024)
+
+        # A body cut at the cap is not JSON any more, so it fails exactly where
+        # every other unparseable body does: a 502 naming the upstream, never a
+        # partial answer presented as a whole one.
+        cut = json.dumps(bare(ACME=snapshot())).encode("utf-8")[:64]
+        svc = Q.QuoteService(Q.Credentials(self.path), self.clock,
+                             fetch=lambda url, headers: cut)
+        with self.assertRaises(DeskError) as caught:
+            svc.quotes(["ACME"])
         self.assertEqual(caught.exception.status, 502)
 
     def test_a_body_that_is_not_the_expected_shape_is_a_502(self):

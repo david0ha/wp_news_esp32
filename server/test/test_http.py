@@ -26,12 +26,13 @@ import urllib.parse
 import urllib.request
 from unittest import mock
 
-from claudepost import schedule as S
+from claudepost import notes, schedule as S, tiles
 from claudepost.app import Config, Desk
 from claudepost.clock import FixedClock
 from claudepost.errors import NotFound, Upstream
 from claudepost.gates import GateResult, StubGates
-from claudepost.http import MAX_CONTROL_BODY, DeskHTTPRequestHandler, make_server
+from claudepost.http import (MAX_CONTROL_BODY, MAX_DRAIN_BYTES,
+                             DeskHTTPRequestHandler, make_server)
 from claudepost.quotes import MAX_SYMBOLS, QuoteService
 
 from test_schedule import at
@@ -1039,6 +1040,30 @@ class WatchlistTest(DeskTestCase):
         self.assertEqual(second.watchlist["source"], "vault")
         self.assertEqual(second.watchlist["items"][0]["symbol"], "SND")
 
+    def test_a_boot_says_in_the_log_which_watchlist_it_came_up_on(self):
+        # The desk already says what schedule it read; the watchlist is the
+        # other document it reads at boot and said nothing about. A file that
+        # will not parse is `None` here and a `claudepost.watchlist` warning
+        # somewhere else, so a desk that came up having silently dropped one
+        # looked exactly like a desk nobody had ever told -- and those two are
+        # very different things for an operator to go and fix.
+        with self.assertLogs("claudepost.app", level="INFO") as caught:
+            Desk(self.cfg, clock=self.clock, gates=self.gates).close()
+        lines = [l for l in caught.output if "watchlist" in l]
+        self.assertEqual(len(lines), 1, caught.output)
+        self.assertIn("watchlist: none at", lines[0])
+
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"source": "vault", "items": [{"symbol": "SND"}]})
+        self.assertEqual(status, 200)
+
+        with self.assertLogs("claudepost.app", level="INFO") as caught:
+            Desk(self.cfg, clock=self.clock, gates=self.gates).close()
+        lines = [l for l in caught.output if "watchlist" in l]
+        self.assertEqual(len(lines), 1, caught.output)
+        self.assertIn("watchlist.json", lines[0])
+        self.assertIn("1 items", lines[0])
+
     def test_the_state_document_counts_it(self):
         status, doc = self.api("GET", "/api/state")
         self.assertEqual(status, 200, doc)
@@ -1052,6 +1077,22 @@ class WatchlistTest(DeskTestCase):
         self.assertEqual(status, 200, doc)
         self.assertEqual(doc["watchlist"]["count"], 2)
         self.assertIsInstance(doc["watchlist"]["updatedAt"], int)
+
+    def test_a_watchlist_with_no_instant_reports_null_rather_than_1970(self):
+        # A file written by something other than this desk's own PUT carries
+        # no `updated_at`, and `watchlist.load` fails that field soft: it comes
+        # back 0. On the wire `0` is not "no instant", it is the Unix epoch --
+        # a client that renders `updatedAt` shows 1 January 1970 as the day the
+        # list was last touched. `int|null`, and `null` is the honest answer.
+        path = os.path.join(self.cfg.data_dir, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"source": "vault", "items": [{"symbol": "SND"}]}, f)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertEqual(second.watchlist["updated_at"], 0)
+        self.assertEqual(second.state()["watchlist"],
+                         {"updatedAt": None, "count": 1})
 
     def test_writing_one_is_audited(self):
         status, _ = self.api("PUT", "/api/watchlist",
@@ -1443,6 +1484,27 @@ class RawTestCase(DeskTestCase):
         conn = RawConnection(self.base)
         self.addCleanup(conn.close)
         return conn
+
+
+class DrainLimitTest(unittest.TestCase):
+    """`MAX_DRAIN_BYTES` against every cap a route actually enforces.
+
+    The constant's docstring claims it is "the largest any route accepts", and
+    that claim is what makes the transport's promise hold: a request inside the
+    limits is drained and keeps its connection, and one past them was never
+    going to be accepted anyway. A route whose own cap climbed above it would
+    break the promise silently -- a body the desk accepts by its own limit and
+    then cannot drain, costing a connection per request rather than failing
+    anywhere a test would look. So this asserts the claim rather than the
+    number, which is the only form of it that survives a new route.
+    """
+
+    def test_it_is_at_least_every_cap_a_route_enforces(self):
+        for name, cap in (("control body", MAX_CONTROL_BODY),
+                          ("a note", notes.MAX_NOTES_BYTES),
+                          ("a payload", tiles.MAX_PAYLOAD_BYTES),
+                          ("a tile", tiles.MAX_TILE_BYTES)):
+            self.assertGreaterEqual(MAX_DRAIN_BYTES, cap, name)
 
 
 class KeepAliveTest(RawTestCase):

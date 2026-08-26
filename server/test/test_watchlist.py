@@ -119,6 +119,37 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(BadRequest):
             W.parse_watchlist({"items": big})
 
+    def test_the_cap_measures_the_form_the_file_is_actually_written_in(self):
+        """A document the PUT accepts must be one `load` takes back after a
+        restart, and the two were measuring different things: the backstop
+        weighed a compact serialisation while `save` writes an indented one.
+        Sixty-four items are seven hundred-odd lines, so the indenting is
+        thousands of bytes -- more than enough room for a watchlist to be
+        accepted, written, and then refused by its own `load` on the next boot
+        as "over the cap". Silently: `load` answers `None` for a file it
+        refuses, which is also its answer for a desk nobody has ever told.
+        """
+        # Built from a real parse of one item so the shape being weighed is
+        # the normalised one this function returns rather than an approximation
+        # of it. Every symbol is the same width, so all sixty-four items weigh
+        # the same and the two totals below are exact.
+        note = "m" * 3900
+        one = W.parse_watchlist({"items": [item("S00", note=note)]})["items"][0]
+        doc = {"updated_at": 0, "source": "", "universe": [],
+               "items": [dict(one, symbol=f"S{i:02d}") for i in range(W.MAX_ITEMS)]}
+        raw = {"items": [{"symbol": f"S{i:02d}", "note": note}
+                         for i in range(W.MAX_ITEMS)]}
+
+        # The straddle this test is about, asserted rather than assumed: under
+        # the cap by the old measure, over it by the one `save` will use.
+        compact = len(json.dumps(doc, ensure_ascii=False).encode("utf-8"))
+        written = len(json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8"))
+        self.assertLess(compact, W.MAX_DOC_BYTES)
+        self.assertGreater(written, W.MAX_DOC_BYTES)
+
+        with self.assertRaises(BadRequest):
+            W.parse_watchlist(raw)
+
 
 class LoadSaveTest(unittest.TestCase):
     def setUp(self):
@@ -153,6 +184,38 @@ class LoadSaveTest(unittest.TestCase):
         # parse.
         with open(self.path) as f:
             self.assertIn("leak", f.read())
+
+    def test_the_largest_document_the_cap_admits_survives_a_restart(self):
+        """The property the measurement above exists to give, end to end: a
+        document at the very top of what the PUT accepts is one the next boot
+        reads back, rather than one `load` refuses for being over a cap the
+        PUT said it was under."""
+        # Sixty-four items rather than one, because the indenting is per line:
+        # a single item's note is one long line and gains almost nothing, where
+        # a full list is seven hundred-odd lines and gains thousands of bytes.
+        # The failure only exists at that scale.
+        def raw(length: int) -> dict:
+            return {"items": [item(f"S{i:02d}", note="m" * length)
+                              for i in range(W.MAX_ITEMS)]}
+
+        # Grown until one more character is refused, so this really is the
+        # largest document rather than a comfortable one -- the whole failure
+        # lives in the last few bytes.
+        length, step = 0, 4096
+        while step:
+            try:
+                W.parse_watchlist(raw(length + step))
+            except BadRequest:
+                step //= 2
+            else:
+                length += step
+        with self.assertRaises(BadRequest):
+            W.parse_watchlist(raw(length + 1))
+
+        doc = W.parse_watchlist(raw(length))
+        doc["updated_at"] = 1234567890          # what the PUT handler stamps
+        W.save(self.path, doc)
+        self.assertEqual(W.load(self.path), doc)
 
     def test_save_then_load_round_trips(self):
         doc = W.parse_watchlist({
