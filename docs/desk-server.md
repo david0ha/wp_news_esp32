@@ -193,6 +193,19 @@ to put a second note, and the edition keeps the one filed with the bytes it
 actually is. Correcting a dossier therefore means filing another draft, the
 same as correcting a headline.
 
+**A command carries a note too**, on `PUT`/`GET /api/commands/<id>/notes.md` —
+`producer` scope, the same one enqueueing and claiming already need. Unlike a
+draft or an edition, each already a directory of its own, a command is a row
+in the queue with nowhere for a file to live, so its notes sit in their own
+tree, one directory per command id. And unlike a draft's note, filed while
+there is still time to change what it describes, a command's note is *about*
+what a worker did with the instruction — so `PUT` is refused `409 conflict`
+while the command is still `pending`: nobody has claimed it, so there is
+nothing done yet to write down. Claimed, done, failed, expired or cancelled
+all take one. The same 256 KB / UTF-8 cap applies, and `GET /api/commands` and
+`GET /api/state`'s `queue.recent` both carry `has_notes` on every row, the way
+a draft and an edition do.
+
 ## Two storage roots
 
 | Root | Where | Holds |

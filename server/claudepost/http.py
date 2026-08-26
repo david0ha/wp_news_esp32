@@ -53,7 +53,7 @@ from . import notes, policy, schedule as sched, tiles
 from .app import Desk, as_int
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
-from .errors import BadRequest, DeskError, Internal, NotFound, TooLarge, epoch_seconds
+from .errors import BadRequest, Conflict, DeskError, Internal, NotFound, TooLarge, epoch_seconds
 
 LOG = logging.getLogger("claudepost.http")
 
@@ -633,7 +633,29 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def h_list_commands(self, _match, query) -> None:
         status = (query.get("status") or [None])[0]
         self._send_json(200, {"ok": True,
-                              "commands": self.desk.store.list_commands(status=status)})
+                              "commands": self.desk.commands(status=status)})
+
+    def h_put_command_notes(self, match, _query) -> None:
+        """File a note on a command -- what a worker found doing it.
+
+        Refused `409` while the command is still `pending`: nobody has
+        claimed it, so there is nothing done yet for a note to be about.
+        Claimed, done, failed, expired or cancelled all take one -- a note
+        is a record of what happened, and every one of those states means
+        something did.
+        """
+        cid = match.group("cid")
+        command = self.desk.store.get_command(cid)
+        if command is None:
+            raise NotFound(message=f"no command {cid}")
+        if command["status"] == "pending":
+            raise Conflict(message="nothing has claimed this command yet")
+        self.desk.notes.put(cid, self._body(notes.MAX_NOTES_BYTES))
+        self._send_json(200, {"ok": True})
+
+    def h_get_command_notes(self, match, _query) -> None:
+        """The note filed on a command, as the markdown a worker filed it as."""
+        self._send_notes(self.desk.notes.get(match.group("cid")))
 
     def h_cancel(self, match, _query) -> None:
         if not self.desk.store.cancel_command(match.group("cid")):
@@ -923,6 +945,9 @@ _ROUTES = [
         "DELETE": ("operator", DeskHTTPRequestHandler.h_cancel)}),
     (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})/(?P<verb>done|fail)\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_finish)}),
+    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})/notes\.md\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_command_notes),
+        "PUT": ("producer", DeskHTTPRequestHandler.h_put_command_notes)}),
 
     (re.compile(r"^/api/directives\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_list_directives),

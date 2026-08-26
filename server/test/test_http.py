@@ -721,6 +721,112 @@ class EditionNotesTest(DeskTestCase):
         self.assertEqual(self.get_notes("0" * 16)[0], 404)
 
 
+class CommandNotesTest(DeskTestCase):
+    """The dossier a worker leaves on the instruction it was given, not the edition.
+
+    Unlike a draft's note, filed while there is still time to correct
+    anything, a command's note is filed on something already in flight or
+    already over -- so the one thing this route guards against is the other
+    direction: a note on an instruction nobody has picked up yet, which can
+    only ever be about work that has not happened.
+    """
+
+    NOTE = "# NVDA\n\nChecked three quarters of guidance; nothing in them moved the print.\n".encode()
+
+    def enqueue(self, kind="research", text="look into NVDA"):
+        status, doc = self.api("POST", "/api/commands", {"kind": kind, "text": text})
+        self.assertEqual(status, 200, doc)
+        return doc["command"]["id"]
+
+    def claim(self):
+        status, doc = self.api("GET", "/api/commands/next?wait=0", scope="producer")
+        self.assertEqual(status, 200, doc)
+        return doc["id"]
+
+    def put_notes(self, cid, data):
+        return self.call("PUT", "/api/commands/%s/notes.md" % cid, data,
+                         self.tokens["producer"], "text/markdown")
+
+    def get_notes(self, cid):
+        return self.call("GET", "/api/commands/%s/notes.md" % cid,
+                         token=self.tokens["producer"])
+
+    def test_a_worker_attaches_a_note_to_what_it_was_asked_to_do(self):
+        self.enqueue()
+        cid = self.claim()
+        self.assertEqual(self.put_notes(cid, self.NOTE)[0], 200)
+
+        status, raw, headers = self.get_notes(cid)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+    def test_a_command_nobody_has_claimed_takes_no_note(self):
+        # Pending, not claimed: nobody has done anything yet for a note to be
+        # about. 409, the same status a command already claimed by somebody
+        # else's `done` answers -- "the request is legal, the desk's state
+        # will not have it."
+        cid = self.enqueue()
+        status, raw, _ = self.put_notes(cid, self.NOTE)
+        self.assertEqual(status, 409, raw)
+        self.assertEqual(json.loads(raw)["error"], "conflict")
+
+        # The refusal leaves no note behind, the same rule a rejected draft
+        # note follows.
+        self.assertEqual(self.get_notes(cid)[0], 404)
+
+    def test_a_finished_command_still_takes_a_note(self):
+        # Terminal is not pending: the worker that just finished the thing is
+        # exactly who has something worth writing down.
+        self.enqueue()
+        cid = self.claim()
+        status, doc = self.api("POST", "/api/commands/%s/done" % cid,
+                               {"result": "filed SEMICONDUCTORS"}, "producer")
+        self.assertEqual(status, 200, doc)
+
+        self.assertEqual(self.put_notes(cid, self.NOTE)[0], 200)
+        status, raw, _ = self.get_notes(cid)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+
+    def test_a_note_on_a_command_that_is_not_there_is_a_404(self):
+        # 32 hex, so it passes the route's own pattern and is refused by the
+        # store rather than by the router -- the case a stale or invented id
+        # makes.
+        gone = "0" * 32
+        self.assertEqual(self.put_notes(gone, self.NOTE)[0], 404)
+        self.assertEqual(self.get_notes(gone)[0], 404)
+
+    def test_the_queue_says_which_commands_carry_notes(self):
+        # Beside "text" and "status" for the same reason `has_notes` sits
+        # beside a draft's tiles and an edition's sheets: a client should be
+        # able to tell without fetching a note to find out there wasn't one.
+        # `state()`'s `queue.recent` is the same row through a second door,
+        # and the two must agree.
+        self.enqueue()
+        cid = self.claim()
+
+        status, listed = self.api("GET", "/api/commands", scope="producer")
+        self.assertEqual(status, 200, listed)
+        row = next(r for r in listed["commands"] if r["id"] == cid)
+        self.assertFalse(row["has_notes"])
+
+        status, state = self.api("GET", "/api/state")
+        self.assertEqual(status, 200, state)
+        recent = next(r for r in state["queue"]["recent"] if r["id"] == cid)
+        self.assertFalse(recent["has_notes"])
+
+        self.assertEqual(self.put_notes(cid, self.NOTE)[0], 200)
+
+        status, listed = self.api("GET", "/api/commands", scope="producer")
+        row = next(r for r in listed["commands"] if r["id"] == cid)
+        self.assertTrue(row["has_notes"])
+
+        status, state = self.api("GET", "/api/state")
+        recent = next(r for r in state["queue"]["recent"] if r["id"] == cid)
+        self.assertTrue(recent["has_notes"])
+
+
 class ScopeTest(DeskTestCase):
     def test_an_unknown_token_is_refused(self):
         status, raw, _ = self.call("GET", "/api/state", token="not-a-token")

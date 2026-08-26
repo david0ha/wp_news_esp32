@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from typing import Mapping
@@ -25,7 +26,16 @@ from .auth import Tokens
 from .clock import Clock
 from .editions import EditionStore
 from .gates import Gates, SubprocessGates
+from .notes import NoteStore
 from .store import Store
+
+#: The shape of a command id, in one place so the route in `http.py` and the
+#: store this desk hands notes to cannot drift apart. `commands` table ids and
+#: `/api/commands/<cid>/...` both already use `[0-9a-f]{8,64}` -- editions'
+#: shape, because a command shares the queue's table with nothing that has a
+#: shorter or longer id -- so this is that pattern named once rather than
+#: spelled twice.
+COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
 
 LOG = logging.getLogger("claudepost.app")
 
@@ -93,6 +103,17 @@ class Desk:
                                      keep=cfg.keep_editions)
         self.tokens = Tokens(cfg.tokens_path)
 
+        # A command has no directory of its own the way a draft or an edition
+        # does -- it is a row in `self.store` -- so its notes need somewhere to
+        # live: one directory per command id under `notes/commands`, disjoint
+        # from `editions/` and `drafts/` so nothing here can collide with the
+        # notes those trees already keep beside their own payloads.
+        # `COMMAND_ID_RE` rather than a pattern written fresh here, so the
+        # route in `http.py` and the id this store will accept are the same
+        # regex and cannot drift apart the way two copies of it could.
+        self.notes = NoteStore(os.path.join(cfg.data_dir, "notes", "commands"),
+                               COMMAND_ID_RE)
+
         #: Not a Config field, because no environment variable chooses it: the
         #: schedule belongs to the serving root the same way the database does,
         #: and a desk with two data roots is two desks.
@@ -153,6 +174,23 @@ class Desk:
 
         return did
 
+    # -- commands -----------------------------------------------------------
+    def commands(self, status: str | None = None, limit: int = 100) -> list[dict]:
+        """Commands, each carrying whether it has a note attached.
+
+        The one place a queue row learns about its note, so that
+        `http.py`'s `h_list_commands` and `state()`'s `queue.recent` cannot
+        answer the question two different ways. `self.store.list_commands`
+        stays ignorant of `self.notes` the way it stays ignorant of
+        `self.gates` -- the store is the queue's ledger and the note is
+        evidence a worker filed beside an entry in it, not a column on the
+        row.
+        """
+        rows = self.store.list_commands(status=status, limit=limit)
+        for row in rows:
+            row["has_notes"] = self.notes.has(row["id"])
+        return rows
+
     # -- state ------------------------------------------------------------
     def state(self) -> dict:
         """The ``GET /api/state`` document: what the desk is doing, not what the paper says.
@@ -183,7 +221,7 @@ class Desk:
             "nextTransition": ({"at": int(nxt[0]), "what": nxt[1]} if nxt else None),
             "queue": {
                 "pending": self.store.pending_count(),
-                "recent": self.store.list_commands(limit=5),
+                "recent": self.commands(limit=5),
             },
             "editions": self.store.list_editions(limit=5),
         }
