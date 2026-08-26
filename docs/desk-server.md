@@ -297,6 +297,63 @@ the argument `news_hash()` makes about content, made about cadence.
 time. Time-zone arithmetic is what everybody gets wrong, and this makes it
 inspectable instead of a thing to be trusted.
 
+## The watchlist
+
+`GET /api/watchlist` and `PUT /api/watchlist` carry one document: which
+companies a private morning script — the vault, or whoever it is run by — is
+watching, a red/yellow/green grade on each, why, a markdown thesis note, and
+the dates something happened. `GET` is `producer` scope, so the phone app and
+a worker read it with the token they already have; `PUT` is `operator` scope,
+because unlike an edition this is not something a remote worker files, it is
+the operator's own call.
+
+```json
+{ "updated_at": 1755702000,
+  "source": "vault",
+  "items": [
+    { "symbol": "SNDK", "name": "Sandisk Corp.", "market": "NASDAQ",
+      "grade": "yellow", "reasons": ["guidance cut", "inventory glut"],
+      "thesis_status": "watching", "note": "markdown, up to 16 KiB",
+      "printable": true, "last_printed": "2026-08-19",
+      "events": ["2026-09-03"], "held": false } ],
+  "universe": ["SNDK", "MU", "WDC"] }
+```
+
+`GET` on a desk nobody has told returns `{"ok": true, "watchlist": null}` —
+there is no default watchlist the way there is a default schedule, so `null`
+means exactly "nobody has said" rather than standing in for an empty one.
+`PUT` validates the whole document through
+[`watchlist.py`](../server/claudepost/watchlist.py)'s `parse_watchlist`,
+stamps `updated_at` from the desk's own clock (a value in the body is
+accepted so a client may echo its own `GET` back, but never read — the desk
+is the only writer of the instant), writes `<data>/watchlist.json`, and
+echoes the stored document. A document that fails validation is refused
+`400 bad_watchlist` whole, the same rule `PUT /api/schedule` follows: the
+previous watchlist stays in force and an operator never has to work out which
+half of an edit landed.
+
+**The schema is a privacy boundary, not a typo guard.** Every field carries
+its own cap — sixty-four items, eight reasons, a 16 KiB note, a 128-symbol
+universe — and an unknown key is refused rather than silently dropped, for a
+reason distinct from why `PUT /api/schedule` refuses one: a stop level, an
+entry price, a P&L figure has no key here to hide behind, because this
+document is read by the phone app and the desk's audit log, and a field that
+was never invited cannot leak through either. Two more ceilings back the
+per-field caps up — the file is capped at `MAX_DOC_BYTES` (a quarter of a
+megabyte) both on the way in, as a serialised-size backstop the per-field
+caps alone cannot provide, and on the way back out of `<data>/watchlist.json`,
+so a hand-edited file that grew past it is refused exactly as a bad `PUT`
+would be.
+
+`PUT` is audited as `watchlist`, carrying `items` (the count) and `source` —
+never the items themselves, which is the same reasoning `store.audit`'s own
+docstring gives for keeping a credential out of it: the audit log is served to
+any `operator` token, so it is the least private place in the desk that still
+looks like a private one. `GET /api/state` carries only a summary —
+`"watchlist": {"updatedAt": int|null, "count": int}` — for the same reason:
+a client checking whether the desk has one yet should not have to fetch the
+whole document, thesis notes included, to find out.
+
 ## The `policy` block
 
 One optional top-level object on the wire, documented in full in

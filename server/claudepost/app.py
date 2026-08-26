@@ -21,7 +21,7 @@ import threading
 from dataclasses import dataclass
 from typing import Mapping
 
-from . import schedule as sched, schedulefile
+from . import schedule as sched, schedulefile, watchlist as wl
 from .auth import Tokens
 from .clock import Clock
 from .editions import EditionStore
@@ -122,6 +122,14 @@ class Desk:
         self.schedule = sched.DEFAULT_SCHEDULE
         self.schedule_source = "default"
 
+        #: Same reasoning as `schedule_path`: the watchlist belongs to the
+        #: serving root, not to an environment variable. Unlike the schedule
+        #: there is no default to fall back on -- `self.watchlist` is `None`
+        #: until an operator PUTs one, and stays `None` on a desk nobody has
+        #: told, forever.
+        self.watchlist_path = os.path.join(cfg.data_dir, "watchlist.json")
+        self.watchlist: dict | None = wl.load(self.watchlist_path)
+
         #: Notified whenever a command is enqueued, so a long poll wakes on the
         #: instruction rather than on its next timeout. The queue is in SQLite
         #: and could be polled, but a poll interval is latency nobody has to pay.
@@ -219,6 +227,11 @@ class Desk:
                 "quiet": sched.is_quiet(self.schedule, t),
             },
             "nextTransition": ({"at": int(nxt[0]), "what": nxt[1]} if nxt else None),
+            "watchlist": {
+                "updatedAt": (as_int(self.watchlist["updated_at"])
+                              if self.watchlist else None),
+                "count": len(self.watchlist["items"]) if self.watchlist else 0,
+            },
             "queue": {
                 "pending": self.store.pending_count(),
                 "recent": self.commands(limit=5),
@@ -243,6 +256,18 @@ class Desk:
         schedulefile.save(self.schedule_path, s)
         self.schedule = s
         self.schedule_source = "file"
+
+    def set_watchlist(self, doc: dict) -> None:
+        """Write ``doc`` down, then put it in force -- in that order.
+
+        Same ordering argument as :meth:`set_schedule`: the file first, so a
+        crash between the write and the assignment loses nothing, while the
+        other order would lose the whole edit. A write that fails raises out
+        of here and out of the PUT that called it, leaving ``self.watchlist``
+        exactly what it was before.
+        """
+        wl.save(self.watchlist_path, doc)
+        self.watchlist = doc
 
     def close(self) -> None:
         """Release the database. Serving state on disk is already durable."""

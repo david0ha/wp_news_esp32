@@ -49,7 +49,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import notes, policy, schedule as sched, tiles
+from . import notes, policy, schedule as sched, tiles, watchlist as wl
 from .app import COMMAND_ID_RE, Desk, as_int
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
@@ -716,6 +716,27 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                               "transitions": sched.describe(self.desk.schedule,
                                                             self.desk.clock.now(), count)})
 
+    # -- handlers: the watchlist --------------------------------------------
+    def h_get_watchlist(self, _match, _query) -> None:
+        self._send_json(200, {"ok": True, "watchlist": self.desk.watchlist})
+
+    def h_put_watchlist(self, _match, _query) -> None:
+        """Validate the whole document, stamp it, then put it in force and write it down.
+
+        Same shape as :meth:`h_put_schedule`: there is no partial watchlist, so
+        a document that fails :func:`~claudepost.watchlist.parse_watchlist` is
+        refused whole and leaves the one in force untouched. ``updated_at`` is
+        stamped here rather than trusted from the body -- `parse_watchlist`
+        never reads one, on purpose, so the desk's own clock is the only
+        source of the instant a phone app or a private script sees.
+        """
+        doc = wl.parse_watchlist(self._json_body())
+        doc["updated_at"] = int(self.desk.clock.now())
+        self.desk.set_watchlist(doc)
+        self.desk.store.audit("watchlist", {"items": len(doc["items"]),
+                                            "source": doc["source"]})
+        self._send_json(200, {"ok": True, "watchlist": self.desk.watchlist})
+
     # -- handlers: operations ---------------------------------------------
     def h_state(self, _match, _query) -> None:
         self._send_json(200, self.desk.state())
@@ -967,6 +988,10 @@ _ROUTES = [
         "PUT": ("operator", DeskHTTPRequestHandler.h_put_schedule)}),
     (re.compile(r"^/api/schedule/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_schedule_next)}),
+
+    (re.compile(r"^/api/watchlist\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_watchlist),
+        "PUT": ("operator", DeskHTTPRequestHandler.h_put_watchlist)}),
 
     (re.compile(r"^/api/state\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_state)}),

@@ -983,6 +983,85 @@ class ControlPlaneTest(DeskTestCase):
         self.assertIn("PUT", headers.get("Allow", ""))
 
 
+class WatchlistTest(DeskTestCase):
+    """`/api/watchlist`: an operator's own private view, a producer's read-only one."""
+
+    def test_a_desk_that_has_never_been_told_has_no_watchlist(self):
+        status, doc = self.api("GET", "/api/watchlist", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertIsNone(doc["watchlist"])
+
+    def test_an_operator_writes_it_and_a_producer_reads_it_back(self):
+        body = {"source": "vault", "items": [{"symbol": "snd"}]}
+        status, put = self.api("PUT", "/api/watchlist", body)
+        self.assertEqual(status, 200, put)
+        self.assertEqual(put["watchlist"]["source"], "vault")
+        # `_symbol` upper-cases -- the echoed document is the normalised one,
+        # not the one the caller sent.
+        self.assertEqual(put["watchlist"]["items"][0]["symbol"], "SND")
+        self.assertGreater(put["watchlist"]["updated_at"], 0)
+
+        status, got = self.api("GET", "/api/watchlist", scope="producer")
+        self.assertEqual(status, 200, got)
+        self.assertEqual(got["watchlist"], put["watchlist"])
+
+    def test_a_producer_may_not_write_one(self):
+        status, body = self.api("PUT", "/api/watchlist", {"items": []}, scope="producer")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error"], "forbidden")
+
+    def test_a_refused_document_leaves_the_previous_one_in_force(self):
+        status, _ = self.api("PUT", "/api/watchlist", {"source": "vault", "items": []})
+        self.assertEqual(status, 200)
+
+        # An unknown key -- the privacy boundary `watchlist.py` exists for --
+        # is exactly the kind of thing a hand-written PUT gets wrong.
+        status, body = self.api("PUT", "/api/watchlist",
+                                {"items": [{"symbol": "SND", "stop": 100}]})
+        self.assertEqual(status, 400, body)
+        self.assertEqual(body["error"], "bad_watchlist")
+
+        status, doc = self.api("GET", "/api/watchlist", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["watchlist"]["source"], "vault")
+
+    def test_it_survives_a_restart(self):
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"source": "vault", "items": [{"symbol": "SND"}]})
+        self.assertEqual(status, 200)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNotNone(second.watchlist)
+        self.assertEqual(second.watchlist["source"], "vault")
+        self.assertEqual(second.watchlist["items"][0]["symbol"], "SND")
+
+    def test_the_state_document_counts_it(self):
+        status, doc = self.api("GET", "/api/state")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["watchlist"], {"updatedAt": None, "count": 0})
+
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"items": [{"symbol": "SND"}, {"symbol": "TSLA"}]})
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/state")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["watchlist"]["count"], 2)
+        self.assertIsInstance(doc["watchlist"]["updatedAt"], int)
+
+    def test_writing_one_is_audited(self):
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"source": "vault", "items": [{"symbol": "SND"}]})
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+        event = doc["events"][0]
+        self.assertEqual(event["event"], "watchlist")
+        self.assertEqual(event["detail"], {"items": 1, "source": "vault"})
+
+
 class PublishGatingTest(DeskTestCase):
     """When a page may reach the glass, which is most of what the desk decides."""
 
