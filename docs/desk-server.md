@@ -173,6 +173,23 @@ surfacing three days late. The claim is a single `UPDATE … RETURNING`, because
 two statements is a race that surfaces as one instruction filing two editions
 and a wall that flashes twice.
 
+## The audit log
+
+`GET /api/audit` is the desk's own record of what it has done — a publish, a
+hold, a schedule edit, a commit or a stage — not the editorial history
+`GET /api/editions` already gives. Each row is
+`{"seq", "at", "event", "detail"}`, newest first; `seq` is the audit table's
+own `AUTOINCREMENT`, carried through because `at` alone cannot order two
+events that land in the same clock tick.
+
+`?limit=N` clamps to `1..200` (default 50) rather than refusing an
+out-of-range value, the same choice `/api/schedule/next`'s `count` makes: an
+operator asking "what just happened" should get an answer, not a 400 to work
+around.
+
+`producer` scope, like `/api/state` — a worker checking what the desk has
+done needs no more than the scope it already files editions with.
+
 ## The schedule
 
 ```json

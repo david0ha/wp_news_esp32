@@ -819,6 +819,49 @@ class TickTest(DeskTestCase):
         self.assertEqual(self.file_edition()["state"], "published")
 
 
+class AuditTest(DeskTestCase):
+    """`GET /api/audit`: the same `store.audit()` calls the other routes already make."""
+
+    def test_the_audit_route_returns_the_events_newest_first(self):
+        # setUp's own PUT /api/schedule already wrote one "schedule" event, so
+        # this exercises the same ordering question with two more of the
+        # desk's real audit calls rather than a synthetic one.
+        doc = S.schedule_to_dict(S.DEFAULT_SCHEDULE)
+        doc["publish"] = {"policy": "immediate", "min_gap_minutes": 0}
+        status, body = self.api("PUT", "/api/schedule", doc)
+        self.assertEqual(status, 200, body)
+        status, body = self.api("POST", "/api/hold", {})
+        self.assertEqual(status, 200, body)
+
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+        events = doc["events"]
+        self.assertGreaterEqual(len(events), 2)
+        self.assertEqual(events[0]["event"], "hold")
+        self.assertEqual(events[1]["event"], "schedule")
+
+    def test_the_audit_route_clamps_the_limit(self):
+        self.api("POST", "/api/hold", {})          # a second event beside setUp's
+
+        status, doc = self.api("GET", "/api/audit?limit=0", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(len(doc["events"]), 1)     # clamped up to the floor of 1
+
+        status, doc = self.api("GET", "/api/audit?limit=9999", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertLessEqual(len(doc["events"]), 200)
+
+    def test_the_audit_route_is_producer_scope(self):
+        # Producer, not operator-only: a worker checking what the desk has
+        # done needs no more than the scope it already files editions with.
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+
+        status, raw, _ = self.call("GET", "/api/audit")
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw)["error"], "unauthorized")
+
+
 # -- one socket, several requests -----------------------------------------
 #
 # Everything above opens a connection per request, which is exactly why the

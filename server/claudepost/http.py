@@ -662,6 +662,14 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self.desk.store.audit("hold", {"until": until})
         self._send_json(200, {"ok": True, "hold": as_int(until)})
 
+    def h_audit(self, _match, query) -> None:
+        """The recent audit log, newest first -- what the desk has done, not
+        what a board is showing. Producer scope: a worker asking what already
+        happened needs no more than the scope it files editions with.
+        """
+        limit = min(max(_query_int(query, "limit", 50), 1), 200)
+        self._send_json(200, {"ok": True, "events": self.desk.store.recent_audit(limit)})
+
     # -- bodies and responses ---------------------------------------------
     def _body(self, limit: int) -> bytes:
         """Read the request body, refusing anything past ``limit``.
@@ -881,6 +889,8 @@ _ROUTES = [
         "POST": ("operator", DeskHTTPRequestHandler.h_publish)}),
     (re.compile(r"^/api/hold\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_hold)}),
+    (re.compile(r"^/api/audit\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_audit)}),
 ]
 
 
