@@ -29,6 +29,10 @@ news.json          the edition — the contract in docs/news-contract.md
 tiles/<id>.bin     one 4bpp tile per picture, made by tools/make_tile.py
 ```
 
+**Unless today's instruction is research rather than a page** — see "Write `notes.md` beside
+`news.json`" under "Before you finish". A research turn writes `notes.md` and nothing else: no
+`news.json`, no tiles, nothing for anyone to typeset.
+
 Write `news.json` **last**, and write it atomically — to `news.json.tmp`, then rename, and only
 after it has passed the render check below. The board may poll mid-write, and a half-written page
 is a rejected payload. (A rejected payload is safe — the board keeps the previous edition and

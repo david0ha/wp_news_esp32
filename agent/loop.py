@@ -167,7 +167,12 @@ def read_notes(workdir: str) -> str | None:
 
     Capped at :data:`deskclient.MAX_NOTES_BYTES`, the same quarter-megabyte
     the desk itself refuses past: reading further into memory only to have
-    it truncated again on the way there buys nothing.
+    it truncated again on the way there buys nothing. The cut is decoded
+    with ``"ignore"`` rather than ``"replace"``, the same choice
+    :meth:`deskclient.DeskClient.put_notes` makes for the same reason: a
+    read stopped at exactly :data:`MAX_NOTES_BYTES` is not guaranteed to
+    land on a UTF-8 character boundary, and a visible ``�`` at the cut is a
+    worse ending than the one dropped character silently missing.
 
     Returns:
         The note's text, or ``None`` when there is no ``notes.md``. That is
@@ -182,7 +187,7 @@ def read_notes(workdir: str) -> str | None:
             data = f.read(MAX_NOTES_BYTES)
     except OSError:
         return None
-    return data.decode("utf-8", "replace")
+    return data.decode("utf-8", "ignore")
 
 
 def upload(desk: DeskClient, workdir: str) -> str:
@@ -287,10 +292,21 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     """One instruction, from claim to commit -- or, for a command that files no
     page, from claim to a note left on the command itself.
 
-    ``kind`` defaults to ``"file_edition"`` here rather than being required:
-    the desk always sends one (:data:`store.COMMAND_KINDS` has no fourth
-    option), and a missing key is treated as the kind this loop has always
-    assumed, not as a new one.
+    ``kind`` decides which of those two this run is, but not by itself:
+
+    - ``"file_edition"`` (the default for a missing key -- the desk always
+      sends one of :data:`store.COMMAND_KINDS`, so this only guards a
+      malformed answer, not a fourth kind) always takes the draft path.
+      A turn that did not produce ``news.json`` fails exactly as it always
+      has, inside :func:`upload` -- an *ordered* page that never showed up
+      is a failure, not a note.
+    - ``"research"`` always takes the command path. "Look into this" has no
+      page to file, ever, so there is never a draft to open.
+    - ``"custom"`` is the operator's text, and the operator's text can be
+      either kind of instruction -- so what decides is what actually landed
+      in the workdir after the turn: a ``news.json`` means it was an order,
+      no ``news.json`` means it was a look. This loop trusts the disk over
+      the kind for exactly this one value.
     """
     cid = command["id"]
     kind = command.get("kind", "file_edition")
@@ -312,21 +328,15 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
                   if fetch_back else [])
         return draft, report, sheets
 
-    text = prompt.build_prompt(
-        read_contract(cfg.repo),
-        prompt.read_context_dir(cfg.context_dir),
-        desk.directives(),
-        command.get("text", ""))
-    status = run_claude(cfg, text, workdir, agent_env)
-    if status != 0:
-        desk.finish(cid, False, "claude exited %d" % status)
-        return
+    def note_on_command() -> None:
+        """File whatever ``notes.md`` holds directly on the command, and finish.
 
-    if kind != "file_edition":
-        # "Look into this" and a one-off ask have no page to file, so
-        # there is no draft to open and nothing for file_and_proof() to
-        # upload -- the note the model wrote is the deliverable, and the
-        # only place it can go is the command it answers.
+        The path for a turn that never opened a draft: there is nothing to
+        attach a note *to* except the command that asked for the turn, so
+        that is where it goes, best effort, the same way :func:`upload`
+        attaches one to a draft -- a desk that refuses it is not a reason to
+        report the turn itself as failed.
+        """
         note = read_notes(workdir)
         if note:
             try:
@@ -334,6 +344,24 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
             except RuntimeError as e:
                 LOG.warning("could not file notes on command %s: %s", cid, e)
         desk.finish(cid, True, note or "done, no notes.md was written")
+
+    text = prompt.build_prompt(
+        read_contract(cfg.repo),
+        prompt.read_context_dir(cfg.context_dir),
+        desk.directives(),
+        command.get("text", ""),
+        kind=kind)
+    status = run_claude(cfg, text, workdir, agent_env)
+    if status != 0:
+        desk.finish(cid, False, "claude exited %d" % status)
+        return
+
+    if kind == "research":
+        note_on_command()
+        return
+
+    if kind == "custom" and not os.path.exists(os.path.join(workdir, "news.json")):
+        note_on_command()
         return
 
     draft, report, sheets = file_and_proof()

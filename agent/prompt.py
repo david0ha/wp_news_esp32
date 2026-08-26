@@ -48,6 +48,20 @@ _TAIL = (
     "validates, typesets and publishes; your job ends when the files are on disk.\n"
 )
 
+#: The tail for a ``"research"`` command, in place of :data:`_TAIL`. A research
+#: instruction never files a page -- ``loop.handle`` never even opens a draft
+#: for one -- so telling the model to write ``news.json`` would be asking for
+#: a file this loop is not going to look for. ``"file_edition"`` and
+#: ``"custom"`` both get the ordinary :data:`_TAIL`: a custom instruction may
+#: or may not turn into a page, and what decides that is what actually lands
+#: in the workdir, not a prompt that guessed.
+_RESEARCH_TAIL = (
+    "\nThis is a research instruction, not a filing one: there is no page to typeset\n"
+    "today. Write only $EDITION_DIR/notes.md — what you found, every source with its\n"
+    "URL, and what you chose not to print and why. Do not write news.json or any tile;\n"
+    "this turn ends when notes.md is on disk.\n"
+)
+
 
 def read_context_dir(path: str | None) -> list[tuple[str, str]]:
     """The operator's context files, as ``(name, text)`` in sorted order.
@@ -100,7 +114,8 @@ def read_context_dir(path: str | None) -> list[tuple[str, str]]:
 
 
 def build_prompt(contract: str, context: list[tuple[str, str]],
-                 directives: list[dict], command_text: str) -> str:
+                 directives: list[dict], command_text: str,
+                 kind: str = "file_edition") -> str:
     """Assemble one turn's prompt.
 
     Args:
@@ -110,10 +125,17 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
             dict with a ``rule``.
         command_text: the instruction the operator queued, passed through
             untouched.
+        kind: the command's kind. ``"research"`` gets :data:`_RESEARCH_TAIL`;
+            every other value, including the default, gets the ordinary
+            :data:`_TAIL` -- this function does not validate `kind` against
+            ``store.COMMAND_KINDS``, the same way ``loop.handle`` treats a
+            kind it does not recognise as ``"file_edition"`` rather than
+            raising over it.
 
     Returns:
         The contract first, then the operator's files under their own names,
-        then the directives as bullets, then today's instruction, then the tail.
+        then the directives as bullets, then today's instruction, then the tail
+        `kind` selects.
 
     The order is the argument. The contract is first because everything after it
     is somebody's opinion and an opinion must not be able to push the length
@@ -134,7 +156,7 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
             parts.append("- %s\n" % directive.get("rule", ""))
 
     parts.append("\n---\n\n# Today's instruction\n\n%s\n" % command_text)
-    parts.append(_TAIL)
+    parts.append(_RESEARCH_TAIL if kind == "research" else _TAIL)
     return "".join(parts)
 
 
