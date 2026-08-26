@@ -496,6 +496,22 @@ class EditionStore:
             return None
         return _read_bytes(os.path.join(base, PROOF_DIR, name))
 
+    def sheet_names(self, edition_id: str) -> list[str]:
+        """The proof sheets an edition carries, by name, sorted.
+
+        The gates decide what they leave: two PNGs on a pass, a BMP where the
+        render died before conversion. So the names are read off the edition
+        rather than assumed, and anything downstream that wants to show the
+        paper asks instead of guessing.
+
+        An id that is not an edition, or one whose directory is gone, has no
+        sheets -- the same answer as an edition that has none, because there is
+        the same thing to show for both.
+        """
+        if not _valid(_EID_RE, edition_id):
+            return []
+        return _sheet_names(os.path.join(self._edition_dir(edition_id), PROOF_DIR))
+
     def edition_meta(self, edition_id: str) -> dict:
         """An edition's ``meta.json`` -- its birth certificate, never rewritten.
 

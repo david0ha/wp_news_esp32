@@ -511,6 +511,50 @@ class SheetTest(DeskTestCase):
         for bad in ("A1.txt", "..", "A1.png.bak", "A1"):
             self.assertEqual(self.sheet(draft, bad)[0], 400, bad)
 
+    def test_an_editions_sheets_outlive_the_draft_that_made_them(self):
+        """The proof survives the commit, and is reachable by the edition's id.
+
+        A draft is deleted the moment it commits, so the draft route can only
+        ever answer for a paper nobody has published yet. Everything that wants
+        to show the edition that is actually on the glass -- the reader site
+        most of all -- has to ask by the id the edition kept.
+        """
+        result = self.file_edition()
+        eid = result["edition_id"]
+
+        status, raw, headers = self.call(
+            "GET", "/api/editions/%s/proof/A1.png" % eid, token=self.tokens["producer"])
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(raw[:4], b"\x89PNG")
+
+    def test_an_editions_sheet_route_refuses_what_the_drafts_one_refuses(self):
+        eid = self.file_edition()["edition_id"]
+        for bad in ("A1.txt", "..", "A1.png.bak", "A1"):
+            status, _, _ = self.call("GET", "/api/editions/%s/proof/%s" % (eid, bad),
+                                     token=self.tokens["producer"])
+            self.assertEqual(status, 400, bad)
+
+    def test_an_editions_metadata_names_the_sheets_it_carries(self):
+        """Otherwise a reader has to guess the file names, and guessing is a bug.
+
+        The gates decide what they leave behind -- two PNGs on a pass, a BMP
+        where a render died before conversion -- so anything downstream that
+        hardcoded ``01_a1_full.png`` would silently show one page of a
+        two-page paper the day that changed.
+        """
+        eid = self.file_edition()["edition_id"]
+        status, doc = self.api("GET", "/api/editions/%s" % eid, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["sheets"], ["A1.png", "A2.bmp"])
+
+    def test_a_sheet_of_an_edition_that_is_not_there_is_a_404(self):
+        # 16 hex, so it passes the route's own pattern and is refused by the
+        # store rather than by the router -- the case a typo actually makes.
+        status, _, _ = self.call("GET", "/api/editions/%s/proof/A1.png" % ("0" * 16),
+                                 token=self.tokens["producer"])
+        self.assertEqual(status, 404)
+
 
 class ScopeTest(DeskTestCase):
     def test_an_unknown_token_is_refused(self):

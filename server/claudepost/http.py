@@ -479,16 +479,34 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, self.desk.editions.proof(match.group("draft")))
 
     def h_sheet(self, match, _query) -> None:
-        """A proof sheet, so the worker that filed the draft can look at it.
+        """A draft's proof sheet, so the worker that filed it can look at it."""
+        self._send_sheet(match.group("draft"), match.group("name"))
+
+    def h_edition_sheet(self, match, _query) -> None:
+        """A published edition's proof sheet.
+
+        The draft route above can only ever answer for paper nobody has seen: a
+        draft is deleted the moment it commits. So anything that wants to show
+        the edition actually on the glass -- the reader site, an operator
+        checking what went out -- has to ask by the id the edition kept, and
+        that is this route rather than a flag on that one.
+        """
+        self._send_sheet(match.group("eid"), match.group("name"))
+
+    def _send_sheet(self, owner: str, name: str) -> None:
+        """One sheet, by the id of whatever owns it.
+
+        ``editions.read_sheet`` tells a draft id from an edition id by their
+        regexes, so the two routes need no more separation than their patterns
+        already give them.
 
         The type comes from the suffix the name has already been checked
         against, because both are pictures the gate may leave: a converted PNG,
         or the BMP of a render that failed before conversion.
         """
-        name = match.group("name")
         if not SHEET_RE.match(name):
             raise BadRequest(message="not a sheet name")
-        data = self.desk.editions.read_sheet(match.group("draft"), name)
+        data = self.desk.editions.read_sheet(owner, name)
         if data is None:
             raise NotFound()
         self._send_bytes(200, data, _SHEET_TYPES[os.path.splitext(name)[1]])
@@ -505,10 +523,16 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                               "staged": self.desk.editions.staged_id()})
 
     def h_get_edition(self, match, _query) -> None:
-        doc = self.desk.store.get_edition(match.group("eid"))
+        eid = match.group("eid")
+        doc = self.desk.store.get_edition(eid)
         if doc is None:
             raise NotFound()
-        self._send_json(200, {"ok": True, "edition": doc})
+        # Beside the store's row rather than inside it: the row is the
+        # publication record and never changes, where the sheets are files on
+        # disk that prune() can take away. Reading them per request keeps the
+        # answer true instead of merely recorded.
+        self._send_json(200, {"ok": True, "edition": doc,
+                              "sheets": self.desk.editions.sheet_names(eid)})
 
     def h_promote(self, match, _query) -> None:
         self._send_commit(self.desk.editions.promote(match.group("eid")))
@@ -824,6 +848,8 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_list_editions)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_get_edition)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/proof/(?P<name>[^/]{1,60})\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_sheet)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_promote)}),
 
