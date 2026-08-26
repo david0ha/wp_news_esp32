@@ -214,6 +214,24 @@ class SnapshotTest(QuoteTestCase):
         self.assertIn("ACME", out)
         self.assertNotIn("ZZZZ", out)
 
+    def test_a_symbol_this_provider_cannot_quote_is_absent_rather_than_an_error(self):
+        # The phone sends its whole watchlist in one call, and a Korean listing
+        # is numeric (005930) where Alpaca's symbols never are. Refusing the
+        # request would cost every US company on that watchlist its price
+        # because of a company Alpaca was never going to answer for -- so the
+        # symbol is dropped, is absent from the map exactly as a skipped one
+        # is, and never reaches the query string either.
+        fetch = Fetches(snapshots=bare(ACME=snapshot()))
+        out = self.service(fetch).quotes(["ACME", "005930", "BAD SYMBOL"])
+        self.assertEqual(list(out), ["ACME"])
+        self.assertNotIn("005930", fetch.urls[0])
+        self.assertNotIn("BAD", fetch.urls[0])
+
+    def test_a_request_of_nothing_askable_makes_no_upstream_call(self):
+        fetch = Fetches(snapshots=bare(ACME=snapshot()))
+        self.assertEqual(self.service(fetch).quotes(["005930"]), {})
+        self.assertEqual(fetch.urls, [])
+
     def test_a_previous_close_of_zero_is_no_change_rather_than_a_crash(self):
         # A newly listed symbol has no previous close, and the division that
         # makes basis points would be a 500 on a route the phone polls.
@@ -244,6 +262,47 @@ class BarsTest(QuoteTestCase):
         ])
         for bar in row["bars"]:
             self.assertIsInstance(bar["c"], int)
+
+    def test_the_bars_request_bounds_its_window_and_every_symbol_comes_back(self):
+        # Two symbols, because one cannot show the failure this guards. Alpaca
+        # does not document how it divides `limit` across symbols, so a request
+        # relying on the limit alone relies on an undocumented property: if the
+        # upstream ever filled symbol by symbol, the first company would take
+        # every bar and the second would draw nothing. A bounded `start` makes
+        # the limit non-binding, and this asserts on the whole query because
+        # each parameter is load-bearing and a silent drop is invisible.
+        doc = bars(231.84, 230.00)
+        doc["bars"].update(bars(10.10, 10.00, symbol="BETA")["bars"])
+        fetch = Fetches(snapshots=bare(ACME=snapshot(), BETA=snapshot(last=10.10)),
+                        bars=doc)
+        out = self.service(fetch).quotes(["ACME", "BETA"])
+
+        url = next(u for u in fetch.urls if u.startswith(Q.BARS_URL))
+        self.assertIn("symbols=ACME,BETA", url)
+        self.assertIn("timeframe=1Day", url)
+        # Sixty days before the fixed clock's 2025-08-24, and a limit that is
+        # thirty per symbol rather than thirty for the pair.
+        self.assertIn("start=2025-06-25", url)
+        self.assertIn(f"limit={Q.BAR_LIMIT * 2}", url)
+        self.assertIn("sort=desc", url)
+        self.assertIn(f"feed={Q.FEED}", url)
+
+        self.assertEqual([b["c"] for b in out["ACME"]["bars"]], [23000, 23184])
+        self.assertEqual([b["c"] for b in out["BETA"]["bars"]], [1000, 1010])
+
+    def test_bars_a_symbol_lacks_are_asked_about_again_within_the_minute(self):
+        # A miss is cached at the snapshot's minute rather than the bars' hour:
+        # a symbol with a price but no history is usually the transient case,
+        # and an hour of blank sparkline is an hour of a company looking like
+        # it has no past.
+        fetch = Fetches(snapshots=bare(ACME=snapshot()), bars={"bars": {}})
+        svc = self.service(fetch)
+        svc.quotes(["ACME"])
+        self.assertEqual(fetch.bar_calls, 1)
+
+        self.clock.advance(61)
+        svc.quotes(["ACME"])
+        self.assertEqual(fetch.bar_calls, 2)
 
     def test_a_symbol_with_no_bars_still_carries_its_quote(self):
         # Bars are the sparkline; the quote is the number. A symbol Alpaca has
@@ -359,11 +418,26 @@ class UpstreamTest(QuoteTestCase):
         # Alpaca answering 200 with an error page, or with a shape nothing here
         # recognises, is the upstream failing -- not the desk. A 502 says which
         # of the two is broken, which is the whole reason the code is not 500.
-        for doc in ("<html>maintenance</html>", [], 7):
+        #
+        # The last two are the ones worth having: a refusal served with a 200
+        # is a JSON *object*, so "is it a dict" cannot be the test for the bare
+        # envelope. Reading one as an empty answer would report every symbol as
+        # skipped, cache that, and hand the phone a 200 with an empty map and
+        # nothing at all to say why the prices had gone.
+        for doc in ("<html>maintenance</html>", [], 7,
+                    {"message": "forbidden"},
+                    {"code": 40110000, "message": "access not authorized"}):
             fetch = Fetches(snapshots=doc)
             with self.assertRaises(DeskError) as caught:
                 self.service(fetch).quotes(["ACME"])
             self.assertEqual(caught.exception.status, 502, repr(doc))
+
+    def test_an_empty_snapshot_map_is_no_symbols_rather_than_an_error(self):
+        # The other side of the same coin. An empty object is a real answer --
+        # there is nothing in it to disagree with -- so it is every symbol
+        # absent, not a 502.
+        fetch = Fetches(snapshots={})
+        self.assertEqual(self.service(fetch).quotes(["ACME"]), {})
 
     def test_the_secret_never_reaches_the_message(self):
         # The load-bearing test. urllib puts the request -- headers and all --

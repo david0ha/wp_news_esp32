@@ -64,6 +64,7 @@ says nothing about prices, which is a complete configuration.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import math
@@ -98,6 +99,13 @@ MAX_SYMBOLS = 32
 #: sparkline beside a price is read over.
 BAR_LIMIT = 30
 
+#: How far back the bars request reaches. Thirty *trading* days is about
+#: forty-two calendar ones; sixty leaves room for holidays and long weekends
+#: while keeping the window short enough that :data:`BAR_LIMIT` per symbol is
+#: never the binding constraint. See :meth:`QuoteService._get_bars` for why the
+#: window matters more than the limit does.
+BARS_WINDOW_DAYS = 60
+
 #: IEX rather than SIP: it is the feed the free plan serves, and a consolidated
 #: tape is not worth a subscription for a page that prints once a day.
 FEED = "iex"
@@ -110,12 +118,18 @@ UPSTREAM_TIMEOUT = 6.0
 SNAPSHOTS_URL = "https://data.alpaca.markets/v2/stocks/snapshots"
 BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
 
-#: What may be a symbol. No digits, deliberately, and this is the one place in
-#: the desk where that differs from :data:`claudepost.watchlist.SYMBOL_RE`: a
-#: watchlist item can be Korean, where a listing is numeric (``005930``), and
-#: this route is Alpaca's, which lists US equities only. A KR symbol reaching
-#: here would be refused by the upstream anyway, and refusing it at the door
-#: says so without spending a call to find out.
+#: What Alpaca can be asked about. No digits, deliberately, and this is the one
+#: place in the desk where the shape of a symbol differs from
+#: :data:`claudepost.watchlist.SYMBOL_RE`: a watchlist item can be Korean,
+#: where a listing is numeric (``005930``), and this provider lists US equities
+#: only.
+#:
+#: **It is not the route's validation.** The phone sends its whole watchlist in
+#: one call, so a Korean holding must not turn the request into a 400 that
+#: costs every other company its price. The route checks the wider watchlist
+#: shape; this narrower one decides which of those symbols there is any point
+#: asking Alpaca about, and a symbol that fails it is simply absent from the
+#: map -- indistinguishable, and rightly so, from one the upstream skipped.
 SYMBOL_RE = re.compile(r"^[A-Z.\-]{1,12}\Z")
 
 #: What a credential becomes on its way into any string a human might read.
@@ -289,9 +303,19 @@ def _parse_snapshots(doc: object, symbols: Sequence[str]) -> dict[str, dict]:
     """
     rows = doc.get("snapshots") if isinstance(doc, dict) else None
     if not isinstance(rows, dict):
+        # The bare-map fallback needs evidence that it *is* the bare map, and
+        # "it is a dict" is not evidence: an upstream refusal served with a 200
+        # -- `{"message": "forbidden"}`, `{"code": 40110000, ...}` -- is a dict
+        # too, and taking it as an empty answer would report every symbol as
+        # skipped, cache that for a minute, and hand the phone a 200 with an
+        # empty map and nothing to say why. An empty object is accepted (there
+        # is nothing to disagree with), and otherwise at least one of the
+        # symbols that were *asked about* has to be a key of it.
+        if not (isinstance(doc, dict)
+                and (not doc or any(s in doc for s in symbols))):
+            raise ValueError(f"expected a snapshot object, got "
+                             f"{type(doc).__name__} carrying no requested symbol")
         rows = doc
-    if not isinstance(rows, dict):
-        raise ValueError(f"expected a snapshot object, got {type(doc).__name__}")
 
     out: dict[str, dict] = {}
     for symbol in symbols:
@@ -382,11 +406,10 @@ class QuoteService:
         Each row is ``{"lastCents", "prevCloseCents", "changeBp", "bars"}``,
         every number an ``int``, ``bars`` oldest first and possibly empty.
 
-        The result is **read-only by contract**: the row is a fresh dict but
-        its ``bars`` list is the cached one, so a caller that edits it edits
-        what the next request will be answered with. The one caller serialises
-        it and drops it. Copying instead would be a shallow copy dressed up as
-        safety -- the bars themselves would still be shared.
+        The row and its ``bars`` list are fresh objects, so a caller may
+        reorder or truncate what it is given. The bar dicts inside that list
+        are the cached ones and must not be mutated in place -- the one caller
+        serialises the result and drops it.
 
         Raises:
             ~claudepost.errors.NotFound: code ``no_quotes``, when the desk
@@ -401,11 +424,13 @@ class QuoteService:
         key_id, secret = pair
 
         # Deduplicated because two of the same symbol is one question, and
-        # filtered because everything here becomes a query string: the route
-        # refuses a symbol that is not one with a 400, and this is the belt
-        # that keeps a comma or an ampersand from reaching a URL by some other
-        # path. A symbol dropped here is absent from the result, which is
-        # exactly what a symbol the upstream skipped looks like.
+        # filtered because a symbol this provider cannot answer for should not
+        # be asked about and must never reach a query string. Silently, on
+        # purpose: the phone sends its whole watchlist in one call, and a
+        # Korean listing among the tickers has to leave the other companies
+        # with their prices rather than turning the request into an error. The
+        # symbol is absent from the map, which is the same thing the phone
+        # already handles for a symbol the upstream skipped.
         wanted = [s for s in dict.fromkeys(symbols) if SYMBOL_RE.match(s)]
         if not wanted:
             return {}
@@ -415,13 +440,15 @@ class QuoteService:
         snaps, stale = self._cached(self._snapshots, wanted, now)
         if stale:
             fresh = self._get_snapshots(stale, key_id, secret)
-            self._remember(self._snapshots, stale, fresh, now + SNAPSHOT_TTL)
+            self._remember(self._snapshots, stale, fresh,
+                           now + SNAPSHOT_TTL, now + SNAPSHOT_TTL)
             snaps.update(fresh)
 
         series, stale = self._cached(self._bars, wanted, now)
         if stale:
             fresh_bars = self._get_bars(stale, key_id, secret)
-            self._remember(self._bars, stale, fresh_bars, now + BARS_TTL)
+            self._remember(self._bars, stale, fresh_bars,
+                           now + BARS_TTL, now + SNAPSHOT_TTL)
             series.update(fresh_bars)
 
         out: dict[str, dict] = {}
@@ -430,8 +457,11 @@ class QuoteService:
             if row is None:
                 continue
             # Bars are the sparkline and the snapshot is the number: a symbol
-            # with no daily history still has a price worth printing.
-            out[symbol] = dict(row, bars=series.get(symbol) or [])
+            # with no daily history still has a price worth printing. The list
+            # is copied because the one the cache holds is the one the next
+            # request will be answered with, and a caller that reverses or
+            # truncates its own copy should not be rewriting history.
+            out[symbol] = dict(row, bars=list(series.get(symbol) or []))
         return out
 
     # -- the cache ---------------------------------------------------------
@@ -459,11 +489,20 @@ class QuoteService:
         return have, stale
 
     def _remember(self, cache: dict, asked: Sequence[str], fresh: dict,
-                  expires: float) -> None:
-        """Cache every symbol that was asked about, including the misses."""
+                  hit_expires: float, miss_expires: float) -> None:
+        """Cache every symbol that was asked about, including the misses.
+
+        A miss can be given a shorter life than a hit, and for bars it is: a
+        symbol with a price but no daily history is usually the transient case
+        -- a fresh listing, a series that has not populated -- so it is worth
+        re-asking in a minute, where holding an empty sparkline for an hour
+        would be an hour of a company looking like it has no past.
+        """
         with self._lock:
             for symbol in asked:
-                cache[symbol] = (expires, fresh.get(symbol))
+                value = fresh.get(symbol)
+                cache[symbol] = (
+                    hit_expires if value is not None else miss_expires, value)
 
     # -- the upstream ------------------------------------------------------
 
@@ -478,17 +517,27 @@ class QuoteService:
                   secret: str) -> dict[str, list[dict]]:
         """The daily closes behind each symbol's sparkline.
 
-        Two parameters here are not obvious and are both load-bearing.
-        ``limit`` bounds the *total* data points in the response across every
-        symbol, not the points per symbol, so it is scaled by how many were
-        asked for -- at the route's cap that is 960, well inside the 10,000
-        Alpaca allows. And ``sort=desc`` is what makes the window recent:
-        with no ``start`` the range begins at the earliest data Alpaca holds,
-        so an ascending request would return thirty closes from 2016 and the
-        sparkline would be a decade old with nothing to say it was.
+        **The window is what makes this correct, not the limit.** ``limit``
+        bounds the *total* data points across every symbol rather than the
+        points per symbol, and Alpaca does not document how it divides them --
+        so a request relying on ``limit`` alone would be relying on an
+        undocumented property, and if the upstream ever filled symbol by
+        symbol the first company would take every bar and the rest would draw
+        nothing. Asking for a bounded ``start`` instead makes the limit
+        non-binding: sixty calendar days of daily bars is at most about
+        forty-two per symbol, so every symbol's series arrives whole and
+        ``limit`` is left in as a ceiling on a pathological response.
+
+        ``sort=desc`` remains because with no ``start`` at all the range would
+        begin at the earliest data Alpaca holds; it is now belt as well as
+        braces, and :func:`_parse_bars` sorts the result regardless.
         """
+        start = datetime.datetime.fromtimestamp(
+            self._clock.now() - BARS_WINDOW_DAYS * 86400,
+            tz=datetime.timezone.utc).date().isoformat()
         url = (f"{BARS_URL}?symbols={','.join(symbols)}"
-               f"&timeframe=1Day&limit={BAR_LIMIT * len(symbols)}"
+               f"&timeframe=1Day&start={start}"
+               f"&limit={BAR_LIMIT * len(symbols)}"
                f"&sort=desc&feed={FEED}")
         return self._get(url, key_id, secret, "bars",
                          lambda doc: _parse_bars(doc, symbols))
