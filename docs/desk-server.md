@@ -163,8 +163,9 @@ a pass and a BMP where the render died before conversion, and both are pictures
 somebody should be able to look at.
 
 `<name>` must match `[A-Za-z0-9_-]{1,40}\.(png|bmp)` — anything else is
-`400 bad_request` before a path is joined, and a name that is well-formed but
-names no sheet is `404`. The `Content-Type` comes from the suffix that pattern
+`400 bad_request` before a path is joined (a name longer than sixty characters
+never reaches the handler at all — the route does not match, so that is a
+plain `404`), and a name that is well-formed but names no sheet is `404`. The `Content-Type` comes from the suffix that pattern
 already allowed: `image/png` or `image/bmp`.
 
 **The two routes exist because the edition's sheets outlive the draft's.** A

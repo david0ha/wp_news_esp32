@@ -166,8 +166,9 @@ class Credentials:
 
     Modelled on :class:`claudepost.auth.Tokens` -- literally the same stat
     stamp, :func:`claudepost.fsutil.file_stamp`, and the same rule that a
-    missing file is not an error -- with one difference that matters. ``Tokens`` raises on a malformed file and is reloaded from the
-    scheduler tick, where an exception becomes a log line. :meth:`get` is
+    missing file is not an error -- with one difference that matters.
+    ``Tokens`` raises on a malformed file and is reloaded from the scheduler
+    tick, where an exception becomes a log line. :meth:`get` is
     called on the request path instead, so it **never raises**: a half-written
     file must be "no quotes today", which is a 404 the app already handles,
     rather than a 500 on a route the phone polls.
