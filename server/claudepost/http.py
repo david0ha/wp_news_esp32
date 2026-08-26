@@ -49,7 +49,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import policy, schedule as sched, tiles
+from . import notes, policy, schedule as sched, tiles
 from .app import Desk, as_int
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
@@ -109,6 +109,13 @@ _SHEET_TYPES = {".png": "image/png", ".bmp": "image/bmp"}
 _TILE_ID = tiles.TILE_ID_RE.pattern.removeprefix("^").removesuffix(r"\Z")
 
 _TILE_PATH_RE = re.compile(r"^/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID)
+
+#: What a note is served as. Named rather than written at the handler because
+#: the charset is not decoration -- it is exactly the promise
+#: ``notes.validate()`` enforces on the way in, refusing anything that is not
+#: UTF-8 -- and a header and the check behind it are the pair that must not
+#: come to be spelled in two places.
+_NOTES_TYPE = "text/markdown; charset=utf-8"
 
 
 def _etag(body: bytes) -> str:
@@ -469,6 +476,24 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self.desk.editions.put_tile(match.group("draft"), match.group("tile"),
                                     self._body(tiles.MAX_TILE_BYTES))
         self._send_json(200, {"ok": True})
+
+    def h_put_draft_notes(self, match, _query) -> None:
+        self.desk.editions.put_draft_notes(match.group("draft"),
+                                           self._body(notes.MAX_NOTES_BYTES))
+        self._send_json(200, {"ok": True})
+
+    def h_get_draft_notes(self, match, _query) -> None:
+        """The notes filed with a draft, as the markdown they arrived as.
+
+        A draft with none is a 404, and an ordinary one -- the answer a missing
+        tile gets, for the same reason: the reader shows the page without a
+        dossier rather than an error, so there is nothing here that an empty
+        body could usefully mean.
+        """
+        data = self.desk.editions.read_draft_notes(match.group("draft"))
+        if data is None:
+            raise NotFound()
+        self._send_bytes(200, data, _NOTES_TYPE)
 
     def h_draft_info(self, match, _query) -> None:
         self._send_json(200, {"ok": True, **self.desk.editions.draft_info(match.group("draft"))})
@@ -845,6 +870,9 @@ _ROUTES = [
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_payload)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID), {
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_tile)}),
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/notes\.md\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_draft_notes),
+        "PUT": ("producer", DeskHTTPRequestHandler.h_put_draft_notes)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_proof)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof/(?P<name>[^/]{1,60})\Z"), {

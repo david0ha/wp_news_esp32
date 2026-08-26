@@ -556,6 +556,89 @@ class SheetTest(DeskTestCase):
         self.assertEqual(status, 404)
 
 
+class DraftNotesTest(DeskTestCase):
+    """The dossier a worker files beside the paper, and what the phone reads.
+
+    A note is evidence rather than copy: it is never typeset and never reaches
+    the glass, so nothing here is fingerprinted and filing one cannot cost a
+    wall a refresh. What it does have to survive is the transport -- a quarter
+    of a megabyte of markdown, through a tunnel, to a phone.
+    """
+
+    NOTE = "# SNDK\n\nThe fab is the story; the guidance was a consequence.\n".encode()
+
+    def draft(self) -> str:
+        status, doc = self.api("POST", "/api/drafts", {}, "producer")
+        self.assertEqual(status, 200, doc)
+        return doc["draft_id"]
+
+    def put_notes(self, draft, data):
+        return self.call("PUT", "/api/drafts/%s/notes.md" % draft, data,
+                         self.tokens["producer"], "text/markdown")
+
+    def get_notes(self, draft):
+        return self.call("GET", "/api/drafts/%s/notes.md" % draft,
+                         token=self.tokens["producer"])
+
+    def test_a_draft_carries_a_note_the_producer_wrote(self):
+        draft = self.draft()
+        self.assertEqual(self.put_notes(draft, self.NOTE)[0], 200)
+
+        status, raw, headers = self.get_notes(draft)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+        # The charset is not decoration: it is the promise the write side
+        # already enforced, which is why a note that is not UTF-8 never reaches
+        # the disk to be served under it.
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+    def test_a_draft_with_no_note_is_a_404(self):
+        # The draft is there and the note is not, so the 404 is about the note.
+        # It is an ordinary condition, the one a missing tile is: the phone
+        # shows the page without a dossier rather than an error.
+        self.assertEqual(self.get_notes(self.draft())[0], 404)
+
+    def test_a_note_of_a_quarter_megabyte_survives_the_transport(self):
+        # Exactly the cap. On the way in it passes _declared_length(), which
+        # closes the connection on anything past MAX_DRAIN_BYTES before a
+        # handler sees it -- so a note the desk accepts by its own limit but the
+        # transport will not carry is this assertion failing.
+        draft = self.draft()
+        big = b"# \n" + b"m" * (256 * 1024 - 3)
+        self.assertEqual(len(big), 256 * 1024)
+        self.assertEqual(self.put_notes(draft, big)[0], 200)
+
+        status, raw, _ = self.get_notes(draft)
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, big)
+
+    def test_a_note_past_the_cap_is_refused_from_the_header_alone(self):
+        status, raw, _ = self.put_notes(self.draft(), b"m" * (256 * 1024 + 1))
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(raw)["error"], "too_large")
+
+    def test_a_note_on_a_draft_that_is_not_there_is_a_404(self):
+        # 32 hex, so it passes the route's own pattern and is refused by the
+        # store rather than by the router -- the case a stale draft id makes,
+        # a draft having a lifetime of an hour.
+        gone = "0" * 32
+        self.assertEqual(self.put_notes(gone, self.NOTE)[0], 404)
+        self.assertEqual(self.get_notes(gone)[0], 404)
+
+    def test_draft_info_says_whether_there_is_a_note(self):
+        # So that a client can tell without fetching a quarter of a megabyte to
+        # find out there was nothing to fetch.
+        draft = self.draft()
+        status, doc = self.api("GET", "/api/drafts/%s" % draft, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertFalse(doc["has_notes"])
+
+        self.assertEqual(self.put_notes(draft, self.NOTE)[0], 200)
+        status, doc = self.api("GET", "/api/drafts/%s" % draft, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertTrue(doc["has_notes"])
+
+
 class ScopeTest(DeskTestCase):
     def test_an_unknown_token_is_refused(self):
         status, raw, _ = self.call("GET", "/api/state", token="not-a-token")

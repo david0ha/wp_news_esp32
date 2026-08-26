@@ -143,6 +143,34 @@ forever. Hanging both off `/api/editions/<something>/` would put two different
 kinds of identifier in one path position, told apart only by the verb after
 them, which is a thing to get wrong at three in the morning.
 
+### The dossier
+
+`PUT /api/drafts/<id>/notes.md` files the research behind a page beside the
+page: why this company, what moved, what was looked at and discarded. `GET`
+gives it back as `text/markdown; charset=utf-8`, and the phone reads it next
+to the edition it explains.
+
+**A note is evidence, not copy.** It is never typeset, never served to the
+board and **never fingerprinted**, so filing one cannot change what is on the
+glass or cost a wall twenty-five seconds of the whole sheet flashing. That is
+what makes it safe for a worker to file one with every draft rather than only
+when it seems worth it.
+
+Two limits, and a reader sees both when they are broken:
+
+- **256 KB**, refused `413` from the `Content-Length` alone, because a phone
+  fetches the whole of it through a tunnel in one go.
+- **UTF-8**, refused `400 bad_request`, because the `Content-Type` says so and
+  a phone handed anything else renders mojibake rather than an error anybody
+  can act on.
+
+A refusal leaves the note that was already there alone, the same rule a
+rejected payload follows. A draft with no note answers `404` — an ordinary
+condition, the one a missing tile is, and the reader shows the page without a
+dossier. `GET /api/drafts/<id>` carries `has_notes`, so a client can tell
+whether there is one without fetching a quarter of a megabyte to find out
+there is not.
+
 ## Two storage roots
 
 | Root | Where | Holds |

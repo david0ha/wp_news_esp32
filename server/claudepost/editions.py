@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import tiles
+from . import notes, tiles
 from .clock import Clock
 from .errors import BadRequest, Conflict, Internal, NotFound
 from .fsutil import atomic_write, fsync_dir
@@ -268,8 +268,20 @@ class EditionStore:
                 raise Conflict(message=f"{len(held)} tiles, limit {tiles.MAX_TILES}")
             atomic_write(os.path.join(tiles_dir, tile_id + ".bin"), data)
 
+    def put_draft_notes(self, draft_id: str, data: bytes) -> None:
+        """Put the worker's notes into a draft, replacing what was there.
+
+        Beside the payload rather than inside it, because a note is evidence
+        about an edition and not part of one: it is not fingerprinted, so
+        filing one cannot move an edition id and cannot cost the wall a
+        twenty-five second refresh. ``notes.py`` owns what may be written.
+        """
+        draft_dir = self._require_draft(draft_id)
+        with self._lock:
+            notes.write(draft_dir, data)
+
     def draft_info(self, draft_id: str) -> dict:
-        """What a draft holds: its tiles, its payload's size and when it opened."""
+        """What a draft holds: its tiles, its bytes, its note, and when it opened."""
         draft_dir = self._require_draft(draft_id)
         try:
             size = os.path.getsize(os.path.join(draft_dir, PAYLOAD_NAME))
@@ -278,6 +290,12 @@ class EditionStore:
         return {"id": draft_id,
                 "tiles": _tile_ids(os.path.join(draft_dir, TILES_DIR)),
                 "bytes": size,
+                # The flag rather than the note: a client asking what a draft
+                # holds should not be sent a quarter of a megabyte of markdown
+                # to find out there was some. Through `has_notes` rather than
+                # off `draft_dir`, which is already in hand, so that there is
+                # one answer to "does this carry a note" and not one per caller.
+                "has_notes": self.has_notes(draft_id),
                 "opened_at": self._draft_stamp(draft_id)}
 
     def sweep_drafts(self, older_than: float = DRAFT_TTL_SECONDS) -> int:
@@ -495,6 +513,33 @@ class EditionStore:
         else:
             return None
         return _read_bytes(os.path.join(base, PROOF_DIR, name))
+
+    def read_draft_notes(self, draft_id: str) -> bytes | None:
+        """A draft's notes, or ``None``.
+
+        Regex-guarded and non-raising, like :meth:`read_sheet` beside it: a
+        draft that is gone, one that never had a note and an id that is not a
+        draft id are one answer to whoever asked, which is a 404.
+        """
+        if not _valid(_DRAFT_RE, draft_id):
+            return None
+        return notes.read(self._draft_dir(draft_id))
+
+    def has_notes(self, owner_id: str) -> bool:
+        """Whether a draft or an edition carries a note.
+
+        The two id shapes are told apart by their regexes rather than by a
+        flag, the way :meth:`read_sheet` does it, so a caller cannot ask after
+        a draft's note by an edition's id and be answered from somewhere else.
+        Anything that is neither shape carries nothing.
+        """
+        if _valid(_EID_RE, owner_id):
+            base = self._edition_dir(owner_id)
+        elif _valid(_DRAFT_RE, owner_id):
+            base = self._draft_dir(owner_id)
+        else:
+            return False
+        return notes.present(base)
 
     def sheet_names(self, edition_id: str) -> list[str]:
         """The proof sheets an edition carries, by name, sorted.
