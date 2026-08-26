@@ -12,13 +12,16 @@ review would otherwise have to do by hand on every PUT.
 ``parse_watchlist`` never reads a clock -- see :mod:`claudepost.clock`'s
 docstring for why that indirection exists -- so ``updated_at`` in its output
 is a placeholder the caller (the PUT handler, Task 7) overwrites with a real
-instant before the document is saved. ``load``/``save`` do not re-validate:
-the file is desk-owned, written only by ``save`` after a document has already
-passed ``parse_watchlist`` once, so a round trip is exact.
+instant before the document is saved. ``load`` runs the file back through
+``parse_watchlist`` -- the boundary at the door is also the boundary at the
+window, so a banned key cannot reach the phone app by some route other than
+the PUT that refuses it -- and splices the file's own ``updated_at`` back in
+afterwards, so a save-then-load round trip is still exact.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -135,6 +138,21 @@ class LoadSaveTest(unittest.TestCase):
 
     def test_load_of_a_missing_file_is_none(self):
         self.assertIsNone(W.load(os.path.join(self.tmp, "nope.json")))
+
+    def test_load_refuses_a_file_that_would_not_pass_the_wire(self):
+        """A document good enough to be valid JSON but not good enough to
+        pass parse_watchlist -- a pushed stop, a leaked field -- must not
+        reach the phone app through GET just because it reached the file by
+        some route other than the PUT that refuses it."""
+        with open(self.path, "w") as f:
+            json.dump({"items": [{"symbol": "ETN", "stop": 41.5}],
+                       "extra_field": "leak"}, f)
+        with self.assertLogs("claudepost.watchlist", level="WARNING"):
+            self.assertIsNone(W.load(self.path))
+        # Left on disk as evidence, same as any other file that will not
+        # parse.
+        with open(self.path) as f:
+            self.assertIn("leak", f.read())
 
     def test_save_then_load_round_trips(self):
         doc = W.parse_watchlist({

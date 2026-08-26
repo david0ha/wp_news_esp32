@@ -19,11 +19,17 @@ What *is* kept apart is the clock: :func:`parse_watchlist` never reads one, in
 the same spirit as :mod:`~claudepost.schedule`'s "nothing in this module reads
 a clock" -- the ``updated_at`` it returns is a placeholder the caller (the PUT
 handler that owns :class:`~claudepost.clock.Clock`) overwrites with a real
-instant before the document is saved. That is also why :func:`load` and
-:func:`save` do not run a document back through :func:`parse_watchlist`: the
-file on disk is desk-owned, written only by :func:`save` after a document has
-already been validated once on its way in, and re-stamping it on every read
-would make a save-then-load round trip lie about the instant it was written.
+instant before the document is saved.
+
+:func:`load` runs the file back through :func:`parse_watchlist`, the same
+rule :func:`~claudepost.schedulefile.load` follows for a schedule: the schema
+is a privacy boundary at the door, and a boundary that only guards the PUT
+would let a hand-edited or otherwise-written file put a banned key back on
+the phone's screen through the GET this module also serves. Since
+:func:`parse_watchlist` ignores ``updated_at`` on principle, :func:`load`
+splices the file's own value back in after validating everything else --
+otherwise every read would quietly rewrite the instant a save-then-load
+round trip is supposed to preserve exactly.
 
 Two ceilings, not one, bound the document. Every field has its own cap --
 sixty-four items, eight reasons, a 16 KiB note -- and none of those alone
@@ -285,6 +291,22 @@ def parse_watchlist(doc: object) -> dict:
 # On disk
 # --------------------------------------------------------------------------
 
+def _stamped_updated_at(raw_doc: object) -> int:
+    """The ``updated_at`` :func:`load` hands back, spliced in from the raw
+    file rather than from :func:`parse_watchlist` -- which never reads one.
+
+    A value that is missing, the wrong type, or negative becomes ``0``,
+    exactly as if it had never been read at all: this is a splice from a
+    trusted source (the desk's own file), not a second validation pass, so it
+    fails soft rather than refusing the whole document over one field that
+    :func:`parse_watchlist` was never going to check anyway.
+    """
+    value = raw_doc.get("updated_at") if isinstance(raw_doc, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def load(path: str) -> dict | None:
     """The watchlist at ``path``, or ``None``.
 
@@ -300,6 +322,13 @@ def load(path: str) -> dict | None:
     outside this module, and deleting the evidence would not help whoever
     has to find out what.
 
+    "Will not parse" includes failing :func:`parse_watchlist` -- a banned key
+    in the file is refused here exactly as it would be on the PUT that
+    (should have) written it, so the privacy boundary holds on the way out as
+    well as the way in. See the module docstring for why ``updated_at`` is
+    spliced back in afterwards rather than left at :func:`parse_watchlist`'s
+    placeholder.
+
     Never raises.
     """
     try:
@@ -314,14 +343,22 @@ def load(path: str) -> dict | None:
         return None
 
     try:
-        doc = json.loads(raw.decode("utf-8"))
+        raw_doc = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         LOG.warning("%s will not parse (%s)", os.path.basename(path), exc)
         return None
-    if not isinstance(doc, dict):
-        LOG.warning("%s will not parse (expected an object, got %s)",
-                    os.path.basename(path), type(doc).__name__)
+
+    try:
+        doc = parse_watchlist(raw_doc)
+    except BadRequest as exc:
+        # parse_watchlist names the field it refused, which is the only part
+        # of this a human can act on -- the same reason schedulefile.load
+        # surfaces a BadRequest's own message rather than a generic one.
+        LOG.warning("%s will not parse (%s)",
+                    os.path.basename(path), exc.message or str(exc))
         return None
+
+    doc["updated_at"] = _stamped_updated_at(raw_doc)
     return doc
 
 
