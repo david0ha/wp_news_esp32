@@ -298,7 +298,10 @@ export default function Dashboard() {
           <Button
             label="See the page on the glass"
             variant="secondary"
-            onPress={() => router.push('/preview')}
+            // `/preview` is gone — Task 26 folded it into the one sheet viewer, which reads the
+            // same framebuffer through the same decoder and falls back to the desk's proof when
+            // the board is asleep. This legacy screen goes with the rest of the old chrome.
+            onPress={() => router.push('/sheet/board')}
           />
         </Section>
 

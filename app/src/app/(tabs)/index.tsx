@@ -9,7 +9,8 @@ import { Standing } from '../../components/Standing'
 import { EmptyState } from '../../components/EmptyState'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masthead } from '../../components/today/Masthead'
-import { SheetPreview } from '../../components/today/SheetPreview'
+import { OnTheGlass } from '../../components/OnTheGlass'
+import { SegmentedControl } from '../../components/SegmentedControl'
 import { LeadStory } from '../../components/today/LeadStory'
 import { MoreStories } from '../../components/today/MoreStories'
 import { Briefs } from '../../components/today/Briefs'
@@ -25,16 +26,17 @@ import {
 } from '../../lib/queries'
 import { DeskError, deskHumanError } from '../../lib/desk'
 import { formatSinceTime } from '../../lib/format'
+import { sheetForPage } from '../../lib/sheets'
 import { colors, spacing } from '../../theme/index'
-
-// The desk's own proof-sheet names (desk.test.ts, server/test/test_http.py) — not the board's
-// PAGE_LABELS in format.ts, which name the physical panel's two pages for a different plane.
-const SHEET_NAMES = ['A1.png', 'A2.png'] as const
 
 /**
  * Today — the masthead, the sheet on the glass, and the day's edition in one column (plan Design
- * > Wireframes). `<SheetPreview>` is a dumb stand-in for Task 26's real `<OnTheGlass>` (see its
- * own doc comment); everything else here is this task's.
+ * > Wireframes).
+ *
+ * The sheet here is `<OnTheGlass state="proof">`: the desk's own render of the current edition,
+ * not the board's framebuffer. Today does not know whether a board exists, and asking one would
+ * wake it — the Board tab is where the live glass belongs. What Today shows is what the desk
+ * published, which is what the board is printing whenever it has managed a poll.
  */
 export default function Today() {
   const router = useRouter()
@@ -50,7 +52,11 @@ export default function Today() {
   // disk — desk.ts's own comment on EditionMeta), so has_notes and the "since" stamp both come from
   // this dedicated fetch rather than from deskState.data.editions.
   const edition = useEdition(currentEid ?? '')
-  const sheet = useSheet(currentEid ?? '', SHEET_NAMES[pageIndex])
+  // The names are the gate's, not ours: `01_a1_full.png` today, a `.bmp` where a render died. The
+  // list is read off disk per request and only a per-edition GET carries it, which is the other
+  // reason this screen fetches the edition rather than reading the row out of `getState()`.
+  const sheetName = sheetForPage(edition.data?.sheets ?? [], pageIndex)
+  const sheet = useSheet(currentEid ?? '', sheetName ?? '')
 
   const onRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: deskKeys.state() })
@@ -132,12 +138,29 @@ export default function Today() {
               key={`glass-${revealKey}`}
               entering={reducedMotion ? undefined : FadeInDown.delay(70).duration(260)}
             >
-              <SheetPreview
-                sheetSource={sheet.data}
-                since={since}
-                pageIndex={pageIndex}
-                onChangePage={setPageIndex}
-              />
+              <View style={styles.glass}>
+                <OnTheGlass
+                  state="proof"
+                  imageUri={sheet.data?.uri}
+                  imageHeaders={sheet.data?.headers}
+                  since={since}
+                  // Only openable once there is something to open — a viewer raised over an
+                  // edition whose sheets were pruned would be a full-screen empty box.
+                  onPress={
+                    currentEid && sheetName
+                      ? () =>
+                          router.push(
+                            `/sheet/proof?eid=${encodeURIComponent(currentEid)}&page=${pageIndex}`,
+                          )
+                      : undefined
+                  }
+                />
+                <SegmentedControl
+                  segments={['A1', 'A2']}
+                  selectedIndex={pageIndex}
+                  onChange={setPageIndex}
+                />
+              </View>
             </Animated.View>
 
             <Animated.View
@@ -196,6 +219,11 @@ const styles = StyleSheet.create({
   },
   masthead: {
     flex: 1,
+  },
+  // The sheet and the page switcher are one block: the control acts on the paper above it, and a
+  // gap of the column's own size between them would read as two unrelated things.
+  glass: {
+    gap: spacing[12],
   },
   paper: {
     gap: spacing[16],

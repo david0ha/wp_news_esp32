@@ -36,7 +36,13 @@ import {
 import { getDeskSettings } from './settings'
 import { useDevice } from './device'
 import { Esp32Error, type Esp32Client } from './esp32'
-import { decode, type DecodedScreen } from './screen'
+import { decode } from './screen'
+import {
+  screenCacheGet,
+  screenCachePut,
+  screenFingerprint,
+  type ScreenIdentity,
+} from './screencache'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,6 +81,15 @@ export const deviceKeys = {
   all: ['device'] as const,
   state: () => [...deviceKeys.all, 'state'] as const,
   screen: () => [...deviceKeys.all, 'screen'] as const,
+  /**
+   * One decoded framebuffer, under the fingerprint of what the board says is printed.
+   *
+   * The fingerprint IS the freshness signal here, which is why it is in the key rather than in a
+   * `staleTime`: nothing but a change to those fields can change those pixels, and a clock cannot
+   * tell you that a 25-second refresh happened. A new key is a new sheet; the old one is not stale,
+   * it is gone.
+   */
+  screenAt: (fingerprint: string) => [...deviceKeys.screen(), fingerprint] as const,
 }
 
 // ---------------------------------------------------------------------------
@@ -269,15 +284,46 @@ export function useDeviceState(enabled: boolean) {
 }
 
 /**
- * The framebuffer, decoded — manual. `enabled: false` on purpose: fetching almost a megabyte and
- * inflating 1.92M pixels is not something any screen should do just by mounting. Call `.refetch()`.
+ * The framebuffer, decoded, as a base64 PNG — the page actually on the glass.
+ *
+ * Three things are load-bearing here and none of them is the fetch.
+ *
+ * THE KEY IS THE FINGERPRINT (src/lib/screencache.ts). `staleTime: Infinity` is only honest
+ * because of it: the pixels cannot change without one of those fields changing, so time tells you
+ * nothing and the key tells you everything. A board that redraws gets a new key and a new read; a
+ * board that has quietly done nothing all afternoon is never asked for a megabyte again.
+ *
+ * THE MODULE CACHE IS THE STORE, react-query is the plumbing. `screenCacheGet` is consulted inside
+ * the query function, so a remount after react-query has garbage-collected its entry still costs
+ * nothing — and, more to the point, exactly ONE 2.6 MB decode is resident however many times this
+ * mounts. Leaving it to `gcTime` would keep a second reference alive for five minutes for free.
+ *
+ * THE YIELD BEFORE THE DECODE is not a stylistic `await`. Everything after it is synchronous and
+ * takes a beat: 1.92 million pixels expanded out of 960,000 bytes, deflated, and base64'd, all on
+ * the one JS thread there is. Without it the spinner is mounted but never painted.
+ *
+ * `enabled` is the caller's call. A megabyte off a board that may be asleep is not something a
+ * screen should spend just by existing — only the two that are ABOUT the glass ask for it.
  */
-export function useScreen() {
+export function useBoardScreen(state: ScreenIdentity | undefined, enabled: boolean) {
   const { client } = useDevice()
-  return useQuery<DecodedScreen>({
-    queryKey: deviceKeys.screen(),
-    queryFn: async () => decode(await client!.fetchScreen()),
-    enabled: false,
+  const fingerprint = screenFingerprint(state)
+  return useQuery<string>({
+    queryKey: deviceKeys.screenAt(fingerprint),
+    queryFn: async () => {
+      const cached = screenCacheGet(fingerprint)
+      if (cached) return cached
+      const fb = await client!.fetchScreen()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const png = decode(fb).pngBase64
+      screenCachePut(fingerprint, png)
+      return png
+    },
+    // No fingerprint means the board has not answered `/api/state`, so there would be no way to
+    // know when to throw the result away. Not asking is the correct behaviour, not a limitation.
+    enabled: enabled && client !== null && fingerprint !== '',
+    staleTime: Infinity,
+    gcTime: 60_000,
   })
 }
 
