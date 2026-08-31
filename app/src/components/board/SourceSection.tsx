@@ -30,7 +30,7 @@ export function SourceSection({ source }: { source: NewsSource }) {
         <InfoRow
           label="Last poll"
           value={fetchResultLabel(source.lastResult)}
-          tone={fetchResultTone(source.lastResult) === 'down' ? 'down' : 'neutral'}
+          tone={fetchResultTone(source.lastResult)}
         />
         <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
         <InfoRow

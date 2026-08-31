@@ -148,16 +148,26 @@ export type Tone = 'up' | 'down' | 'warn' | 'neutral'
 /**
  * Chip colour for a fetch result.
  *
- * Two of these are load-bearing. `not_modified` is a 304 and a SUCCESS — the most common outcome
- * there is on a board polling all day, so colouring it as a failure would paint a healthy board
- * red for most of its life. `no_url` is neutral, not a warning: a board with no URL is a complete,
- * working product showing its demo edition, not a broken one.
+ * **A SUCCESSFUL POLL IS NEUTRAL, NOT GREEN**, and that is the whole shape of this function. On
+ * this app green means DIRECTION — a price moved, a change is positive — and nothing else; it is
+ * the rule `commandStatus` in `queue.ts` keeps for the same reason, and the one the edition
+ * detail's When row refuses `tone="up"` over. "The board fetched its edition" is an outcome, not a
+ * direction, and the label beside this colour already says so in words.
+ *
+ * This used to return `up` for `ok` and `not_modified`, and the rule held only because its single
+ * render site (`<SourceSection>`) clamped it back to neutral on the way past. A clamp at one call
+ * site is not a rule; it is a thing the next caller does not know about. The clamp is gone and the
+ * function is the rule.
+ *
+ * Two of the rest are load-bearing. `not_modified` is a 304 and a SUCCESS — the most common
+ * outcome there is on a board polling all day, so colouring it as a failure would paint a healthy
+ * board red for most of its life. `no_url` is neutral, not a warning: a board with no URL is a
+ * complete, working product showing its demo edition, not a broken one.
  */
 export function fetchResultTone(result: NewsFetchResult): Tone {
   switch (result) {
     case 'ok':
     case 'not_modified':
-      return 'up'
     case 'no_url':
       return 'neutral'
     case 'transport':

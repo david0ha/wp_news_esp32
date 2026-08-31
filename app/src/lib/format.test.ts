@@ -25,7 +25,7 @@ import {
   formatDateStamp,
   formatWhen,
 } from './format'
-import { PAGE_COUNT } from './esp32'
+import { PAGE_COUNT, type NewsFetchResult } from './esp32'
 
 describe('pageLabel', () => {
   it('names the board’s two pages, in its order', () => {
@@ -168,10 +168,11 @@ describe('fetch result rendering', () => {
     expect(fetchResultLabel('unknown')).toBe('unknown')
   })
 
-  it('treats not_modified as the success it is', () => {
+  it('treats not_modified as the success it is — not red, and equally not green', () => {
     // A 304 is the MOST COMMON outcome on a board polling all day. Colouring it as a failure
-    // paints a healthy board red for most of its life.
-    expect(fetchResultTone('not_modified')).toBe('up')
+    // paints a healthy board red for most of its life. Colouring it as a success spends green,
+    // which on this app means DIRECTION and nothing else.
+    expect(fetchResultTone('not_modified')).toBe('neutral')
     expect(fetchResultMessage('not_modified')).toMatch(/nothing had changed|nothing has changed/i)
   })
 
@@ -189,11 +190,28 @@ describe('fetch result rendering', () => {
   it('does not colour an unconfigured board as broken', () => {
     // A board with no URL is a complete product showing its demo edition, not a failure.
     expect(fetchResultTone('no_url')).toBe('neutral')
-    expect(fetchResultTone('ok')).toBe('up')
+    expect(fetchResultTone('ok')).toBe('neutral')
     expect(fetchResultTone('transport')).toBe('down')
     expect(fetchResultTone('http_status')).toBe('down')
     expect(fetchResultTone('bad_payload')).toBe('down')
     expect(fetchResultTone('unknown')).toBe('warn')
+  })
+
+  it('never returns up — green is direction, and a poll result is not a direction', () => {
+    // The rule this function used to break, now asserted here rather than clamped at the one
+    // render site that happened to remember. `queue.ts`'s `commandStatus` holds the same line.
+    const every: NewsFetchResult[] = [
+      'ok',
+      'not_modified',
+      'no_url',
+      'transport',
+      'http_status',
+      'bad_payload',
+      'unknown',
+    ]
+    for (const r of every) {
+      expect(fetchResultTone(r)).not.toBe('up')
+    }
   })
 })
 

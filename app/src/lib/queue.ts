@@ -40,12 +40,11 @@ export interface CommandStatusMark {
  * `Composer`, `HoldCard`), so a red `!` says what the rest of the app says. Green does not have
  * that second meaning: it means DIRECTION — a price moved, a change is positive — and nothing else.
  * The edition detail's When row refuses it for exactly this reason (`editions/[eid].tsx`), and
- * `<SourceSection>` clamps `fetchResultTone`'s `'up'` back to neutral at the render site rather
- * than painting a successful poll green. This was the last place a green outcome still reached the
- * glass. A green tick spends the one colour that already means something on saying "this happened",
- * which the `✓` and the word "done" have already said. The three that are merely over — expired,
- * cancelled, and a status this app cannot read — are grey rather than red: nothing went wrong in
- * any of them, they simply are not going to happen.
+ * `format.ts`'s `fetchResultTone` returns neutral for a successful poll — no caller has to
+ * remember to clamp it. A green tick spends the one colour that already means something on saying
+ * "this happened", which the `✓` and the word "done" have already said. The three that are merely
+ * over — expired, cancelled, and a status this app cannot read — are grey rather than red: nothing
+ * went wrong in any of them, they simply are not going to happen.
  */
 export function commandStatus(status: CommandStatus): CommandStatusMark {
   switch (status) {
