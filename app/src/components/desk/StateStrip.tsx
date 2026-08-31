@@ -5,10 +5,10 @@ import { useRouter } from 'expo-router'
 import { Card } from '../Card'
 import { Stamp } from '../Stamp'
 import { useNews, useScheduleNext } from '../../lib/queries'
-import { formatSinceTime } from '../../lib/format'
+import { formatWhen } from '../../lib/format'
 import { transitionClock } from '../../lib/scheduleform'
 import type { DeskState, ScheduleEvent } from '../../lib/desk'
-import { colors, radius, spacing, typography } from '../../theme/index'
+import { colors, spacing, typography } from '../../theme/index'
 
 /**
  * What the desk is holding, in four rows — plan Design > Wireframes ("Current SNDK · 06:04 /
@@ -38,7 +38,13 @@ export function StateStrip({ state }: { state: DeskState | undefined }) {
   const transition = next.data?.[0]
 
   const symbol = news.data?.subject.symbol ?? ''
-  const publishedAt = state?.lastPublishAt ? formatSinceTime(state.lastPublishAt) : ''
+  // `formatWhen` and not `formatSinceTime`: both instants on this strip are compared against the
+  // desk's own `now`, and a bare clock reading is only unambiguous on the day it falls. An edition
+  // published on Tuesday and a hold running until tomorrow would otherwise both print as a time
+  // that reads as today — the second of those actively invites the reader to set another hold.
+  // On the ordinary same-day path this is character-identical to the clock alone.
+  const now = state?.now ?? 0
+  const publishedAt = state?.lastPublishAt ? formatWhen(state.lastPublishAt, now) : ''
 
   return (
     <Card style={styles.card}>
@@ -78,7 +84,7 @@ export function StateStrip({ state }: { state: DeskState | undefined }) {
       />
       <StripRow
         label="Hold"
-        value={hold === null ? 'publishing normally' : `held until ${formatSinceTime(hold)}`}
+        value={hold === null ? 'publishing normally' : `held until ${formatWhen(hold, now)}`}
         dim={hold === null}
         stamp={hold === null ? undefined : 'held'}
         last
@@ -173,11 +179,11 @@ function StripRow({
 }
 
 const styles = StyleSheet.create({
+  // `padding: 0` only — `<Card>` already sets the radius and the continuous curve, and repeating
+  // them here would quietly keep the old ones the day that primitive's radius changes.
   card: {
     padding: 0,
     overflow: 'hidden',
-    borderRadius: radius.lg,
-    borderCurve: 'continuous',
   },
   row: {
     flexDirection: 'row',

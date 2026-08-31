@@ -75,6 +75,62 @@ export const deskKeys = {
   schedule: () => [...deskKeys.all, 'schedule'] as const,
   scheduleNext: (count?: number) => [...deskKeys.all, 'scheduleNext', count ?? 10] as const,
   audit: (limit?: number) => [...deskKeys.all, 'audit', limit ?? 50] as const,
+
+  // THE TWO FAMILY KEYS, and they exist because a defaulted argument in a key is a trap.
+  //
+  // react-query matches an invalidation against a live query by PREFIX over the key array, so
+  // `audit(50)` reaches `['desk','audit',50]` and NOTHING else — not the Desk tab's `audit(20)`.
+  // A write that invalidated the exact key would therefore refresh only a screen that happened to
+  // ask for the same limit the mutation's author happened to omit. Nothing throws and nothing logs;
+  // the section simply keeps showing what it had.
+  //
+  // So: a READ names its limit, a WRITE names the family. Every mutation below uses these, and
+  // `deskInvalidates` is where the pairing is written down once and tested.
+  auditAll: () => [...deskKeys.all, 'audit'] as const,
+  scheduleNextAll: () => [...deskKeys.all, 'scheduleNext'] as const,
+}
+
+/**
+ * What each write to the desk can have changed — as DATA, not as a closure inside each hook.
+ *
+ * The reason it is data is that the bug it prevents is invisible in a diff: a mutation's key list
+ * and the key a screen reads live in different files, and a mismatch between them costs nothing at
+ * compile time and nothing at run time. It costs a stale section. Pulled out here, the pairing is
+ * assertable — see `queries.test.ts`, which checks every write against every query this app opens.
+ *
+ * What is ABSENT matters as much as what is present. A command (order, research, custom, cancel)
+ * does not invalidate the audit family, because the desk writes no audit row for one: `h_cancel`
+ * and the command POST touch the queue only. A directive does not either, and does not touch the
+ * state document. Adding them would spend a round trip to fetch back exactly what was already held.
+ */
+export const deskInvalidates = {
+  /** Anything that changes the queue. The desk audits none of it. */
+  command: () => [deskKeys.commands(), deskKeys.state()] as const,
+  /**
+   * Publishing changes what `/news.json` serves, so a Today screen left open must not keep showing
+   * the old edition until its next unrelated refetch. `http.py`'s `h_publish` writes an audit row.
+   */
+  publish: () =>
+    [deskKeys.state(), deskKeys.editions(), deskKeys.auditAll(), deskKeys.news()] as const,
+  /** A promote is a publish of an older edition — the same four. */
+  promote: () =>
+    [deskKeys.state(), deskKeys.editions(), deskKeys.auditAll(), deskKeys.news()] as const,
+  /** `h_hold` writes an audit row; the hold itself lives on the state document. */
+  hold: () => [deskKeys.state(), deskKeys.auditAll()] as const,
+  /**
+   * A schedule save moves the NEXT TRANSITION, which is the one row on the Desk tab a schedule edit
+   * is actually for — and it is read as `scheduleNext(1)`, which the exact `scheduleNext()` key
+   * would have missed. `h_put_schedule` writes an audit row too.
+   */
+  schedule: () =>
+    [
+      deskKeys.schedule(),
+      deskKeys.scheduleNextAll(),
+      deskKeys.state(),
+      deskKeys.auditAll(),
+    ] as const,
+  /** Standing rules only. The desk does not audit them and they are not on the state document. */
+  directive: () => [deskKeys.directives()] as const,
 }
 
 export const deviceKeys = {
@@ -390,7 +446,7 @@ type OrderInput = Omit<PostCommandInput, 'kind'>
 export function useOrderEdition() {
   return useDeskMutation<OrderInput, Awaited<ReturnType<DeskClient['postCommand']>>>(
     (client, vars) => client.postCommand({ ...vars, kind: 'file_edition' }),
-    () => [deskKeys.commands(), deskKeys.state()],
+    deskInvalidates.command,
   )
 }
 
@@ -398,7 +454,7 @@ export function useOrderEdition() {
 export function useResearch() {
   return useDeskMutation<OrderInput, Awaited<ReturnType<DeskClient['postCommand']>>>(
     (client, vars) => client.postCommand({ ...vars, kind: 'research' }),
-    () => [deskKeys.commands(), deskKeys.state()],
+    deskInvalidates.command,
   )
 }
 
@@ -406,58 +462,56 @@ export function useResearch() {
 export function useCustomCommand() {
   return useDeskMutation<OrderInput, Awaited<ReturnType<DeskClient['postCommand']>>>(
     (client, vars) => client.postCommand({ ...vars, kind: 'custom' }),
-    () => [deskKeys.commands(), deskKeys.state()],
+    deskInvalidates.command,
   )
 }
 
 export function useCancelCommand() {
   return useDeskMutation<string, void>(
     (client, id) => client.cancelCommand(id),
-    () => [deskKeys.commands(), deskKeys.state()],
+    deskInvalidates.command,
   )
 }
 
 export function useHold() {
   return useDeskMutation<number | null, number | null>(
     (client, until) => client.hold(until),
-    () => [deskKeys.state(), deskKeys.audit()],
+    deskInvalidates.hold,
   )
 }
 
 export function usePublish() {
   return useDeskMutation<void, Awaited<ReturnType<DeskClient['publish']>>>(
     (client) => client.publish(),
-    // Publishing changes what /news.json serves — a Today screen left open must not keep
-    // showing the old edition until its next unrelated refetch.
-    () => [deskKeys.state(), deskKeys.editions(), deskKeys.audit(), deskKeys.news()],
+    deskInvalidates.publish,
   )
 }
 
 export function usePromote() {
   return useDeskMutation<string, Awaited<ReturnType<DeskClient['promote']>>>(
     (client, eid) => client.promote(eid),
-    () => [deskKeys.state(), deskKeys.editions(), deskKeys.audit(), deskKeys.news()],
+    deskInvalidates.promote,
   )
 }
 
 export function useAddDirective() {
   return useDeskMutation<AddDirectiveInput, Awaited<ReturnType<DeskClient['addDirective']>>>(
     (client, input) => client.addDirective(input),
-    () => [deskKeys.directives()],
+    deskInvalidates.directive,
   )
 }
 
 export function useDeleteDirective() {
   return useDeskMutation<string, void>(
     (client, id) => client.deleteDirective(id),
-    () => [deskKeys.directives()],
+    deskInvalidates.directive,
   )
 }
 
 export function usePutSchedule() {
   return useDeskMutation<Schedule, Awaited<ReturnType<DeskClient['putSchedule']>>>(
     (client, doc) => client.putSchedule(doc),
-    () => [deskKeys.schedule(), deskKeys.scheduleNext(), deskKeys.state()],
+    deskInvalidates.schedule,
   )
 }
 

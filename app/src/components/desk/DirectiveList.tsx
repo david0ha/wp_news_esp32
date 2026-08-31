@@ -18,6 +18,13 @@ import { colors, radius, spacing, typography } from '../../theme/index'
  * edition, after which the desk forgets it and its owner concludes the system ignored them. So the
  * two live in separate sections with separate controls, and nothing here can reach the queue.
  *
+ * REMOVING ONE IS UNDOABLE, and that is not decoration. The tab's "nothing here asks are you sure"
+ * argument (desk.tsx) rests on every action being reversible on the desk's own terms — a hold lifts,
+ * a command re-queues, an edition promotes. A directive is the exception: its text exists only in
+ * the desk's row, so a mis-tapped ✕ means retyping a rule from memory. Rather than make this the one
+ * screen with a confirm dialog, the removed rule is held here and offered back — scope and expiry
+ * included, which `addDirective` can restore for both scopes. The id changes; the rule does not.
+ *
  * WHAT THIS EDITOR CANNOT DO: file an `until` directive. The desk takes a scope of 'always' or
  * 'until', and 'until' needs an `expires_at` instant — a date the phone would have to collect
  * through a picker whose whole job is to produce one number. Rules with an expiry still LIST here
@@ -30,6 +37,8 @@ export function DirectiveList() {
   const add = useAddDirective()
   const remove = useDeleteDirective()
   const [rule, setRule] = useState('')
+  /** The last rule removed from this screen, kept only so it can be put back. */
+  const [removed, setRemoved] = useState<Directive | null>(null)
 
   const trimmed = rule.trim()
 
@@ -40,6 +49,34 @@ export function DirectiveList() {
       {
         onSuccess: () => {
           setRule('')
+          setRemoved(null)
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+        },
+      },
+    )
+  }
+
+  const onRemove = (directive: Directive) => {
+    remove.mutate(directive.id, {
+      onSuccess: () => {
+        setRemoved(directive)
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+      },
+    })
+  }
+
+  const onUndo = () => {
+    if (removed === null) return
+    add.mutate(
+      // `expiresAt` only on an `until` scope: the desk refuses an `always` rule that carries one
+      // and an `until` rule that does not, so the restored rule is spelled exactly as the removed
+      // one was rather than flattened to the default.
+      removed.scope === 'until' && removed.expires_at !== null
+        ? { rule: removed.rule, scope: 'until', expiresAt: removed.expires_at }
+        : { rule: removed.rule, scope: 'always' },
+      {
+        onSuccess: () => {
+          setRemoved(null)
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
         },
       },
@@ -76,10 +113,29 @@ export function DirectiveList() {
             key={d.id}
             directive={d}
             removing={remove.isPending && remove.variables === d.id}
-            onRemove={() => remove.mutate(d.id)}
+            onRemove={() => onRemove(d)}
           />
         ))
       )}
+
+      {removed !== null ? (
+        <View style={styles.undo}>
+          <Text style={[typography.ui, styles.undoText]} numberOfLines={2}>
+            Removed “{removed.rule}”
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Put back: ${removed.rule}`}
+            accessibilityState={{ disabled: add.isPending, busy: add.isPending }}
+            disabled={add.isPending}
+            hitSlop={8}
+            onPress={onUndo}
+            style={({ pressed }) => [styles.undoAction, pressed && styles.undoActionDown]}
+          >
+            <Text style={[typography.uiStrong, styles.undoActionText]}>Put it back</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <View style={styles.composer}>
         <TextInput
@@ -99,8 +155,8 @@ export function DirectiveList() {
         <Button
           label="Add a directive"
           onPress={onAdd}
-          loading={add.isPending}
-          disabled={trimmed === ''}
+          loading={add.isPending && add.variables?.rule === trimmed}
+          disabled={trimmed === '' || add.isPending}
         />
       </View>
 
@@ -129,7 +185,7 @@ function DirectiveRow({
       </View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Remove"
+        accessibilityLabel={`Remove: ${directive.rule}`}
         accessibilityState={{ disabled: removing, busy: removing }}
         disabled={removing}
         hitSlop={8}
@@ -166,11 +222,10 @@ function ErrorLine({ error, fallback }: { error: unknown; fallback: string }) {
 }
 
 const styles = StyleSheet.create({
+  // `padding: 0` only — `<Card>` already sets the radius and the continuous curve.
   card: {
     padding: 0,
     overflow: 'hidden',
-    borderRadius: radius.lg,
-    borderCurve: 'continuous',
   },
   message: {
     minHeight: 100,
@@ -208,6 +263,28 @@ const styles = StyleSheet.create({
   removeGlyph: {
     fontSize: 17,
     color: colors.deskDim,
+  },
+  undo: {
+    padding: spacing[16],
+    gap: spacing[8],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.deskFaint,
+  },
+  undoText: {
+    fontSize: 13,
+    color: colors.deskDim,
+    lineHeight: 18,
+  },
+  undoAction: {
+    minHeight: 32,
+    justifyContent: 'center',
+  },
+  undoActionDown: {
+    opacity: 0.55,
+  },
+  undoActionText: {
+    fontSize: 14,
+    color: colors.signal.chrome.tint,
   },
   composer: {
     padding: spacing[16],

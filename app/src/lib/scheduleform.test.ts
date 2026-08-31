@@ -86,6 +86,12 @@ describe('wake times, text and back', () => {
     expect(parseWakeText('')).toEqual([])
   })
 
+  it('drops a repeated day, because the desk’s own _days() builds a set', () => {
+    // Otherwise the editor sends 'sat,sat', the next GET answers 'sat', and a document that was
+    // supposed to round-trip comes back spelled differently from the way it went out.
+    expect(parseWakeText('12:40 sat,sat,sun')).toEqual([{ at: '12:40', days: 'sat,sun' }])
+  })
+
   it('refuses a day name the desk does not know', () => {
     // schedule.py's DAY_NAMES: mon..sun, three letters. "monday" is not one of them.
     expect(parseWakeText('06:00 monday')).toBeNull()

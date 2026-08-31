@@ -6,7 +6,7 @@ import { ScreenMessage } from '../ScreenMessage'
 import { useCancelCommand, useCommands } from '../../lib/queries'
 import { DeskError, deskHumanError, type Command } from '../../lib/desk'
 import { canCancelCommand, commandKindLabel, commandStatus } from '../../lib/queue'
-import { colors, radius, spacing, typography } from '../../theme/index'
+import { colors, spacing, typography } from '../../theme/index'
 
 /**
  * How many rows the queue prints before it stops.
@@ -182,11 +182,10 @@ function toneStyle(tone: 'up' | 'down' | 'warn' | 'neutral' | 'dim') {
 }
 
 const styles = StyleSheet.create({
+  // `padding: 0` only — `<Card>` already sets the radius and the continuous curve.
   card: {
     padding: 0,
     overflow: 'hidden',
-    borderRadius: radius.lg,
-    borderCurve: 'continuous',
   },
   messageCard: {
     minHeight: 120,

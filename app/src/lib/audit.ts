@@ -9,7 +9,7 @@
 // than useless — it is a record that looks complete.
 
 import type { AuditEntry } from './desk'
-import { formatAge, formatPrintedDate, formatSinceTime } from './format'
+import { formatAge, formatDateStamp, formatSinceTime } from './format'
 
 /** Edition ids are hex fingerprints. Eight characters is what the desk's own logs print. */
 function shortId(v: unknown): string {
@@ -84,6 +84,11 @@ const DAY_SECONDS = 86400
  * in another zone printing a different hour than the desk's log is the app disagreeing with the
  * thing it is describing.
  *
+ * The switch is a 24-HOUR WINDOW here and a CALENDAR DAY in `formatWhen()`, and the difference is
+ * deliberate: this row carries its own age in front of the clock, so "20h ago · 02:10" cannot be
+ * misread whichever day it fell on. An instant with no age beside it — a hold's target — has no
+ * such guard, which is why that one needs the date sooner. See `formatWhen()`.
+ *
  * `now` is the DESK's clock (`DeskState.now`), not the phone's, so a phone a few seconds off does
  * not report the newest row as being in the future. It can still be slightly ahead of a row —
  * `/api/state` and `/api/audit` are two round trips — which is why the age is clamped at zero
@@ -93,10 +98,6 @@ const DAY_SECONDS = 86400
 export function auditWhen(atSec: number, nowSec: number): string {
   const age = formatAge(Math.max(0, nowSec - atSec))
   if (!Number.isFinite(atSec) || atSec <= 0) return age
-  const d = new Date(atSec * 1000)
   if (nowSec - atSec < DAY_SECONDS) return `${age} · ${formatSinceTime(atSec)}`
-  const ymd = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(
-    d.getUTCDate(),
-  ).padStart(2, '0')}`
-  return `${age} · ${formatPrintedDate(ymd)}`
+  return `${age} · ${formatDateStamp(atSec)}`
 }

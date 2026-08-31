@@ -315,3 +315,51 @@ export function formatSinceTime(epochSeconds: number): string {
   const mm = String(d.getUTCMinutes()).padStart(2, '0')
   return `${hh}:${mm}`
 }
+
+/**
+ * An instant's UTC calendar date, as the paper's own "NOV 14" stamp — or '' when it is not an
+ * instant at all.
+ *
+ * The one place this app turns an epoch second into a date, so `formatPrintedDate()`'s month table
+ * is not re-implemented beside every caller. UTC, for `formatSinceTime()`'s reason: the desk's
+ * record is the desk's, and a phone in another zone printing a different day than the desk's log is
+ * the app disagreeing with the thing it is describing.
+ */
+export function formatDateStamp(epochSeconds: number): string {
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return ''
+  const d = new Date(epochSeconds * 1000)
+  const ymd = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    d.getUTCDate(),
+  ).padStart(2, '0')}`
+  return formatPrintedDate(ymd)
+}
+
+/**
+ * An instant a reader can act on: `"23:13"` when it falls on the same UTC day as `now`, and
+ * `"NOV 15, 22:13"` the moment it does not.
+ *
+ * THE SWITCH IS THE CALENDAR DAY, NOT A 24-HOUR WINDOW, and that is the whole function. A hold set
+ * at 22:13 to last a day targets 22:13 TOMORROW; printed as a bare clock it is character-identical
+ * to the moment it was set, so for the next twenty-three hours it reads as a hold that ran out a
+ * minute ago — and the reader's rational response is to set another one. Two hours is enough to
+ * cross midnight and produce the same lie in the other direction. Only the date settles it.
+ *
+ * `auditWhen()` (src/lib/audit.ts) makes the opposite call deliberately: an audit row carries its
+ * own age ("3m ago"), which already says which day it was, so the clock beside it is never
+ * ambiguous and the date only takes over once the age stops being precise. A hold has no age
+ * beside it, so it needs the date sooner.
+ *
+ * `now` is the DESK's clock wherever one is available, not the phone's — same rule as everywhere
+ * else that reads an instant off `/api/state`.
+ */
+export function formatWhen(epochSeconds: number, nowSeconds: number): string {
+  const clock = formatSinceTime(epochSeconds)
+  if (clock === '') return ''
+  const at = new Date(epochSeconds * 1000)
+  const now = new Date(nowSeconds * 1000)
+  const sameDay =
+    at.getUTCFullYear() === now.getUTCFullYear() &&
+    at.getUTCMonth() === now.getUTCMonth() &&
+    at.getUTCDate() === now.getUTCDate()
+  return sameDay ? clock : `${formatDateStamp(epochSeconds)}, ${clock}`
+}

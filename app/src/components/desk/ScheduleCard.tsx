@@ -47,6 +47,10 @@ export function ScheduleCard() {
   const [quiet, setQuiet] = useState('')
   const [wake, setWake] = useState('')
   const [quietPoll, setQuietPoll] = useState('')
+  // "Saved." stands until the next EDIT, not until the form next happens to match the document.
+  // Gating it on `!changed` alone would bring the line back the moment a reader typed a figure and
+  // then typed the old one again — a confirmation for a save that did not just happen.
+  const [justSaved, setJustSaved] = useState(false)
 
   // Re-seed whenever the desk's own document changes — the first load, and again after a save
   // (`usePutSchedule` invalidates this key, so the refetch lands here carrying what was just sent).
@@ -63,6 +67,14 @@ export function ScheduleCard() {
     setWake(wakeToText(loaded.wake))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `seed` IS `loaded`, serialized.
   }, [seed])
+
+  /** A field's setter, wrapped so that touching anything retires the "Saved." line. */
+  function edit<T>(set: (v: T) => void): (v: T) => void {
+    return (v: T) => {
+      setJustSaved(false)
+      set(v)
+    }
+  }
 
   const parsed = useMemo(() => {
     if (loaded === undefined) return null
@@ -124,7 +136,8 @@ export function ScheduleCard() {
       <Field label="Time zone">
         <Text style={[typography.ui, styles.readonly]}>{loaded.timezone}</Text>
         <Text style={styles.hint}>
-          Set where the schedule file is — {schedule.data?.source === 'file' ? 'a file on the desk' : 'the desk’s own default'}.
+          Every clock time on this card is read in this zone. It comes from{' '}
+          {schedule.data?.source === 'file' ? 'a file on the desk' : 'the desk’s own default'}.
         </Text>
       </Field>
 
@@ -134,7 +147,7 @@ export function ScheduleCard() {
           selectedIndex={POLICIES.indexOf(policy)}
           onChange={(i) => {
             const next = POLICIES[i]
-            if (next !== undefined) setPolicy(next)
+            if (next !== undefined) edit(setPolicy)(next)
           }}
           disabled={save.isPending}
         />
@@ -144,7 +157,7 @@ export function ScheduleCard() {
         <Row>
           <NumberInput
             value={gap}
-            onChangeText={setGap}
+            onChangeText={edit(setGap)}
             editable={!save.isPending}
             accessibilityLabel="Minutes between publishes"
             bad={parsed?.gapN === null}
@@ -164,7 +177,7 @@ export function ScheduleCard() {
         <Row>
           <NumberInput
             value={active}
-            onChangeText={setActive}
+            onChangeText={edit(setActive)}
             editable={!save.isPending}
             accessibilityLabel="Seconds between polls, awake"
             bad={parsed?.activeN === null}
@@ -174,7 +187,7 @@ export function ScheduleCard() {
         <Row>
           <NumberInput
             value={quietPoll}
-            onChangeText={setQuietPoll}
+            onChangeText={edit(setQuietPoll)}
             editable={!save.isPending}
             accessibilityLabel="Seconds between polls, quiet"
             bad={parsed?.quietPollN === null}
@@ -196,7 +209,7 @@ export function ScheduleCard() {
       <Field label="Quiet windows">
         <TextInput
           value={quiet}
-          onChangeText={setQuiet}
+          onChangeText={edit(setQuiet)}
           editable={!save.isPending}
           multiline
           autoCapitalize="none"
@@ -219,7 +232,7 @@ export function ScheduleCard() {
       <Field label="When the worker runs">
         <TextInput
           value={wake}
-          onChangeText={setWake}
+          onChangeText={edit(setWake)}
           editable={!save.isPending}
           multiline
           autoCapitalize="none"
@@ -244,13 +257,16 @@ export function ScheduleCard() {
           onPress={() => {
             if (document === null) return
             save.mutate(document, {
-              onSuccess: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
+              onSuccess: () => {
+                setJustSaved(true)
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+              },
             })
           }}
           loading={save.isPending}
           disabled={!changed}
         />
-        {save.isSuccess && !changed ? (
+        {justSaved && !changed ? (
           <Text style={styles.saved}>Saved. The desk is keeping this one now.</Text>
         ) : null}
         {save.isError ? (
@@ -306,11 +322,10 @@ function NumberInput({
 }
 
 const styles = StyleSheet.create({
+  // `padding: 0` only — `<Card>` already sets the radius and the continuous curve.
   card: {
     padding: 0,
     overflow: 'hidden',
-    borderRadius: radius.lg,
-    borderCurve: 'continuous',
   },
   message: {
     minHeight: 120,

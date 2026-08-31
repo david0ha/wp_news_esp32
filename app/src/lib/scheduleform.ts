@@ -104,7 +104,10 @@ export function parseWakeText(text: string): WakeTime[] | null {
     for (const n of names) {
       if (!DAY_NAMES.includes(n)) return null
     }
-    out.push({ at, days: names.join(',') })
+    // Deduplicated, because `_days()` builds a SET: send 'sat,sat' and the next GET answers 'sat',
+    // and a document that was meant to round-trip comes back spelled differently from the way it
+    // went out — which would then read as an edit nobody made.
+    out.push({ at, days: [...new Set(names)].join(',') })
   }
   return out
 }

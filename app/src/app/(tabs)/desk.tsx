@@ -95,7 +95,14 @@ export default function Desk() {
           />
         }
       >
-        {state.isError ? (
+        {/* THE ERROR CARD REPLACES THE STRIP ONLY WHEN THERE IS NOTHING TO REPLACE IT WITH.
+            `isError` is true after a failed REFETCH while react-query still holds the last good
+            snapshot, and this query polls every fifteen seconds over a tunnel — so branching on
+            the flag alone would blank a populated four-row strip on one dropped poll and restore
+            it fifteen seconds later, flapping, while `<HoldCard>` underneath went on rendering
+            from the snapshot that was still there. The house posture is the panel's own: a stale
+            page that says it is stale beats an empty one. */}
+        {state.isError && state.data === undefined ? (
           <Card style={styles.stateError}>
             <ScreenMessage
               error={
@@ -107,10 +114,20 @@ export default function Desk() {
             />
           </Card>
         ) : (
-          <StateStrip state={state.data} />
+          <>
+            {state.isError ? (
+              <Text style={styles.stale}>
+                {state.error instanceof DeskError
+                  ? deskHumanError(state.error)
+                  : 'Couldn’t reach the desk just now.'}{' '}
+                What follows is the last answer that came back.
+              </Text>
+            ) : null}
+            <StateStrip state={state.data} />
+          </>
         )}
 
-        <HoldCard state={state.data} />
+        <HoldCard state={state.data} stateAt={state.dataUpdatedAt} />
 
         <View style={styles.section}>
           <Standing label="ORDER" tone="chrome" />
@@ -249,6 +266,12 @@ const styles = StyleSheet.create({
   stateError: {
     minHeight: 120,
     justifyContent: 'center',
+  },
+  stale: {
+    ...typography.ui,
+    fontSize: 13,
+    color: colors.signal.chrome.down,
+    lineHeight: 18,
   },
   linkCard: {
     padding: 0,

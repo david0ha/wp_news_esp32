@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native'
 import * as Haptics from 'expo-haptics'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Button } from '../Button'
 import { SegmentedControl } from '../SegmentedControl'
 import { Stamp } from '../Stamp'
@@ -50,7 +51,28 @@ const DISMISS_MS = 900
  * because the drag gesture was misread, and the instruction is now somewhere the reader cannot see
  * it — the queue on the tab underneath, which they are not looking at yet.
  */
-export function Composer({ initialKind, onDone }: { initialKind: ComposerKind; onDone: () => void }) {
+export function Composer({
+  initialKind,
+  fullScreen,
+  onDone,
+}: {
+  initialKind: ComposerKind
+  /**
+   * True when this route is the FIRST screen of the stack and therefore renders full-screen rather
+   * than as a form sheet — a deep link, or a cold start straight into `/compose`. `compose.tsx`
+   * derives it from the same `router.canGoBack()` it already needs for `onDone`.
+   */
+  fullScreen: boolean
+  onDone: () => void
+}) {
+  // THE INSET IS CONDITIONAL, and it was measured rather than assumed. Inside the form sheet this
+  // route normally is, `insets.top` still reports the device's full status-bar allowance — 62 pt on
+  // an iPhone 17 Pro, measured off two screenshots of the same sheet with and without it — even
+  // though iOS has already presented the sheet below the bar. Applied unconditionally that is a
+  // band of dead chrome above a sheet only half a screen tall. Dropped unconditionally, the header
+  // lands on the clock in the one case `compose.tsx` explicitly documents. So it is applied exactly
+  // where the view really does start at the top of the screen.
+  const insets = useSafeAreaInsets()
   const [kind, setKind] = useState<ComposerKind>(initialKind)
   const [text, setText] = useState('')
 
@@ -92,11 +114,7 @@ export function Composer({ initialKind, onDone }: { initialKind: ComposerKind; o
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* No safe-area inset on this header. `compose` is registered `presentation: 'formSheet'`
-          (app/_layout.tsx), and iOS presents a form sheet BELOW the status bar — an inset added
-          here would be a second allowance for a bar the sheet never reaches, which reads as a
-          band of dead chrome above a sheet that is only half a screen tall to begin with. */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: (fullScreen ? insets.top : 0) + spacing[8] }]}>
         <Stamp tone="chrome">order</Stamp>
         <Button label={sent ? 'Done' : 'Cancel'} variant="ghost" onPress={onDone} />
       </View>
@@ -163,7 +181,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: spacing[8],
     paddingLeft: spacing[16],
     paddingRight: spacing[8],
   },

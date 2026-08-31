@@ -3,7 +3,7 @@ import * as Haptics from 'expo-haptics'
 import { Button } from '../Button'
 import { useHold, usePublish } from '../../lib/queries'
 import { DeskError, deskHumanError, type DeskState } from '../../lib/desk'
-import { formatSinceTime } from '../../lib/format'
+import { formatWhen } from '../../lib/format'
 import { colors, spacing, typography } from '../../theme/index'
 
 /**
@@ -15,6 +15,10 @@ import { colors, spacing, typography } from '../../theme/index'
  * covers the next edition and expires on its own if the phone is never opened again. It is also
  * the least costly thing to get wrong, which is why it is not behind a picker — the hold lifts
  * with one tap, and a hold that is too short simply gets set again.
+ *
+ * It is also the one duration whose target collides with the clock reading it was set at, which is
+ * why both places that print it go through `formatWhen()` rather than `formatSinceTime()` — see
+ * that function for why a bare "22:13" tomorrow reads as a hold that ran out a minute ago.
  */
 const HOLD_SECONDS = 86400
 
@@ -33,13 +37,27 @@ const HOLD_SECONDS = 86400
  * no button under it. These two sit on the desk surround for the same reason the ORDER buttons do:
  * a control needs a ground it is distinguishable from.
  */
-export function HoldCard({ state }: { state: DeskState | undefined }) {
+export function HoldCard({
+  state,
+  stateAt,
+}: {
+  state: DeskState | undefined
+  /** `Date.now()` in ms when `state` came back — react-query's `dataUpdatedAt`. */
+  stateAt: number
+}) {
   const publish = usePublish()
   const hold = useHold()
 
+  // The desk's clock is the only one that may decide any of this, but the SNAPSHOT of it can be
+  // arbitrarily old: `useDeskState`'s fifteen-second poll is paused while the app is backgrounded
+  // (focusManager), so a phone reopened the next morning still holds yesterday's `now`. Adding the
+  // wall-clock time elapsed since the snapshot landed keeps the two in step without ever trusting
+  // the phone's absolute clock — only its ability to measure an interval. `POST /api/hold` stores
+  // whatever instant it is given, past ones included, so an uncorrected figure would be a hold
+  // that expired before it was set.
+  const now = state === undefined ? 0 : state.now + Math.max(0, (Date.now() - stateAt) / 1000)
   const staged = state?.staged ?? null
   const held = state?.hold ?? null
-  const now = state?.now ?? 0
   const busy = publish.isPending || hold.isPending
 
   const onPublish = () => {
@@ -51,14 +69,19 @@ export function HoldCard({ state }: { state: DeskState | undefined }) {
   }
 
   const onHold = () => {
-    // The desk's own clock, never the phone's: `state.now` is what every other instant in this
-    // document is read against, and a phone a minute fast would set a hold a minute short.
-    hold.mutate(held === null ? now + HOLD_SECONDS : null, {
+    hold.mutate(held === null ? Math.round(now) + HOLD_SECONDS : null, {
       onSuccess: () => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
       },
     })
   }
+
+  // The desk has not answered — first load, or an unreachable desk with no cached snapshot. Every
+  // sentence below is a claim about what the desk is holding, and `editionsLine()` on the tab
+  // states the rule these two would otherwise break: undefined is "not known yet" and must not be
+  // rendered as "nothing". Printing "Nothing is staged" under a card that says the desk could not
+  // be read is the app contradicting itself in the space of two lines.
+  if (state === undefined) return null
 
   return (
     <View style={styles.wrap}>
@@ -90,16 +113,17 @@ export function HoldCard({ state }: { state: DeskState | undefined }) {
       <Text style={styles.note}>
         {held === null
           ? 'Nothing new reaches the glass for a day. Lift it any time.'
-          : `Held until ${formatSinceTime(held)}. Nothing new reaches the glass until then.`}
+          : `Held until ${formatWhen(held, now)}. Nothing new reaches the glass until then.`}
       </Text>
 
-      {/* The desk's own prose about what it did — `CommitResult.reason` is written for a person,
-          and a publish inside a quiet window says so rather than silently doing nothing. */}
+      {/* The desk's own prose about what it did — `CommitResult.reason` is written for a person.
+          There is no second arm here on purpose: `editions.py`'s `publish_now()` overrides every
+          gate and always answers `published`, and `h_publish` 404s when nothing is staged, so a
+          `staged`/`unchanged` branch would be unreachable code that could only ever surface a raw
+          wire token. A refusal arrives as an error, and the error line below is where it lands. */}
       {publish.isSuccess ? (
         <Text style={styles.result}>
-          {publish.data.state === 'published'
-            ? `Published ${publish.data.edition_id.slice(0, 8)} — ${publish.data.reason}`
-            : `${publish.data.state} — ${publish.data.reason}`}
+          Published {publish.data.edition_id.slice(0, 8)} — {publish.data.reason}
         </Text>
       ) : null}
       {publish.isError ? <ErrorLine error={publish.error} /> : null}

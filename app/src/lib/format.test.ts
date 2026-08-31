@@ -19,6 +19,8 @@ import {
   pollSourceLabel,
   sleepPresetInForce,
   sleepSourceLabel,
+  formatDateStamp,
+  formatWhen,
 } from './format'
 import { PAGE_COUNT } from './esp32'
 
@@ -306,5 +308,45 @@ describe('formatSinceTime', () => {
     expect(formatSinceTime(0)).toBe('')
     expect(formatSinceTime(-5)).toBe('')
     expect(formatSinceTime(NaN)).toBe('')
+  })
+})
+
+describe('formatDateStamp', () => {
+  it('is the paper’s own month abbreviation, in UTC', () => {
+    expect(formatDateStamp(1_700_000_000)).toBe('NOV 14') // 2023-11-14T22:13:20Z
+  })
+
+  it('is empty for anything that is not a real past-or-future instant', () => {
+    // The caller omits the stamp rather than printing a date in 1970.
+    expect(formatDateStamp(0)).toBe('')
+    expect(formatDateStamp(-1)).toBe('')
+    expect(formatDateStamp(Number.NaN)).toBe('')
+  })
+})
+
+describe('formatWhen', () => {
+  const now = 1_700_000_000 // 2023-11-14T22:13:20Z
+
+  it('is a bare clock inside the same UTC day, where the clock alone is unambiguous', () => {
+    expect(formatWhen(now + 3600, now)).toBe('23:13')
+    expect(formatWhen(now - 3600, now)).toBe('21:13')
+  })
+
+  it('carries the date the moment the instant is on another day', () => {
+    // Two hours ahead of 22:13 is already tomorrow, and "00:13" alone would read as this morning —
+    // fourteen hours in the past.
+    expect(formatWhen(now + 7200, now)).toBe('NOV 15, 00:13')
+  })
+
+  it('never prints a day-old instant as the clock reading it was set at', () => {
+    // The whole reason this function exists. A 24-hour hold set at 22:13 targets 22:13 TOMORROW;
+    // rendered as a bare clock it reads as a hold that ran out a moment ago, and the reader's
+    // rational response is to set it again.
+    expect(formatWhen(now + 86400, now)).toBe('NOV 15, 22:13')
+    expect(formatWhen(now + 86400, now)).not.toBe(formatWhen(now, now))
+  })
+
+  it('is empty for a non-instant, so a caller can omit the whole phrase', () => {
+    expect(formatWhen(0, now)).toBe('')
   })
 })
