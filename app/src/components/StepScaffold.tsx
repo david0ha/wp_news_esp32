@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Screen } from './Screen'
 import { Button } from './Button'
 import { BackButton } from './BackButton'
-import { colors, layout } from '../theme/legacy'
+import { colors, spacing } from '../theme/index'
 
 /**
  * Shared chrome for every onboarding step: an optional back-circle + SKIP bar, the progress bar,
@@ -57,7 +57,7 @@ export function StepScaffold({
 const styles = StyleSheet.create({
   topBar: {
     height: 64,
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -75,27 +75,27 @@ const styles = StyleSheet.create({
   skip: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.textDim,
+    color: colors.deskDim,
     letterSpacing: 0.5,
   },
   progressTrack: {
     height: 4,
-    marginHorizontal: layout.gutter,
+    marginHorizontal: spacing[16],
     borderRadius: 2,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: colors.deskRaised,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
     borderRadius: 2,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.signal.chrome.tint,
   },
   content: {
     flex: 1,
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
   },
   ctaWrap: {
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
     paddingBottom: 8,
   },
 })

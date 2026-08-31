@@ -5,7 +5,7 @@ import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../../lib/newsurl'
-import { colors, radius } from '../../../theme/legacy'
+import { colors, radius } from '../../../theme/index'
 
 // Where the board fetches its news snapshot from. Collected BEFORE the Wi-Fi handover so it is
 // written to NVS at provisioning time and the board's very first poll after joining already has
@@ -53,7 +53,7 @@ export default function News() {
               value={newsUrl}
               onChangeText={setNewsUrl}
               placeholder="http://mymac.local:8123/news.json"
-              placeholderTextColor={colors.textFaint}
+              placeholderTextColor={colors.deskFaint}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
   },
   caption: {
     fontSize: 14,
-    color: colors.textDim,
+    color: colors.deskDim,
     textAlign: 'center',
     lineHeight: 20,
   },
@@ -99,32 +99,33 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.text,
+    color: colors.deskText,
   },
   inputRow: {
     minHeight: 48,
     borderRadius: radius.md,
+    borderCurve: 'continuous',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    borderColor: colors.deskFaint,
+    backgroundColor: colors.deskRaised,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
   },
   input: {
     flex: 1,
-    color: colors.text,
+    color: colors.deskText,
     fontSize: 16,
     paddingVertical: 12,
   },
   hint: {
     fontSize: 12,
-    color: colors.textFaint,
+    color: colors.deskFaint,
     lineHeight: 16,
   },
   error: {
     fontSize: 12,
-    color: colors.down,
+    color: colors.signal.chrome.down,
     lineHeight: 16,
   },
 })

@@ -20,6 +20,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as SecureStore from 'expo-secure-store'
 import { normalizeBaseUrl } from './discovery'
+import type { DeskState } from './desk'
 
 const KEY_DESK_URL = 'claudepost.deskUrl'
 const KEY_DESK_TOKEN = 'claudepost.deskToken'
@@ -32,6 +33,14 @@ let deskTokenCache: string | null | undefined
 
 export interface SetDeskUrlResult {
   ok: boolean
+  /** A sentence fit to show in the Settings screen as-is. Absent when ok. */
+  error?: string
+}
+
+export interface ValidateDeskUrlResult {
+  ok: boolean
+  /** The normalized address, present only when ok. */
+  value?: string
   /** A sentence fit to show in the Settings screen as-is. Absent when ok. */
   error?: string
 }
@@ -103,8 +112,14 @@ export async function getDeskUrl(): Promise<string | null> {
   return deskUrlCache ?? null
 }
 
-/** Validate, apply the ATS rule, and persist. Invalid/refused input leaves storage untouched. */
-export async function setDeskUrl(input: string): Promise<SetDeskUrlResult> {
+/**
+ * Validate, normalize and apply the ATS rule, WITHOUT touching storage.
+ *
+ * `setDeskUrl` is this plus a write; Settings' "Test the connection" is this plus a request —
+ * and must be able to check an address the owner has typed but not yet saved, without persisting
+ * anything on their behalf just because they tapped Test.
+ */
+export function validateDeskUrl(input: string): ValidateDeskUrlResult {
   const raw = (input ?? '').trim()
 
   if (hasEmbeddedCredentials(raw)) {
@@ -121,9 +136,17 @@ export async function setDeskUrl(input: string): Promise<SetDeskUrlResult> {
     return { ok: false, error: ATS_SENTENCE }
   }
 
-  deskUrlCache = norm.value
+  return { ok: true, value: norm.value }
+}
+
+/** Validate, apply the ATS rule, and persist. Invalid/refused input leaves storage untouched. */
+export async function setDeskUrl(input: string): Promise<SetDeskUrlResult> {
+  const result = validateDeskUrl(input)
+  if (!result.ok) return { ok: false, error: result.error }
+
+  deskUrlCache = result.value!
   try {
-    await AsyncStorage.setItem(KEY_DESK_URL, norm.value)
+    await AsyncStorage.setItem(KEY_DESK_URL, result.value!)
   } catch {
     // best-effort, matches store.ts's setDeviceBaseUrl
   }
@@ -168,6 +191,25 @@ export async function clearDeskToken(): Promise<void> {
   } catch {
     // best-effort
   }
+}
+
+/**
+ * Whether a token is stored, without exposing it. Settings shows this rather than the secret
+ * itself, so the token field can say "saved" without ever holding the value in render state.
+ */
+export async function hasDeskToken(): Promise<boolean> {
+  return (await getDeskToken()) !== null
+}
+
+/**
+ * A quietly affirmative line for a successful "Test the connection" in Settings — the desk's
+ * current edition, when it has one, because that is the one fact that proves the address and
+ * token actually reach a working desk rather than just a server that answers 200.
+ */
+export function deskTestResultLine(state: Pick<DeskState, 'current'>): string {
+  return state.current === null
+    ? 'Connected — nothing published yet.'
+    : `Connected — current edition ${state.current.slice(0, 8)}.`
 }
 
 /** What the desk client (src/lib/queries.ts) reads once to build its client. */

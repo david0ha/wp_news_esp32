@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,228 +9,319 @@ import {
   View,
 } from 'react-native'
 import { useRouter } from 'expo-router'
+import Constants from 'expo-constants'
 import { Screen } from '../../components/Screen'
 import { BackButton } from '../../components/BackButton'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { InfoRow } from '../../components/InfoRow'
+import { Standing } from '../../components/Standing'
 import { useDevice } from '../../lib/device'
-import { Esp32Error, type DeviceInfo, type DeviceState } from '../../lib/esp32'
-import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
+import { invalidateDeskSettings, useDeviceState } from '../../lib/queries'
+import { Esp32Error, humanError } from '../../lib/esp32'
+import { createDeskClient, DeskError, deskHumanError } from '../../lib/desk'
+import {
+  clearDeskToken,
+  deskTestResultLine,
+  getDeskToken,
+  getDeskUrl,
+  hasDeskToken,
+  setDeskToken,
+  setDeskUrl,
+  validateDeskUrl,
+} from '../../lib/settings'
+import { DEFAULT_HOST, discoverDevice } from '../../lib/discovery'
 import { clearDeviceBaseUrl, getDeviceBaseUrl } from '../../lib/store'
 import { ONBOARDING_ROUTES } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
-import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
-import { colors, layout, radius, space } from '../../theme/legacy'
+import { PAGE_LABELS, fetchResultLabel, fetchResultMessage } from '../../lib/format'
+import { colors, radius, spacing, typography } from '../../theme/index'
 
+/**
+ * Settings — the desk, the board and the app, in that order (plan Design > Wireframes: what an
+ * OWNER configures once and rarely returns to). All chrome, same as Desk: nothing here is a sheet
+ * of paper, it is the app admitting what it is connected to.
+ */
 export default function Settings() {
   const router = useRouter()
-  const { client, baseUrl, setBaseUrl } = useDevice()
-
-  const [info, setInfo] = useState<DeviceInfo | null>(null)
-  const [infoError, setInfoError] = useState(false)
-  const [host, setHost] = useState('')
-  const [hostError, setHostError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
-
-  // The board's own view of its source — the URL it is actually using and how the last poll went.
-  // Unlike a write-only secret, the URL is plain text the board echoes back, so the editor below
-  // can be prefilled with it and the user can see what they are changing.
-  const [source, setSource] = useState<DeviceState['source'] | null>(null)
-
-  // Reconnect ("find board") UI state.
-  const [reconnecting, setReconnecting] = useState(false)
-  const [reconnectMsg, setReconnectMsg] = useState<string | null>(null)
-
-  // Pre-fill the host field with the current base URL (sans scheme, for friendlier editing).
-  useEffect(() => {
-    if (baseUrl) setHost(baseUrl.replace(/^https?:\/\//, ''))
-  }, [baseUrl])
-
-  const loadInfo = useCallback(async () => {
-    if (!client) return
-    setInfoError(false)
-    try {
-      setInfo(await client.getInfo())
-    } catch {
-      setInfoError(true)
-    }
-    // Best-effort: also pull the configured source so the editor below reflects the board.
-    try {
-      setSource((await client.getState()).source)
-    } catch {
-      // leave the last-known value; the section just shows "unknown" until a state read succeeds
-    }
-  }, [client])
-
-  useEffect(() => {
-    loadInfo()
-  }, [loadInfo])
-
-  // Re-probe the LAN for the board (its reported IP, the saved address, the mDNS name) and persist
-  // whichever answers. Used after the user rejoins their home Wi-Fi or the board's lease changes.
-  const reconnect = useCallback(async () => {
-    setReconnecting(true)
-    setReconnectMsg(null)
-    try {
-      const savedUrl = await getDeviceBaseUrl()
-      const found = await discoverDevice([info?.ip, savedUrl, `http://${DEFAULT_HOST}`])
-      if (found) {
-        await setBaseUrl(found)
-        setReconnectMsg(`Found your board at ${found.replace(/^https?:\/\//, '')}.`)
-        loadInfo()
-      } else {
-        setReconnectMsg('Couldn’t find the board. Make sure it’s powered on and on this Wi-Fi.')
-      }
-    } finally {
-      setReconnecting(false)
-    }
-  }, [info?.ip, setBaseUrl, loadInfo])
-
-  const applyHost = async () => {
-    setSaved(false)
-    const norm = normalizeBaseUrl(host)
-    if (!norm.ok) {
-      setHostError('That doesn’t look like a valid IP address or hostname.')
-      return
-    }
-    setHostError(null)
-    const ok = await setBaseUrl(host)
-    if (ok) {
-      setSaved(true)
-      loadInfo()
-    }
-  }
-
-  const reonboard = async () => {
-    // Drop the saved board, then walk the pairing wizard. A push, not a replace: the wizard now
-    // lives under Settings rather than in front of the app, so backing out of it has to land
-    // here again — there is no launch gate left to fall back to.
-    await clearDeviceBaseUrl()
-    router.push(ONBOARDING_ROUTES['turn-on'])
-  }
-
   return (
     <Screen>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.titleRow}>
           <BackButton onPress={() => router.back()} />
-          <Text style={styles.title}>Settings</Text>
+          <Text style={[typography.uiStrong, styles.title]}>Settings</Text>
           <View style={styles.backSpacer} />
         </View>
 
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-          {/* Board identity */}
-          <Section title="Board">
-            <Card style={styles.infoCard}>
-              {infoError ? (
-                <Pressable onPress={loadInfo} accessibilityRole="button" style={styles.infoRetry}>
-                  <Text style={styles.infoRetryText}>Couldn’t reach the board. Tap to retry.</Text>
-                </Pressable>
-              ) : (
-                <>
-                  <InfoRow label="Model" value={info?.model || '—'} />
-                  <InfoRow label="Firmware" value={info?.fw || '—'} />
-                  <InfoRow label="Device ID" value={info?.deviceId || '—'} />
-                  <InfoRow label="IP" value={info?.ip || baseUrl?.replace(/^https?:\/\//, '') || '—'} last />
-                </>
-              )}
-            </Card>
-          </Section>
-
-          {/* The news snapshot URL — the one setting that decides what the board shows. */}
-          <Section title="News source">
-            <Text style={styles.help}>
-              The address the board fetches its snapshot from. Clear it and save to put the board
-              back on its built-in demo data.
-            </Text>
-            {source ? (
-              <Card style={styles.infoCard}>
-                <InfoRow label="Last poll" value={fetchResultLabel(source.lastResult)} />
-                <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
-                <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
-              </Card>
-            ) : null}
-            {source && source.lastResult !== 'ok' ? (
-              <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
-            ) : null}
-            <NewsUrlEditor
-              // Remount when the board reports a different URL, so the field picks up the new
-              // value instead of holding a draft the board has already moved past.
-              key={source?.url ?? ''}
-              initial={source?.url ?? ''}
-              onSave={async (next) => {
-                if (!client) return 'Not connected to the board.'
-                try {
-                  await client.setNewsUrl(next)
-                } catch (e) {
-                  if (e instanceof Esp32Error && e.code === 'news_url_invalid') {
-                    return 'The board wouldn’t accept that address.'
-                  }
-                  return 'Couldn’t update. Please try again.'
-                }
-                // Re-read so the rows above reflect the change. The board polls the new URL
-                // immediately, but the result lands a moment later — the next poll of this screen
-                // (or a pull-to-refresh on the dashboard) will show it.
-                try {
-                  setSource((await client.getState()).source)
-                } catch {
-                  // the write succeeded; the value refreshes on the next load
-                }
-                return null
-              }}
-            />
-          </Section>
-
-          {/* Manual host / IP override */}
-          <Section title="Connection">
-            <Text style={styles.help}>
-              The app finds your board at {DEFAULT_HOST}. If that doesn’t work on your network,
-              enter its IP address or hostname here.
-            </Text>
-            <View style={styles.hostRow}>
-              <TextInput
-                value={host}
-                onChangeText={(t) => {
-                  setHost(t)
-                  setHostError(null)
-                  setSaved(false)
-                }}
-                placeholder={`192.168.0.42 or ${DEFAULT_HOST}`}
-                placeholderTextColor={colors.textFaint}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                style={styles.hostInput}
-                onSubmitEditing={applyHost}
-              />
-            </View>
-            {hostError ? <Text style={styles.error}>{hostError}</Text> : null}
-            {saved ? <Text style={styles.saved}>Saved.</Text> : null}
-            <Button label="Use this address" variant="secondary" onPress={applyHost} />
-
-            <Text style={styles.help}>
-              Rejoined your home Wi-Fi? Find the board automatically on this network.
-            </Text>
-            {reconnectMsg ? <Text style={styles.saved}>{reconnectMsg}</Text> : null}
-            <Button label="Find board" variant="secondary" loading={reconnecting} onPress={reconnect} />
-          </Section>
-
-          {/* Pair a board — the wizard, now a push from here */}
-          <Section title="Setup">
-            <Button label="Set up a different board" variant="ghost" onPress={reonboard} />
-          </Section>
+          <DeskSection />
+          <BoardSection />
+          <AboutSection />
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+// ---------------------------------------------------------------------------
+// DESK — the desk's address and operator token, plus a live test of both.
+// ---------------------------------------------------------------------------
+
+type TestState =
+  | { kind: 'idle' }
+  | { kind: 'testing' }
+  | { kind: 'ok'; message: string }
+  | { kind: 'error'; message: string }
+
+function DeskSection() {
+  const [urlLoaded, setUrlLoaded] = useState(false)
+  const [urlDraft, setUrlDraft] = useState('')
+  const [urlError, setUrlError] = useState<string | null>(null)
+  const [urlSaved, setUrlSaved] = useState(false)
+  const [urlSaving, setUrlSaving] = useState(false)
+
+  const [tokenDraft, setTokenDraft] = useState('')
+  const [hasToken, setHasToken] = useState(false)
+  const [tokenSaving, setTokenSaving] = useState(false)
+  const [tokenResult, setTokenResult] = useState<'saved' | 'cleared' | null>(null)
+
+  const [test, setTest] = useState<TestState>({ kind: 'idle' })
+
+  // Prefill the address (plain text, echoed back by the desk client itself) — never the token,
+  // which is SecureStore's alone. `hasDeskToken()` only reports whether one exists.
+  useEffect(() => {
+    ;(async () => {
+      const [url, has] = await Promise.all([getDeskUrl(), hasDeskToken()])
+      setUrlDraft(url ?? '')
+      setHasToken(has)
+      setUrlLoaded(true)
+    })()
+  }, [])
+
+  const saveUrl = async () => {
+    setUrlSaving(true)
+    setUrlSaved(false)
+    setUrlError(null)
+    const result = await setDeskUrl(urlDraft)
+    setUrlSaving(false)
+    if (!result.ok) {
+      setUrlError(result.error ?? 'That address didn’t work.')
+      return
+    }
+    setUrlSaved(true)
+    await invalidateDeskSettings()
+  }
+
+  // An empty field clears the token — settings.ts's own rule (`setDeskToken('')` calls
+  // `clearDeskToken()`), and the button's label says so before it happens rather than after.
+  const tokenWillClear = tokenDraft.trim() === '' && hasToken
+  const tokenActionable = tokenDraft.trim() !== '' || hasToken
+
+  const saveToken = async () => {
+    setTokenSaving(true)
+    setTokenResult(null)
+    const willClear = tokenDraft.trim() === ''
+    await setDeskToken(tokenDraft)
+    setHasToken(!willClear)
+    setTokenDraft('')
+    setTokenSaving(false)
+    setTokenResult(willClear ? 'cleared' : 'saved')
+    await invalidateDeskSettings()
+  }
+
+  // Against whatever is TYPED right now, not what's saved — an untyped token field falls back to
+  // the saved one (fetched fresh, never held in render state) so a first "is this still working"
+  // tap tests the real configuration rather than nothing at all.
+  const testConnection = async () => {
+    setTest({ kind: 'testing' })
+    const url = validateDeskUrl(urlDraft)
+    if (!url.ok || !url.value) {
+      setTest({ kind: 'error', message: url.error ?? 'That doesn’t look like a valid address.' })
+      return
+    }
+    const token = tokenDraft.trim() !== '' ? tokenDraft.trim() : ((await getDeskToken()) ?? '')
+    try {
+      const client = createDeskClient({ baseUrl: url.value, token })
+      const state = await client.getState()
+      setTest({ kind: 'ok', message: deskTestResultLine(state) })
+    } catch (e) {
+      setTest({
+        kind: 'error',
+        message: e instanceof DeskError ? deskHumanError(e) : 'Couldn’t reach the desk. Check the address.',
+      })
+    }
+  }
+
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {children}
+      <Standing label="DESK" tone="chrome" />
+
+      <View style={styles.field}>
+        <Text style={styles.label}>Address</Text>
+        <TextInput
+          value={urlDraft}
+          onChangeText={(t) => {
+            setUrlDraft(t)
+            setUrlSaved(false)
+            setUrlError(null)
+            setTest({ kind: 'idle' })
+          }}
+          placeholder="https://claudepost.example"
+          placeholderTextColor={colors.deskFaint}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          style={styles.input}
+          onSubmitEditing={saveUrl}
+        />
+        {urlError ? <Text style={styles.error}>{urlError}</Text> : null}
+        {urlSaved ? <Text style={styles.saved}>Saved.</Text> : null}
+        <Button
+          label="Save address"
+          variant="secondary"
+          disabled={!urlLoaded || urlDraft.trim() === ''}
+          loading={urlSaving}
+          onPress={saveUrl}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>Operator token</Text>
+        <Text style={styles.help}>
+          Reads and changes everything on the desk. Stored on this device only — this field never
+          shows a token that’s already saved.
+        </Text>
+        <TextInput
+          value={tokenDraft}
+          onChangeText={(t) => {
+            setTokenDraft(t)
+            setTokenResult(null)
+          }}
+          placeholder={hasToken ? '•••••••• saved — type to replace it' : 'paste the operator token'}
+          placeholderTextColor={colors.deskFaint}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={styles.input}
+          onSubmitEditing={saveToken}
+        />
+        {tokenResult === 'saved' ? <Text style={styles.saved}>Saved.</Text> : null}
+        {tokenResult === 'cleared' ? <Text style={styles.saved}>Cleared.</Text> : null}
+        <Button
+          label={tokenWillClear ? 'Clear token' : 'Save token'}
+          variant="secondary"
+          disabled={!tokenActionable}
+          loading={tokenSaving}
+          onPress={saveToken}
+        />
+      </View>
+
+      <Button
+        label="Test the connection"
+        variant="secondary"
+        loading={test.kind === 'testing'}
+        onPress={testConnection}
+      />
+      {test.kind === 'ok' ? <Text style={styles.saved}>{test.message}</Text> : null}
+      {test.kind === 'error' ? <Text style={styles.error}>{test.message}</Text> : null}
+    </View>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// BOARD — identity, pairing, discovery, and the snapshot source it fetches.
+// ---------------------------------------------------------------------------
+
+function BoardSection() {
+  const router = useRouter()
+  const { client, baseUrl, hasDevice, setBaseUrl } = useDevice()
+  const deviceState = useDeviceState(hasDevice)
+  const state = deviceState.data
+
+  const [reconnecting, setReconnecting] = useState(false)
+  const [reconnectMsg, setReconnectMsg] = useState<string | null>(null)
+
+  const findBoard = useCallback(async () => {
+    setReconnecting(true)
+    setReconnectMsg(null)
+    try {
+      const saved = await getDeviceBaseUrl()
+      const found = await discoverDevice([state?.ip, saved, baseUrl, `http://${DEFAULT_HOST}`])
+      if (found) {
+        await setBaseUrl(found)
+        setReconnectMsg(`Found your board at ${found.replace(/^https?:\/\//, '')}.`)
+        deviceState.refetch()
+      } else {
+        setReconnectMsg('Couldn’t find the board. Make sure it’s powered on and on this Wi-Fi.')
+      }
+    } finally {
+      setReconnecting(false)
+    }
+  }, [state?.ip, baseUrl, setBaseUrl, deviceState])
+
+  const pairBoard = async () => {
+    // Drop the saved board first: pairing a NEW one that then fails to join must not leave this
+    // screen pointed at whichever board used to answer here.
+    await clearDeviceBaseUrl()
+    router.push(ONBOARDING_ROUTES['turn-on'])
+  }
+
+  return (
+    <View style={styles.section}>
+      <Standing label="BOARD" tone="chrome" />
+
+      {!hasDevice ? (
+        <Text style={styles.help}>No board paired yet.</Text>
+      ) : state ? (
+        <Card style={styles.rows}>
+          <InfoRow label="Model" value={state.model || '—'} />
+          <InfoRow label="On the panel" value={state.pageTitle || PAGE_LABELS[state.page] || '—'} />
+          <InfoRow label="Firmware" value={state.fw || '—'} />
+          <InfoRow label="Device ID" value={state.deviceId || '—'} />
+          <InfoRow label="IP" value={state.ip || baseUrl?.replace(/^https?:\/\//, '') || '—'} last />
+        </Card>
+      ) : deviceState.isError ? (
+        <Text style={styles.error}>
+          {deviceState.error instanceof Esp32Error ? humanError(deviceState.error) : 'Couldn’t reach the board.'}
+        </Text>
+      ) : (
+        <Text style={styles.help}>Reading the board…</Text>
+      )}
+
+      <Button label="Pair a board" variant="secondary" onPress={pairBoard} />
+
+      {reconnectMsg ? <Text style={styles.saved}>{reconnectMsg}</Text> : null}
+      <Button label="Find board" variant="secondary" loading={reconnecting} onPress={findBoard} />
+
+      <Text style={styles.help}>
+        The address the board fetches its news from. Clear it and save to put the board back on
+        its built-in demo data.
+      </Text>
+      {state && state.source.lastResult !== 'ok' ? (
+        <Text style={styles.help}>{fetchResultMessage(state.source.lastResult)}</Text>
+      ) : null}
+      {state ? (
+        <Text style={styles.help}>Last poll: {fetchResultLabel(state.source.lastResult)}.</Text>
+      ) : null}
+      <NewsUrlEditor
+        // Remount when the board reports a different URL, so the field picks up the new value
+        // instead of holding a draft the board has already moved past.
+        key={state?.source.url ?? ''}
+        initial={state?.source.url ?? ''}
+        onSave={async (next) => {
+          if (!client) return 'Not connected to the board.'
+          try {
+            await client.setNewsUrl(next)
+          } catch (e) {
+            if (e instanceof Esp32Error && e.code === 'news_url_invalid') {
+              return 'The board wouldn’t accept that address.'
+            }
+            return 'Couldn’t update. Please try again.'
+          }
+          deviceState.refetch()
+          return null
+        }}
+      />
     </View>
   )
 }
@@ -240,6 +330,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * The snapshot-URL field. Prefilled with what the board reports, validated locally against the
  * firmware's own rule before any request goes out, and explicit about the empty case: clearing the
  * field and saving is a real, supported action (back to the demo snapshot), not a mistake.
+ *
+ * Moved verbatim from the pre-redesign screen — only the container styling below is new.
  *
  * `onSave` returns null on success or a sentence to show on failure.
  */
@@ -272,23 +364,21 @@ function NewsUrlEditor({
 
   return (
     <View style={styles.field}>
-      <View style={styles.hostRow}>
-        <TextInput
-          value={draft}
-          onChangeText={(t) => {
-            setDraft(t)
-            setDone(false)
-            setFailure(null)
-          }}
-          placeholder="http://mymac.local:8123/news.json"
-          placeholderTextColor={colors.textFaint}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          style={styles.hostInput}
-          onSubmitEditing={save}
-        />
-      </View>
+      <TextInput
+        value={draft}
+        onChangeText={(t) => {
+          setDraft(t)
+          setDone(false)
+          setFailure(null)
+        }}
+        placeholder="http://mymac.local:8123/news.json"
+        placeholderTextColor={colors.deskFaint}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        style={styles.input}
+        onSubmitEditing={save}
+      />
       {localError ? <Text style={styles.error}>{localError}</Text> : null}
       {failure ? <Text style={styles.error}>{failure}</Text> : null}
       {done ? (
@@ -307,78 +397,84 @@ function NewsUrlEditor({
   )
 }
 
+// ---------------------------------------------------------------------------
+// ABOUT — the app itself.
+// ---------------------------------------------------------------------------
+
+function AboutSection() {
+  const version = Constants.expoConfig?.version ?? '—'
+  return (
+    <View style={styles.section}>
+      <Standing label="ABOUT" tone="chrome" />
+      <Card style={styles.rows}>
+        <InfoRow label="App version" value={version} last />
+      </Card>
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
     height: 56,
   },
   title: {
     fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
+    color: colors.deskText,
   },
   backSpacer: {
     width: 42,
   },
   body: {
-    paddingHorizontal: layout.gutter,
-    paddingTop: 12,
-    paddingBottom: 32,
-    gap: space.xl,
+    paddingHorizontal: spacing[16],
+    paddingTop: spacing[12],
+    paddingBottom: spacing[32],
+    gap: spacing[32],
   },
   section: {
-    gap: 10,
+    gap: spacing[12],
   },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textDim,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  infoCard: {
+  rows: {
     padding: 0,
+    overflow: 'hidden',
   },
-  infoRetry: {
-    padding: 16,
-  },
-  infoRetryText: {
+  label: {
+    ...typography.uiStrong,
     fontSize: 14,
-    color: colors.accent,
-    textAlign: 'center',
+    color: colors.deskText,
   },
   help: {
+    ...typography.ui,
     fontSize: 13,
-    color: colors.textFaint,
+    color: colors.deskFaint,
     lineHeight: 18,
   },
   field: {
-    gap: 8,
+    gap: spacing[8],
   },
-  hostRow: {
-    flexDirection: 'row',
-  },
-  hostInput: {
-    flex: 1,
+  input: {
     height: 48,
     borderRadius: radius.md,
+    borderCurve: 'continuous',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    borderColor: colors.deskFaint,
+    backgroundColor: colors.deskRaised,
     paddingHorizontal: 14,
-    color: colors.text,
+    color: colors.deskText,
     fontSize: 16,
   },
   error: {
+    ...typography.ui,
     fontSize: 13,
-    color: colors.down,
+    color: colors.signal.chrome.down,
   },
   saved: {
+    ...typography.ui,
     fontSize: 13,
-    color: colors.up,
+    color: colors.signal.chrome.up,
   },
 })

@@ -18,7 +18,7 @@ import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES } from '../../../onboarding/flow'
 import { esp32, Esp32Error } from '../../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../../lib/newsurl'
-import { colors, layout, radius } from '../../../theme/legacy'
+import { colors, radius, spacing } from '../../../theme/index'
 
 // Map a provisioning failure to a short, user-facing reason.
 function failureMessage(e: unknown): string {
@@ -139,7 +139,7 @@ export default function Password() {
                   value={manualSsid}
                   onChangeText={setManualSsid}
                   placeholder="My Home Wi-Fi"
-                  placeholderTextColor={colors.textFaint}
+                  placeholderTextColor={colors.deskFaint}
                   autoCapitalize="none"
                   autoCorrect={false}
                   editable={!pending}
@@ -158,7 +158,7 @@ export default function Password() {
                 value={password}
                 onChangeText={setPassword}
                 placeholder={selectedSecured === false ? '(open network — none needed)' : 'password'}
-                placeholderTextColor={colors.textFaint}
+                placeholderTextColor={colors.deskFaint}
                 secureTextEntry={!reveal}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -166,7 +166,7 @@ export default function Password() {
                 style={styles.input}
               />
               <Pressable accessibilityLabel="Toggle password visibility" onPress={() => setReveal((r) => !r)} hitSlop={8}>
-                <Ionicons name={reveal ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.textDim} />
+                <Ionicons name={reveal ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.deskDim} />
               </Pressable>
             </View>
           </View>
@@ -181,7 +181,7 @@ export default function Password() {
 
           {pending ? (
             <Text style={styles.status}>
-              <ActivityIndicator color={colors.accent} /> Connecting to {ssid}… this can take up to a minute.
+              <ActivityIndicator color={colors.signal.chrome.tint} /> Connecting to {ssid}… this can take up to a minute.
             </Text>
           ) : error ? (
             <Text style={styles.error}>{error}</Text>
@@ -201,7 +201,7 @@ export default function Password() {
             ]}
           >
             {pending ? (
-              <ActivityIndicator color={colors.ink} />
+              <ActivityIndicator color={colors.desk} />
             ) : (
               <Text style={[styles.ctaLabel, !enabled && styles.ctaLabelDisabled]}>JOIN</Text>
             )}
@@ -218,25 +218,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
     height: 56,
   },
   title: {
     fontSize: 18,
     fontWeight: '700',
-    color: colors.text,
+    color: colors.deskText,
   },
   backSpacer: {
     width: 42,
   },
   body: {
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
     paddingTop: 16,
     gap: 20,
   },
   kicker: {
     fontSize: 14,
-    color: colors.textDim,
+    color: colors.deskDim,
   },
   field: {
     gap: 8,
@@ -244,14 +244,15 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.text,
+    color: colors.deskText,
   },
   inputRow: {
     minHeight: 48,
     borderRadius: radius.md,
+    borderCurve: 'continuous',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    borderColor: colors.deskFaint,
+    backgroundColor: colors.deskRaised,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -259,34 +260,35 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    color: colors.text,
+    color: colors.deskText,
     fontSize: 16,
     paddingVertical: 12,
   },
   hint: {
     fontSize: 12,
-    color: colors.textFaint,
+    color: colors.deskFaint,
     lineHeight: 16,
   },
   status: {
     fontSize: 13,
-    color: colors.textDim,
+    color: colors.deskDim,
     lineHeight: 18,
   },
   error: {
     fontSize: 13,
-    color: colors.down,
+    color: colors.signal.chrome.down,
     lineHeight: 18,
   },
   ctaWrap: {
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
     paddingBottom: 8,
     paddingTop: 8,
   },
   cta: {
     height: 52,
     borderRadius: radius.md,
-    backgroundColor: colors.accent,
+    borderCurve: 'continuous',
+    backgroundColor: colors.signal.chrome.tint,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -299,10 +301,10 @@ const styles = StyleSheet.create({
   ctaLabel: {
     fontSize: 16,
     fontWeight: '700',
-    color: colors.ink,
+    color: colors.desk,
     letterSpacing: 0.5,
   },
   ctaLabelDisabled: {
-    color: colors.ink,
+    color: colors.desk,
   },
 })

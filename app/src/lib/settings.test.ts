@@ -4,11 +4,14 @@ import * as SecureStore from 'expo-secure-store'
 import {
   __resetSettingsCacheForTests,
   clearDeskToken,
+  deskTestResultLine,
   getDeskSettings,
   getDeskToken,
   getDeskUrl,
+  hasDeskToken,
   setDeskToken,
   setDeskUrl,
+  validateDeskUrl,
 } from './settings'
 
 // Mirrors settings.ts's own private keys — not exported, since a test that hardcodes them the
@@ -105,6 +108,27 @@ describe('desk URL', () => {
   })
 })
 
+describe('validateDeskUrl', () => {
+  it('normalizes and returns the value WITHOUT persisting it', async () => {
+    const result = validateDeskUrl('https://Desk.Example.com/')
+    expect(result).toEqual({ ok: true, value: 'https://desk.example.com' })
+    expect(await getDeskUrl()).toBeNull()
+  })
+
+  it('applies the ATS rule, same as setDeskUrl', () => {
+    const result = validateDeskUrl('http://desk.example.com')
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/https:\/\//)
+  })
+
+  it('accepts plain http:// on the LAN, same as setDeskUrl', () => {
+    expect(validateDeskUrl('http://192.168.1.10')).toEqual({
+      ok: true,
+      value: 'http://192.168.1.10',
+    })
+  })
+})
+
 describe('desk token', () => {
   it('returns null when nothing is stored', async () => {
     expect(await getDeskToken()).toBeNull()
@@ -141,6 +165,37 @@ describe('desk token', () => {
       new Error('locked'),
     )
     await expect(getDeskToken()).resolves.toBeNull()
+  })
+})
+
+describe('hasDeskToken', () => {
+  it('is false when nothing is stored', async () => {
+    expect(await hasDeskToken()).toBe(false)
+  })
+
+  it('is true once a token is saved, without exposing it', async () => {
+    await setDeskToken('secret-token')
+    __resetSettingsCacheForTests()
+    expect(await hasDeskToken()).toBe(true)
+  })
+
+  it('is false again once the token is cleared', async () => {
+    await setDeskToken('secret-token')
+    await clearDeskToken()
+    __resetSettingsCacheForTests()
+    expect(await hasDeskToken()).toBe(false)
+  })
+})
+
+describe('deskTestResultLine', () => {
+  it('names the current edition, shortened to eight characters', () => {
+    expect(deskTestResultLine({ current: 'a1b2c3d4e5f6' })).toBe(
+      'Connected — current edition a1b2c3d4.',
+    )
+  })
+
+  it('says nothing published yet when there is none', () => {
+    expect(deskTestResultLine({ current: null })).toBe('Connected — nothing published yet.')
   })
 })
 

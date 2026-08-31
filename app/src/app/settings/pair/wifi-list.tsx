@@ -7,7 +7,7 @@ import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../../onboarding/flow'
 import { esp32, type ScanNetwork } from '../../../lib/esp32'
-import { colors, radius } from '../../../theme/legacy'
+import { colors, radius } from '../../../theme/index'
 
 // "Other…" sentinel — lets the user provision a hidden/unlisted SSID typed on the password step.
 const OTHER = '__other__'
@@ -70,14 +70,14 @@ export default function WifiList() {
       <View style={styles.sectionRow}>
         <Text style={styles.sectionLabel}>NETWORKS</Text>
         <Pressable accessibilityLabel="Rescan networks" onPress={scan} hitSlop={8} disabled={loading}>
-          <Ionicons name="refresh" size={18} color={loading ? colors.textFaint : colors.text} />
+          <Ionicons name="refresh" size={18} color={loading ? colors.deskFaint : colors.deskText} />
         </Pressable>
       </View>
 
       <ScrollView style={styles.card} contentContainerStyle={styles.cardContent} showsVerticalScrollIndicator={false}>
         {loading ? (
           <View style={styles.state}>
-            <ActivityIndicator color={colors.accent} />
+            <ActivityIndicator color={colors.signal.chrome.tint} />
             <Text style={styles.stateText}>Scanning…</Text>
           </View>
         ) : error ? (
@@ -105,9 +105,9 @@ export default function WifiList() {
                     {net.ssid}
                   </Text>
                   <View style={styles.icons}>
-                    {selected ? <Ionicons name="checkmark" size={20} color={colors.accent} /> : null}
-                    {net.secured ? <Ionicons name="lock-closed" size={16} color={colors.textDim} /> : null}
-                    <Ionicons name="wifi" size={18} color={colors.text} />
+                    {selected ? <Ionicons name="checkmark" size={20} color={colors.signal.chrome.tint} /> : null}
+                    {net.secured ? <Ionicons name="lock-closed" size={16} color={colors.deskDim} /> : null}
+                    <Ionicons name="wifi" size={18} color={colors.deskText} />
                   </View>
                 </Pressable>
               )
@@ -127,7 +127,7 @@ export default function WifiList() {
               }}
             >
               <Text style={[styles.ssid, other && styles.ssidSelected]}>Other…</Text>
-              {other ? <Ionicons name="checkmark" size={20} color={colors.accent} /> : null}
+              {other ? <Ionicons name="checkmark" size={20} color={colors.signal.chrome.tint} /> : null}
             </Pressable>
           </>
         )}
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
   },
   caption: {
     fontSize: 14,
-    color: colors.textDim,
+    color: colors.deskDim,
     textAlign: 'center',
     lineHeight: 20,
   },
@@ -158,14 +158,15 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: colors.textDim,
+    color: colors.deskDim,
     letterSpacing: 1,
   },
   card: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.deskRaised,
     borderRadius: radius.lg,
+    borderCurve: 'continuous',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
+    borderColor: colors.deskFaint,
   },
   cardContent: {
     paddingHorizontal: 16,
@@ -177,14 +178,14 @@ const styles = StyleSheet.create({
   },
   stateText: {
     fontSize: 14,
-    color: colors.textDim,
+    color: colors.deskDim,
     textAlign: 'center',
     lineHeight: 20,
   },
   retry: {
     fontSize: 12,
     fontWeight: '600',
-    color: colors.accent,
+    color: colors.signal.chrome.tint,
     letterSpacing: 0.5,
   },
   row: {
@@ -195,15 +196,15 @@ const styles = StyleSheet.create({
   },
   rowBordered: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.deskFaint,
   },
   ssid: {
     fontSize: 16,
-    color: colors.text,
+    color: colors.deskText,
     flexShrink: 1,
   },
   ssidSelected: {
-    color: colors.accent,
+    color: colors.signal.chrome.tint,
     fontWeight: '600',
   },
   icons: {

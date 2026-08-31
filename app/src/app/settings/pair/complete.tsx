@@ -7,7 +7,7 @@ import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { useDevice } from '../../../lib/device'
 import { DEFAULT_BASE_URL } from '../../../lib/discovery'
-import { colors, layout } from '../../../theme/legacy'
+import { colors, spacing } from '../../../theme/index'
 
 export default function Complete() {
   const router = useRouter()
@@ -54,7 +54,7 @@ export default function Complete() {
 
 const styles = StyleSheet.create({
   screen: {
-    paddingHorizontal: layout.gutter,
+    paddingHorizontal: spacing[16],
     paddingBottom: 8,
   },
   center: {
@@ -66,17 +66,17 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 30,
     fontWeight: '700',
-    color: colors.text,
+    color: colors.deskText,
     letterSpacing: 0.3,
   },
   subtitle: {
     fontSize: 17,
-    color: colors.textDim,
+    color: colors.deskDim,
     textAlign: 'center',
   },
   guidance: {
     fontSize: 14,
-    color: colors.textFaint,
+    color: colors.deskFaint,
     textAlign: 'center',
     lineHeight: 20,
     maxWidth: 300,
