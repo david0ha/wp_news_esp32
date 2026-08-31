@@ -5,9 +5,10 @@ import { Button } from '../Button'
 import { Card } from '../Card'
 import { ScreenMessage } from '../ScreenMessage'
 import { Stamp } from '../Stamp'
-import { useAddDirective, useDeleteDirective, useDirectives } from '../../lib/queries'
+import { useAddDirective, useDeleteDirective, useDeskNow, useDirectives } from '../../lib/queries'
 import { DeskError, deskHumanError, type Directive } from '../../lib/desk'
 import { formatPrintedDate } from '../../lib/format'
+import { canRestoreDirective } from '../../lib/directives'
 import { colors, radius, spacing, typography } from '../../theme/index'
 
 /**
@@ -24,6 +25,8 @@ import { colors, radius, spacing, typography } from '../../theme/index'
  * the desk's row, so a mis-tapped ✕ means retyping a rule from memory. Rather than make this the one
  * screen with a confirm dialog, the removed rule is held here and offered back — scope and expiry
  * included, which `addDirective` can restore for both scopes. The id changes; the rule does not.
+ * The offer is withheld where re-filing would not actually put anything back: see
+ * `canRestoreDirective()`, whose whole subject is that every such case fails silently.
  *
  * WHAT THIS EDITOR CANNOT DO: file an `until` directive. The desk takes a scope of 'always' or
  * 'until', and 'until' needs an `expires_at` instant — a date the phone would have to collect
@@ -40,7 +43,12 @@ export function DirectiveList() {
   /** The last rule removed from this screen, kept only so it can be put back. */
   const [removed, setRemoved] = useState<Directive | null>(null)
 
+  const now = useDeskNow()
   const trimmed = rule.trim()
+  // Held rules whose undo would be a 200 that shows nothing are simply not offered — the guard is
+  // on the OFFER rather than on the press, so there is never a button that reports success and
+  // leaves the list unchanged.
+  const restorable = removed !== null && canRestoreDirective(removed, now)
 
   const onAdd = () => {
     if (trimmed === '') return
@@ -66,11 +74,12 @@ export function DirectiveList() {
   }
 
   const onUndo = () => {
-    if (removed === null) return
+    if (removed === null || !restorable) return
     add.mutate(
       // `expiresAt` only on an `until` scope: the desk refuses an `always` rule that carries one
       // and an `until` rule that does not, so the restored rule is spelled exactly as the removed
-      // one was rather than flattened to the default.
+      // one was rather than flattened to the default. `canRestoreDirective` has already ruled out
+      // the `until`-without-an-instant case, so this pair is exhaustive rather than a fallback.
       removed.scope === 'until' && removed.expires_at !== null
         ? { rule: removed.rule, scope: 'until', expiresAt: removed.expires_at }
         : { rule: removed.rule, scope: 'always' },
@@ -123,6 +132,13 @@ export function DirectiveList() {
           <Text style={[typography.ui, styles.undoText]} numberOfLines={2}>
             Removed “{removed.rule}”
           </Text>
+          {/* An expired rule is gone for good, and saying so is better than offering a button that
+              cannot work: the desk would take the rule back and never list it again. */}
+          {!restorable ? (
+            <Text style={styles.undoNote}>
+              That one had already run out, so there is nothing to put back.
+            </Text>
+          ) : (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Put back: ${removed.rule}`}
@@ -134,6 +150,7 @@ export function DirectiveList() {
           >
             <Text style={[typography.uiStrong, styles.undoActionText]}>Put it back</Text>
           </Pressable>
+          )}
         </View>
       ) : null}
 
@@ -274,6 +291,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.deskDim,
     lineHeight: 18,
+  },
+  undoNote: {
+    ...typography.ui,
+    fontSize: 12,
+    color: colors.deskFaint,
+    lineHeight: 17,
   },
   undoAction: {
     minHeight: 32,

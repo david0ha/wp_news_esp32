@@ -14,7 +14,7 @@ import { HoldCard } from '../../components/desk/HoldCard'
 import { QueueList } from '../../components/desk/QueueList'
 import { ScheduleCard } from '../../components/desk/ScheduleCard'
 import { StateStrip } from '../../components/desk/StateStrip'
-import { deskKeys, queryClient, useAudit, useDeskClient, useDeskState } from '../../lib/queries'
+import { deskKeys, queryClient, useAudit, useDeskClient, useDeskNow, useDeskState } from '../../lib/queries'
 import { DeskError, deskHumanError } from '../../lib/desk'
 import { auditEventLine, auditWhen } from '../../lib/audit'
 import { colors, spacing, typography } from '../../theme/index'
@@ -45,6 +45,7 @@ export default function Desk() {
   const client = useDeskClient()
   const state = useDeskState()
   const audit = useAudit(AUDIT_ROWS)
+  const now = useDeskNow()
 
   // The pull is tracked HERE rather than read off `state.isRefetching`, and that is not a style
   // choice: `useDeskState` carries a `refetchInterval` of fifteen seconds, so `isRefetching` is
@@ -127,7 +128,7 @@ export default function Desk() {
           </>
         )}
 
-        <HoldCard state={state.data} stateAt={state.dataUpdatedAt} />
+        <HoldCard state={state.data} />
 
         <View style={styles.section}>
           <Standing label="ORDER" tone="chrome" />
@@ -207,7 +208,7 @@ export default function Desk() {
                       read against `now`, and an age measured against a phone a minute fast would
                       report the newest row as being in the future. */}
                   <Text style={styles.recordWhen}>
-                    {auditWhen(entry.at, state.data?.now ?? entry.at)}
+                    {auditWhen(entry.at, now === 0 ? entry.at : now)}
                   </Text>
                 </View>
               ))

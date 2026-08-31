@@ -197,6 +197,25 @@ export function useDeskState() {
   })
 }
 
+/**
+ * The desk's clock, now — its own `now`, plus however long the snapshot carrying it has been sitting.
+ *
+ * Every instant on the Desk tab is read against the DESK's clock rather than the phone's, because
+ * they are the desk's own fields and the desk is what will act on them. But the snapshot carrying
+ * that clock can be arbitrarily stale: `useDeskState`'s fifteen-second poll is paused while the app
+ * is backgrounded (`focusManager`), so a phone reopened the next morning still holds yesterday's
+ * `now`. Adding the elapsed wall time never trusts the phone's ABSOLUTE clock — only its ability to
+ * measure an interval, which is the one thing a device with a wrong date still gets right.
+ *
+ * `0` until `/api/state` has landed, and that is a value callers must handle rather than a
+ * placeholder: `canRestoreDirective()` refuses to answer against it on purpose.
+ */
+export function useDeskNow(): number {
+  const { data, dataUpdatedAt } = useDeskState()
+  if (data === undefined) return 0
+  return data.now + Math.max(0, (Date.now() - dataUpdatedAt) / 1000)
+}
+
 /** `news.json`, the same bytes the board polls. Anonymous — needs no token, so no desk gate. */
 export function useNews() {
   const client = useDeskClient()

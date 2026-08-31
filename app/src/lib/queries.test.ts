@@ -1,5 +1,9 @@
 import { describe, it, expect } from '@jest/globals'
-import { partialMatchKey, type QueryKey } from '@tanstack/query-core'
+// From `@tanstack/react-query`, which re-exports it — NOT from `@tanstack/query-core`.
+// The core package is not a dependency of this app; importing it directly resolves only by
+// npm hoisting, and would break the day the tree is flattened differently or a package
+// manager that does not hoist is used.
+import { partialMatchKey, type QueryKey } from '@tanstack/react-query'
 import { deskInvalidates, deskKeys, deviceKeys } from './queries'
 
 // The key factory is the one thing in this file worth a test on its own: two calls that MEAN the

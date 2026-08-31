@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { Card } from '../Card'
 import { Stamp } from '../Stamp'
-import { useNews, useScheduleNext } from '../../lib/queries'
+import { useDeskNow, useNews, useScheduleNext } from '../../lib/queries'
 import { formatWhen } from '../../lib/format'
 import { transitionClock } from '../../lib/scheduleform'
 import type { DeskState, ScheduleEvent } from '../../lib/desk'
@@ -43,7 +43,7 @@ export function StateStrip({ state }: { state: DeskState | undefined }) {
   // published on Tuesday and a hold running until tomorrow would otherwise both print as a time
   // that reads as today — the second of those actively invites the reader to set another hold.
   // On the ordinary same-day path this is character-identical to the clock alone.
-  const now = state?.now ?? 0
+  const now = useDeskNow()
   const publishedAt = state?.lastPublishAt ? formatWhen(state.lastPublishAt, now) : ''
 
   return (

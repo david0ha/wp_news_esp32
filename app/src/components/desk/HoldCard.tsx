@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native'
 import * as Haptics from 'expo-haptics'
 import { Button } from '../Button'
-import { useHold, usePublish } from '../../lib/queries'
+import { useDeskNow, useHold, usePublish } from '../../lib/queries'
 import { DeskError, deskHumanError, type DeskState } from '../../lib/desk'
 import { formatWhen } from '../../lib/format'
 import { colors, spacing, typography } from '../../theme/index'
@@ -37,25 +37,13 @@ const HOLD_SECONDS = 86400
  * no button under it. These two sit on the desk surround for the same reason the ORDER buttons do:
  * a control needs a ground it is distinguishable from.
  */
-export function HoldCard({
-  state,
-  stateAt,
-}: {
-  state: DeskState | undefined
-  /** `Date.now()` in ms when `state` came back — react-query's `dataUpdatedAt`. */
-  stateAt: number
-}) {
+export function HoldCard({ state }: { state: DeskState | undefined }) {
   const publish = usePublish()
   const hold = useHold()
 
-  // The desk's clock is the only one that may decide any of this, but the SNAPSHOT of it can be
-  // arbitrarily old: `useDeskState`'s fifteen-second poll is paused while the app is backgrounded
-  // (focusManager), so a phone reopened the next morning still holds yesterday's `now`. Adding the
-  // wall-clock time elapsed since the snapshot landed keeps the two in step without ever trusting
-  // the phone's absolute clock — only its ability to measure an interval. `POST /api/hold` stores
-  // whatever instant it is given, past ones included, so an uncorrected figure would be a hold
-  // that expired before it was set.
-  const now = state === undefined ? 0 : state.now + Math.max(0, (Date.now() - stateAt) / 1000)
+  // `POST /api/hold` stores whatever instant it is given, past ones included, so this must be the
+  // desk's clock as it is NOW and not as the last snapshot found it — see `useDeskNow()`.
+  const now = useDeskNow()
   const staged = state?.staged ?? null
   const held = state?.hold ?? null
   const busy = publish.isPending || hold.isPending

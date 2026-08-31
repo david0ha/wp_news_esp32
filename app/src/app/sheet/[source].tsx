@@ -37,10 +37,19 @@ const SHEET_ASPECT = SCREEN_W / SCREEN_H
 export default function SheetViewer() {
   const router = useRouter()
   const reducedMotion = useReducedMotion()
-  // Zero inside a form sheet, which iOS already presents below the status bar — so this costs
-  // nothing on the normal path and saves the header from landing on the clock when the route is
-  // opened directly as the first screen (a deep link, or a cold start into it).
+  // THE INSET IS CONDITIONAL, and the earlier comment here had the fact backwards. It claimed the
+  // inset is "zero inside a form sheet"; it is not. The root `SafeAreaProvider` (app/_layout.tsx)
+  // hands every consumer the WINDOW's insets, so inside this sheet — which iOS has already
+  // presented below the status bar — `insets.top` still reports the device's full allowance: 62 pt
+  // on an iPhone 17 Pro, measured off two screenshots of the same sheet with and without it.
+  // Applied unconditionally that is a dead band above the stamp on every tap of a sheet of paper.
+  //
+  // It is still needed where the view really does start at the top of the screen: this route is
+  // reachable directly, and the FIRST screen of a stack does not get its `presentation: 'formSheet'`.
+  // `canGoBack()` distinguishes the two — nothing behind means nothing raised this — and is the same
+  // question `<Composer>` asks for the same reason.
   const insets = useSafeAreaInsets()
+  const raised = router.canGoBack()
   const params = useLocalSearchParams<{ source: string; eid?: string; page?: string }>()
 
   const wantsBoard = params.source === 'board'
@@ -117,7 +126,7 @@ export default function SheetViewer() {
 
   return (
     <View style={styles.root}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing[8] }]}>
+      <View style={[styles.header, { paddingTop: (raised ? 0 : insets.top) + spacing[8] }]}>
         <Stamp tone="chrome">
           {/* Names what is ACTUALLY up, and when nothing is up, what was asked for — a board route
               showing an error is not showing a proof, and must not say it is. The board's own
