@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, type ViewStyle } from 'react-native'
 import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, motion, radius, typography } from '../theme/index'
+import { colors, pressTransition, pressedScale, radius, typography } from '../theme/index'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
@@ -66,7 +66,7 @@ export function Button({
       <Animated.View
         style={[
           styles.base,
-          transition,
+          pressTransition,
           fill,
           isDisabled && styles.disabled,
           pressed && !reducedMotion && pressedScale,
@@ -83,16 +83,6 @@ export function Button({
   )
 }
 
-// Reanimated's CSS transition keys (`transitionProperty`/`transitionDuration`) aren't part of
-// RN's own `ViewStyle`, so they live outside `StyleSheet.create` — its generic constraint rejects
-// them as unknown properties even though `Animated.View`'s own style prop accepts them fine.
-const transition = {
-  transform: [{ scale: 1 }],
-  transitionProperty: 'transform' as const,
-  transitionDuration: `${motion.press}ms`,
-}
-const pressedScale = { transform: [{ scale: 0.97 }] }
-
 const styles = StyleSheet.create({
   base: {
     height: 52,
@@ -105,8 +95,15 @@ const styles = StyleSheet.create({
   primary: {
     backgroundColor: colors.signal.chrome.tint,
   },
+  // A hairline border, so `secondary` still reads as a button on a raised surface — `<Card>`'s own
+  // fill IS `deskRaised`, and a fill-only button the same colour as the card under it is a label.
+  // Every current call site sits on the desk ground rather than a card (`DirectiveList`'s own
+  // comment names this reason for choosing `primary` there instead), but the border is harmless on
+  // that ground too, and the fix has to be here rather than at each call site to hold everywhere.
   secondary: {
     backgroundColor: colors.deskRaised,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.deskFaint,
   },
   ghost: {
     backgroundColor: 'transparent',

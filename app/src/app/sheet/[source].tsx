@@ -78,6 +78,10 @@ export default function SheetViewer() {
     hasBoardImage: boardUri !== null,
     hasProof: proof.data !== undefined,
     proofLoading: proof.isLoading,
+    // `useSheet` stays disabled — and therefore `proof.isLoading` false — until `sheetName` is
+    // known, so the edition query's own loading state has to be carried separately (`glass.ts`'s
+    // own docstring on this field has the failure it closes).
+    editionLoading: edition.isLoading,
   })
   const showingBoard = shown === 'board'
   const fellBackToProof = wantsBoard && shown === 'proof'

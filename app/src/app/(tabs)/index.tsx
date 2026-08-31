@@ -58,9 +58,21 @@ export default function Today() {
   const sheetName = sheetForPage(edition.data?.sheets ?? [], pageIndex)
   const sheet = useSheet(currentEid ?? '', sheetName ?? '')
 
-  const onRefresh = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: deskKeys.state() })
-    queryClient.invalidateQueries({ queryKey: deskKeys.news() })
+  // The pull is tracked HERE rather than read off `deskState.isRefetching`/`news.isRefetching`, for
+  // the same reason `desk.tsx` tracks its own: `useDeskState` carries a `refetchInterval` of fifteen
+  // seconds, so `isRefetching` goes true for a moment four times a minute on its own — bound to the
+  // control, that is a spinner at the top of Today nobody pulled, every fifteen seconds, forever.
+  const [pulling, setPulling] = useState(false)
+  const onRefresh = useCallback(async () => {
+    setPulling(true)
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: deskKeys.state() }),
+        queryClient.invalidateQueries({ queryKey: deskKeys.news() }),
+      ])
+    } finally {
+      setPulling(false)
+    }
   }, [])
 
   if (client === null) {
@@ -94,8 +106,10 @@ export default function Today() {
         contentContainerStyle={styles.scroll}
         refreshControl={
           <RefreshControl
-            refreshing={deskState.isRefetching || news.isRefetching}
-            onRefresh={onRefresh}
+            refreshing={pulling}
+            onRefresh={() => {
+              void onRefresh()
+            }}
             tintColor={colors.signal.chrome.tint}
           />
         }

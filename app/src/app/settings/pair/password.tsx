@@ -12,13 +12,14 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { Screen } from '../../../components/Screen'
 import { BackButton } from '../../../components/BackButton'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES } from '../../../onboarding/flow'
 import { esp32, Esp32Error } from '../../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../../lib/newsurl'
-import { colors, radius, spacing } from '../../../theme/index'
+import { colors, pressTransition, pressedScale, radius, spacing } from '../../../theme/index'
 
 // Map a provisioning failure to a short, user-facing reason.
 function failureMessage(e: unknown): string {
@@ -54,6 +55,9 @@ export default function Password() {
   const [reveal, setReveal] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [revealPressed, setRevealPressed] = useState(false)
+  const [ctaPressed, setCtaPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
 
   // The provision + poll can run up to ~45s; if the user leaves, don't run setState or fire a
   // router.replace from an unmounted screen.
@@ -165,8 +169,20 @@ export default function Password() {
                 editable={!pending}
                 style={styles.input}
               />
-              <Pressable accessibilityLabel="Toggle password visibility" onPress={() => setReveal((r) => !r)} hitSlop={8}>
-                <Ionicons name={reveal ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.deskDim} />
+              <Pressable
+                accessibilityLabel="Toggle password visibility"
+                onPress={() => setReveal((r) => !r)}
+                onPressIn={() => setRevealPressed(true)}
+                onPressOut={() => setRevealPressed(false)}
+                // 22 pt glyph -> 44 pt target: the hitSlop makes up the rest rather than growing
+                // the icon itself.
+                hitSlop={11}
+              >
+                <Animated.View
+                  style={[pressTransition, revealPressed && !reducedMotion && pressedScale]}
+                >
+                  <Ionicons name={reveal ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.deskDim} />
+                </Animated.View>
               </Pressable>
             </View>
           </View>
@@ -194,17 +210,23 @@ export default function Password() {
             accessibilityState={{ disabled: !enabled, busy: pending }}
             onPress={join}
             disabled={!enabled}
-            style={({ pressed }) => [
-              styles.cta,
-              !enabled && styles.ctaDisabled,
-              pressed && enabled && styles.ctaPressed,
-            ]}
+            onPressIn={() => setCtaPressed(true)}
+            onPressOut={() => setCtaPressed(false)}
           >
-            {pending ? (
-              <ActivityIndicator color={colors.desk} />
-            ) : (
-              <Text style={[styles.ctaLabel, !enabled && styles.ctaLabelDisabled]}>JOIN</Text>
-            )}
+            <Animated.View
+              style={[
+                styles.cta,
+                pressTransition,
+                !enabled && styles.ctaDisabled,
+                ctaPressed && enabled && !reducedMotion && pressedScale,
+              ]}
+            >
+              {pending ? (
+                <ActivityIndicator color={colors.desk} />
+              ) : (
+                <Text style={[styles.ctaLabel, !enabled && styles.ctaLabelDisabled]}>JOIN</Text>
+              )}
+            </Animated.View>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -294,9 +316,6 @@ const styles = StyleSheet.create({
   },
   ctaDisabled: {
     opacity: 0.5,
-  },
-  ctaPressed: {
-    opacity: 0.8,
   },
   ctaLabel: {
     fontSize: 16,

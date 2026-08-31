@@ -4,6 +4,7 @@ import { Image } from 'expo-image'
 import { Ionicons } from '@expo/vector-icons'
 import * as Haptics from 'expo-haptics'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { EmptyState } from '../../components/EmptyState'
@@ -25,7 +26,7 @@ import { editionWhen, promoteResultLine } from '../../lib/editions'
 import { sheetForPage } from '../../lib/sheets'
 import { pageLabel } from '../../lib/format'
 import { SCREEN_W, SCREEN_H } from '../../lib/screen'
-import { colors, radius, spacing, typography } from '../../theme/index'
+import { colors, pressTransition, pressedScale, radius, spacing, typography } from '../../theme/index'
 
 const SHEET_ASPECT = SCREEN_W / SCREEN_H
 const PAGES = [0, 1] as const
@@ -137,18 +138,7 @@ export default function EditionDetail() {
               </Text>
             ) : null}
 
-            {edition.data.has_notes ? (
-              <Pressable
-                accessibilityRole="link"
-                accessibilityLabel="The dossier filed with this edition"
-                hitSlop={8}
-                onPress={() => router.push(`/notes/editions/${encodeURIComponent(eid)}`)}
-                style={({ pressed }) => [styles.dossier, pressed && styles.dossierDown]}
-              >
-                <Text style={[typography.ui, styles.dossierText]}>The dossier</Text>
-                <Ionicons name="arrow-forward" size={13} color={colors.signal.chrome.tint} />
-              </Pressable>
-            ) : null}
+            {edition.data.has_notes ? <DossierLink eid={eid} /> : null}
           </View>
         </ScrollView>
       )}
@@ -160,28 +150,59 @@ export default function EditionDetail() {
 function SheetThumb({ eid, page, name }: { eid: string; page: 0 | 1; name: string }) {
   const router = useRouter()
   const sheet = useSheet(eid, name)
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
   return (
     <Pressable
       accessibilityRole="imagebutton"
       accessibilityLabel={`${pageLabel(page)} proof. Opens it full size.`}
       onPress={() => router.push(`/sheet/proof?eid=${encodeURIComponent(eid)}&page=${page}`)}
-      style={styles.thumbWrap}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
     >
-      <Sheet style={styles.thumbFrame}>
-        {sheet.data ? (
-          <Image
-            source={{ uri: sheet.data.uri, headers: sheet.data.headers }}
-            style={styles.thumbImage}
-            contentFit="contain"
-            accessibilityIgnoresInvertColors
-          />
-        ) : (
-          <View style={styles.thumbBlank}>
-            {sheet.isLoading ? <ActivityIndicator color={colors.signal.chrome.tint} /> : null}
-          </View>
-        )}
-      </Sheet>
-      <Text style={styles.thumbLabel}>{pageLabel(page)}</Text>
+      <Animated.View
+        style={[styles.thumbWrap, pressTransition, pressed && !reducedMotion && pressedScale]}
+      >
+        <Sheet style={styles.thumbFrame}>
+          {sheet.data ? (
+            <Image
+              source={{ uri: sheet.data.uri, headers: sheet.data.headers }}
+              style={styles.thumbImage}
+              contentFit="contain"
+              accessibilityIgnoresInvertColors
+            />
+          ) : (
+            <View style={styles.thumbBlank}>
+              {sheet.isLoading ? <ActivityIndicator color={colors.signal.chrome.tint} /> : null}
+            </View>
+          )}
+        </Sheet>
+        <Text style={styles.thumbLabel}>{pageLabel(page)}</Text>
+      </Animated.View>
+    </Pressable>
+  )
+}
+
+/** "The dossier" — the link to this edition's own filed notes, when it has any. */
+function DossierLink({ eid }: { eid: string }) {
+  const router = useRouter()
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel="The dossier filed with this edition"
+      hitSlop={8}
+      onPress={() => router.push(`/notes/editions/${encodeURIComponent(eid)}`)}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+    >
+      <Animated.View
+        style={[styles.dossier, pressTransition, pressed && !reducedMotion && pressedScale]}
+      >
+        <Text style={[typography.ui, styles.dossierText]}>The dossier</Text>
+        <Ionicons name="arrow-forward" size={13} color={colors.signal.chrome.tint} />
+      </Animated.View>
     </Pressable>
   )
 }
@@ -252,9 +273,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing[4],
     minHeight: 32,
-  },
-  dossierDown: {
-    opacity: 0.55,
   },
   dossierText: {
     fontSize: 13,

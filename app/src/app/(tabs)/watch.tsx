@@ -31,9 +31,21 @@ export default function Watch() {
   const symbols = useMemo(() => (watchlist.data?.items ?? []).map((i) => i.symbol), [watchlist.data])
   const quotes = useQuotes(symbols)
 
-  const onRefresh = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: deskKeys.watchlist() })
-    queryClient.invalidateQueries({ queryKey: deskKeys.quotes(symbols) })
+  // Tracked locally rather than read off `watchlist.isRefetching`/`quotes.isRefetching` — neither
+  // query polls on an interval today, but binding the spinner to a query flag couples it to
+  // whichever screen happens to read the same key next; `desk.tsx`/`(tabs)/index.tsx` use the same
+  // local-state shape for the query that does.
+  const [pulling, setPulling] = useState(false)
+  const onRefresh = useCallback(async () => {
+    setPulling(true)
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: deskKeys.watchlist() }),
+        queryClient.invalidateQueries({ queryKey: deskKeys.quotes(symbols) }),
+      ])
+    } finally {
+      setPulling(false)
+    }
   }, [symbols])
 
   const onChangeFilter = useCallback((index: number) => {
@@ -74,8 +86,10 @@ export default function Watch() {
         contentContainerStyle={styles.scroll}
         refreshControl={
           <RefreshControl
-            refreshing={watchlist.isRefetching || quotes.isRefetching}
-            onRefresh={onRefresh}
+            refreshing={pulling}
+            onRefresh={() => {
+              void onRefresh()
+            }}
             tintColor={colors.signal.chrome.tint}
           />
         }

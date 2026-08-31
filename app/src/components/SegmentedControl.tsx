@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { StyleSheet, Pressable, Text, View } from 'react-native'
 import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, motion, radius, typography } from '../theme/index'
+import { colors, pressTransition, pressedScale, radius, typography } from '../theme/index'
 
 /**
  * A horizontal segmented selector — used by the dashboard to switch the page on the panel
@@ -60,7 +60,7 @@ function Segment({
       <Animated.View
         style={[
           styles.segment,
-          transition,
+          pressTransition,
           selected && styles.segmentActive,
           pressed && !reducedMotion && pressedScale,
         ]}
@@ -70,16 +70,6 @@ function Segment({
     </Pressable>
   )
 }
-
-// Reanimated's CSS transition keys aren't part of RN's own `ViewStyle`, so they live outside
-// `StyleSheet.create` — its generic constraint rejects them even though `Animated.View`'s style
-// prop accepts them fine.
-const transition = {
-  transform: [{ scale: 1 }],
-  transitionProperty: 'transform' as const,
-  transitionDuration: `${motion.press}ms`,
-}
-const pressedScale = { transform: [{ scale: 0.97 }] }
 
 const styles = StyleSheet.create({
   track: {

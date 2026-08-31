@@ -1,7 +1,8 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { Stack, useRouter } from 'expo-router'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { Screen } from '../../components/Screen'
 import { EmptyState } from '../../components/EmptyState'
 import { ScreenMessage } from '../../components/ScreenMessage'
@@ -9,7 +10,7 @@ import { Stamp } from '../../components/Stamp'
 import { deskKeys, queryClient, useDeskClient, useDeskNow, useEditions } from '../../lib/queries'
 import { DeskError, deskHumanError, type EditionMeta } from '../../lib/desk'
 import { editionPointer, editionWhen } from '../../lib/editions'
-import { colors, spacing, typography } from '../../theme/index'
+import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
 
 /**
  * The editorial history — every edition the desk still keeps a directory for, newest first as the
@@ -108,23 +109,35 @@ function EditionRow({
   last: boolean
   onPress: () => void
 }) {
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Edition ${edition.id.slice(0, 8)}${pointer ? `, ${pointer}` : ''}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, !last && styles.bordered, pressed && styles.pressed]}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
     >
-      <View style={styles.rowText}>
-        <Text style={[typography.uiStrong, styles.id]} numberOfLines={1}>
-          {edition.id.slice(0, 8)}
-        </Text>
-        <Text style={styles.when} numberOfLines={1}>
-          {editionWhen(edition, now)}
-        </Text>
-      </View>
-      {pointer ? <Stamp tone="chrome">{pointer}</Stamp> : null}
-      <Ionicons name="chevron-forward" size={16} color={colors.deskFaint} style={styles.chevron} />
+      <Animated.View
+        style={[
+          styles.row,
+          pressTransition,
+          !last && styles.bordered,
+          pressed && !reducedMotion && pressedScale,
+        ]}
+      >
+        <View style={styles.rowText}>
+          <Text style={[typography.uiStrong, styles.id]} numberOfLines={1}>
+            {edition.id.slice(0, 8)}
+          </Text>
+          <Text style={styles.when} numberOfLines={1}>
+            {editionWhen(edition, now)}
+          </Text>
+        </View>
+        {pointer ? <Stamp tone="chrome">{pointer}</Stamp> : null}
+        <Ionicons name="chevron-forward" size={16} color={colors.deskFaint} style={styles.chevron} />
+      </Animated.View>
     </Pressable>
   )
 }
@@ -145,9 +158,6 @@ const styles = StyleSheet.create({
   bordered: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.deskFaint,
-  },
-  pressed: {
-    opacity: 0.55,
   },
   rowText: {
     flex: 1,

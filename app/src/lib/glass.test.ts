@@ -18,6 +18,7 @@ const base = {
   hasBoardImage: false,
   hasProof: false,
   proofLoading: false,
+  editionLoading: false,
 }
 
 describe('resolveGlassSource — the proof route', () => {
@@ -31,6 +32,15 @@ describe('resolveGlassSource — the proof route', () => {
 
   it('has nothing to show when the edition has no sheet for this page', () => {
     expect(resolveGlassSource(base)).toBe('none')
+  })
+
+  it('waits for the edition record rather than announcing nothing to show', () => {
+    // `useSheet(eid, sheetName)` is disabled — and therefore reports `isLoading: false` — until
+    // `sheetName` is known, which comes off `useEdition(eid)`. Without this, the gap between the
+    // screen mounting and the edition query landing read as `hasProof: false, proofLoading: false`,
+    // which is indistinguishable from a genuinely empty edition and rendered the "nothing to show"
+    // sentence for a beat on every load.
+    expect(resolveGlassSource({ ...base, editionLoading: true })).toBe('busy')
   })
 
   it('is never affected by the board, which it does not ask', () => {
@@ -76,5 +86,20 @@ describe('resolveGlassSource — the board route', () => {
 
   it('shows the spinner rather than nothing while the first read is running', () => {
     expect(resolveGlassSource({ ...base, wantsBoard: true, boardInFlight: true })).toBe('busy')
+  })
+
+  it('waits for the edition record before falling back to "nothing to show"', () => {
+    // Same gap as the proof route: once the board has had its go and come back with nothing, the
+    // fallback still needs the edition record to know whether there is a proof to fall back TO.
+    expect(resolveGlassSource({ ...base, wantsBoard: true, editionLoading: true })).toBe('busy')
+  })
+
+  it('does not blank a live sheet just because the edition record is still loading', () => {
+    // Rule 1 (a sheet already read off the board stays up) still outranks everything below it —
+    // `editionLoading` is a fallback-path concern and must not reach back and override a page that
+    // is already on screen.
+    expect(
+      resolveGlassSource({ ...base, wantsBoard: true, hasBoardImage: true, editionLoading: true }),
+    ).toBe('board')
   })
 })

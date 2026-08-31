@@ -1,9 +1,10 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { Screen } from './Screen'
 import { Button } from './Button'
 import { BackButton } from './BackButton'
-import { colors, spacing } from '../theme/index'
+import { colors, pressTransition, pressedScale, spacing } from '../theme/index'
 
 /**
  * Shared chrome for every onboarding step: an optional back-circle + SKIP bar, the progress bar,
@@ -30,13 +31,29 @@ export function StepScaffold({
   loading?: boolean
   children: ReactNode
 }) {
+  const [skipPressed, setSkipPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
   return (
     <Screen>
       <View style={styles.topBar}>
         {onBack ? <BackButton onPress={onBack} /> : <View style={styles.backSpacer} />}
         {onSkip ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Skip" onPress={onSkip} style={styles.skipHit}>
-            <Text style={styles.skip}>SKIP</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Skip"
+            onPress={onSkip}
+            onPressIn={() => setSkipPressed(true)}
+            onPressOut={() => setSkipPressed(false)}
+          >
+            <Animated.View
+              style={[
+                styles.skipHit,
+                pressTransition,
+                skipPressed && !reducedMotion && pressedScale,
+              ]}
+            >
+              <Text style={styles.skip}>SKIP</Text>
+            </Animated.View>
           </Pressable>
         ) : null}
       </View>

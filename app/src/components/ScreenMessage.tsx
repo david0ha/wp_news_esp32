@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, motion, typography } from '../theme/index'
+import { colors, pressTransition, pressedScale, typography } from '../theme/index'
 
 /**
  * Centered loading / error / empty state shared across screens. Pass `loading` for a spinner,
@@ -46,22 +46,12 @@ function RetryButton({ onRetry }: { onRetry: () => void }) {
       onPressOut={() => setPressed(false)}
       hitSlop={8}
     >
-      <Animated.View style={[styles.retry, transition, pressed && !reducedMotion && pressedScale]}>
+      <Animated.View style={[styles.retry, pressTransition, pressed && !reducedMotion && pressedScale]}>
         <Text style={[typography.uiStrong, styles.retryText]}>Try again</Text>
       </Animated.View>
     </Pressable>
   )
 }
-
-// Reanimated's CSS transition keys aren't part of RN's own `ViewStyle`, so they live outside
-// `StyleSheet.create` — its generic constraint rejects them even though `Animated.View`'s style
-// prop accepts them fine.
-const transition = {
-  transform: [{ scale: 1 }],
-  transitionProperty: 'transform' as const,
-  transitionDuration: `${motion.press}ms`,
-}
-const pressedScale = { transform: [{ scale: 0.97 }] }
 
 const styles = StyleSheet.create({
   center: {

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, motion, radius, typography } from '../theme/index'
+import { colors, pressTransition, pressedScale, radius, typography } from '../theme/index'
 
 /**
  * A small rounded label/toggle — desk chrome, system font. With `onPress` it acts as a selectable
@@ -72,7 +72,7 @@ export function Chip({
       <Animated.View
         style={[
           styles.chip,
-          transition,
+          pressTransition,
           active && styles.active,
           disabled && styles.disabled,
           pressed && !reducedMotion && pressedScale,
@@ -84,16 +84,6 @@ export function Chip({
     </Pressable>
   )
 }
-
-// Reanimated's CSS transition keys aren't part of RN's own `ViewStyle`, so they live outside
-// `StyleSheet.create` — its generic constraint rejects them even though `Animated.View`'s style
-// prop accepts them fine.
-const transition = {
-  transform: [{ scale: 1 }],
-  transitionProperty: 'transform' as const,
-  transitionDuration: `${motion.press}ms`,
-}
-const pressedScale = { transform: [{ scale: 0.97 }] }
 
 const styles = StyleSheet.create({
   chip: {

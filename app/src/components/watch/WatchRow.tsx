@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { GradeDisc } from '../GradeDisc'
 import { Change } from '../Change'
-import { colors, spacing, typography } from '../../theme/index'
+import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
 import { formatCents, formatPrintedDate } from '../../lib/format'
 import { thesisLine } from '../../lib/watchlist'
 import type { Quote, WatchlistItem } from '../../lib/desk'
@@ -31,36 +33,48 @@ export function WatchRow({
 }) {
   const thesis = thesisLine(item.note)
   const printed = item.last_printed ? formatPrintedDate(item.last_printed) : ''
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${item.symbol}, ${item.name}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, !last && styles.divider, pressed && styles.pressed]}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
     >
-      <View style={styles.left}>
-        <View style={styles.headRow}>
-          <GradeDisc grade={item.grade} size={14} />
-          <Text style={[typography.label, styles.symbol]}>{item.symbol}</Text>
-          <Text style={[typography.headlineSm, styles.name]} numberOfLines={1}>
-            {item.name}
-          </Text>
+      <Animated.View
+        style={[
+          styles.row,
+          pressTransition,
+          !last && styles.divider,
+          pressed && !reducedMotion && pressedScale,
+        ]}
+      >
+        <View style={styles.left}>
+          <View style={styles.headRow}>
+            <GradeDisc grade={item.grade} size={14} />
+            <Text style={[typography.label, styles.symbol]}>{item.symbol}</Text>
+            <Text style={[typography.headlineSm, styles.name]} numberOfLines={1}>
+              {item.name}
+            </Text>
+          </View>
+          {thesis !== '' ? (
+            <Text style={[typography.deck, styles.thesis]} numberOfLines={1}>
+              {thesis}
+            </Text>
+          ) : null}
+          {printed !== '' ? (
+            <Text style={[typography.figure, styles.printed]}>printed {printed}</Text>
+          ) : null}
         </View>
-        {thesis !== '' ? (
-          <Text style={[typography.deck, styles.thesis]} numberOfLines={1}>
-            {thesis}
-          </Text>
+        {quote ? (
+          <View style={styles.quotes}>
+            <Text style={[typography.figure, styles.last]}>{formatCents(quote.lastCents)}</Text>
+            <Change bp={quote.changeBp} tone="paper" />
+          </View>
         ) : null}
-        {printed !== '' ? (
-          <Text style={[typography.figure, styles.printed]}>printed {printed}</Text>
-        ) : null}
-      </View>
-      {quote ? (
-        <View style={styles.quotes}>
-          <Text style={[typography.figure, styles.last]}>{formatCents(quote.lastCents)}</Text>
-          <Change bp={quote.changeBp} tone="paper" />
-        </View>
-      ) : null}
+      </Animated.View>
     </Pressable>
   )
 }
@@ -75,9 +89,6 @@ const styles = StyleSheet.create({
   divider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.ink,
-  },
-  pressed: {
-    opacity: 0.6,
   },
   left: {
     flex: 1,

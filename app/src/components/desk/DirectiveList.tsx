@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import * as Haptics from 'expo-haptics'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { Button } from '../Button'
 import { Card } from '../Card'
 import { ScreenMessage } from '../ScreenMessage'
@@ -9,7 +10,7 @@ import { useAddDirective, useDeleteDirective, useDeskNow, useDirectives } from '
 import { DeskError, deskHumanError, type Directive } from '../../lib/desk'
 import { formatPrintedDate } from '../../lib/format'
 import { canRestoreDirective } from '../../lib/directives'
-import { colors, radius, spacing, typography } from '../../theme/index'
+import { colors, pressTransition, pressedScale, radius, spacing, typography } from '../../theme/index'
 
 /**
  * The standing rules — "Never lead with executive compensation."
@@ -139,17 +140,7 @@ export function DirectiveList() {
               That one had already run out, so there is nothing to put back.
             </Text>
           ) : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Put back: ${removed.rule}`}
-            accessibilityState={{ disabled: add.isPending, busy: add.isPending }}
-            disabled={add.isPending}
-            hitSlop={8}
-            onPress={onUndo}
-            style={({ pressed }) => [styles.undoAction, pressed && styles.undoActionDown]}
-          >
-            <Text style={[typography.uiStrong, styles.undoActionText]}>Put it back</Text>
-          </Pressable>
+            <UndoAction onPress={onUndo} disabled={add.isPending} rule={removed.rule} />
           )}
         </View>
       ) : null}
@@ -194,6 +185,8 @@ function DirectiveRow({
   removing: boolean
   onRemove: () => void
 }) {
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
   return (
     <View style={styles.row}>
       <View style={styles.ruleWrap}>
@@ -207,11 +200,53 @@ function DirectiveRow({
         disabled={removing}
         hitSlop={8}
         onPress={onRemove}
-        style={({ pressed }) => [styles.remove, (pressed || removing) && styles.removeDown]}
+        onPressIn={() => setPressed(true)}
+        onPressOut={() => setPressed(false)}
       >
-        <Text style={[typography.ui, styles.removeGlyph]}>✕</Text>
+        <Animated.View
+          style={[
+            styles.remove,
+            pressTransition,
+            removing && styles.removeBusy,
+            pressed && !reducedMotion && pressedScale,
+          ]}
+        >
+          <Text style={[typography.ui, styles.removeGlyph]}>✕</Text>
+        </Animated.View>
       </Pressable>
     </View>
+  )
+}
+
+/** "Put it back" — the undo action offered under a removed directive that can still be restored. */
+function UndoAction({
+  onPress,
+  disabled,
+  rule,
+}: {
+  onPress: () => void
+  disabled: boolean
+  rule: string
+}) {
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Put back: ${rule}`}
+      accessibilityState={{ disabled, busy: disabled }}
+      disabled={disabled}
+      hitSlop={8}
+      onPress={onPress}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+    >
+      <Animated.View
+        style={[styles.undoAction, pressTransition, pressed && !reducedMotion && pressedScale]}
+      >
+        <Text style={[typography.uiStrong, styles.undoActionText]}>Put it back</Text>
+      </Animated.View>
+    </Pressable>
   )
 }
 
@@ -274,7 +309,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: -6,
   },
-  removeDown: {
+  // The pending state — a request in flight — not press feedback (that's the shared scale); dimmed
+  // while `removing` so a second tap has a reason not to land.
+  removeBusy: {
     opacity: 0.45,
   },
   removeGlyph: {
@@ -301,9 +338,6 @@ const styles = StyleSheet.create({
   undoAction: {
     minHeight: 32,
     justifyContent: 'center',
-  },
-  undoActionDown: {
-    opacity: 0.55,
   },
   undoActionText: {
     fontSize: 14,

@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { StepScaffold } from '../../../components/StepScaffold'
 import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../../onboarding/flow'
 import { esp32, type ScanNetwork } from '../../../lib/esp32'
-import { colors, radius } from '../../../theme/index'
+import { colors, pressTransition, pressedScale, radius } from '../../../theme/index'
 
 // "Other…" sentinel — lets the user provision a hidden/unlisted SSID typed on the password step.
 const OTHER = '__other__'
@@ -20,6 +21,10 @@ export default function WifiList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [other, setOther] = useState(false)
+  const [rescanPressed, setRescanPressed] = useState(false)
+  const [retryPressed, setRetryPressed] = useState(false)
+  const [otherPressed, setOtherPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
 
   const scan = useCallback(async () => {
     setLoading(true)
@@ -69,8 +74,20 @@ export default function WifiList() {
 
       <View style={styles.sectionRow}>
         <Text style={styles.sectionLabel}>NETWORKS</Text>
-        <Pressable accessibilityLabel="Rescan networks" onPress={scan} hitSlop={8} disabled={loading}>
-          <Ionicons name="refresh" size={18} color={loading ? colors.deskFaint : colors.deskText} />
+        <Pressable
+          accessibilityLabel="Rescan networks"
+          onPress={scan}
+          onPressIn={() => setRescanPressed(true)}
+          onPressOut={() => setRescanPressed(false)}
+          // 18 pt glyph -> 44 pt target: the hitSlop makes up the rest rather than growing the icon.
+          hitSlop={13}
+          disabled={loading}
+        >
+          <Animated.View
+            style={[pressTransition, rescanPressed && !reducedMotion && pressedScale]}
+          >
+            <Ionicons name="refresh" size={18} color={loading ? colors.deskFaint : colors.deskText} />
+          </Animated.View>
         </Pressable>
       </View>
 
@@ -81,37 +98,34 @@ export default function WifiList() {
             <Text style={styles.stateText}>Scanning…</Text>
           </View>
         ) : error ? (
-          <Pressable style={styles.state} onPress={scan} accessibilityRole="button">
-            <Text style={styles.stateText}>Couldn’t reach the board. Make sure you’re on its setup Wi-Fi.</Text>
-            <Text style={styles.retry}>TAP TO RETRY</Text>
+          <Pressable
+            onPress={scan}
+            onPressIn={() => setRetryPressed(true)}
+            onPressOut={() => setRetryPressed(false)}
+            accessibilityRole="button"
+          >
+            <Animated.View
+              style={[styles.state, pressTransition, retryPressed && !reducedMotion && pressedScale]}
+            >
+              <Text style={styles.stateText}>Couldn’t reach the board. Make sure you’re on its setup Wi-Fi.</Text>
+              <Text style={styles.retry}>TAP TO RETRY</Text>
+            </Animated.View>
           </Pressable>
         ) : (
           <>
-            {uniqueNetworks.map((net, i) => {
-              const selected = !other && net.ssid === selectedNetwork
-              return (
-                <Pressable
-                  key={net.ssid}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  style={[styles.row, i > 0 && styles.rowBordered]}
-                  onPress={() => {
-                    setOther(false)
-                    setSelectedNetwork(net.ssid)
-                    setSelectedSecured(net.secured)
-                  }}
-                >
-                  <Text style={[styles.ssid, selected && styles.ssidSelected]} numberOfLines={1}>
-                    {net.ssid}
-                  </Text>
-                  <View style={styles.icons}>
-                    {selected ? <Ionicons name="checkmark" size={20} color={colors.signal.chrome.tint} /> : null}
-                    {net.secured ? <Ionicons name="lock-closed" size={16} color={colors.deskDim} /> : null}
-                    <Ionicons name="wifi" size={18} color={colors.deskText} />
-                  </View>
-                </Pressable>
-              )
-            })}
+            {uniqueNetworks.map((net, i) => (
+              <NetworkRow
+                key={net.ssid}
+                net={net}
+                bordered={i > 0}
+                selected={!other && net.ssid === selectedNetwork}
+                onPress={() => {
+                  setOther(false)
+                  setSelectedNetwork(net.ssid)
+                  setSelectedSecured(net.secured)
+                }}
+              />
+            ))}
 
             {/* Manual / hidden SSID entry — the name itself is typed on the next step. The top
                 border always shows: the "Other…" row sits below the network list (or the empty
@@ -119,20 +133,73 @@ export default function WifiList() {
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ selected: other }}
-              style={[styles.row, styles.rowBordered]}
               onPress={() => {
                 setOther(true)
                 setSelectedNetwork(null)
                 setSelectedSecured(true)
               }}
+              onPressIn={() => setOtherPressed(true)}
+              onPressOut={() => setOtherPressed(false)}
             >
-              <Text style={[styles.ssid, other && styles.ssidSelected]}>Other…</Text>
-              {other ? <Ionicons name="checkmark" size={20} color={colors.signal.chrome.tint} /> : null}
+              <Animated.View
+                style={[
+                  styles.row,
+                  styles.rowBordered,
+                  pressTransition,
+                  otherPressed && !reducedMotion && pressedScale,
+                ]}
+              >
+                <Text style={[styles.ssid, other && styles.ssidSelected]}>Other…</Text>
+                {other ? <Ionicons name="checkmark" size={20} color={colors.signal.chrome.tint} /> : null}
+              </Animated.View>
             </Pressable>
           </>
         )}
       </ScrollView>
     </StepScaffold>
+  )
+}
+
+/** One scanned network — the SSID, the lock glyph when secured, and a checkmark when selected. */
+function NetworkRow({
+  net,
+  bordered,
+  selected,
+  onPress,
+}: {
+  net: ScanNetwork
+  bordered: boolean
+  selected: boolean
+  onPress: () => void
+}) {
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+    >
+      <Animated.View
+        style={[
+          styles.row,
+          bordered && styles.rowBordered,
+          pressTransition,
+          pressed && !reducedMotion && pressedScale,
+        ]}
+      >
+        <Text style={[styles.ssid, selected && styles.ssidSelected]} numberOfLines={1}>
+          {net.ssid}
+        </Text>
+        <View style={styles.icons}>
+          {selected ? <Ionicons name="checkmark" size={20} color={colors.signal.chrome.tint} /> : null}
+          {net.secured ? <Ionicons name="lock-closed" size={16} color={colors.deskDim} /> : null}
+          <Ionicons name="wifi" size={18} color={colors.deskText} />
+        </View>
+      </Animated.View>
+    </Pressable>
   )
 }
 

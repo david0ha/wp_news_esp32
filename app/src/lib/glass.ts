@@ -29,10 +29,18 @@ export interface GlassInput {
   hasBoardImage: boolean
   hasProof: boolean
   proofLoading: boolean
+  /**
+   * `useEdition(eid)` is still running. `sheetName` — and therefore whether `useSheet` is even
+   * enabled — comes off its `data`, so `useSheet` reports `isLoading: false` (a DISABLED query's
+   * `isLoading`, not a busy one) for the whole gap before it lands. Without this field that gap is
+   * indistinguishable from `hasProof: false, proofLoading: false` — a genuinely empty edition — and
+   * every load flashed "nothing to show" for a beat before the real answer arrived.
+   */
+  editionLoading: boolean
 }
 
 export function resolveGlassSource(input: GlassInput): GlassSource {
-  const { wantsBoard, boardInFlight, hasBoardImage, hasProof, proofLoading } = input
+  const { wantsBoard, boardInFlight, hasBoardImage, hasProof, proofLoading, editionLoading } = input
 
   // 1. A sheet already read off the board stays up, INCLUDING while a refetch runs over it. This
   //    rule is above the in-flight one on purpose: blanking a live sheet to a spinner because the
@@ -44,7 +52,12 @@ export function resolveGlassSource(input: GlassInput): GlassSource {
   //    claim about the board — "it did not answer" — and that claim cannot be true yet.
   if (wantsBoard && boardInFlight) return 'busy'
 
-  // 3. The desk's proof: the whole point on the proof route, and on the board route the fallback,
+  // 3. The edition record itself, on BOTH routes: the proof route reads it directly for
+  //    `sheetName`, and the board route's own fallback needs the same field once the board has had
+  //    its go. Either way, "nothing to show" cannot yet be told apart from "still finding out".
+  if (editionLoading) return 'busy'
+
+  // 4. The desk's proof: the whole point on the proof route, and on the board route the fallback,
   //    now that the board has had its go. The caller says so out loud when it lands here.
   if (hasProof) return 'proof'
 

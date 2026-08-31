@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { EmptyState } from '../../components/EmptyState'
@@ -17,7 +18,7 @@ import { StateStrip } from '../../components/desk/StateStrip'
 import { deskKeys, queryClient, useAudit, useDeskClient, useDeskNow, useDeskState } from '../../lib/queries'
 import { DeskError, deskHumanError } from '../../lib/desk'
 import { auditEventLine, auditWhen } from '../../lib/audit'
-import { colors, spacing, typography } from '../../theme/index'
+import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
 
 /** The last twenty rows of the desk's own record — the foot of this tab. */
 const AUDIT_ROWS = 20
@@ -46,6 +47,8 @@ export default function Desk() {
   const state = useDeskState()
   const audit = useAudit(AUDIT_ROWS)
   const now = useDeskNow()
+  const [editionsPressed, setEditionsPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
 
   // The pull is tracked HERE rather than read off `state.isRefetching`, and that is not a style
   // choice: `useDeskState` carries a `refetchInterval` of fifteen seconds, so `isRefetching` is
@@ -165,12 +168,21 @@ export default function Desk() {
               accessibilityRole="link"
               accessibilityLabel="Recent editions"
               onPress={() => router.push('/editions')}
-              style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+              onPressIn={() => setEditionsPressed(true)}
+              onPressOut={() => setEditionsPressed(false)}
             >
-              <Text style={[typography.ui, styles.linkText]}>
-                {editionsLine(state.data?.editions.length)}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.deskFaint} />
+              <Animated.View
+                style={[
+                  styles.linkRow,
+                  pressTransition,
+                  editionsPressed && !reducedMotion && pressedScale,
+                ]}
+              >
+                <Text style={[typography.ui, styles.linkText]}>
+                  {editionsLine(state.data?.editions.length)}
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.deskFaint} />
+              </Animated.View>
             </Pressable>
           </Card>
         </View>
@@ -284,9 +296,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     minHeight: 48,
     paddingHorizontal: spacing[16],
-  },
-  pressed: {
-    opacity: 0.55,
   },
   linkText: {
     fontSize: 15,

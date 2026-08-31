@@ -1,12 +1,14 @@
+import { useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { Card } from '../Card'
 import { ScreenMessage } from '../ScreenMessage'
 import { useCancelCommand, useCommands } from '../../lib/queries'
 import { DeskError, deskHumanError, type Command } from '../../lib/desk'
 import { canCancelCommand, commandKindLabel, commandStatus } from '../../lib/queue'
-import { colors, spacing, typography } from '../../theme/index'
+import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
 
 /**
  * How many rows the queue prints before it stops.
@@ -111,6 +113,9 @@ function QueueRow({
   const router = useRouter()
   const mark = commandStatus(command.status)
   const cancellable = canCancelCommand(command.status)
+  const [cancelPressed, setCancelPressed] = useState(false)
+  const [dossierPressed, setDossierPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
 
   return (
     <View style={[styles.row, !last && styles.bordered]}>
@@ -130,9 +135,19 @@ function QueueRow({
             disabled={cancelling}
             hitSlop={8}
             onPress={onCancel}
-            style={({ pressed }) => [styles.cancel, (pressed || cancelling) && styles.cancelDown]}
+            onPressIn={() => setCancelPressed(true)}
+            onPressOut={() => setCancelPressed(false)}
           >
-            <Text style={[typography.ui, styles.cancelGlyph]}>✕</Text>
+            <Animated.View
+              style={[
+                styles.cancel,
+                pressTransition,
+                cancelling && styles.cancelBusy,
+                cancelPressed && !reducedMotion && pressedScale,
+              ]}
+            >
+              <Text style={[typography.ui, styles.cancelGlyph]}>✕</Text>
+            </Animated.View>
           </Pressable>
         ) : null}
       </View>
@@ -158,10 +173,19 @@ function QueueRow({
           accessibilityLabel="What came of this command"
           hitSlop={8}
           onPress={() => router.push(`/notes/commands/${encodeURIComponent(command.id)}`)}
-          style={({ pressed }) => [styles.dossier, pressed && styles.dossierDown]}
+          onPressIn={() => setDossierPressed(true)}
+          onPressOut={() => setDossierPressed(false)}
         >
-          <Text style={[typography.ui, styles.dossierText]}>What came of it</Text>
-          <Ionicons name="arrow-forward" size={13} color={colors.signal.chrome.tint} />
+          <Animated.View
+            style={[
+              styles.dossier,
+              pressTransition,
+              dossierPressed && !reducedMotion && pressedScale,
+            ]}
+          >
+            <Text style={[typography.ui, styles.dossierText]}>What came of it</Text>
+            <Ionicons name="arrow-forward" size={13} color={colors.signal.chrome.tint} />
+          </Animated.View>
         </Pressable>
       ) : null}
     </View>
@@ -227,7 +251,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: -6,
   },
-  cancelDown: {
+  // The pending state — a request in flight — not press feedback (that's the shared scale).
+  cancelBusy: {
     opacity: 0.45,
   },
   cancelGlyph: {
@@ -249,9 +274,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing[4],
     minHeight: 32,
-  },
-  dossierDown: {
-    opacity: 0.55,
   },
   dossierText: {
     fontSize: 13,

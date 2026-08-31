@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Pressable, StyleSheet } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import Animated, { useReducedMotion } from 'react-native-reanimated'
 import { useRouter } from 'expo-router'
-import { colors } from '../theme/colors'
+import { colors, pressTransition, pressedScale } from '../theme/index'
 
 /**
  * The gear that opens Settings, in the top-right of every tab — plan Design > Wireframes, where
@@ -17,15 +19,22 @@ import { colors } from '../theme/colors'
  */
 export function HeaderGear() {
   const router = useRouter()
+  const [pressed, setPressed] = useState(false)
+  const reducedMotion = useReducedMotion()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Settings"
       hitSlop={4}
       onPress={() => router.push('/settings')}
-      style={({ pressed }) => [styles.tap, pressed && styles.pressed]}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
     >
-      <Ionicons name="settings-outline" size={22} color={colors.deskDim} />
+      <Animated.View
+        style={[styles.tap, pressTransition, pressed && !reducedMotion && pressedScale]}
+      >
+        <Ionicons name="settings-outline" size={22} color={colors.deskDim} />
+      </Animated.View>
     </Pressable>
   )
 }
@@ -39,8 +48,5 @@ const styles = StyleSheet.create({
     // The glyph is 22 pt inside a 44 pt box; nudged to the right edge of the row so the box's
     // padding falls outside the screen gutter rather than inside it.
     marginRight: -10,
-  },
-  pressed: {
-    opacity: 0.55,
   },
 })
