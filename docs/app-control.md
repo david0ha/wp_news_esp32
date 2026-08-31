@@ -457,8 +457,8 @@ a change there too.
 Everything above is the LAN-only channel to the board itself. When a
 [desk server](desk-server.md) is in the picture, the phone has a second
 channel — straight to it, the same `Authorization: Bearer` control plane a
-worker speaks. There is no client for it in `app/` yet; this section is what
-the app will call and against which token.
+worker speaks. `app/src/lib/desk.ts` is that client now; this section is
+what it calls and against which token.
 
 **These are the routes a phone client uses, not the desk's whole surface.**
 The drafts family — opening one, uploading a payload and its tiles, proofing,
@@ -493,12 +493,21 @@ rules.
 | `GET /api/quotes?symbols=…` | last price, day's change and a sparkline, proxied so the phone never holds the Alpaca key |
 | `GET /api/audit` | the desk's own record of what it has done |
 
+`GET /api/commands/<id>/notes.md` also takes a `PUT` at `producer` scope on
+the desk (`h_put_command_notes` in `http.py`) — filing a note beside an
+instruction. `desk.ts` has no caller for it yet: the app's Notes screen
+(`app/src/app/notes/[kind]/[id].tsx`) reads a dossier or a command's note,
+it does not write one.
+
 Unauthenticated, and not under `/api/*` at all — the device plane, open to
 anything that can reach the desk: `GET /news.json`, the same edition the
 board polls, fetchable by the app exactly as the board fetches it.
 
-`operator` scope — the writes a `producer` token cannot make, and the ones a
-phone would offer:
+`operator` scope — the writes a `producer` token cannot make. `desk.ts` calls
+every row below except `PUT /api/watchlist`: the vault owns that document
+(see [`app/README.md`](../app/README.md)), so the app reads the watchlist
+and never writes it — the row is here because the desk still answers it at
+`operator` scope, not because the app offers it.
 
 | | |
 |---|---|
@@ -506,7 +515,7 @@ phone would offer:
 | `DELETE /api/commands/<id>` | cancel a pending instruction |
 | `POST /api/directives` · `DELETE /api/directives/<id>` | add or remove a standing rule |
 | `PUT /api/schedule` | change when the desk may publish |
-| `PUT /api/watchlist` | rewrite the vault's document |
+| `PUT /api/watchlist` | rewrite the vault's document — no caller in `desk.ts` |
 | `POST /api/publish` · `POST /api/hold` | force the staged edition up, or hold the wall |
 
 A `producer` token that can enqueue but never promote or publish is

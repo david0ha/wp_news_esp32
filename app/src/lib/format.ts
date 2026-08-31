@@ -148,16 +148,26 @@ export type Tone = 'up' | 'down' | 'warn' | 'neutral'
 /**
  * Chip colour for a fetch result.
  *
- * Two of these are load-bearing. `not_modified` is a 304 and a SUCCESS — the most common outcome
- * there is on a board polling all day, so colouring it as a failure would paint a healthy board
- * red for most of its life. `no_url` is neutral, not a warning: a board with no URL is a complete,
- * working product showing its demo edition, not a broken one.
+ * **A SUCCESSFUL POLL IS NEUTRAL, NOT GREEN**, and that is the whole shape of this function. On
+ * this app green means DIRECTION — a price moved, a change is positive — and nothing else; it is
+ * the rule `commandStatus` in `queue.ts` keeps for the same reason, and the one the edition
+ * detail's When row refuses `tone="up"` over. "The board fetched its edition" is an outcome, not a
+ * direction, and the label beside this colour already says so in words.
+ *
+ * This used to return `up` for `ok` and `not_modified`, and the rule held only because its single
+ * render site (`<SourceSection>`) clamped it back to neutral on the way past. A clamp at one call
+ * site is not a rule; it is a thing the next caller does not know about. The clamp is gone and the
+ * function is the rule.
+ *
+ * Two of the rest are load-bearing. `not_modified` is a 304 and a SUCCESS — the most common
+ * outcome there is on a board polling all day, so colouring it as a failure would paint a healthy
+ * board red for most of its life. `no_url` is neutral, not a warning: a board with no URL is a
+ * complete, working product showing its demo edition, not a broken one.
  */
 export function fetchResultTone(result: NewsFetchResult): Tone {
   switch (result) {
     case 'ok':
     case 'not_modified':
-      return 'up'
     case 'no_url':
       return 'neutral'
     case 'transport':
@@ -240,4 +250,157 @@ export function sleepPresetInForce(source: SleepSource, sleepSeconds: number): n
   if (source === 'policy') return null
   if (source === 'default') return SLEEP_PRESET_DEFAULT
   return sleepSeconds
+}
+
+const DAY_ABBR: Record<string, string> = {
+  SUNDAY: 'SUN',
+  MONDAY: 'MON',
+  TUESDAY: 'TUE',
+  WEDNESDAY: 'WED',
+  THURSDAY: 'THU',
+  FRIDAY: 'FRI',
+  SATURDAY: 'SAT',
+}
+
+const MONTH_ABBR: Record<string, string> = {
+  JANUARY: 'JAN',
+  FEBRUARY: 'FEB',
+  MARCH: 'MAR',
+  APRIL: 'APR',
+  MAY: 'MAY',
+  JUNE: 'JUN',
+  JULY: 'JUL',
+  AUGUST: 'AUG',
+  SEPTEMBER: 'SEP',
+  OCTOBER: 'OCT',
+  NOVEMBER: 'NOV',
+  DECEMBER: 'DEC',
+}
+
+/**
+ * `news.dateline` ("FRIDAY, AUGUST 14, 2026") to the masthead's dateline row ("FRI, AUG 14").
+ *
+ * Shown as it arrived on anything that doesn't parse — same posture as `formatGeneratedAt()`: a
+ * producer bug belongs on screen, not silently hidden behind a fallback that looks plausible.
+ */
+export function formatDateline(dateline: string): string {
+  const m = /^([A-Za-z]+),\s*([A-Za-z]+)\s+(\d{1,2}),?\s*\d{4}$/.exec(dateline.trim())
+  if (!m) return dateline
+  const day = DAY_ABBR[m[1].toUpperCase()]
+  const month = MONTH_ABBR[m[2].toUpperCase()]
+  if (!day || !month) return dateline
+  return `${day}, ${month} ${Number(m[3])}`
+}
+
+/**
+ * `WatchlistItem.last_printed` ("2026-08-12") as the Watch row's "printed AUG 12" stamp (Task 27).
+ * The caller supplies "printed "; this only turns the date into the paper's own month
+ * abbreviation, reusing the `MONTHS` table `formatGeneratedAt()` already carries.
+ *
+ * Shown as it arrived on anything that isn't `YYYY-MM-DD` — `formatDateline()`'s own posture: a
+ * desk sending something else is a desk bug, and this is where it would be seen, not hidden.
+ * The caller omits the whole stamp for `null`; this function is never asked about that case.
+ */
+export function formatPrintedDate(dateISO: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateISO)
+  if (!m) return dateISO
+  const month = MONTHS[Number(m[2]) - 1]
+  if (!month) return dateISO
+  return `${month.toUpperCase()} ${Number(m[3])}`
+}
+
+/**
+ * An edition's `published_at` (epoch seconds) as a "06:04" stamp — `<OnTheGlass>`'s
+ * "hangs there since" line.
+ *
+ * UTC, not the phone's own zone: `formatGeneratedAt()`'s reasoning applies again — a reader must
+ * not see a different hour than the desk's own record because of where the phone happens to be.
+ * Empty for anything that isn't a real past instant, so the caller omits the stamp rather than
+ * printing a clock reading midnight 1970.
+ */
+export function formatSinceTime(epochSeconds: number): string {
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return ''
+  const d = new Date(epochSeconds * 1000)
+  const hh = String(d.getUTCHours()).padStart(2, '0')
+  const mm = String(d.getUTCMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+/**
+ * An instant's UTC calendar date, as the paper's own "NOV 14" stamp — or '' when it is not an
+ * instant at all.
+ *
+ * The one place this app turns an epoch second into a date, so `formatPrintedDate()`'s month table
+ * is not re-implemented beside every caller. UTC, for `formatSinceTime()`'s reason: the desk's
+ * record is the desk's, and a phone in another zone printing a different day than the desk's log is
+ * the app disagreeing with the thing it is describing.
+ */
+export function formatDateStamp(epochSeconds: number): string {
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return ''
+  const d = new Date(epochSeconds * 1000)
+  const ymd = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    d.getUTCDate(),
+  ).padStart(2, '0')}`
+  return formatPrintedDate(ymd)
+}
+
+/**
+ * The Board tab's "since" stamp for `<OnTheGlass>` — from `source.ageSeconds` (seconds since the
+ * board's last SUCCESSFUL poll), read against the PHONE's own clock.
+ *
+ * The board's `/api/state` carries no absolute clock of its own, unlike the desk's `now` —
+ * `useDeskNow()`'s reasoning does not apply here, there is nothing to add elapsed wall time to. So
+ * this is the closest fact the endpoint actually reports, not necessarily the moment the panel last
+ * redrew: a poll can succeed without changing the fingerprint `news_hash()` guards, in which case
+ * the panel did not redraw and this stamp is a little earlier than the true one. `-1` is the
+ * board's own "never synced" sentinel and must not render as an instant.
+ */
+export function boardSinceStamp(ageSeconds: number, nowMs: number): string | undefined {
+  if (!Number.isFinite(ageSeconds) || ageSeconds < 0) return undefined
+  const epochSeconds = Math.floor(nowMs / 1000) - Math.round(ageSeconds)
+  const stamp = formatSinceTime(epochSeconds)
+  return stamp === '' ? undefined : stamp
+}
+
+/** `<OnTheGlass>`'s own stamp when no refresh has been measured yet ("about 25 seconds"). */
+export const REFRESH_MS_FALLBACK = 25_000
+
+/**
+ * How long the Board tab's refresh ring should sweep: the panel's own measured refresh time
+ * (`panel.refreshMs`) once the board has reported one, and the documented ballpark otherwise. `0`
+ * means "never refreshed since boot" (esp32.ts's `PanelInfo`) — not a panel that redraws instantly,
+ * so the ring still needs something to sweep over.
+ */
+export function refreshWindowMs(measuredMs: number): number {
+  return Number.isFinite(measuredMs) && measuredMs > 0 ? measuredMs : REFRESH_MS_FALLBACK
+}
+
+/**
+ * An instant a reader can act on: `"23:13"` when it falls on the same UTC day as `now`, and
+ * `"NOV 15, 22:13"` the moment it does not.
+ *
+ * THE SWITCH IS THE CALENDAR DAY, NOT A 24-HOUR WINDOW, and that is the whole function. A hold set
+ * at 22:13 to last a day targets 22:13 TOMORROW; printed as a bare clock it is character-identical
+ * to the moment it was set, so for the next twenty-three hours it reads as a hold that ran out a
+ * minute ago — and the reader's rational response is to set another one. Two hours is enough to
+ * cross midnight and produce the same lie in the other direction. Only the date settles it.
+ *
+ * `auditWhen()` (src/lib/audit.ts) makes the opposite call deliberately: an audit row carries its
+ * own age ("3m ago"), which already says which day it was, so the clock beside it is never
+ * ambiguous and the date only takes over once the age stops being precise. A hold has no age
+ * beside it, so it needs the date sooner.
+ *
+ * `now` is the DESK's clock wherever one is available, not the phone's — same rule as everywhere
+ * else that reads an instant off `/api/state`.
+ */
+export function formatWhen(epochSeconds: number, nowSeconds: number): string {
+  const clock = formatSinceTime(epochSeconds)
+  if (clock === '') return ''
+  const at = new Date(epochSeconds * 1000)
+  const now = new Date(nowSeconds * 1000)
+  const sameDay =
+    at.getUTCFullYear() === now.getUTCFullYear() &&
+    at.getUTCMonth() === now.getUTCMonth() &&
+    at.getUTCDate() === now.getUTCDate()
+  return sameDay ? clock : `${formatDateStamp(epochSeconds)}, ${clock}`
 }

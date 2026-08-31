@@ -1,10 +1,16 @@
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { colors, radius } from '../theme'
+import Animated from 'react-native-reanimated'
+import { colors, radius, typography, usePressedScale } from '../theme/index'
 
 /**
- * A small rounded label/toggle. With `onPress` it acts as a selectable pill (the dashboard's
- * page/econ controls); without one it's a static status chip (sensor/battery readouts).
+ * A small rounded label/toggle — desk chrome, system font. With `onPress` it acts as a selectable
+ * pill (the dashboard's page/econ controls); without one it's a static status chip (sensor/battery
+ * readouts).
+ *
+ * `tone` maps onto the app's one accent hue per meaning (plan Global constraints: "on the app side
+ * red/green = direction only, blue = tint") — `warn` has no hue of its own in the new palette, so
+ * it reads as a dimmer neutral rather than inventing a fourth accent colour.
  */
 export function Chip({
   label,
@@ -23,41 +29,54 @@ export function Chip({
   disabled?: boolean
   style?: ViewStyle
 }) {
+  const [press, pressStyle] = usePressedScale()
   const toneColor =
     tone === 'up'
-      ? colors.up
+      ? colors.signal.chrome.up
       : tone === 'down'
-        ? colors.down
-        : tone === 'warn'
-          ? colors.warn
-          : tone === 'accent'
-            ? colors.accent
-            : colors.text
-  const content = (
-    <View
-      style={[
-        styles.chip,
-        active && styles.active,
-        disabled && styles.disabled,
-        style,
-      ]}
-    >
-      {icon ? <Ionicons name={icon} size={14} color={active ? colors.ink : toneColor} /> : null}
-      <Text style={[styles.label, { color: active ? colors.ink : toneColor }]}>{label}</Text>
-    </View>
+        ? colors.signal.chrome.down
+        : tone === 'accent'
+          ? colors.signal.chrome.tint
+          : tone === 'warn'
+            ? colors.deskDim
+            : colors.deskText
+  const labelColor = active ? colors.desk : toneColor
+  const inner = (
+    <>
+      {icon ? <Ionicons name={icon} size={14} color={labelColor} /> : null}
+      <Text style={[typography.ui, styles.label, { color: labelColor }]}>{label}</Text>
+    </>
   )
 
-  if (!onPress) return content
+  if (!onPress) {
+    return (
+      <View style={[styles.chip, active && styles.active, disabled && styles.disabled, style]}>
+        {inner}
+      </View>
+    )
+  }
+
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected: active, disabled }}
       onPress={onPress}
       disabled={disabled}
-      hitSlop={6}
-      style={({ pressed }) => (pressed && !disabled ? styles.pressed : undefined)}
+      hitSlop={10}
+      pressRetentionOffset={12}
+      {...press}
     >
-      {content}
+      <Animated.View
+        style={[
+          styles.chip,
+          active && styles.active,
+          disabled && styles.disabled,
+          pressStyle,
+          style,
+        ]}
+      >
+        {inner}
+      </Animated.View>
     </Pressable>
   )
 }
@@ -67,26 +86,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    minHeight: 34,
     paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingVertical: 8,
     borderRadius: radius.pill,
-    backgroundColor: colors.surfaceAlt,
+    borderCurve: 'continuous',
+    backgroundColor: colors.deskRaised,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
+    borderColor: colors.deskFaint,
   },
   active: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+    backgroundColor: colors.signal.chrome.tint,
+    borderColor: colors.signal.chrome.tint,
   },
   disabled: {
     opacity: 0.45,
   },
-  pressed: {
-    opacity: 0.7,
-  },
   label: {
     fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.2,
   },
 })

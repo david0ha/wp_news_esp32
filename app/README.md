@@ -1,211 +1,156 @@
 # Claude Post — companion app
 
-A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 Claude Post**
-over your home Wi-Fi. No cloud, no accounts, no API keys — the app talks **directly** to the board
-over plain HTTP on the LAN.
+A React Native (Expo) app with two audiences and two backends: **the desk** — the server that
+files editions, holds a schedule and a queue, and watches a company list — and **the board** — the
+ESP32-S3 hardware itself, reached directly over the LAN. Neither is optional and neither stands in
+for the other: the desk knows the editorial history and the queue, the board knows what is actually
+on the glass right now and how it is sleeping. `src/lib/desk.ts` and `src/lib/esp32.ts` are the
+TypeScript mirrors of those two wires — the only files in the app that know a field name for
+either.
 
-It does three things:
+The app opens on **Today** with no launch gate. There is no onboarding-first flow any more: pairing
+a board and adding a desk address both live under **Settings**, reached from the gear icon each tab
+carries, and a phone that has configured neither still opens to a usable (if mostly empty) app.
 
-1. **Onboarding** over the board's setup Wi-Fi (SoftAP): pick your home Wi-Fi, enter the password
-   and the edition URL, and the board reboots onto your network.
-2. **Live control** over the LAN: a dashboard that polls the board, shows the company today's
-   edition is about, how the last poll went, and what the board's power counters say — and
-   switches the page, changes the URL, sets the sleep interval and runs the panel self-test.
-3. **Seeing the glass**: a preview rendered from the board's own framebuffer, in the measured
-   Spectra 6 inks.
+## The four tabs, plus Settings
 
-The HTTP/JSON contract it implements is documented in [`../docs/app-control.md`](../docs/app-control.md).
-`src/lib/esp32.ts` is the TypeScript mirror of that document and the only file in the app that
-knows a field name.
+`src/app/(tabs)/_layout.tsx` — `NativeTabs`, the platform's own `UITabBarController`, so tab
+switches never animate (see "Design system" below). Settings is deliberately not a fifth tab: it is
+somewhere you go to change something and come back, pushed from `<HeaderGear>` rather than tapped
+into.
 
-## What the dashboard shows
+| Tab | Screen | Shows | Reads |
+|---|---|---|---|
+| **Today** | `src/app/(tabs)/index.tsx` | The masthead, the desk's own proof render of the current edition, and the day's stories, briefs and dossier in one column | desk `GET /api/state`, `GET /api/editions/<id>`, `GET /api/editions/<id>/proof/<name>`, `GET /news.json` |
+| **Watch** | `src/app/(tabs)/watch.tsx` | Every company the vault is watching, led by its grade and the argument behind it — read-only, the vault owns this list | desk `GET /api/watchlist`, `GET /api/quotes?symbols=…` |
+| **Desk** | `src/app/(tabs)/desk.tsx` | What the desk is holding, the queue, the standing directives, the schedule, the last twenty audit rows, and the order sheet (`compose`) that asks it for something | desk `GET /api/state`, `GET /news.json` (the strip's own line), `GET /api/audit`, `GET/POST /api/commands`, `GET /api/directives`, `GET /api/schedule[/next]`, plus `POST /api/hold` / `POST /api/publish` |
+| **Board** | `src/app/(tabs)/board.tsx` | The hardware: the live glass, the page switcher, where the edition comes from, and the deep-sleep design measuring itself | board `GET /api/state`, `GET /api/screen`, `POST /api/refresh`, `POST /api/page`, `POST /api/sleep`, `POST /api/display/test`; desk `GET /api/state` (for the edition id a tap on the glass carries) |
 
-Not the whole edition — the *board*. Both sheets are at the URL in `source.url`, which the phone
-can fetch as easily as the board can; what a companion app is for is the half-metre of air between
-the user and a device with no keyboard:
+Two screens are reached only by a tap or a deep link, never a tab of their own — a company's full
+detail (`src/app/watch/[symbol].tsx`, off a `WatchRow`) and the editorial history
+(`src/app/editions/`, `src/app/notes/[kind]/[id].tsx`, off Desk's EDITIONS row). Both use the
+platform's native header rather than this app's hand-built chrome one.
 
-- **Status** — how the last poll went, whether the glass has the demo edition or a stale one,
-  whether this board sleeps, and the battery when there is one.
-- **The company** — every edition is about one listed company, so the symbol, the name, the price
-  and the change *are* what the board is printing today. A new symbol or a new `generatedAt` is the
-  cheapest "did the edition change" check there is.
-- **The tape** — up to five index cells, symbol and direction.
-- **Headlines** — what the board actually set, in its order, and under them the `counts`: what
-  arrived **after parsing**. That line is the difference between "the desk filed a thin day" and
-  "the parser dropped something", which is a distinction no other field can make.
-- **On the panel** — which page is showing (with the board's own title for it: `FRONT PAGE` /
-  `MARKETS`), a switcher, what the last refresh actually cost, and the way through to the preview.
-  A page change is a full refresh of a 13.3" Spectra 6 panel, so the control stays on the page you
-  asked for until the board confirms it rather than snapping back and looking like a lost tap.
-- **Source** — the URL, the last result, when it last succeeded, and the cadence **with who set
-  it**. `not_modified` is a success, not a failure: it is a 304 against the board's ETag, and on a
-  board polling all day it is the most common outcome there is.
-- **Power** — deep sleep on or off, the interval the board will *actually* sleep for and which of
-  the four layers decided it, the wake counters, and the awake-time mAh estimate. The sleep-interval
-  editor writes `POST /api/sleep`; when the desk's `policy` block is driving, no preset is shown as
-  selected, because the stored value is waiting rather than in force.
+`docs/app-control.md`'s "The desk from the phone" section is the fuller route table, with which
+scope (`producer` / `operator`) each route needs; `docs/desk-server.md` is the desk itself.
 
-## Seeing the page on the glass
+## Developing against the mocks
 
-`GET /api/screen` hands over the framebuffer verbatim — 960,000 bytes, portrait 1200 × 1600 at
-4 bpp, two pixels per byte, the panel's own six wire codes as the nibble values. `src/lib/screen.ts`
-turns that into an **indexed PNG** on the phone: `pako` for the IDAT, a hand-rolled CRC-32 and
-base64, and a 16-entry palette so the pixel byte written *is* the nibble read.
-
-Two decisions worth knowing:
-
-- The palette is `wp_palette_ink[]` — the **measured** "as paper" table, the one the simulator draws
-  its screenshots with — not the saturated `wp_palette_rgb[]` the UI draws with. A preview in
-  primaries would flatter the design into a decision nobody could make from the real sheet.
-- The ten nibble values the panel cannot make (`0x04`, `0x07`..`0x0F`) render as **magenta**, which
-  is not one of the six inks and cannot be. A contract drift that rendered as plausible paper is a
-  drift nobody would report.
-
-A frame caught mid-render can show part of one edition and part of the next. That is the download,
-not the panel — the UI task is not locked out of its framebuffer while a phone reads it, and
-locking would cost the board the length of a download to spare one imperfect preview of a page that
-flashes for twenty-five seconds whenever it changes for real.
-
-**And it only answers while the board is awake.** A board on a battery with deep sleep on wakes for
-about three seconds, asks its desk one conditional question and goes back down without running a
-server at all. A timeout against it is the feature working, so the app says so — press a button on
-the board, which holds it awake for a couple of minutes, and every request restarts that clock.
-`humanError()` in `src/lib/esp32.ts` owns that sentence, and it is why a timeout is a separate error
-code from a network failure rather than being folded into "check your Wi-Fi".
-
-## Why not Expo Go?
-
-This app **cannot** run in Expo Go. It needs a **native build** (Expo **Dev Client**) for two
-reasons:
-
-- It talks to the board over **plain HTTP** on the local network. iOS requires
-  `NSAllowsLocalNetworking` + `NSLocalNetworkUsageDescription` and Android requires
-  `usesCleartextTraffic` — these are baked into a native build, not available in Expo Go.
-- mDNS discovery of `claudepost.local` needs the iOS `NSBonjourServices` entitlement.
-
-So you run it with `npx expo run:ios` / `npx expo run:android` (a real device or simulator with a
-dev build), not by scanning a QR code into Expo Go.
-
-## Quick start
+Two Node scripts stand in for the two backends — neither is a stub, both really do the work rather
+than returning canned JSON:
 
 ```bash
 cd app
 npm install
+npm run mock          # scripts/mock-esp32.js — the board's HTTP API, :8080
+npm run mock:desk     # scripts/mock-desk.js  — the desk's HTTP API,  :8090
 ```
 
-### 1. Develop against the mock (no hardware needed)
+`mock-esp32.js` implements **both** firmware APIs (provisioning + control), including a
+synthetic 960,000-byte `/api/screen`, and — given a real edition URL — fetches it with an
+`If-None-Match` so a 304 is a real `not_modified`. `mock-desk.js` serves `/news.json` from the same
+fixture the firmware's host tests hold to
+(`components/news_core/test/host/fixtures/news.json`), with a real strong ETag, and seeds two
+editions (one CURRENT, one STAGED) plus a watchlist so Today, Watch, Desk and the editions list all
+have something to show from the first request. It takes two env-var variants for exercising the
+edges: `NO_TOKEN=1` makes every `/api/*` answer 401 whatever bearer token is sent, and `NO_QUOTES=1`
+makes `GET /api/quotes` always answer `404 no_quotes` — the state Watch's quote column hides behind
+rather than errors on.
 
-A Node mock implements **both** board APIs (provisioning + control), including `/api/screen`:
+Point the app at both with the three dev env vars:
 
 ```bash
-npm run mock                      # http://localhost:8080  (PORT=9000 to change)
-# in another terminal:
-EXPO_PUBLIC_ESP32_BASE_URL=http://localhost:8080 npx expo start
+EXPO_PUBLIC_ESP32_BASE_URL=http://localhost:8080 \
+EXPO_PUBLIC_DESK_BASE_URL=http://localhost:8090 \
+EXPO_PUBLIC_DESK_TOKEN=dev-operator \
+npx expo start
 ```
 
-`EXPO_PUBLIC_ESP32_BASE_URL` points the app's client at the mock and **skips onboarding** (it
-routes straight to the dashboard). Open it in the iOS Simulator (which can reach the host's
-`localhost`) or an Android emulator (use `http://10.0.2.2:8080` instead of `localhost`).
+(Android emulator: `http://10.0.2.2:8080` / `:8090` in place of `localhost`.) Any non-empty bearer
+token is accepted by the mock desk and granted both scopes — it does not model the producer/operator
+split, since nothing about telling them apart on this side teaches the app anything the desk's own
+authorization tests (`server/test/`) don't already cover. Without the env vars the app falls back to
+whatever is saved in Settings (or nothing, which is a legitimate — if quiet — state for Today, Watch
+and Desk to be in).
 
-The mock is not a stub. Give it a real edition URL and it fetches it **with an `If-None-Match`**,
-so a 304 is a real `not_modified` and not a simulated one, and summarises the payload exactly as
-`components/news_core/device_api_json.c` would — cents, basis points, counts and all:
+## Why not Expo Go
+
+This app **cannot** run in Expo Go. It needs a **native build** (Expo **Dev Client**):
+
+- It talks to the board over **plain HTTP** on the local network. iOS requires
+  `NSAllowsLocalNetworking` + `NSLocalNetworkUsageDescription` and Android requires
+  `usesCleartextTraffic` — baked into a native build, unavailable in Expo Go.
+- mDNS discovery of `claudepost.local` needs the iOS `NSBonjourServices` entitlement.
+
+Run it with `npx expo run:ios` / `npx expo run:android` against a real device or a dev-build
+simulator, not by scanning a QR code into Expo Go.
+
+## Tests and typecheck
 
 ```bash
-python3 ../tools/mock_news_server.py --port 8123     # the news contract, as a server
-curl -X POST http://localhost:8080/api/news -d '{"url":"http://localhost:8123/news.json"}'
-curl -s http://localhost:8080/api/state | jq .news.subject
-curl -X POST http://localhost:8080/api/refresh       # again -> lastResult becomes not_modified
+npm test          # Jest — pure logic + both clients, no network
+npm run typecheck # tsc --noEmit
 ```
 
-`GET /api/screen` on the mock serves a **deterministic synthetic page** in the device's own
-framebuffer format — the 30 px margin, a masthead bar, one keylined stripe per ink, the six-column
-grid at 170 + 24, a screened block for a photograph and a drawn curve. Anything that decodes it
-wrong decodes it obviously wrong:
+`npx expo export --platform web` is the cheapest way to actually *look* at the app without a native
+build — it catches what `tsc` cannot, and serving the bundle and a mock behind one origin (a small
+proxy forwarding `/api/*`) runs the whole app in a browser without adding CORS headers React Native
+has no use for.
 
-```bash
-curl -s http://localhost:8080/api/screen | wc -c     # 960000
-```
+## Design system
 
-Provisioning test knobs in the mock: enter password **`wrong`** to exercise the auth-failure path;
-set `CONNECT_MS=8000` to slow the connect test.
+Two materials that never blend, tokens under `src/theme/` (imported from `src/theme/index.ts`, not
+an individual module — a screen gets the whole system or none of it):
 
-### 2. Run on a real device against real hardware
+- **Paper** — the sheet itself: white, black hairline rules, the newspaper faces
+  (`src/theme/typography.ts`), unchanged in dark mode because a sheet of paper is a physical object
+  photographed against a surround, not a themed surface. Today and Watch live here.
+- **Desk / chrome** — near-black, the system font, rounded corners, for anything that issues a
+  command. Desk and Board live here.
 
-```bash
-npx expo run:ios      # or: npx expo run:android
-```
+`src/theme/colors.ts` carries both palettes plus the two-tier signal colours (direction) and the
+keylined-yellow grade treatment; `spacing.ts`, `radius.ts` and `motion.ts` are shared by both
+materials. **Zero hex literals outside `src/theme/`** — every colour a component draws is a token
+import, checked by reading the diff rather than by a lint rule, so a component reaching for a raw
+`#` is a review comment waiting to happen.
 
-Then follow the in-app onboarding:
+**The animation gate**: nothing animates by default. `NativeTabs` never cross-fades between tabs —
+the platform owns that, which is how the gate costs nothing rather than turning a JS animation off
+— and the one press treatment a pressable is allowed (`src/theme/press.ts`: scale to `0.97` over
+`motion.press` ms) is the single copy every button-shaped component imports rather than four local
+copies that could drift. A refresh ring's duration is never a design constant — it is
+`state.panel.refreshMs`, the board's own measured refresh time.
 
-1. **Turn on** the board (USB-C). In your phone's Wi-Fi settings, join the network named
-   `Claude Post-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
-2. **Pick your Wi-Fi** from the scanned list (or "Other…" for a hidden SSID).
-3. **Enter the edition URL** — or skip it, and the board runs on its built-in demo edition, which is
-   a complete configuration rather than a placeholder. A URL you do type is validated against the
-   firmware's own rule before anything is sent, because the board's rejection would otherwise arrive
-   on the far side of a ~45s join.
-4. **Enter the Wi-Fi password.** The app `POST`s to `/api/provision` and polls `/api/status` until
-   the board confirms it joined.
-5. **Setup complete** — reconnect your phone to the same home Wi-Fi, then open the dashboard. The
-   board is reached at `http://claudepost.local` (mDNS) or its IP; you can override the address
-   in **Settings** if mDNS isn't available on your network.
+## The "nothing personal" rule for fixtures
 
-Provisioning sends exactly the three fields `prov_portal.c` reads: `ssid`, `password`, `news_url`.
-Its optional `sleep_seconds` is deliberately **not** sent — an absent field keeps whatever interval
-is stored, where an empty one would clear it, and onboarding must not silently reset an interval set
-from the dashboard.
-
-## Onboarding → control flow
-
-```
-[AP setup]                                    [home LAN control]
-turn-on  ─ join "Claude Post-XXXX"     dashboard ─ GET /api/state (poll)
-wifi-list ─ GET /api/scan                       │           POST /api/{page,refresh,sleep,display/test}
-news    ─ (validate locally)                    ├─ preview  ─ GET /api/screen → indexed PNG
-password ─ POST /api/provision (ssid, pass,     └─ settings ─ GET /api/info + /api/state
-           news_url) → poll GET /api/status                   POST /api/news, change host,
-complete ─ save board base URL                                re-onboard
-```
-
-## Scripts
-
-| command            | what it does                                        |
-| ------------------ | --------------------------------------------------- |
-| `npm run mock`     | start the dual-API mock board on port 8080          |
-| `npm start`        | start the Metro/Expo dev server                     |
-| `npm run ios`      | native dev build + run on iOS simulator/device      |
-| `npm run android`  | native dev build + run on Android emulator/device   |
-| `npm test`         | Jest unit tests (no network — pure logic + client)  |
-| `npm run typecheck`| `tsc --noEmit`                                       |
-| `npx expo export --platform web` | bundle everything — catches what `tsc` cannot |
-
-The web export is also the cheapest way to actually *look* at the app without a native build: serve
-the bundle and the mock board behind one origin (a small proxy forwarding `/api/*` to the board and
-`/news.json` to the desk) and the whole dashboard runs in a browser. Doing it that way rather than
-adding CORS headers to the mock keeps a browser-only problem out of the repo — React Native has no
-CORS.
+Same rule as the firmware repo it lives beside (see the root `CLAUDE.md`): nothing that makes this
+app's data look like somebody's own paper belongs in it. Mock data comes only from committed
+files — `mock-desk.js`'s inline seed data and the shared `components/news_core/.../fixtures/news.json`
+— never a real hostname, a real watchlist, or a real editorial instruction. If you're developing
+against a real desk, its address and token live in Settings (base URL in `AsyncStorage`, token in
+`SecureStore`/Keychain) or the `EXPO_PUBLIC_DESK_*` env vars above — never committed, never in a
+fixture file.
 
 ## Releasing (EAS → TestFlight)
 
-`eas.json` carries three profiles — `development` (dev client), `preview` (internal
-distribution) and `production` (store). The production profile has `autoIncrement` on with the
-version source remote: the build number lives with EAS, so nothing here needs bumping per build.
+`eas.json` carries three profiles — `development` (dev client), `preview` (internal distribution)
+and `production` (store). Production has `autoIncrement` on with the version source remote: the
+build number lives with EAS, so nothing here needs bumping per build.
 
-```sh
+```bash
 npm install -g eas-cli && eas login    # once
 eas build -p ios --profile production
 eas submit -p ios                      # or `npx testflight` — build + submit in one
 ```
 
-The first run asks for an Apple Developer sign-in interactively. That is where Apple identifiers
-live — in EAS's credential store and, if you want the prompts gone, in `EXPO_APPLE_ID` /
-`EXPO_APPLE_TEAM_ID` in your shell — never in a committed file, which is why `eas.json` carries
-no `appleId` or `ascAppId`. TestFlight needs the app to exist in App Store Connect with the
-matching bundle id (`com.claudepost.app`); `eas submit` offers to create it.
+The first run asks for an Apple Developer sign-in interactively — that is where Apple identifiers
+live, in EAS's credential store and, if you want the prompts gone, in `EXPO_APPLE_ID` /
+`EXPO_APPLE_TEAM_ID` in your shell — never in a committed file, which is why `eas.json` carries no
+`appleId` or `ascAppId`. TestFlight needs the app to exist in App Store Connect with the matching
+bundle id (`com.claudepost.app`); `eas submit` offers to create it.
 
-**Forks:** `app.json`'s `extra.eas.projectId` names *this* app's Expo project. Run `eas init`
-in your fork to claim your own before the first build.
+**Forks:** `app.json`'s `extra.eas.projectId` names *this* app's Expo project. Run `eas init` in
+your fork to claim your own before the first build.
 
 ## Project layout
 
@@ -215,41 +160,52 @@ app/
 ├─ eas.json            EAS build/submit profiles — carries no Apple identifiers, on purpose
 ├─ assets/
 │  └─ icon.png         generated — regenerate with python3 tools/make_icon.py (repo root)
-├─ babel.config.js
-├─ jest.setup.js       mocks @react-native-async-storage for tests
 ├─ scripts/
-│  └─ mock-esp32.js    Node mock for BOTH board APIs — really fetches the edition URL,
-│                      and serves a synthetic 960,000-byte /api/screen
+│  ├─ mock-esp32.js    Node mock of the board's HTTP API (provisioning + control), :8080
+│  └─ mock-desk.js     Node mock of the desk's HTTP API (device + control plane), :8090
 └─ src/
-   ├─ theme.ts         dark design tokens
+   ├─ theme/           colors, typography, spacing, radius, motion, press — import from index.ts
    ├─ app/             expo-router file-based routes
-   │  ├─ _layout.tsx       providers (DeviceProvider)
-   │  ├─ index.tsx         entry → onboarding or dashboard
-   │  ├─ dashboard.tsx     live dashboard (polls getState)
-   │  ├─ preview.tsx       the page on the glass, decoded from /api/screen
-   │  ├─ settings.tsx      board info, edition URL, host override, re-onboard
-   │  └─ onboarding/       turn-on → wifi-list → news → password → complete
-   ├─ components/      Screen, Button, Card, Chip, SegmentedControl, StatTile, InfoRow, …
+   │  ├─ _layout.tsx           providers + the root Stack (tabs, watch detail, editions, settings)
+   │  ├─ (tabs)/               Today, Watch, Desk, Board — the app itself
+   │  ├─ watch/[symbol].tsx    one company off the watchlist, in full
+   │  ├─ editions/             the editorial history and one edition's record
+   │  ├─ notes/[kind]/[id].tsx the dossier beside an edition, or the note beside a command
+   │  ├─ settings/
+   │  │  ├─ index.tsx          desk address + token, board address, about — read/write config
+   │  │  └─ pair/               the board-pairing wizard (turn-on → wifi-list → news → password → complete)
+   │  ├─ compose.tsx           the order sheet — "order today's edition" / "research a ticker"
+   │  └─ sheet/[source].tsx    a proof sheet, full size and zoomable, as a form sheet
+   ├─ components/      Screen, Button, Card, Sheet, HeaderGear, EmptyState, … plus board/desk/today/watch subfolders
    ├─ lib/
-   │  ├─ esp32.ts          the board client (both API surfaces) + types  ← core
-   │  ├─ esp32.test.ts     thorough unit tests with a fake fetch
-   │  ├─ screen.ts         framebuffer → indexed PNG, in the measured inks
-   │  ├─ screen.test.ts    round-trips a synthetic page through an independent PNG reader
-   │  ├─ discovery.ts      base-URL normalize/validate/resolve (pure)
-   │  ├─ store.ts          AsyncStorage: board base URL + onboarding flag
-   │  ├─ device.tsx        app-wide board connection context
-   │  ├─ newsurl.ts        edition-URL validation mirroring the firmware
-   │  └─ format.ts         money / change / age / interval / fetch-result display helpers
-   └─ onboarding/      flow.ts (step logic) + OnboardingContext
+   │  ├─ desk.ts            the desk client (device + control plane) + types  ← core
+   │  ├─ esp32.ts           the board client (provisioning + control) + types ← core
+   │  ├─ queries.ts         the one QueryClient and every screen's hooks onto both clients
+   │  ├─ settings.ts        desk base URL (AsyncStorage) + token (SecureStore), ATS enforcement
+   │  ├─ store.ts           the board's last-known base URL (AsyncStorage)
+   │  ├─ discovery.ts       base-URL normalize/validate/resolve (pure), shared by both clients
+   │  ├─ screen.ts          board framebuffer → indexed PNG, in the measured Spectra 6 inks
+   │  ├─ device.tsx         app-wide board connection context
+   │  ├─ watchlist.ts       grade filtering/sorting, thesis-block parsing
+   │  ├─ audit.ts / editions.ts / directives.ts / queue.ts / scheduleform.ts / quotes.ts / spark.ts
+   │  │                     — desk-domain parsing and formatting helpers, one file per concern
+   │  ├─ md.ts              a small markdown renderer for dossiers and thesis notes
+   │  ├─ newsurl.ts         edition-URL validation mirroring the firmware
+   │  └─ format.ts          money / change / age / interval / fetch-result display helpers
+   └─ onboarding/      flow.ts (pairing-wizard step logic) + OnboardingContext
 ```
 
-## Local-only by design
+## Local network and remote, both, on purpose
 
-There is **no** Supabase / AWS / MQTT / cloud auth anywhere in this app. The only network calls it
-makes are direct HTTP requests to the board's IP / `claudepost.local`. Wi-Fi credentials and the
-edition URL live on the board (NVS); the app persists only the board's base URL and an
-onboarding-complete flag in `AsyncStorage`.
+The board is LAN-only by design (see `docs/app-control.md`): no auth, no TLS, plain HTTP to an
+address on your own network. The desk is reachable from the public internet by construction — it
+sits behind a tunnel (`docs/hosting-cloudflare.md`) — so it is authenticated with a bearer token and
+must answer on `https://`; `app.json`'s `NSAllowsLocalNetworking` ATS exception covers only the
+board, and `src/lib/settings.ts` enforces the `https://`-for-the-desk rule on both platforms (iOS
+partly at the OS level, Android — whose cleartext flag is project-wide — entirely by this check).
 
-Those two AsyncStorage keys are namespaced `claudepost.*`. A phone that once ran the fortune
-board's app keeps its `tickerboard.*` entries untouched — they point at different hardware on the
-same LAN.
+Wi-Fi credentials and the edition URL a board pairs with live on the board itself (NVS); the app
+persists only the board's base URL (`AsyncStorage`) and the desk's base URL + token
+(`AsyncStorage` + `SecureStore`). Those AsyncStorage keys are namespaced `claudepost.*` — a phone
+that once ran the fortune board's app keeps its `tickerboard.*` entries untouched, since they point
+at different hardware on the same LAN.

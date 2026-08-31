@@ -1,9 +1,11 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
-import { colors } from '../theme'
+import Animated from 'react-native-reanimated'
+import { colors, typography, usePressedScale } from '../theme/index'
 
 /**
  * Centered loading / error / empty state shared across screens. Pass `loading` for a spinner,
  * `error` for an error message (with optional retry), or `message` for a neutral empty state.
+ * Desk chrome, system font.
  */
 export function ScreenMessage({
   loading,
@@ -19,20 +21,32 @@ export function ScreenMessage({
   return (
     <View style={styles.center}>
       {loading ? (
-        <ActivityIndicator color={colors.accent} />
+        <ActivityIndicator color={colors.signal.chrome.tint} />
       ) : error ? (
         <>
-          <Text style={styles.error}>{error}</Text>
-          {onRetry ? (
-            <Pressable accessibilityRole="button" onPress={onRetry} style={styles.retry} hitSlop={8}>
-              <Text style={styles.retryText}>Try again</Text>
-            </Pressable>
-          ) : null}
+          <Text style={[typography.ui, styles.error]}>{error}</Text>
+          {onRetry ? <RetryButton onRetry={onRetry} /> : null}
         </>
       ) : (
-        <Text style={styles.message}>{message}</Text>
+        <Text style={[typography.ui, styles.message]}>{message}</Text>
       )}
     </View>
+  )
+}
+
+function RetryButton({ onRetry }: { onRetry: () => void }) {
+  const [press, pressStyle] = usePressedScale()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onRetry}
+      {...press}
+      hitSlop={8}
+    >
+      <Animated.View style={[styles.retry, pressStyle]}>
+        <Text style={[typography.uiStrong, styles.retryText]}>Try again</Text>
+      </Animated.View>
+    </Pressable>
   )
 }
 
@@ -45,23 +59,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   error: {
-    fontSize: 14,
-    color: colors.down,
+    color: colors.signal.chrome.down,
     textAlign: 'center',
     lineHeight: 20,
   },
   retry: {
+    minHeight: 44,
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   retryText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.accent,
+    color: colors.signal.chrome.tint,
   },
   message: {
-    fontSize: 14,
-    color: colors.textDim,
+    color: colors.deskDim,
     textAlign: 'center',
   },
 })
