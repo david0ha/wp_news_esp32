@@ -16,7 +16,7 @@ import { Sparkline } from '../../components/watch/Sparkline'
 import { useDeskClient, useOrderEdition, useQuotes, useResearch, useWatchlist } from '../../lib/queries'
 import { DeskError, deskHumanError } from '../../lib/desk'
 import { formatCents, formatPrintedDate } from '../../lib/format'
-import { parse } from '../../lib/md'
+import { thesisBlocks } from '../../lib/watchlist'
 import { colors, spacing, typography } from '../../theme/index'
 
 /**
@@ -147,7 +147,7 @@ export default function WatchDetail() {
             <View style={styles.section}>
               <Standing label="Thesis" tone="paper" />
               {item.note !== '' ? (
-                <Markdown blocks={parse(item.note)} tone="paper" />
+                <Markdown blocks={thesisBlocks(item.note)} tone="paper" />
               ) : (
                 <Text style={[typography.body, styles.empty]}>No thesis filed yet.</Text>
               )}

@@ -1,5 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
-import { filterByGrade, sortWatchlist, thesisLine, WATCH_GRADE_FILTERS } from './watchlist'
+import { filterByGrade, sortWatchlist, thesisBlocks, thesisLine, WATCH_GRADE_FILTERS } from './watchlist'
+import { parse } from './md'
 import type { WatchlistItem } from './desk'
 
 function item(overrides: Partial<WatchlistItem>): WatchlistItem {
@@ -122,5 +123,32 @@ describe('thesisLine', () => {
 
   it('skips a heading-only note down to nothing rather than returning the heading text', () => {
     expect(thesisLine('# Passed')).toBe('')
+  })
+})
+
+describe('thesisBlocks', () => {
+  it('drops a leading heading — it is the note’s own label, not the argument', () => {
+    const blocks = thesisBlocks('## Thesis\n\nContract volume is now the majority of the mix.')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].type).toBe('paragraph')
+  })
+
+  it('leaves a note with no leading heading unchanged', () => {
+    const note = 'Spin-off overhang cleared.\n\n> A quote below it.'
+    expect(thesisBlocks(note)).toEqual(parse(note))
+  })
+
+  it('drops only the FIRST block — an interior heading is part of the argument and stays', () => {
+    const note = 'Watching\n\n## Still watching\n\nDRAM softer than NAND this quarter.'
+    const blocks = thesisBlocks(note)
+    expect(blocks.map((b) => b.type)).toEqual(['paragraph', 'heading', 'paragraph'])
+  })
+
+  it('is empty for a heading-only note, same as thesisLine’s own reading of one', () => {
+    expect(thesisBlocks('# Passed')).toEqual([])
+  })
+
+  it('is empty for an empty note', () => {
+    expect(thesisBlocks('')).toEqual([])
   })
 })

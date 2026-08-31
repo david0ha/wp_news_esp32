@@ -78,3 +78,18 @@ export function thesisLine(note: string): string {
   }
   return ''
 }
+
+/**
+ * The thesis note's full markdown, ready for `<Markdown>` — every block except a LEADING heading.
+ * `thesisLine()`'s own reading, extended to the whole document rather than one summary line: a
+ * heading at the top ("## Thesis", "# Passed") is the note's own label, not the argument, and the
+ * detail page already draws its own THESIS standing head above this — printing the note's label a
+ * second time under the app's own would be the label twice and the argument once.
+ *
+ * Only the FIRST block is ever dropped. An interior heading is part of the argument (a note
+ * structured as "Watching" / "## Still watching" / body) and renders exactly as filed.
+ */
+export function thesisBlocks(note: string): Block[] {
+  const blocks = parse(note)
+  return blocks.length > 0 && blocks[0].type === 'heading' ? blocks.slice(1) : blocks
+}
