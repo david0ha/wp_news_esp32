@@ -7,7 +7,7 @@ import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { useDevice } from '../../../lib/device'
 import { DEFAULT_BASE_URL } from '../../../lib/discovery'
-import { colors, layout } from '../../../theme'
+import { colors, layout } from '../../../theme/legacy'
 
 export default function Complete() {
   const router = useRouter()

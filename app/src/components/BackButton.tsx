@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, type ViewStyle } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { colors } from '../theme'
+import { colors } from '../theme/legacy'
 
 /** The circular back control used across onboarding/settings screens. */
 export function BackButton({

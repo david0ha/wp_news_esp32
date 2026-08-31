@@ -335,6 +335,37 @@ export function formatDateStamp(epochSeconds: number): string {
 }
 
 /**
+ * The Board tab's "since" stamp for `<OnTheGlass>` — from `source.ageSeconds` (seconds since the
+ * board's last SUCCESSFUL poll), read against the PHONE's own clock.
+ *
+ * The board's `/api/state` carries no absolute clock of its own, unlike the desk's `now` —
+ * `useDeskNow()`'s reasoning does not apply here, there is nothing to add elapsed wall time to. So
+ * this is the closest fact the endpoint actually reports, not necessarily the moment the panel last
+ * redrew: a poll can succeed without changing the fingerprint `news_hash()` guards, in which case
+ * the panel did not redraw and this stamp is a little earlier than the true one. `-1` is the
+ * board's own "never synced" sentinel and must not render as an instant.
+ */
+export function boardSinceStamp(ageSeconds: number, nowMs: number): string | undefined {
+  if (!Number.isFinite(ageSeconds) || ageSeconds < 0) return undefined
+  const epochSeconds = Math.floor(nowMs / 1000) - Math.round(ageSeconds)
+  const stamp = formatSinceTime(epochSeconds)
+  return stamp === '' ? undefined : stamp
+}
+
+/** `<OnTheGlass>`'s own stamp when no refresh has been measured yet ("about 25 seconds"). */
+export const REFRESH_MS_FALLBACK = 25_000
+
+/**
+ * How long the Board tab's refresh ring should sweep: the panel's own measured refresh time
+ * (`panel.refreshMs`) once the board has reported one, and the documented ballpark otherwise. `0`
+ * means "never refreshed since boot" (esp32.ts's `PanelInfo`) — not a panel that redraws instantly,
+ * so the ring still needs something to sweep over.
+ */
+export function refreshWindowMs(measuredMs: number): number {
+  return Number.isFinite(measuredMs) && measuredMs > 0 ? measuredMs : REFRESH_MS_FALLBACK
+}
+
+/**
  * An instant a reader can act on: `"23:13"` when it falls on the same UTC day as `now`, and
  * `"NOV 15, 22:13"` the moment it does not.
  *

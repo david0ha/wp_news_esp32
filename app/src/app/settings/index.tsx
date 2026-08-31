@@ -22,7 +22,7 @@ import { clearDeviceBaseUrl, getDeviceBaseUrl } from '../../lib/store'
 import { ONBOARDING_ROUTES } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
 import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
-import { colors, layout, radius, space } from '../../theme'
+import { colors, layout, radius, space } from '../../theme/legacy'
 
 export default function Settings() {
   const router = useRouter()

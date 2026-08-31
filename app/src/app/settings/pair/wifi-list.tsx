@@ -7,7 +7,7 @@ import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../../onboarding/flow'
 import { esp32, type ScanNetwork } from '../../../lib/esp32'
-import { colors, radius } from '../../../theme'
+import { colors, radius } from '../../../theme/legacy'
 
 // "Other…" sentinel — lets the user provision a hidden/unlisted SSID typed on the password step.
 const OTHER = '__other__'

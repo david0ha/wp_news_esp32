@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { colors } from '../theme'
+import { colors } from '../theme/legacy'
 
 /** Centered illustration + title + body used by the info onboarding steps. */
 export function StepHero({

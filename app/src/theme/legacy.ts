@@ -1,10 +1,11 @@
 // The dark-terminal palette this app shipped with before the newspaper redesign (plan Design —
 // "paper" and "desk", two materials that never blend). Kept byte-for-byte, independent of
 // src/theme/{colors,radius,spacing}.ts even where a number happens to coincide, so a future edit
-// to the new scale can never silently reflow a screen this task did not touch. Every screen that
-// still imports the old `../theme` gets exactly what it got before the redesign; migrating a
-// screen onto the new tokens is later work (see plan App tasks), not this one. This file and the
-// `src/theme.ts` shim that re-exports it are both deleted in Task 31, once nothing imports them.
+// to the new scale can never silently reflow a screen this task did not touch. Migrating a screen
+// onto the new tokens is later work (see plan App tasks), not this one. The `src/theme.ts` shim
+// that used to re-export this file under the old `../theme` names is gone as of Task 31 — every
+// screen that carried it now imports this file directly. This file itself stays, and is deleted
+// only once the last screen still on the dark-terminal palette migrates onto the new tokens.
 
 export const colors = {
   bg: '#0B0E11', // app background — near-black

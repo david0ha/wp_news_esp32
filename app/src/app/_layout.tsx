@@ -8,11 +8,12 @@ import * as SplashScreen from 'expo-splash-screen'
 import { DeviceProvider } from '../lib/device'
 import { onAppStateChange, queryClient } from '../lib/queries'
 import { useAppFonts } from '../lib/fonts'
-import { colors } from '../theme'
+import { colors } from '../theme/legacy'
 // The redesign's own token set (src/theme/index.ts) — named apart from the legacy `colors` above
-// because `../theme` resolves to the pre-redesign compatibility shim (src/theme.ts, deleted in
-// Task 31) rather than this directory, and the one screen with a native header (Task 28's watch
-// detail) needs the tokens that shim does not carry (`desk`, `deskText`, `signal.chrome.tint`).
+// because the one screen with a native header (Task 28's watch detail) needs tokens the legacy
+// dark-terminal palette does not carry (`desk`, `deskText`, `signal.chrome.tint`). `../theme`, the
+// pre-redesign compatibility shim that used to resolve to `theme/legacy` under the old names, is
+// gone as of Task 31 — every screen that carried it now imports `theme/legacy` directly.
 import { colors as theme } from '../theme/index'
 
 // Module scope, before the component ever renders — the one place this call is allowed to work.

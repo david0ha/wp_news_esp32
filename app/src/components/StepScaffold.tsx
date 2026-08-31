@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Screen } from './Screen'
 import { Button } from './Button'
 import { BackButton } from './BackButton'
-import { colors, layout } from '../theme'
+import { colors, layout } from '../theme/legacy'
 
 /**
  * Shared chrome for every onboarding step: an optional back-circle + SKIP bar, the progress bar,

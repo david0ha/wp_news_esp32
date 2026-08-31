@@ -18,7 +18,7 @@ import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES } from '../../../onboarding/flow'
 import { esp32, Esp32Error } from '../../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../../lib/newsurl'
-import { colors, layout, radius } from '../../../theme'
+import { colors, layout, radius } from '../../../theme/legacy'
 
 // Map a provisioning failure to a short, user-facing reason.
 function failureMessage(e: unknown): string {

@@ -7,7 +7,7 @@ import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, progressFor } from '../../../onboarding/flow'
 import { esp32 } from '../../../lib/esp32'
-import { colors } from '../../../theme'
+import { colors } from '../../../theme/legacy'
 
 // Step 1: power the device on and join its setup AP, then probe http://192.168.4.1 over the
 // SoftAP. The default `esp32` client is bound to 192.168.4.1, which is correct here because the

@@ -1,6 +1,6 @@
 import { StyleSheet, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { colors, radius } from '../theme'
+import { colors, radius } from '../theme/legacy'
 
 /** A rounded badge holding a single accent glyph, used by the onboarding hero steps. */
 export function IconBadge({

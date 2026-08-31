@@ -1,6 +1,8 @@
 import { describe, it, expect } from '@jest/globals'
 import {
   PAGE_LABELS,
+  REFRESH_MS_FALLBACK,
+  boardSinceStamp,
   changeTone,
   fetchResultLabel,
   fetchResultMessage,
@@ -17,6 +19,7 @@ import {
   formatSinceTime,
   pageLabel,
   pollSourceLabel,
+  refreshWindowMs,
   sleepPresetInForce,
   sleepSourceLabel,
   formatDateStamp,
@@ -348,5 +351,39 @@ describe('formatWhen', () => {
 
   it('is empty for a non-instant, so a caller can omit the whole phrase', () => {
     expect(formatWhen(0, now)).toBe('')
+  })
+})
+
+describe('boardSinceStamp', () => {
+  // 2023-11-14T22:13:20Z
+  const nowMs = 1_700_000_000_000
+
+  it('is the last SUCCESSFUL poll, not the phone’s own clock, expressed against it', () => {
+    // ageSeconds=80 -> the poll landed at nowMs - 80_000, i.e. 22:11:60 -> 22:12 UTC.
+    expect(boardSinceStamp(80, nowMs)).toBe(formatSinceTime(1_700_000_000 - 80))
+  })
+
+  it('is undefined when no poll has ever succeeded (-1), not a bogus "just now"', () => {
+    // -1 is the board's own sentinel for "never", not zero seconds ago — rendering it as a real
+    // instant would claim a poll that never happened.
+    expect(boardSinceStamp(-1, nowMs)).toBeUndefined()
+  })
+
+  it('is undefined for anything that is not a real age', () => {
+    expect(boardSinceStamp(Number.NaN, nowMs)).toBeUndefined()
+  })
+})
+
+describe('refreshWindowMs', () => {
+  it('uses the panel’s own measured refresh time once there is one', () => {
+    expect(refreshWindowMs(28_400)).toBe(28_400)
+  })
+
+  it('falls back to the documented ballpark before anything has been measured', () => {
+    // 0 means "never refreshed since boot" (esp32.ts's PanelInfo) — not a panel that refreshes
+    // instantly, so the ring still has to sweep over SOMETHING.
+    expect(refreshWindowMs(0)).toBe(REFRESH_MS_FALLBACK)
+    expect(refreshWindowMs(Number.NaN)).toBe(REFRESH_MS_FALLBACK)
+    expect(refreshWindowMs(-5)).toBe(REFRESH_MS_FALLBACK)
   })
 })
