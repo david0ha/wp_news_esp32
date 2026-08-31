@@ -146,6 +146,24 @@ class BuildPromptTest(unittest.TestCase):
         self.assertIn("news.json LAST", text)
         self.assertIn("Do not try to publish", text)
 
+    def test_a_custom_kind_gets_the_same_tail_as_file_edition(self):
+        # "custom" may or may not turn into a page -- the operator's text
+        # decides, and only what actually landed in the workdir after the
+        # turn tells loop.handle() which. The prompt itself stays the
+        # ordinary filing one, the same as the default kind.
+        text = prompt.build_prompt(self.CONTRACT, [], [], "look into NVDA", kind="custom")
+        self.assertIn("news.json LAST", text)
+        self.assertNotIn("research instruction", text)
+
+    def test_a_research_kind_gets_the_research_tail_instead(self):
+        # "research" never files a page, so the model is told that plainly
+        # instead of being handed an instruction to write news.json that
+        # this loop is never going to look for.
+        text = prompt.build_prompt(self.CONTRACT, [], [], "look into NVDA", kind="research")
+        self.assertIn("$EDITION_DIR/notes.md", text)
+        self.assertIn("research instruction", text)
+        self.assertNotIn("news.json LAST", text)
+
     def test_the_shipped_contract_assembles_on_its_own(self):
         # The one integration point with the rest of the repository: PROMPT.md
         # is the file the worker actually reads, and a prompt built from it and

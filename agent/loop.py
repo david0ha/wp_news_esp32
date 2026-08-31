@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 import prompt
-from deskclient import DeskClient, load_agent_env, read_token
+from deskclient import DeskClient, MAX_NOTES_BYTES, load_agent_env, read_token
 
 LOG = logging.getLogger("worker")
 
@@ -162,8 +162,65 @@ def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict) -> int:
     return proc.returncode
 
 
+def read_notes(workdir: str) -> str | None:
+    """``workdir/notes.md`` -- the dossier behind whatever else the run wrote.
+
+    Capped at :data:`deskclient.MAX_NOTES_BYTES`, the same quarter-megabyte
+    the desk itself refuses past: reading further into memory only to have
+    it truncated again on the way there buys nothing. The cut is decoded
+    with ``"ignore"`` rather than ``"replace"``, the same choice
+    :meth:`deskclient.DeskClient.put_notes` makes for the same reason: a
+    read stopped at exactly :data:`MAX_NOTES_BYTES` is not guaranteed to
+    land on a UTF-8 character boundary, and a visible ``�`` at the cut is a
+    worse ending than the one dropped character silently missing.
+
+    Returns:
+        The note's text, or ``None`` when there is no ``notes.md``. That is
+        the ordinary case rather than a failure -- a turn with nothing worth
+        writing down left nothing behind, the way an edition with no picture
+        is still a normal edition. Never raises: a directory that vanished
+        between the write and this read is not a reason to lose the payload
+        it sits beside.
+    """
+    try:
+        with open(os.path.join(workdir, "notes.md"), "rb") as f:
+            data = f.read(MAX_NOTES_BYTES)
+    except OSError:
+        return None
+    return data.decode("utf-8", "ignore")
+
+
+def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
+               command: str | None = None) -> None:
+    """File ``workdir/notes.md`` on a draft or a command, best effort.
+
+    Best effort is the whole of it. A note is evidence about a page, not the
+    page: a desk that refused one -- too large, some transient failure -- is
+    not a reason to hold back an edition that has already passed every gate
+    that matters, nor to report a turn that did the work as failed. So the
+    refusal is a log line and nothing else, and a turn that wrote no
+    ``notes.md`` is the ordinary case rather than a failure to report.
+
+    One function rather than the same shape at each of the two places a note is
+    filed, because "best effort" is a *policy*, and a policy written down twice
+    is one that can be half-changed -- the two would then disagree about
+    whether a refused note costs the work it was filed beside.
+
+    ``ValueError`` is deliberately not caught: naming both or neither of
+    ``draft``/``command`` is a bug in this file, not a desk that said no.
+    """
+    text = read_notes(workdir)
+    if not text:
+        return
+    try:
+        desk.put_notes(text, draft=draft, command=command)
+    except RuntimeError as e:
+        owner = f"draft {draft}" if draft is not None else f"command {command}"
+        LOG.warning("could not file notes on %s: %s", owner, e)
+
+
 def upload(desk: DeskClient, workdir: str) -> str:
-    """Open a draft and PUT the payload and every tile beside it."""
+    """Open a draft and PUT the payload, every tile, and any notes beside it."""
     payload_path = os.path.join(workdir, "news.json")
     if not os.path.exists(payload_path):
         raise RuntimeError("no news.json was produced")
@@ -183,6 +240,9 @@ def upload(desk: DeskClient, workdir: str) -> str:
             with open(os.path.join(tiles_dir, name), "rb") as f:
                 desk.put_tile(draft, name[:-4], f.read())
             count += 1
+
+    file_notes(desk, workdir, draft=draft)
+
     LOG.info("draft %s: %d bytes and %d tile(s)", draft, len(payload), count)
     return draft
 
@@ -249,8 +309,27 @@ def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str)
 
 
 def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> None:
-    """One instruction, from claim to commit."""
+    """One instruction, from claim to commit -- or, for a command that files no
+    page, from claim to a note left on the command itself.
+
+    ``kind`` decides which of those two this run is, but not by itself:
+
+    - ``"file_edition"`` (the default for a missing key -- the desk always
+      sends one of :data:`store.COMMAND_KINDS`, so this only guards a
+      malformed answer, not a fourth kind) always takes the draft path.
+      A turn that did not produce ``news.json`` fails exactly as it always
+      has, inside :func:`upload` -- an *ordered* page that never showed up
+      is a failure, not a note.
+    - ``"research"`` always takes the command path. "Look into this" has no
+      page to file, ever, so there is never a draft to open.
+    - ``"custom"`` is the operator's text, and the operator's text can be
+      either kind of instruction -- so what decides is what actually landed
+      in the workdir after the turn: a ``news.json`` means it was an order,
+      no ``news.json`` means it was a look. This loop trusts the disk over
+      the kind for exactly this one value.
+    """
     cid = command["id"]
+    kind = command.get("kind", "file_edition")
     workdir = os.path.join(cfg.scratch, cid)
     shutil.rmtree(workdir, ignore_errors=True)
     os.makedirs(os.path.join(workdir, "tiles"), exist_ok=True)
@@ -269,14 +348,51 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
                   if fetch_back else [])
         return draft, report, sheets
 
+    def note_on_command() -> None:
+        """File whatever ``notes.md`` holds directly on the command, and finish.
+
+        The path for a turn that never opened a draft: there is nothing to
+        attach a note *to* except the command that asked for the turn, so that
+        is where it goes, best effort, the same way :func:`upload` attaches one
+        to a draft.
+
+        **:func:`write_brief` is not called here, and that is not an
+        oversight.** On this path the desk note *is* the brief -- the same text,
+        filed against the instruction it answers rather than into a folder --
+        and it is durable where a brief is not: the context directory is
+        somebody's own mount, off unless configured twice, and absent entirely
+        on a worker running without one, where a research turn's whole
+        deliverable would then exist nowhere. The edition path keeps its brief
+        because there the note describes a *page*, and what the brief records
+        is what was filed and why, which is a different sentence.
+
+        The note is read twice -- once by :func:`file_notes` and once here --
+        because the desk gets the dossier and the operator gets the same text
+        back as the command's result. It is one bounded file, already read, and
+        the alternative is a helper whose contract is "file this, and also hand
+        it back".
+        """
+        file_notes(desk, workdir, command=cid)
+        note = read_notes(workdir)
+        desk.finish(cid, True, note or "done, no notes.md was written")
+
     text = prompt.build_prompt(
         read_contract(cfg.repo),
         prompt.read_context_dir(cfg.context_dir),
         desk.directives(),
-        command.get("text", ""))
+        command.get("text", ""),
+        kind=kind)
     status = run_claude(cfg, text, workdir, agent_env)
     if status != 0:
         desk.finish(cid, False, "claude exited %d" % status)
+        return
+
+    if kind == "research":
+        note_on_command()
+        return
+
+    if kind == "custom" and not os.path.exists(os.path.join(workdir, "news.json")):
+        note_on_command()
         return
 
     draft, report, sheets = file_and_proof()

@@ -451,3 +451,78 @@ snapshot URL and summarising it — so the app can be developed against it, and 
 second implementation to disagree with. It was updated with the app: it serves the committed
 fixture's edition and streams `/api/screen` chunked exactly as the board does, so a change here is
 a change there too.
+
+## The desk from the phone
+
+Everything above is the LAN-only channel to the board itself. When a
+[desk server](desk-server.md) is in the picture, the phone has a second
+channel — straight to it, the same `Authorization: Bearer` control plane a
+worker speaks. There is no client for it in `app/` yet; this section is what
+the app will call and against which token.
+
+**These are the routes a phone client uses, not the desk's whole surface.**
+The drafts family — opening one, uploading a payload and its tiles, proofing,
+committing — and the queue's claim and `done`/`fail` belong to the worker that
+files editions, not to a reader on a phone, and they are listed in
+[`server/README.md`](../server/README.md)'s route table. The scopes below were
+transcribed from
+[`server/claudepost/http.py`](../server/claudepost/http.py)'s `_ROUTES` table,
+the only place the split is actually decided, as it stood on this branch;
+`_ROUTES` is what to read when this and the desk disagree.
+
+**Two tokens, and the split is real.** `producer` reads everything below and
+may queue an instruction or file a note; `operator` additionally changes what
+the desk does with nothing in front of it — the schedule, the standing
+directives, a forced publish, a hold, a promotion. A phone carrying only a
+`producer` token can see everything and ask for work; it cannot change the
+rules.
+
+`producer` scope — the reads and the one write a phone makes:
+
+| | |
+|---|---|
+| `GET /api/state` | what the desk is doing |
+| `GET /api/editions` · `GET /api/editions/<id>` | the editorial history, and one edition's record |
+| `GET /api/editions/<id>/proof/<name>` | that edition's own proof sheets |
+| `GET /api/editions/<id>/notes.md` | the dossier filed with it, if there is one |
+| `GET /api/commands` · `POST /api/commands` | the queue, and asking it for something |
+| `GET/PUT /api/commands/<id>/notes.md` | the note on one instruction |
+| `GET /api/directives` | the standing rules in force — adding one is `operator` |
+| `GET /api/schedule` · `GET /api/schedule/next` | the schedule, and what it does next — editing it is `operator` |
+| `GET /api/watchlist` | the vault's grades, reasons and thesis notes — editing it is `operator` |
+| `GET /api/quotes?symbols=…` | last price, day's change and a sparkline, proxied so the phone never holds the Alpaca key |
+| `GET /api/audit` | the desk's own record of what it has done |
+
+Unauthenticated, and not under `/api/*` at all — the device plane, open to
+anything that can reach the desk: `GET /news.json`, the same edition the
+board polls, fetchable by the app exactly as the board fetches it.
+
+`operator` scope — the writes a `producer` token cannot make, and the ones a
+phone would offer:
+
+| | |
+|---|---|
+| `POST /api/editions/<id>/promote` | replay an old edition as current |
+| `DELETE /api/commands/<id>` | cancel a pending instruction |
+| `POST /api/directives` · `DELETE /api/directives/<id>` | add or remove a standing rule |
+| `PUT /api/schedule` | change when the desk may publish |
+| `PUT /api/watchlist` | rewrite the vault's document |
+| `POST /api/publish` · `POST /api/hold` | force the staged edition up, or hold the wall |
+
+A `producer` token that can enqueue but never promote or publish is
+deliberate, the same split [desk-server.md](desk-server.md#the-five-gates)'s
+"five gates" describes: pushing an instruction is the whole point of the
+queue, and an instruction still has to clear every gate before it reaches
+paper, where a promotion or a forced publish reaches the glass with nothing
+in front of it.
+
+**The ATS rule.** `app.json` sets `NSAppTransportSecurity.NSAllowsLocalNetworking`,
+which lets the app speak plain `http://` to the board on the LAN and to
+nothing else — a desk is reachable from anywhere by construction, so on iOS
+it must answer on `https://`, exactly as `<desk-host>` does behind the tunnel
+in [desk-server.md](desk-server.md#cloudflare); a plain-`http://` address to
+a desk on the public internet is refused by the OS before the app's own code
+runs. Android is not the same guarantee: `app.json`'s
+`expo-build-properties` plugin sets `usesCleartextTraffic: true` project-wide,
+so there the LAN-vs-internet split is enforced by convention — always give
+the app an `https://` desk address — rather than by the platform.

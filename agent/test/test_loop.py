@@ -170,5 +170,281 @@ class WriteBriefTest(unittest.TestCase):
         self.assertIn("bbb", text)
 
 
+class UploadNotesTest(unittest.TestCase):
+    """``upload()``'s third file: a note that travels with the draft it
+    explains, and never holds back the two files that matter more.
+    """
+
+    class Desk:
+        """Enough of :class:`deskclient.DeskClient` to answer ``upload()``."""
+
+        def __init__(self, notes_error: Exception | None = None):
+            self.notes_error = notes_error
+            self.payloads = []
+            self.tiles = []
+            self.notes_calls = []
+
+        def open_draft(self):
+            return "d" * 32
+
+        def put_payload(self, draft, data):
+            self.payloads.append((draft, data))
+
+        def put_tile(self, draft, tile_id, data):
+            self.tiles.append((draft, tile_id, data))
+
+        def put_notes(self, text, *, draft=None, command=None):
+            self.notes_calls.append({"text": text, "draft": draft, "command": command})
+            if self.notes_error is not None:
+                raise self.notes_error
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        with open(os.path.join(self.tmp, "news.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+
+    def test_a_notes_file_beside_the_payload_reaches_the_draft(self):
+        text = "# Sources\n\n- Alpaca, get_stock_snapshot\n- 10-Q, filed 2026-08-20\n"
+        with open(os.path.join(self.tmp, "notes.md"), "w", encoding="utf-8") as f:
+            f.write(text)
+
+        desk = self.Desk()
+        draft = loop.upload(desk, self.tmp)
+
+        self.assertEqual(desk.notes_calls,
+                         [{"text": text, "draft": draft, "command": None}])
+
+    def test_no_notes_file_is_not_a_failure(self):
+        desk = self.Desk()
+        draft = loop.upload(desk, self.tmp)
+
+        # The payload still went up -- a missing notes.md is not the
+        # payload's problem -- and put_notes was never even asked, because
+        # there was nothing to file.
+        self.assertEqual(desk.payloads, [(draft, b"{}")])
+        self.assertEqual(desk.notes_calls, [])
+
+    def test_a_desk_that_refuses_the_note_still_files_the_edition(self):
+        with open(os.path.join(self.tmp, "notes.md"), "w", encoding="utf-8") as f:
+            f.write("more than the desk will take, or the desk is briefly down")
+
+        desk = self.Desk(notes_error=RuntimeError("put notes: 413 too large"))
+        # upload() must not raise: the payload and every tile are already in
+        # the draft by the time the note is refused, and a note is evidence
+        # about the page, not the page.
+        draft = loop.upload(desk, self.tmp)
+
+        self.assertEqual(desk.payloads, [(draft, b"{}")])
+        self.assertEqual(len(desk.notes_calls), 1)
+
+
+class HandleResearchTest(unittest.TestCase):
+    """``handle()``'s other outcome: an instruction with no page to file, so
+    the note the model wrote is the deliverable and it goes on the command
+    that asked for it rather than on a draft that was never opened.
+    """
+
+    class Desk:
+        """Enough of :class:`deskclient.DeskClient` for a research turn.
+
+        Deliberately has no ``open_draft``, ``proof`` or ``commit`` -- a call
+        to any of them is exactly the bug this test exists to catch, and an
+        ``AttributeError`` from a stub that does not have the method says so
+        more loudly than a mock that quietly counted one more call.
+        """
+
+        def __init__(self):
+            self.notes_calls = []
+            self.finished = []
+
+        def directives(self):
+            return []
+
+        def put_notes(self, text, *, draft=None, command=None):
+            self.notes_calls.append({"text": text, "draft": draft, "command": command})
+
+        def finish(self, cid, ok, result):
+            self.finished.append((cid, ok, result))
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
+
+        # The contract is read from disk in the ordinary path; a research
+        # turn in this test needs none of tools/edition/PROMPT.md's text, so
+        # it is replaced rather than pointing CLAUDEPOST_REPO at a checkout.
+        self._real_read_contract = loop.read_contract
+        loop.read_contract = lambda repo: "the contract"
+        self.addCleanup(setattr, loop, "read_contract", self._real_read_contract)
+
+    def test_a_research_command_attaches_its_note_to_the_command(self):
+        note_text = "Looked at NVDA's supplier mix. Nothing outranks the rotation today.\n"
+
+        def fake_run_claude(cfg, text, workdir, extra_env):
+            # Stands in for the headless turn: a research command's model
+            # writes notes.md and no news.json, because there is no page.
+            with open(os.path.join(workdir, "notes.md"), "w", encoding="utf-8") as f:
+                f.write(note_text)
+            return 0
+
+        real_run_claude = loop.run_claude
+        loop.run_claude = fake_run_claude
+        self.addCleanup(setattr, loop, "run_claude", real_run_claude)
+
+        desk = self.Desk()
+        cid = "c" * 32
+        command = {"id": cid, "kind": "research", "text": "look into NVDA's supply chain"}
+        loop.handle(self.cfg, desk, command, {})
+
+        self.assertEqual(desk.notes_calls,
+                         [{"text": note_text, "draft": None, "command": cid}])
+        self.assertEqual(desk.finished, [(cid, True, note_text)])
+
+
+class ReadNotesTest(unittest.TestCase):
+    """``read_notes()`` on its own, past the cap."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_note_cut_at_the_cap_has_no_stray_replacement_character(self):
+        # 262144 % 3 == 1 (confirmed against deskclient.MAX_NOTES_BYTES), so
+        # a run of three-byte characters is cut mid-character at the cap.
+        # "ignore" drops the dangling partial sequence; "replace" would leave
+        # a visible U+FFFD where put_notes' own cut never would.
+        text = "가" * (loop.MAX_NOTES_BYTES // 3 + 10)          # "가", 3 bytes each
+        with open(os.path.join(self.tmp, "notes.md"), "w", encoding="utf-8") as f:
+            f.write(text)
+
+        note = loop.read_notes(self.tmp)
+
+        self.assertNotIn("�", note)
+        self.assertTrue(note)
+        self.assertTrue(text.startswith(note))
+
+
+class HandleCustomTest(unittest.TestCase):
+    """``handle()``'s third case: a ``custom`` command, which may or may not
+    turn into a page. What is on disk after the turn decides, not the kind.
+    """
+
+    class Desk:
+        """Enough of :class:`deskclient.DeskClient` for a custom turn that
+        does file a page -- the full draft/proof/commit surface.
+        """
+
+        def __init__(self):
+            self.notes_calls = []
+            self.finished = []
+            self.payloads = []
+            self.commits = []
+
+        def directives(self):
+            return []
+
+        def open_draft(self):
+            return "d" * 32
+
+        def put_payload(self, draft, data):
+            self.payloads.append((draft, data))
+
+        def put_tile(self, draft, tile_id, data):
+            pass
+
+        def put_notes(self, text, *, draft=None, command=None):
+            self.notes_calls.append({"text": text, "draft": draft, "command": command})
+
+        def proof(self, draft):
+            return {"ok": True, "sheets": []}
+
+        def commit(self, draft):
+            self.commits.append(draft)
+            return {"state": "staged", "edition_id": "e" * 32}
+
+        def finish(self, cid, ok, result):
+            self.finished.append((cid, ok, result))
+
+    class NoDraftDesk:
+        """Enough of :class:`deskclient.DeskClient` for a custom turn that
+        does not -- no ``open_draft``, ``proof`` or ``commit`` at all, so a
+        call to any of them fails the test as loudly as possible.
+        """
+
+        def __init__(self):
+            self.notes_calls = []
+            self.finished = []
+
+        def directives(self):
+            return []
+
+        def put_notes(self, text, *, draft=None, command=None):
+            self.notes_calls.append({"text": text, "draft": draft, "command": command})
+
+        def finish(self, cid, ok, result):
+            self.finished.append((cid, ok, result))
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
+
+        self._real_read_contract = loop.read_contract
+        loop.read_contract = lambda repo: "the contract"
+        self.addCleanup(setattr, loop, "read_contract", self._real_read_contract)
+
+    def _patch_run_claude(self, fn):
+        real = loop.run_claude
+        loop.run_claude = fn
+        self.addCleanup(setattr, loop, "run_claude", real)
+
+    def test_a_custom_command_that_produced_a_page_still_files_it(self):
+        note_text = "NVDA's guide beat the whisper number; sourced to the call transcript.\n"
+
+        def fake_run_claude(cfg, text, workdir, extra_env):
+            with open(os.path.join(workdir, "news.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            with open(os.path.join(workdir, "notes.md"), "w", encoding="utf-8") as f:
+                f.write(note_text)
+            return 0
+
+        self._patch_run_claude(fake_run_claude)
+
+        desk = self.Desk()
+        cid = "b" * 32
+        command = {"id": cid, "kind": "custom", "text": "put NVDA on tomorrow's front page"}
+        loop.handle(self.cfg, desk, command, {})
+
+        # The page went through the ordinary pipeline -- committed, with its
+        # note on the draft, not on the command.
+        self.assertEqual(desk.commits, ["d" * 32])
+        self.assertEqual(desk.notes_calls,
+                         [{"text": note_text, "draft": "d" * 32, "command": None}])
+        self.assertEqual(desk.finished, [(cid, True, "staged " + "e" * 32)])
+
+    def test_a_custom_command_without_a_page_files_its_note_on_the_command(self):
+        note_text = "Looked into NVDA's supplier mix. Nothing outranks the rotation today.\n"
+
+        def fake_run_claude(cfg, text, workdir, extra_env):
+            # No news.json -- the operator's text turned out to be a look,
+            # not an order, and this loop takes disk as the source of truth.
+            with open(os.path.join(workdir, "notes.md"), "w", encoding="utf-8") as f:
+                f.write(note_text)
+            return 0
+
+        self._patch_run_claude(fake_run_claude)
+
+        desk = self.NoDraftDesk()
+        cid = "a" * 32
+        command = {"id": cid, "kind": "custom", "text": "keep an eye on NVDA this week"}
+        loop.handle(self.cfg, desk, command, {})
+
+        self.assertEqual(desk.notes_calls,
+                         [{"text": note_text, "draft": None, "command": cid}])
+        self.assertEqual(desk.finished, [(cid, True, note_text)])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,18 +14,29 @@ every few seconds; the tests call it at whatever instant they want to examine.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from typing import Mapping
 
-from . import schedule as sched, schedulefile
+from . import quotes as Q, schedule as sched, schedulefile, watchlist as wl
 from .auth import Tokens
 from .clock import Clock
 from .editions import EditionStore
 from .gates import Gates, SubprocessGates
+from .notes import NoteStore
 from .store import Store
+
+#: The shape of a command id: `commands` table ids, the `NoteStore` this desk
+#: hands their notes to, and every `/api/commands/<cid>/...` route in
+#: `http.py` -- which imports this constant and builds its routes from it
+#: rather than spelling `[0-9a-f]{8,64}` a second time, so the three cannot
+#: drift apart. Editions' shape, because a command shares the queue's table
+#: with nothing that has a shorter or longer id.
+COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
 
 LOG = logging.getLogger("claudepost.app")
 
@@ -55,6 +66,11 @@ class Config:
     host: str = "0.0.0.0"
     port: int = 8080
     keep_editions: int = 30
+    #: Beside `tokens_path`, mounted the same read-only way. Defaulted to ""
+    #: rather than left required: a desk with no key is a complete
+    #: configuration (see `quotes.py`'s module docstring), and `Credentials("")`
+    #: already resolves that to "no key" without a caller having to say so.
+    alpaca_path: str = ""
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Config":
@@ -67,6 +83,7 @@ class Config:
             host=env.get("CLAUDEPOST_HOST", "0.0.0.0"),
             port=int(env.get("CLAUDEPOST_PORT", "8080")),
             keep_editions=int(env.get("CLAUDEPOST_KEEP_EDITIONS", "30")),
+            alpaca_path=os.path.join(secrets, "alpaca.json"),
         )
 
 
@@ -93,6 +110,24 @@ class Desk:
                                      keep=cfg.keep_editions)
         self.tokens = Tokens(cfg.tokens_path)
 
+        #: The phone's prices, fetched with a key the phone never sees -- see
+        #: `quotes.py`'s module docstring. `Credentials` reloads on change and
+        #: never raises, so a desk with no `alpaca.json` is a complete
+        #: configuration: `/api/quotes` answers `no_quotes` rather than the
+        #: constructor failing.
+        self.quotes = Q.QuoteService(Q.Credentials(cfg.alpaca_path), self.clock)
+
+        # A command has no directory of its own the way a draft or an edition
+        # does -- it is a row in `self.store` -- so its notes need somewhere to
+        # live: one directory per command id under `notes/commands`, disjoint
+        # from `editions/` and `drafts/` so nothing here can collide with the
+        # notes those trees already keep beside their own payloads.
+        # `COMMAND_ID_RE` rather than a pattern written fresh here, so the
+        # route in `http.py` and the id this store will accept are the same
+        # regex and cannot drift apart the way two copies of it could.
+        self.notes = NoteStore(os.path.join(cfg.data_dir, "notes", "commands"),
+                               COMMAND_ID_RE)
+
         #: Not a Config field, because no environment variable chooses it: the
         #: schedule belongs to the serving root the same way the database does,
         #: and a desk with two data roots is two desks.
@@ -100,6 +135,14 @@ class Desk:
 
         self.schedule = sched.DEFAULT_SCHEDULE
         self.schedule_source = "default"
+
+        #: Same reasoning as `schedule_path`: the watchlist belongs to the
+        #: serving root, not to an environment variable. Unlike the schedule
+        #: there is no default to fall back on -- `self.watchlist` is `None`
+        #: until an operator PUTs one, and stays `None` on a desk nobody has
+        #: told, forever.
+        self.watchlist_path = os.path.join(cfg.data_dir, "watchlist.json")
+        self.watchlist: dict | None = None
 
         #: Notified whenever a command is enqueued, so a long poll wakes on the
         #: instruction rather than on its next timeout. The queue is in SQLite
@@ -109,6 +152,7 @@ class Desk:
         self._last_housekeeping = 0.0
 
         self._load_schedule()
+        self._load_watchlist()
 
     # -- the periodic pass ------------------------------------------------
     def tick(self, now: float | None = None) -> list[str]:
@@ -153,6 +197,23 @@ class Desk:
 
         return did
 
+    # -- commands -----------------------------------------------------------
+    def commands(self, status: str | None = None, limit: int = 100) -> list[dict]:
+        """Commands, each carrying whether it has a note attached.
+
+        The one place a queue row learns about its note, so that
+        `http.py`'s `h_list_commands` and `state()`'s `queue.recent` cannot
+        answer the question two different ways. `self.store.list_commands`
+        stays ignorant of `self.notes` the way it stays ignorant of
+        `self.gates` -- the store is the queue's ledger and the note is
+        evidence a worker filed beside an entry in it, not a column on the
+        row.
+        """
+        rows = self.store.list_commands(status=status, limit=limit)
+        for row in rows:
+            row["has_notes"] = self.notes.has(row["id"])
+        return rows
+
     # -- state ------------------------------------------------------------
     def state(self) -> dict:
         """The ``GET /api/state`` document: what the desk is doing, not what the paper says.
@@ -181,9 +242,21 @@ class Desk:
                 "quiet": sched.is_quiet(self.schedule, t),
             },
             "nextTransition": ({"at": int(nxt[0]), "what": nxt[1]} if nxt else None),
+            "watchlist": {
+                # `or None`, because a watchlist written by something other
+                # than this desk's own PUT carries no `updated_at` and
+                # `wl.load` fails that field soft, to `0`. On this wire `0` is
+                # not "no instant", it is the Unix epoch -- a client rendering
+                # it shows 1 January 1970 as the day the list was last touched.
+                # `int|null`, and `null` is what "there is no instant here"
+                # actually says.
+                "updatedAt": ((self.watchlist["updated_at"] or None)
+                              if self.watchlist else None),
+                "count": len(self.watchlist["items"]) if self.watchlist else 0,
+            },
             "queue": {
                 "pending": self.store.pending_count(),
-                "recent": self.store.list_commands(limit=5),
+                "recent": self.commands(limit=5),
             },
             "editions": self.store.list_editions(limit=5),
         }
@@ -206,6 +279,18 @@ class Desk:
         self.schedule = s
         self.schedule_source = "file"
 
+    def set_watchlist(self, doc: dict) -> None:
+        """Write ``doc`` down, then put it in force -- in that order.
+
+        Same ordering argument as :meth:`set_schedule`: the file first, so a
+        crash between the write and the assignment loses nothing, while the
+        other order would lose the whole edit. A write that fails raises out
+        of here and out of the PUT that called it, leaving ``self.watchlist``
+        exactly what it was before.
+        """
+        wl.save(self.watchlist_path, doc)
+        self.watchlist = doc
+
     def close(self) -> None:
         """Release the database. Serving state on disk is already durable."""
         self.store.close()
@@ -222,6 +307,27 @@ class Desk:
                  self.schedule_source, self.schedule.timezone,
                  self.schedule.publish_policy,
                  [(w.start, w.end) for w in self.schedule.quiet])
+
+    def _load_watchlist(self) -> None:
+        """Read the watchlist off disk, and say in the log what came back.
+
+        Called once, from the constructor, for :meth:`_load_schedule`'s reason:
+        the desk is the only writer of the file, so nothing re-reads it.
+
+        The line earns its place more than the schedule's does. ``wl.load``
+        answers ``None`` both for a desk nobody has ever told and for a file it
+        refused, with only a ``claudepost.watchlist`` warning to tell them
+        apart -- so without this, a desk that came up having silently dropped
+        somebody's watchlist reads in its own log exactly like a desk that
+        never had one. Those are different things to go and fix.
+        """
+        self.watchlist = wl.load(self.watchlist_path)
+        if self.watchlist is None:
+            LOG.info("watchlist: none at %s", self.watchlist_path)
+            return
+        LOG.info("watchlist %s (%d items, updated %s)",
+                 self.watchlist_path, len(self.watchlist["items"]),
+                 _stamp(self.watchlist["updated_at"]))
 
     def _fire_due_wake(self, t: float) -> bool:
         """Enqueue one ``file_edition`` command per wake instant, at most once.
@@ -275,6 +381,23 @@ def _last_wake_at(s: sched.Schedule, t: float) -> float | None:
         last = nxt
         cursor = nxt
     return last
+
+
+def _stamp(when: int) -> str:
+    """An epoch second as a UTC timestamp, for a log line a human reads.
+
+    Spelled the way ``schedule.describe`` spells its ``utc`` field, so the two
+    places this desk prints an instant for a person print it the same way.
+
+    ``0`` is ``"never"`` rather than 1 January 1970. A watchlist written by
+    something other than this desk's own PUT carries no instant, and a date is
+    a worse answer than the absence of one -- the same distinction
+    :meth:`Desk.state` makes by sending ``null``.
+    """
+    if not when:
+        return "never"
+    return datetime.datetime.fromtimestamp(
+        when, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def as_int(value: float | None) -> int | None:

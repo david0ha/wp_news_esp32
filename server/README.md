@@ -12,8 +12,14 @@ else copies it somewhere — and neither can be **told** anything. This is the
 third thing: a service that can be asked, from anywhere, by anything holding a
 token.
 
-The desk knows nothing about notes, a vault, or where an agent keeps its
-opinions — see [`agent/README.md`](../agent/README.md).
+The desk stores and serves the research notes a worker files with a draft, a
+command or an edition, and the watchlist an operator keeps — but it never
+writes either on its own: a note is a worker's own record, filed and read
+back verbatim, and the watchlist changes only through `PUT /api/watchlist`.
+What still never reaches the desk is the *standing* voice — a house style, a
+rotation, a list of things that must never print — which lives wherever an
+agent's `AGENT_CONTEXT_DIR` points, a directory this container never sees;
+see [`agent/README.md`](../agent/README.md).
 
 The design and the arguments behind it are in
 [docs/desk-server.md](../docs/desk-server.md). This file is how to run it.
@@ -39,12 +45,14 @@ can serve a fourth path. `server/test/test_http.py` asserts it.
 
 | Control plane — `/api/*`, `Authorization: Bearer` | |
 |---|---|
-| Drafts | `POST /api/drafts` · `PUT …/news.json` · `PUT …/tiles/<id>.bin` · `POST …/proof` · `POST …/commit` · `GET …` |
-| Editions | `GET /api/editions` · `GET /api/editions/<id>` · `POST /api/editions/<id>/promote` |
-| Queue | `POST /api/commands` · `GET /api/commands/next?wait=60` · `POST …/done` · `POST …/fail` · `GET /api/commands` · `DELETE …` |
+| Drafts | `POST /api/drafts` · `PUT …/news.json` · `PUT …/tiles/<id>.bin` · `GET/PUT …/notes.md` · `POST …/proof` · `GET …/proof/<name>` · `POST …/commit` · `GET …` |
+| Editions | `GET /api/editions` · `GET /api/editions/<id>` · `GET …/notes.md` · `GET …/proof/<name>` · `POST …/promote` |
+| Queue | `POST /api/commands` · `GET /api/commands/next?wait=60` · `POST …/done` · `POST …/fail` · `GET/PUT …/notes.md` · `GET /api/commands` · `DELETE …` |
 | Directives | `GET/POST /api/directives` · `DELETE /api/directives/<id>` |
 | Schedule | `GET/PUT /api/schedule` · `GET /api/schedule/next` |
-| Operations | `GET /api/state` · `POST /api/publish` · `POST /api/hold` |
+| Watchlist | `GET/PUT /api/watchlist` |
+| Quotes | `GET /api/quotes?symbols=…` |
+| Operations | `GET /api/state` · `POST /api/publish` · `POST /api/hold` · `GET /api/audit` |
 
 Errors come back as `{"ok":false,"error":"<code>"}` with a 4xx — the same
 envelope [`device_api.c`](../components/device_api/device_api.c) uses, so a
@@ -63,6 +71,19 @@ server/tools/mint-token.sh producer agent
 Both land in `~/.claudepost/tokens.json`, mode 0600, **outside the repository,
 which is public, and outside any directory you sync** — git history is
 permanent, and a private repository is one setting away from a public one.
+
+**Quotes are optional.** Beside `tokens.json`, `~/.claudepost/alpaca.json`,
+also mode 0600, carries the Alpaca key `GET /api/quotes` proxies through so
+the phone never holds it:
+
+```json
+{ "key_id": "<your Alpaca key id>", "secret_key": "<your Alpaca secret key>" }
+```
+
+No file is a complete configuration too — `/api/quotes` answers
+`404 no_quotes` rather than failing to start, and the desk reloads the file
+if it changes underneath the process, so a key dropped in or rotated later
+takes effect on the next request.
 
 **2. The agent's own credential.** `~/.claudepost/agent.env`, also 0600:
 

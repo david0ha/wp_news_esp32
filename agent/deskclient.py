@@ -50,6 +50,13 @@ CLAIM_WAIT = 60
 #: before a trailing newline, and that is not a directory name.
 DESK_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
+#: The desk's own cap on a note, from ``notes.MAX_NOTES_BYTES`` -- a quarter of
+#: a megabyte, because a phone fetches the whole of it through a tunnel in one
+#: go. Duplicated rather than imported: the worker and the desk are two ends
+#: of one wire, not one program, and the desk enforces this limit regardless
+#: -- this constant only saves a 413 round trip for a dossier that ran long.
+MAX_NOTES_BYTES = 262144
+
 
 class DeskClient:
     """The control plane, over HTTP, with a bearer token.
@@ -204,6 +211,55 @@ class DeskClient:
             content_type="application/octet-stream")
         if status != 200:
             raise self._fail("put tile %s" % tile_id, status, raw)
+
+    def put_notes(self, text: str, *, draft: str | None = None,
+                  command: str | None = None) -> None:
+        """File a markdown dossier beside a draft or a command.
+
+        Exactly one of ``draft`` or ``command`` names what the note is about
+        -- naming both or neither is a bug in the caller, not something the
+        desk gets to answer, so it is caught here rather than sent.
+
+        Args:
+            text: the note, markdown, meant for a person reading it on a
+                phone next to the page it explains.
+            draft: a draft id, checked against `DESK_ID_RE` before it
+                becomes a path -- the same precondition every other draft
+                call holds it to.
+            command: a command id, held to the same check.
+
+        The desk refuses a note over :data:`MAX_NOTES_BYTES` from the
+        ``Content-Length`` alone, without reading a byte of it, so a note
+        that ran long is cut here instead of refused outright -- at a
+        codepoint boundary, because that many bytes of UTF-8 is not
+        necessarily a whole number of characters, and a raw slice would
+        leave a dangling partial sequence at the end that no reader could
+        decode. ``decode(..., "ignore")`` drops that fragment; the
+        re-encode after it is what turns the cut back into bytes.
+
+        Raises:
+            ValueError: both or neither of ``draft``/``command`` were given,
+                or the one that was is not a shape the desk mints.
+            RuntimeError: the desk answered anything but 200, redacted and
+                short.
+        """
+        if (draft is None) == (command is None):
+            raise ValueError("put_notes: name exactly one of draft or command")
+        if draft is not None:
+            if not DESK_ID_RE.match(draft):
+                raise ValueError("put_notes: not a draft id: %r" % (draft,))
+            path = "/api/drafts/%s/notes.md" % draft
+        else:
+            if not DESK_ID_RE.match(command):
+                raise ValueError("put_notes: not a command id: %r" % (command,))
+            path = "/api/commands/%s/notes.md" % command
+        body = text.encode("utf-8")
+        if len(body) > MAX_NOTES_BYTES:
+            body = body[:MAX_NOTES_BYTES].decode("utf-8", "ignore").encode("utf-8")
+        status, raw = self._request(
+            "PUT", path, body, content_type="text/markdown; charset=utf-8")
+        if status != 200:
+            raise self._fail("put notes", status, raw)
 
     def proof(self, draft: str):
         """Run the desk's gates over a draft. Returns the report.

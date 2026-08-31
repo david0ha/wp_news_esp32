@@ -541,12 +541,19 @@ class Store:
                  json.dumps(detail or {}, ensure_ascii=False, default=str)))
 
     def recent_audit(self, limit: int = 50) -> list[dict]:
-        """The last ``limit`` events, newest first, with detail parsed back."""
+        """The last ``limit`` events, newest first, with detail parsed back.
+
+        ``seq`` is the table's own ``AUTOINCREMENT`` primary key, carried
+        through rather than left as an internal detail -- it is what orders
+        two events that land in the same clock tick, which ``at`` alone
+        cannot do.
+        """
         with self._lock:
             rows = self._db.execute(
-                "SELECT at, event, detail FROM audit ORDER BY seq DESC LIMIT ?",
+                "SELECT seq, at, event, detail FROM audit ORDER BY seq DESC LIMIT ?",
                 (max(0, int(limit)),)).fetchall()
-        return [{"at": r["at"], "event": r["event"], "detail": json.loads(r["detail"])}
+        return [{"seq": r["seq"], "at": r["at"], "event": r["event"],
+                 "detail": json.loads(r["detail"])}
                 for r in rows]
 
     # -- internals ---------------------------------------------------------

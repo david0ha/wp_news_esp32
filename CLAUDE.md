@@ -253,7 +253,7 @@ tools/
   make_tile.py            a photograph -> a 4bpp tile the board blits verbatim
   gen_fonts.py            regenerates components/news_core/fonts/
   flash.sh                find the board and flash it
-server/                   the desk: command queue, directives, gates, editions, and the URL the board polls
+server/                   the desk: command queue, directives, gates, editions, notes, watchlist, quotes, and the URL the board polls
 agent/                    an example worker that files into the desk, plus the standalone no-server producer
 ```
 

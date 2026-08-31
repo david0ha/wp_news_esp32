@@ -22,14 +22,18 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from unittest import mock
 
-from claudepost import schedule as S
+from claudepost import notes, schedule as S, tiles
 from claudepost.app import Config, Desk
 from claudepost.clock import FixedClock
+from claudepost.errors import NotFound, Upstream
 from claudepost.gates import GateResult, StubGates
-from claudepost.http import MAX_CONTROL_BODY, DeskHTTPRequestHandler, make_server
+from claudepost.http import (MAX_CONTROL_BODY, MAX_DRAIN_BYTES,
+                             DeskHTTPRequestHandler, make_server)
+from claudepost.quotes import MAX_SYMBOLS, QuoteService
 
 from test_schedule import at
 
@@ -165,7 +169,50 @@ class DeskTestCase(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.status, resp.read(), dict(resp.headers)
         except urllib.error.HTTPError as e:
-            return e.code, e.read(), dict(e.headers)
+            # Closed rather than left to the collector. An HTTPError is a
+            # response with a socket behind it, and reading one without closing
+            # it makes CPython print a ResourceWarning into the middle of the
+            # test output -- which here is not a rare event but the normal one,
+            # because every 4xx this desk sends is an answer a test asked for.
+            with e:
+                return e.code, e.read(), dict(e.headers)
+
+    def assert_body_refused_as_too_large(self, method, path, body, token=None,
+                                          ctype="application/json"):
+        """Assert a request is refused for exceeding a body-size cap, honouring
+        both faces that refusal can arrive in.
+
+        ``_body()`` in ``http.py`` checks ``Content-Length`` against the limit
+        before it drains the socket: on an oversized body it writes the 413
+        and deliberately sets ``close_connection``, so the unread bytes are
+        never drained and the connection closes with them still in flight
+        (see the comment at that call site -- draining what was just refused
+        would spend exactly what the header check exists to save). The
+        socket then carries two things at once: the 413 this client is
+        trying to read, and a kernel RST for the request body bytes the
+        server never read. Which one this client observes first is a TCP
+        race neither side of this test controls -- and losing it does not
+        even leave a readable response: `http.client.send()` can hit the RST
+        while it is still writing the oversized body, before a response
+        exists to read, so urllib never gets as far as an ``HTTPError``. What
+        it raises instead is a plain ``URLError`` wrapping the underlying
+        ``OSError`` (``do_open()`` catches ``OSError`` from the send/receive
+        and re-raises it as ``URLError(err)`` -- see ``urllib/request.py``),
+        so that is the shape this checks for, not a bare
+        ``ConnectionResetError``. A ``URLError`` whose reason is a
+        ``ConnectionResetError`` or ``BrokenPipeError`` (EPIPE is the same
+        close, met while still writing) is that other honest face of the
+        refusal. A 200, a different status, or any other error is not
+        covered by that and still fails the test.
+        """
+        try:
+            status, raw, _ = self.call(method, path, body, token, ctype)
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, (ConnectionResetError, BrokenPipeError)):
+                return
+            raise
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(raw)["error"], "too_large")
 
     def api(self, method, path, doc=None, scope="operator"):
         body = json.dumps(doc).encode() if doc is not None else None
@@ -511,6 +558,318 @@ class SheetTest(DeskTestCase):
         for bad in ("A1.txt", "..", "A1.png.bak", "A1"):
             self.assertEqual(self.sheet(draft, bad)[0], 400, bad)
 
+    def test_an_editions_sheets_outlive_the_draft_that_made_them(self):
+        """The proof survives the commit, and is reachable by the edition's id.
+
+        A draft is deleted the moment it commits, so the draft route can only
+        ever answer for a paper nobody has published yet. Everything that wants
+        to show the edition that is actually on the glass -- the reader site
+        most of all -- has to ask by the id the edition kept.
+        """
+        result = self.file_edition()
+        eid = result["edition_id"]
+
+        status, raw, headers = self.call(
+            "GET", "/api/editions/%s/proof/A1.png" % eid, token=self.tokens["producer"])
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(raw[:4], b"\x89PNG")
+
+    def test_an_editions_sheet_route_refuses_what_the_drafts_one_refuses(self):
+        eid = self.file_edition()["edition_id"]
+        for bad in ("A1.txt", "..", "A1.png.bak", "A1"):
+            status, _, _ = self.call("GET", "/api/editions/%s/proof/%s" % (eid, bad),
+                                     token=self.tokens["producer"])
+            self.assertEqual(status, 400, bad)
+
+    def test_an_editions_metadata_names_the_sheets_it_carries(self):
+        """Otherwise a reader has to guess the file names, and guessing is a bug.
+
+        The gates decide what they leave behind -- two PNGs on a pass, a BMP
+        where a render died before conversion -- so anything downstream that
+        hardcoded ``01_a1_full.png`` would silently show one page of a
+        two-page paper the day that changed.
+        """
+        eid = self.file_edition()["edition_id"]
+        status, doc = self.api("GET", "/api/editions/%s" % eid, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["sheets"], ["A1.png", "A2.bmp"])
+
+    def test_a_sheet_of_an_edition_that_is_not_there_is_a_404(self):
+        # 16 hex, so it passes the route's own pattern and is refused by the
+        # store rather than by the router -- the case a typo actually makes.
+        status, _, _ = self.call("GET", "/api/editions/%s/proof/A1.png" % ("0" * 16),
+                                 token=self.tokens["producer"])
+        self.assertEqual(status, 404)
+
+
+class DraftNotesTest(DeskTestCase):
+    """The dossier a worker files beside the paper, and what the phone reads.
+
+    A note is evidence rather than copy: it is never typeset and never reaches
+    the glass, so nothing here is fingerprinted and filing one cannot cost a
+    wall a refresh. What it does have to survive is the transport -- a quarter
+    of a megabyte of markdown, through a tunnel, to a phone.
+    """
+
+    NOTE = "# SNDK\n\nThe fab is the story; the guidance was a consequence.\n".encode()
+
+    def draft(self) -> str:
+        status, doc = self.api("POST", "/api/drafts", {}, "producer")
+        self.assertEqual(status, 200, doc)
+        return doc["draft_id"]
+
+    def put_notes(self, draft, data):
+        return self.call("PUT", "/api/drafts/%s/notes.md" % draft, data,
+                         self.tokens["producer"], "text/markdown")
+
+    def get_notes(self, draft):
+        return self.call("GET", "/api/drafts/%s/notes.md" % draft,
+                         token=self.tokens["producer"])
+
+    def test_a_draft_carries_a_note_the_producer_wrote(self):
+        draft = self.draft()
+        self.assertEqual(self.put_notes(draft, self.NOTE)[0], 200)
+
+        status, raw, headers = self.get_notes(draft)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+        # The charset is not decoration: it is the promise the write side
+        # already enforced, which is why a note that is not UTF-8 never reaches
+        # the disk to be served under it.
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+    def test_a_draft_with_no_note_is_a_404(self):
+        # The draft is there and the note is not, so the 404 is about the note.
+        # It is an ordinary condition, the one a missing tile is: the phone
+        # shows the page without a dossier rather than an error.
+        self.assertEqual(self.get_notes(self.draft())[0], 404)
+
+    def test_a_note_of_a_quarter_megabyte_survives_the_transport(self):
+        # Exactly the cap. On the way in it passes _declared_length(), which
+        # closes the connection on anything past MAX_DRAIN_BYTES before a
+        # handler sees it -- so a note the desk accepts by its own limit but the
+        # transport will not carry is this assertion failing.
+        draft = self.draft()
+        big = b"# \n" + b"m" * (256 * 1024 - 3)
+        self.assertEqual(len(big), 256 * 1024)
+        self.assertEqual(self.put_notes(draft, big)[0], 200)
+
+        status, raw, _ = self.get_notes(draft)
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, big)
+
+    def test_a_note_past_the_cap_is_refused_from_the_header_alone(self):
+        # See assert_body_refused_as_too_large for why a torn-down connection
+        # counts here alongside a readable 413 -- this is the same refusal
+        # `put_notes` would otherwise wrap in a helper that hides the race.
+        self.assert_body_refused_as_too_large(
+            "PUT", "/api/drafts/%s/notes.md" % self.draft(), b"m" * (256 * 1024 + 1),
+            self.tokens["producer"], "text/markdown")
+
+    def test_a_note_on_a_draft_that_is_not_there_is_a_404(self):
+        # 32 hex, so it passes the route's own pattern and is refused by the
+        # store rather than by the router -- the case a stale draft id makes,
+        # a draft having a lifetime of an hour.
+        gone = "0" * 32
+        self.assertEqual(self.put_notes(gone, self.NOTE)[0], 404)
+        self.assertEqual(self.get_notes(gone)[0], 404)
+
+    def test_draft_info_says_whether_there_is_a_note(self):
+        # So that a client can tell without fetching a quarter of a megabyte to
+        # find out there was nothing to fetch.
+        draft = self.draft()
+        status, doc = self.api("GET", "/api/drafts/%s" % draft, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertFalse(doc["has_notes"])
+
+        self.assertEqual(self.put_notes(draft, self.NOTE)[0], 200)
+        status, doc = self.api("GET", "/api/drafts/%s" % draft, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertTrue(doc["has_notes"])
+
+
+class EditionNotesTest(DeskTestCase):
+    """The dossier after the commit, which is where the phone actually reads it.
+
+    The draft route can only ever answer for paper nobody has published: a
+    draft is deleted the moment it commits. So the note the owner reads next to
+    the page on the wall is the copy the edition kept, asked for by the id the
+    edition kept.
+    """
+
+    NOTE = "# SNDK\n\nThe fab is the story; the guidance was a consequence.\n".encode()
+
+    def payload(self, edition: str) -> bytes:
+        """:data:`PAYLOAD` under another edition name, and therefore another id.
+
+        Committing identical bytes twice answers ``unchanged`` and hands back
+        the first edition's id, so a test wanting two editions and filing one
+        payload twice would quietly be asserting about one of them.
+        """
+        doc = json.loads(PAYLOAD)
+        doc["edition"] = edition
+        return json.dumps(doc).encode()
+
+    def filed(self, note: bytes | None = NOTE,
+              edition: str = "SEMICONDUCTORS") -> str:
+        """One edition all the way through, carrying a note unless told not to."""
+        status, doc = self.api("POST", "/api/drafts", {}, "producer")
+        self.assertEqual(status, 200, doc)
+        draft = doc["draft_id"]
+
+        status, _, _ = self.call("PUT", "/api/drafts/%s/news.json" % draft,
+                                 self.payload(edition), self.tokens["producer"])
+        self.assertEqual(status, 200)
+        if note is not None:
+            status, _, _ = self.call("PUT", "/api/drafts/%s/notes.md" % draft, note,
+                                     self.tokens["producer"], "text/markdown")
+            self.assertEqual(status, 200)
+
+        status, result = self.api("POST", "/api/drafts/%s/commit" % draft, {}, "producer")
+        self.assertEqual(status, 200, result)
+        return result["edition_id"]
+
+    def get_notes(self, eid: str):
+        return self.call("GET", "/api/editions/%s/notes.md" % eid,
+                         token=self.tokens["producer"])
+
+    def test_an_editions_metadata_says_whether_it_carries_a_note(self):
+        # Beside "sheets" and for the same reason: a client should be able to
+        # tell there is a dossier without fetching a quarter of a megabyte to
+        # find out there is not.
+        eid = self.filed()
+        status, doc = self.api("GET", "/api/editions/%s" % eid, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertTrue(doc["has_notes"])
+
+        bare = self.filed(note=None, edition="DISPLAYS")
+        self.assertNotEqual(bare, eid)
+        status, doc = self.api("GET", "/api/editions/%s" % bare, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertFalse(doc["has_notes"])
+
+    def test_an_editions_note_is_served_as_markdown(self):
+        eid = self.filed()
+
+        status, raw, headers = self.get_notes(eid)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+        # An edition nobody annotated, and an id no edition has: both are the
+        # 404 a missing tile gets, because the phone shows the page without a
+        # dossier rather than an error. Sixteen hex on the second, so it is the
+        # store refusing it and not the router.
+        self.assertEqual(self.get_notes(self.filed(note=None, edition="DISPLAYS"))[0], 404)
+        self.assertEqual(self.get_notes("0" * 16)[0], 404)
+
+
+class CommandNotesTest(DeskTestCase):
+    """The dossier a worker leaves on the instruction it was given, not the edition.
+
+    Unlike a draft's note, filed while there is still time to correct
+    anything, a command's note is filed on something already in flight or
+    already over -- so the one thing this route guards against is the other
+    direction: a note on an instruction nobody has picked up yet, which can
+    only ever be about work that has not happened.
+    """
+
+    NOTE = "# NVDA\n\nChecked three quarters of guidance; nothing in them moved the print.\n".encode()
+
+    def enqueue(self, kind="research", text="look into NVDA"):
+        status, doc = self.api("POST", "/api/commands", {"kind": kind, "text": text})
+        self.assertEqual(status, 200, doc)
+        return doc["command"]["id"]
+
+    def claim(self):
+        status, doc = self.api("GET", "/api/commands/next?wait=0", scope="producer")
+        self.assertEqual(status, 200, doc)
+        return doc["id"]
+
+    def put_notes(self, cid, data):
+        return self.call("PUT", "/api/commands/%s/notes.md" % cid, data,
+                         self.tokens["producer"], "text/markdown")
+
+    def get_notes(self, cid):
+        return self.call("GET", "/api/commands/%s/notes.md" % cid,
+                         token=self.tokens["producer"])
+
+    def test_a_worker_attaches_a_note_to_what_it_was_asked_to_do(self):
+        self.enqueue()
+        cid = self.claim()
+        self.assertEqual(self.put_notes(cid, self.NOTE)[0], 200)
+
+        status, raw, headers = self.get_notes(cid)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+    def test_a_command_nobody_has_claimed_takes_no_note(self):
+        # Pending, not claimed: nobody has done anything yet for a note to be
+        # about. 409, the same status a command already claimed by somebody
+        # else's `done` answers -- "the request is legal, the desk's state
+        # will not have it."
+        cid = self.enqueue()
+        status, raw, _ = self.put_notes(cid, self.NOTE)
+        self.assertEqual(status, 409, raw)
+        self.assertEqual(json.loads(raw)["error"], "conflict")
+
+        # The refusal leaves no note behind, the same rule a rejected draft
+        # note follows.
+        self.assertEqual(self.get_notes(cid)[0], 404)
+
+    def test_a_finished_command_still_takes_a_note(self):
+        # Terminal is not pending: the worker that just finished the thing is
+        # exactly who has something worth writing down.
+        self.enqueue()
+        cid = self.claim()
+        status, doc = self.api("POST", "/api/commands/%s/done" % cid,
+                               {"result": "filed SEMICONDUCTORS"}, "producer")
+        self.assertEqual(status, 200, doc)
+
+        self.assertEqual(self.put_notes(cid, self.NOTE)[0], 200)
+        status, raw, _ = self.get_notes(cid)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(raw, self.NOTE)
+
+    def test_a_note_on_a_command_that_is_not_there_is_a_404(self):
+        # 32 hex, so it passes the route's own pattern and is refused by the
+        # store rather than by the router -- the case a stale or invented id
+        # makes.
+        gone = "0" * 32
+        self.assertEqual(self.put_notes(gone, self.NOTE)[0], 404)
+        self.assertEqual(self.get_notes(gone)[0], 404)
+
+    def test_the_queue_says_which_commands_carry_notes(self):
+        # Beside "text" and "status" for the same reason `has_notes` sits
+        # beside a draft's tiles and an edition's sheets: a client should be
+        # able to tell without fetching a note to find out there wasn't one.
+        # `state()`'s `queue.recent` is the same row through a second door,
+        # and the two must agree.
+        self.enqueue()
+        cid = self.claim()
+
+        status, listed = self.api("GET", "/api/commands", scope="producer")
+        self.assertEqual(status, 200, listed)
+        row = next(r for r in listed["commands"] if r["id"] == cid)
+        self.assertFalse(row["has_notes"])
+
+        status, state = self.api("GET", "/api/state")
+        self.assertEqual(status, 200, state)
+        recent = next(r for r in state["queue"]["recent"] if r["id"] == cid)
+        self.assertFalse(recent["has_notes"])
+
+        self.assertEqual(self.put_notes(cid, self.NOTE)[0], 200)
+
+        status, listed = self.api("GET", "/api/commands", scope="producer")
+        row = next(r for r in listed["commands"] if r["id"] == cid)
+        self.assertTrue(row["has_notes"])
+
+        status, state = self.api("GET", "/api/state")
+        recent = next(r for r in state["queue"]["recent"] if r["id"] == cid)
+        self.assertTrue(recent["has_notes"])
+
 
 class ScopeTest(DeskTestCase):
     def test_an_unknown_token_is_refused(self):
@@ -548,10 +907,12 @@ class ControlPlaneTest(DeskTestCase):
         status, doc = self.api("POST", "/api/drafts", {})
         draft = doc["draft_id"]
         huge = b"x" * (300 * 1024 + 1)
-        status, raw, _ = self.call("PUT", "/api/drafts/%s/news.json" % draft, huge,
-                                   self.tokens["producer"])
-        self.assertEqual(status, 413)
-        self.assertEqual(json.loads(raw)["error"], "too_large")
+        # See assert_body_refused_as_too_large: with 300KB+1 in flight the
+        # RST racing the 413 to this client is rarer than it is at the
+        # 256KB+1 the notes cap tests with, but it is the same race and the
+        # same two honest outcomes.
+        self.assert_body_refused_as_too_large(
+            "PUT", "/api/drafts/%s/news.json" % draft, huge, self.tokens["producer"])
 
     def test_malformed_json_is_bad_json_and_not_a_crash(self):
         status, raw, _ = self.call("POST", "/api/commands", b"{not json",
@@ -668,6 +1029,267 @@ class ControlPlaneTest(DeskTestCase):
         self.assertIn("PUT", headers.get("Allow", ""))
 
 
+class WatchlistTest(DeskTestCase):
+    """`/api/watchlist`: an operator's own private view, a producer's read-only one."""
+
+    def test_a_desk_that_has_never_been_told_has_no_watchlist(self):
+        status, doc = self.api("GET", "/api/watchlist", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertIsNone(doc["watchlist"])
+
+    def test_an_operator_writes_it_and_a_producer_reads_it_back(self):
+        body = {"source": "vault", "items": [{"symbol": "snd"}]}
+        status, put = self.api("PUT", "/api/watchlist", body)
+        self.assertEqual(status, 200, put)
+        self.assertEqual(put["watchlist"]["source"], "vault")
+        # `_symbol` upper-cases -- the echoed document is the normalised one,
+        # not the one the caller sent.
+        self.assertEqual(put["watchlist"]["items"][0]["symbol"], "SND")
+        self.assertGreater(put["watchlist"]["updated_at"], 0)
+
+        status, got = self.api("GET", "/api/watchlist", scope="producer")
+        self.assertEqual(status, 200, got)
+        self.assertEqual(got["watchlist"], put["watchlist"])
+
+    def test_a_producer_may_not_write_one(self):
+        status, body = self.api("PUT", "/api/watchlist", {"items": []}, scope="producer")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error"], "forbidden")
+
+    def test_a_refused_document_leaves_the_previous_one_in_force(self):
+        status, _ = self.api("PUT", "/api/watchlist", {"source": "vault", "items": []})
+        self.assertEqual(status, 200)
+
+        # An unknown key -- the privacy boundary `watchlist.py` exists for --
+        # is exactly the kind of thing a hand-written PUT gets wrong.
+        status, body = self.api("PUT", "/api/watchlist",
+                                {"items": [{"symbol": "SND", "stop": 100}]})
+        self.assertEqual(status, 400, body)
+        self.assertEqual(body["error"], "bad_watchlist")
+
+        status, doc = self.api("GET", "/api/watchlist", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["watchlist"]["source"], "vault")
+
+    def test_it_survives_a_restart(self):
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"source": "vault", "items": [{"symbol": "SND"}]})
+        self.assertEqual(status, 200)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNotNone(second.watchlist)
+        self.assertEqual(second.watchlist["source"], "vault")
+        self.assertEqual(second.watchlist["items"][0]["symbol"], "SND")
+
+    def test_a_boot_says_in_the_log_which_watchlist_it_came_up_on(self):
+        # The desk already says what schedule it read; the watchlist is the
+        # other document it reads at boot and said nothing about. A file that
+        # will not parse is `None` here and a `claudepost.watchlist` warning
+        # somewhere else, so a desk that came up having silently dropped one
+        # looked exactly like a desk nobody had ever told -- and those two are
+        # very different things for an operator to go and fix.
+        with self.assertLogs("claudepost.app", level="INFO") as caught:
+            Desk(self.cfg, clock=self.clock, gates=self.gates).close()
+        lines = [l for l in caught.output if "watchlist" in l]
+        self.assertEqual(len(lines), 1, caught.output)
+        self.assertIn("watchlist: none at", lines[0])
+
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"source": "vault", "items": [{"symbol": "SND"}]})
+        self.assertEqual(status, 200)
+
+        with self.assertLogs("claudepost.app", level="INFO") as caught:
+            Desk(self.cfg, clock=self.clock, gates=self.gates).close()
+        lines = [l for l in caught.output if "watchlist" in l]
+        self.assertEqual(len(lines), 1, caught.output)
+        self.assertIn("watchlist.json", lines[0])
+        self.assertIn("1 items", lines[0])
+
+    def test_the_state_document_counts_it(self):
+        status, doc = self.api("GET", "/api/state")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["watchlist"], {"updatedAt": None, "count": 0})
+
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"items": [{"symbol": "SND"}, {"symbol": "TSLA"}]})
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/state")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["watchlist"]["count"], 2)
+        self.assertIsInstance(doc["watchlist"]["updatedAt"], int)
+
+    def test_a_watchlist_with_no_instant_reports_null_rather_than_1970(self):
+        # A file written by something other than this desk's own PUT carries
+        # no `updated_at`, and `watchlist.load` fails that field soft: it comes
+        # back 0. On the wire `0` is not "no instant", it is the Unix epoch --
+        # a client that renders `updatedAt` shows 1 January 1970 as the day the
+        # list was last touched. `int|null`, and `null` is the honest answer.
+        path = os.path.join(self.cfg.data_dir, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"source": "vault", "items": [{"symbol": "SND"}]}, f)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertEqual(second.watchlist["updated_at"], 0)
+        self.assertEqual(second.state()["watchlist"],
+                         {"updatedAt": None, "count": 1})
+
+    def test_writing_one_is_audited(self):
+        status, _ = self.api("PUT", "/api/watchlist",
+                             {"source": "vault", "items": [{"symbol": "SND"}]})
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+        event = doc["events"][0]
+        self.assertEqual(event["event"], "watchlist")
+        self.assertEqual(event["detail"], {"items": 1, "source": "vault"})
+
+
+class StubQuoteService:
+    """A `quotes.QuoteService` double: returns a fixed map or raises a fixed
+    error, and remembers what it was asked -- so a test can hold the route's
+    own normalisation (upper-cased, deduplicated, order preserved) apart from
+    anything `QuoteService.quotes` itself does, which `test_quotes.py` already
+    covers and this module has no business re-proving."""
+
+    def __init__(self, result: dict | None = None, error: Exception | None = None) -> None:
+        self.result = {} if result is None else result
+        self.error = error
+        self.calls: list[list[str]] = []
+
+    def quotes(self, symbols):
+        self.calls.append(list(symbols))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class QuotesTest(DeskTestCase):
+    """`/api/quotes`: the phone's watchlist prices, proxied through the desk
+    so the Alpaca key never reaches it. `quotes.py`'s own cache, parsing and
+    redaction are `test_quotes.py`'s job; this class holds the route: the
+    `symbols` parameter, the envelope, and the boundary between a 400 the
+    route decides and an absence `QuoteService` decides silently."""
+
+    def test_the_desk_wires_a_real_quote_service_not_only_a_stub(self):
+        """No `StubQuoteService` here, deliberately -- every other test in
+        this class replaces `self.desk.quotes` before it ever calls the
+        route, which would pass identically if `Desk.__init__` built the
+        wrong class, read the wrong `Config` field, or never built one at
+        all. This is the one test that walks through the real wiring:
+        `self.cfg.alpaca_path` is `""` (DeskTestCase's `Config` never sets
+        one), so the real `Credentials` finds no key and the real
+        `QuoteService.quotes` raises `NotFound("no_quotes")` before it asks
+        anything of anybody -- `test_quotes.py`'s
+        `test_no_credentials_is_no_quotes` already holds that no-upstream-call
+        guarantee for the class itself; what this test adds is that the desk
+        actually reaches that class through the route rather than a double
+        standing in for it.
+        """
+        self.assertIsInstance(self.desk.quotes, QuoteService)
+        status, doc = self.api("GET", "/api/quotes?symbols=ACME", scope="producer")
+        self.assertEqual(status, 404, doc)
+        self.assertEqual(doc["error"], "no_quotes")
+
+    def test_without_a_credential_the_route_is_a_404_the_app_can_hide_on(self):
+        self.desk.quotes = StubQuoteService(error=NotFound("no_quotes"))
+        status, doc = self.api("GET", "/api/quotes?symbols=ACME", scope="producer")
+        self.assertEqual(status, 404, doc)
+        self.assertEqual(doc["error"], "no_quotes")
+
+    def test_symbols_are_required(self):
+        self.desk.quotes = StubQuoteService()
+        for qs in ("/api/quotes", "/api/quotes?symbols=", "/api/quotes?symbols=,,,"):
+            status, doc = self.api("GET", qs, scope="producer")
+            self.assertEqual(status, 400, doc)
+            self.assertEqual(doc["error"], "bad_request")
+        self.assertEqual(self.desk.quotes.calls, [])
+
+    def test_more_than_thirty_two_symbols_is_a_bad_request(self):
+        self.desk.quotes = StubQuoteService()
+        too_many = ",".join("S%d" % i for i in range(MAX_SYMBOLS + 1))
+        status, doc = self.api("GET", "/api/quotes?symbols=" + too_many, scope="producer")
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(self.desk.quotes.calls, [])
+
+        # Exactly the cap is fine -- this is a boundary, not a round number.
+        exactly = ",".join("S%d" % i for i in range(MAX_SYMBOLS))
+        status, doc = self.api("GET", "/api/quotes?symbols=" + exactly, scope="producer")
+        self.assertEqual(status, 200, doc)
+
+        # The cap applies to the deduplicated count, not the raw token count
+        # off the wire: forty tokens, twenty of them repeats, must not 400.
+        stub = StubQuoteService()
+        self.desk.quotes = stub
+        forty_raw = ",".join("S%d" % (i % 20) for i in range(40))
+        status, doc = self.api("GET", "/api/quotes?symbols=" + forty_raw, scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(len(stub.calls[0]), 20)
+
+    def test_a_symbol_that_is_not_one_is_refused(self):
+        self.desk.quotes = StubQuoteService()
+        status, doc = self.api("GET", "/api/quotes?symbols=BAD%20SYMBOL", scope="producer")
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(doc["error"], "bad_request")
+        self.assertIn("BAD SYMBOL", doc["detail"])
+        self.assertEqual(self.desk.quotes.calls, [])
+
+    def test_the_wire_carries_integers_only(self):
+        stub = StubQuoteService(result={
+            "ACME": {"lastCents": 24160, "prevCloseCents": 23184, "changeBp": 421,
+                     "bars": [{"t": "2026-08-01", "c": 24000}]},
+        })
+        self.desk.quotes = stub
+        status, doc = self.api("GET", "/api/quotes?symbols=acme", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertTrue(doc["ok"])
+        self.assertEqual(doc["feed"], "iex")
+        self.assertIsInstance(doc["asOf"], int)
+        row = doc["quotes"]["ACME"]
+        for value in (row["lastCents"], row["prevCloseCents"], row["changeBp"],
+                      row["bars"][0]["c"]):
+            self.assertIsInstance(value, int)
+            self.assertNotIsInstance(value, bool)
+        # lower-cased on the wire, normalised to upper before it ever reaches
+        # the service.
+        self.assertEqual(stub.calls, [["ACME"]])
+
+    def test_symbols_are_split_stripped_deduped_and_order_preserved(self):
+        stub = StubQuoteService()
+        self.desk.quotes = stub
+        status, doc = self.api(
+            "GET", "/api/quotes?symbols=" + urllib.parse.quote("tsla, acme ,TSLA,acme"),
+            scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(stub.calls, [["TSLA", "ACME"]])
+
+    def test_an_upstream_failure_is_a_502_carrying_no_secret(self):
+        self.desk.quotes = StubQuoteService(
+            error=Upstream(message="snapshots: RuntimeError: HTTP 403 for ..."))
+        status, doc = self.api("GET", "/api/quotes?symbols=ACME", scope="producer")
+        self.assertEqual(status, 502, doc)
+        self.assertEqual(doc["error"], "upstream")
+        self.assertNotIn("secret", json.dumps(doc).lower())
+
+    def test_a_numeric_symbol_is_accepted_and_absent_when_the_service_skips_it(self):
+        # `005930` is a KR listing: `watchlist.SYMBOL_RE` (this route's own
+        # check) admits digits, `quotes.SYMBOL_RE` (Alpaca's) does not -- so
+        # the route must pass it through rather than 400 the whole watchlist
+        # over one holding this provider cannot quote. The service (stubbed
+        # here; the real one is `test_quotes.py`'s job) silently omits it.
+        stub = StubQuoteService(result={"ACME": {
+            "lastCents": 100, "prevCloseCents": 100, "changeBp": 0, "bars": []}})
+        self.desk.quotes = stub
+        status, doc = self.api("GET", "/api/quotes?symbols=005930,ACME", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(stub.calls, [["005930", "ACME"]])
+        self.assertNotIn("005930", doc["quotes"])
+        self.assertIn("ACME", doc["quotes"])
+
+
 class PublishGatingTest(DeskTestCase):
     """When a page may reach the glass, which is most of what the desk decides."""
 
@@ -775,6 +1397,49 @@ class TickTest(DeskTestCase):
         self.assertEqual(self.file_edition()["state"], "published")
 
 
+class AuditTest(DeskTestCase):
+    """`GET /api/audit`: the same `store.audit()` calls the other routes already make."""
+
+    def test_the_audit_route_returns_the_events_newest_first(self):
+        # setUp's own PUT /api/schedule already wrote one "schedule" event, so
+        # this exercises the same ordering question with two more of the
+        # desk's real audit calls rather than a synthetic one.
+        doc = S.schedule_to_dict(S.DEFAULT_SCHEDULE)
+        doc["publish"] = {"policy": "immediate", "min_gap_minutes": 0}
+        status, body = self.api("PUT", "/api/schedule", doc)
+        self.assertEqual(status, 200, body)
+        status, body = self.api("POST", "/api/hold", {})
+        self.assertEqual(status, 200, body)
+
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+        events = doc["events"]
+        self.assertGreaterEqual(len(events), 2)
+        self.assertEqual(events[0]["event"], "hold")
+        self.assertEqual(events[1]["event"], "schedule")
+
+    def test_the_audit_route_clamps_the_limit(self):
+        self.api("POST", "/api/hold", {})          # a second event beside setUp's
+
+        status, doc = self.api("GET", "/api/audit?limit=0", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(len(doc["events"]), 1)     # clamped up to the floor of 1
+
+        status, doc = self.api("GET", "/api/audit?limit=9999", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertLessEqual(len(doc["events"]), 200)
+
+    def test_the_audit_route_is_producer_scope(self):
+        # Producer, not operator-only: a worker checking what the desk has
+        # done needs no more than the scope it already files editions with.
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+
+        status, raw, _ = self.call("GET", "/api/audit")
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw)["error"], "unauthorized")
+
+
 # -- one socket, several requests -----------------------------------------
 #
 # Everything above opens a connection per request, which is exactly why the
@@ -861,6 +1526,27 @@ class RawTestCase(DeskTestCase):
         conn = RawConnection(self.base)
         self.addCleanup(conn.close)
         return conn
+
+
+class DrainLimitTest(unittest.TestCase):
+    """`MAX_DRAIN_BYTES` against every cap a route actually enforces.
+
+    The constant's docstring claims it is "the largest any route accepts", and
+    that claim is what makes the transport's promise hold: a request inside the
+    limits is drained and keeps its connection, and one past them was never
+    going to be accepted anyway. A route whose own cap climbed above it would
+    break the promise silently -- a body the desk accepts by its own limit and
+    then cannot drain, costing a connection per request rather than failing
+    anywhere a test would look. So this asserts the claim rather than the
+    number, which is the only form of it that survives a new route.
+    """
+
+    def test_it_is_at_least_every_cap_a_route_enforces(self):
+        for name, cap in (("control body", MAX_CONTROL_BODY),
+                          ("a note", notes.MAX_NOTES_BYTES),
+                          ("a payload", tiles.MAX_PAYLOAD_BYTES),
+                          ("a tile", tiles.MAX_TILE_BYTES)):
+            self.assertGreaterEqual(MAX_DRAIN_BYTES, cap, name)
 
 
 class KeepAliveTest(RawTestCase):

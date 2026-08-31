@@ -88,6 +88,17 @@ curl -sS -X POST "$DESK/api/commands" -H "Authorization: Bearer $TOKEN" \
    a reader notices from across a room. Up to two revisions, then a verdict pass.
 6. **Commit.** `POST …/commit`, and report the command done.
 
+A run may also leave a `notes.md` in its workdir — the research behind the
+page: why this company, what moved, what was looked at and discarded. `kind`
+decides where it lands, and one of the three kinds decides it from the disk
+rather than from itself: `file_edition` files it beside the draft
+(`PUT …/notes.md`, step 4 above); `research` never opens a draft, so its note
+goes straight onto the command (`PUT /api/commands/<id>/notes.md`); `custom`
+is the operator's own text and can be either — a `news.json` in the workdir
+means it was an order and the note follows the draft, no `news.json` means it
+was a look and the note follows the command. Leaving no `notes.md` files
+nothing; that is the ordinary case, not a gap.
+
 ## Bring your own continuity
 
 There is nothing personal in this repository and there is not going to be. What

@@ -452,6 +452,19 @@ class AuditTest(StoreTestCase):
             self.store.audit("tick", {"i": i})
         self.assertEqual(len(self.store.recent_audit(limit=2)), 2)
 
+    def test_every_event_carries_a_sequence_that_orders_it(self):
+        # `seq` is the audit table's own AUTOINCREMENT primary key, exposed so
+        # a caller can page ("give me everything after seq N") without racing
+        # `at`, which two events in the same clock tick can share.
+        self.store.audit("publish", {"edition": "9f3a"})
+        self.store.audit("hold", {"until": T0 + 60})
+        rows = self.store.recent_audit()
+        self.assertEqual([r["event"] for r in rows], ["hold", "publish"])
+        newest, oldest = rows
+        self.assertIsInstance(newest["seq"], int)
+        self.assertIsInstance(oldest["seq"], int)
+        self.assertGreater(newest["seq"], oldest["seq"])
+
 
 class MetaTest(StoreTestCase):
     def test_a_note_to_self_round_trips_and_survives_a_reopen(self):

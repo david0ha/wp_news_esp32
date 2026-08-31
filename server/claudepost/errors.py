@@ -101,6 +101,24 @@ class TooLarge(DeskError):
     default_status = 413
 
 
+class Upstream(DeskError):
+    """Something the desk depends on failed, and it is not the caller's fault.
+
+    A 502 rather than a 500 because the two are read differently by whoever is
+    holding the phone: a 500 says the desk is broken and there is nothing to do
+    but wait for its owner, a 502 says the desk is fine and the market-data
+    provider is not. Only one of those is worth retrying in a minute.
+
+    The message reaching the wire is prose a human reads, as every ``detail``
+    is -- but this is the one code whose message is assembled from an upstream
+    library's exception text, so the module that raises it redacts the
+    credential before the string exists. See :mod:`claudepost.quotes`.
+    """
+
+    default_code = "upstream"
+    default_status = 502
+
+
 class Internal(DeskError):
     """The desk broke, and it is not the caller's fault.
 

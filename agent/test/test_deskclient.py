@@ -287,6 +287,70 @@ class ErrorTest(unittest.TestCase):
             self.assertNotIn(TOKEN, str(caught.exception))
 
 
+class PutNotesTest(unittest.TestCase):
+    """The dossier: a markdown note filed beside a draft or a command.
+
+    ``put_notes`` takes exactly one of the two owners it can file against --
+    naming both or neither is a programming error in the caller, not a desk
+    answer, so it never reaches the wire. See ``docs/desk-server.md``'s
+    dossier section for the two routes this fans out to.
+    """
+
+    def test_a_draft_note_goes_to_the_drafts_route(self):
+        desk, opener = client((200, b'{"ok":true}'))
+        desk.put_notes("why this company", draft=CID)
+        req = opener.requests[0]
+        self.assertEqual(req.full_url, "http://desk:8080/api/drafts/%s/notes.md" % CID)
+        self.assertEqual(req.get_header("Content-type"), "text/markdown; charset=utf-8")
+        self.assertEqual(req.data, b"why this company")
+
+    def test_a_command_note_goes_to_the_commands_route(self):
+        desk, opener = client((200, b'{"ok":true}'))
+        desk.put_notes("what came of the instruction", command=CID)
+        req = opener.requests[0]
+        self.assertEqual(req.full_url, "http://desk:8080/api/commands/%s/notes.md" % CID)
+        self.assertEqual(req.data, b"what came of the instruction")
+
+    def test_naming_both_or_neither_is_a_programming_error(self):
+        desk, opener = client()
+        with self.assertRaises(ValueError):
+            desk.put_notes("x")
+        with self.assertRaises(ValueError):
+            desk.put_notes("x", draft=CID, command=CID)
+        # Neither malformed call should have reached the wire.
+        self.assertEqual(opener.requests, [])
+
+    def test_a_draft_id_that_is_not_one_never_becomes_a_path(self):
+        # Same precondition claim() and open_draft() hold their ids to: this is
+        # the line where a caller's mistake stops being a string and starts
+        # being a path, so it must be caught before any request goes out.
+        desk, opener = client()
+        for bad in ("../..", "abc", "", "0123456789abcdef",
+                    "0123456789abcdef0123456789abcdeg",         # 32, but not hex
+                    "0123456789ABCDEF0123456789ABCDEF"):        # uuid4().hex is lower
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                desk.put_notes("x", draft=bad)
+        self.assertEqual(opener.requests, [])
+
+    def test_a_note_longer_than_the_cap_is_cut_at_a_codepoint(self):
+        # "가" is 3 bytes in utf-8, and 262144 is not a multiple of 3 -- a raw
+        # byte slice at the cap lands mid-character. 100,000 of them is 300 KB.
+        text = "가" * 100_000
+        desk, opener = client((200, b'{"ok":true}'))
+        desk.put_notes(text, draft=CID)
+        body = opener.requests[0].data
+        self.assertLessEqual(len(body), 262144)
+        body.decode("utf-8")  # must not raise: no dangling partial sequence
+
+    def test_a_refusal_carries_no_token(self):
+        echo = json.dumps({"ok": False, "error": "unauthorized",
+                           "detail": "Bearer " + TOKEN}).encode()
+        desk, _ = client((401, echo))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.put_notes("x", draft=CID)
+        self.assertNotIn(TOKEN, str(caught.exception))
+
+
 class SecretsTest(unittest.TestCase):
     """The two shapes a producer token arrives in."""
 

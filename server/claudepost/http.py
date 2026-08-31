@@ -49,11 +49,11 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import policy, schedule as sched, tiles
-from .app import Desk, as_int
+from . import notes, policy, quotes as Q, schedule as sched, tiles, watchlist as wl
+from .app import COMMAND_ID_RE, Desk, as_int
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
-from .errors import BadRequest, DeskError, Internal, NotFound, TooLarge, epoch_seconds
+from .errors import BadRequest, Conflict, DeskError, Internal, NotFound, TooLarge, epoch_seconds
 
 LOG = logging.getLogger("claudepost.http")
 
@@ -67,7 +67,15 @@ MAX_CONTROL_BODY = 64 * 1024
 #: a request inside the limits never costs its connection, and a longer one is
 #: already past anything the desk would have taken -- so the socket goes
 #: instead of the bytes.
-MAX_DRAIN_BYTES = max(MAX_CONTROL_BODY, tiles.MAX_PAYLOAD_BYTES, tiles.MAX_TILE_BYTES)
+#:
+#: Every cap is named in the ``max()`` rather than the largest of them being
+#: written down, which is what makes the sentence above true *by construction*
+#: instead of by arithmetic somebody did once. A note is the newest of them and
+#: is comfortably under the tile that decides the figure today -- so leaving it
+#: out changed nothing, and would go on changing nothing right up until the day
+#: a cap moved and this line quietly stopped meaning what it says.
+MAX_DRAIN_BYTES = max(MAX_CONTROL_BODY, notes.MAX_NOTES_BYTES,
+                      tiles.MAX_PAYLOAD_BYTES, tiles.MAX_TILE_BYTES)
 
 #: The longest a claim may park. Long enough that an idle worker makes one
 #: request a minute and a half; short enough that a stalled connection is
@@ -109,6 +117,19 @@ _SHEET_TYPES = {".png": "image/png", ".bmp": "image/bmp"}
 _TILE_ID = tiles.TILE_ID_RE.pattern.removeprefix("^").removesuffix(r"\Z")
 
 _TILE_PATH_RE = re.compile(r"^/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID)
+
+#: The command id, likewise from the module that owns it: `app.COMMAND_ID_RE`
+#: is what `Desk.notes` accepts, so every `/api/commands/<cid>/...` route
+#: below is built from this rather than a second `[0-9a-f]{8,64}` that could
+#: quietly stop matching what the store does.
+_CID = COMMAND_ID_RE.pattern.removeprefix("^").removesuffix(r"\Z")
+
+#: What a note is served as. Named rather than written at the handler because
+#: the charset is not decoration -- it is exactly the promise
+#: ``notes.validate()`` enforces on the way in, refusing anything that is not
+#: UTF-8 -- and a header and the check behind it are the pair that must not
+#: come to be spelled in two places.
+_NOTES_TYPE = "text/markdown; charset=utf-8"
 
 
 def _etag(body: bytes) -> str:
@@ -470,6 +491,15 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                                     self._body(tiles.MAX_TILE_BYTES))
         self._send_json(200, {"ok": True})
 
+    def h_put_draft_notes(self, match, _query) -> None:
+        self.desk.editions.put_draft_notes(match.group("draft"),
+                                           self._body(notes.MAX_NOTES_BYTES))
+        self._send_json(200, {"ok": True})
+
+    def h_get_draft_notes(self, match, _query) -> None:
+        """The notes filed with a draft, as the markdown they arrived as."""
+        self._send_notes(self.desk.editions.read_draft_notes(match.group("draft")))
+
     def h_draft_info(self, match, _query) -> None:
         self._send_json(200, {"ok": True, **self.desk.editions.draft_info(match.group("draft"))})
 
@@ -479,16 +509,61 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, self.desk.editions.proof(match.group("draft")))
 
     def h_sheet(self, match, _query) -> None:
-        """A proof sheet, so the worker that filed the draft can look at it.
+        """A draft's proof sheet, so the worker that filed it can look at it."""
+        self._send_sheet(match.group("draft"), match.group("name"))
+
+    def h_edition_sheet(self, match, _query) -> None:
+        """A published edition's proof sheet.
+
+        The draft route above can only ever answer for paper nobody has seen: a
+        draft is deleted the moment it commits. So anything that wants to show
+        the edition actually on the glass -- the reader site, an operator
+        checking what went out -- has to ask by the id the edition kept, and
+        that is this route rather than a flag on that one.
+        """
+        self._send_sheet(match.group("eid"), match.group("name"))
+
+    def h_edition_notes(self, match, _query) -> None:
+        """A published edition's notes.
+
+        The draft route can only ever answer for paper nobody has seen -- a
+        draft is deleted the moment it commits -- so the dossier the owner
+        reads beside the page actually on the wall is this one, asked for by
+        the id the edition kept. The same split, and the same reason, as the
+        two proof-sheet routes above.
+        """
+        self._send_notes(self.desk.editions.read_edition_notes(match.group("eid")))
+
+    def _send_notes(self, data: bytes | None) -> None:
+        """One dossier, or the 404 that "there is not one" means here.
+
+        An ordinary condition rather than an error -- the answer a missing tile
+        gets, for the same reason: the reader shows the page without a dossier,
+        so there is nothing an empty body could usefully mean instead.
+
+        Shared by the draft's route and the edition's, the way
+        :meth:`_send_sheet` is shared by the two proof routes. What differs
+        between them is which kind of id was asked about, and that belongs in
+        the handler that matched it rather than here.
+        """
+        if data is None:
+            raise NotFound()
+        self._send_bytes(200, data, _NOTES_TYPE)
+
+    def _send_sheet(self, owner: str, name: str) -> None:
+        """One sheet, by the id of whatever owns it.
+
+        ``editions.read_sheet`` tells a draft id from an edition id by their
+        regexes, so the two routes need no more separation than their patterns
+        already give them.
 
         The type comes from the suffix the name has already been checked
         against, because both are pictures the gate may leave: a converted PNG,
         or the BMP of a render that failed before conversion.
         """
-        name = match.group("name")
         if not SHEET_RE.match(name):
             raise BadRequest(message="not a sheet name")
-        data = self.desk.editions.read_sheet(match.group("draft"), name)
+        data = self.desk.editions.read_sheet(owner, name)
         if data is None:
             raise NotFound()
         self._send_bytes(200, data, _SHEET_TYPES[os.path.splitext(name)[1]])
@@ -505,10 +580,21 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                               "staged": self.desk.editions.staged_id()})
 
     def h_get_edition(self, match, _query) -> None:
-        doc = self.desk.store.get_edition(match.group("eid"))
+        eid = match.group("eid")
+        doc = self.desk.store.get_edition(eid)
         if doc is None:
             raise NotFound()
-        self._send_json(200, {"ok": True, "edition": doc})
+        # Beside the store's row rather than inside it: the row is the
+        # publication record and never changes, where the sheets and the note
+        # are files on disk that prune() can take away. Reading them per
+        # request keeps the answer true instead of merely recorded.
+        #
+        # The flag rather than the note, the way `draft_info` does it: a client
+        # asking what an edition holds should not be sent a quarter of a
+        # megabyte of markdown to find out there was none.
+        self._send_json(200, {"ok": True, "edition": doc,
+                              "sheets": self.desk.editions.sheet_names(eid),
+                              "has_notes": self.desk.editions.has_notes(eid)})
 
     def h_promote(self, match, _query) -> None:
         self._send_commit(self.desk.editions.promote(match.group("eid")))
@@ -561,7 +647,30 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def h_list_commands(self, _match, query) -> None:
         status = (query.get("status") or [None])[0]
         self._send_json(200, {"ok": True,
-                              "commands": self.desk.store.list_commands(status=status)})
+                              "commands": self.desk.commands(status=status)})
+
+    def h_put_command_notes(self, match, _query) -> None:
+        """File a note on a command -- what came of the instruction.
+
+        Refused `409` only while the command is still `pending`: nothing has
+        happened to it yet for a note to be about. Every other status takes
+        one: claimed, done or failed describe a worker's own report, and
+        expired or cancelled describe an outcome the queue or an operator
+        settled without a worker ever touching it -- which is exactly the
+        kind of thing worth writing down too.
+        """
+        cid = match.group("cid")
+        command = self.desk.store.get_command(cid)
+        if command is None:
+            raise NotFound(message=f"no command {cid}")
+        if command["status"] == "pending":
+            raise Conflict(message="nothing has claimed this command yet")
+        self.desk.notes.put(cid, self._body(notes.MAX_NOTES_BYTES))
+        self._send_json(200, {"ok": True})
+
+    def h_get_command_notes(self, match, _query) -> None:
+        """The note filed on a command, as the markdown a worker filed it as."""
+        self._send_notes(self.desk.notes.get(match.group("cid")))
 
     def h_cancel(self, match, _query) -> None:
         if not self.desk.store.cancel_command(match.group("cid")):
@@ -615,6 +724,40 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                               "transitions": sched.describe(self.desk.schedule,
                                                             self.desk.clock.now(), count)})
 
+    # -- handlers: the watchlist --------------------------------------------
+    def h_get_watchlist(self, _match, _query) -> None:
+        self._send_json(200, {"ok": True, "watchlist": self.desk.watchlist})
+
+    def h_put_watchlist(self, _match, _query) -> None:
+        """Validate the whole document, stamp it, then put it in force and write it down.
+
+        Same shape as :meth:`h_put_schedule`: there is no partial watchlist, so
+        a document that fails :func:`~claudepost.watchlist.parse_watchlist` is
+        refused whole and leaves the one in force untouched. ``updated_at`` is
+        stamped here rather than trusted from the body -- `parse_watchlist`
+        never reads one, on purpose, so the desk's own clock is the only
+        source of the instant a phone app or a private script sees.
+        """
+        doc = wl.parse_watchlist(self._json_body())
+        doc["updated_at"] = int(self.desk.clock.now())
+        self.desk.set_watchlist(doc)
+        self.desk.store.audit("watchlist", {"items": len(doc["items"]),
+                                            "source": doc["source"]})
+        self._send_json(200, {"ok": True, "watchlist": self.desk.watchlist})
+
+    # -- handlers: quotes ---------------------------------------------------
+    def h_quotes(self, _match, query) -> None:
+        """Last price, day's change and a sparkline, proxied so the phone
+        never sees the Alpaca key -- see `quotes.py`'s module docstring.
+
+        A symbol the route accepts but `QuoteService` cannot answer for is
+        simply absent from `quotes`, never a 400: see `_parse_symbols`.
+        """
+        symbols = _parse_symbols(query)
+        answer = self.desk.quotes.quotes(symbols)
+        self._send_json(200, {"ok": True, "asOf": int(self.desk.clock.now()),
+                              "feed": Q.FEED, "quotes": answer})
+
     # -- handlers: operations ---------------------------------------------
     def h_state(self, _match, _query) -> None:
         self._send_json(200, self.desk.state())
@@ -637,6 +780,14 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self.desk.store.set_hold(until)
         self.desk.store.audit("hold", {"until": until})
         self._send_json(200, {"ok": True, "hold": as_int(until)})
+
+    def h_audit(self, _match, query) -> None:
+        """The recent audit log, newest first -- what the desk has done, not
+        what a board is showing. Producer scope: a worker asking what already
+        happened needs no more than the scope it files editions with.
+        """
+        limit = min(max(_query_int(query, "limit", 50), 1), 200)
+        self._send_json(200, {"ok": True, "events": self.desk.store.recent_audit(limit)})
 
     # -- bodies and responses ---------------------------------------------
     def _body(self, limit: int) -> bytes:
@@ -813,6 +964,9 @@ _ROUTES = [
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_payload)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID), {
         "PUT": ("producer", DeskHTTPRequestHandler.h_put_tile)}),
+    (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/notes\.md\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_draft_notes),
+        "PUT": ("producer", DeskHTTPRequestHandler.h_put_draft_notes)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof\Z"), {
         "POST": ("producer", DeskHTTPRequestHandler.h_proof)}),
     (re.compile(r"^/api/drafts/(?P<draft>[0-9a-f]{32})/proof/(?P<name>[^/]{1,60})\Z"), {
@@ -824,6 +978,10 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_list_editions)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_get_edition)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/notes\.md\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_notes)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/proof/(?P<name>[^/]{1,60})\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_sheet)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_promote)}),
 
@@ -832,10 +990,13 @@ _ROUTES = [
         "POST": ("producer", DeskHTTPRequestHandler.h_enqueue)}),
     (re.compile(r"^/api/commands/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_claim)}),
-    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})\Z"), {
+    (re.compile(r"^/api/commands/(?P<cid>%s)\Z" % _CID), {
         "DELETE": ("operator", DeskHTTPRequestHandler.h_cancel)}),
-    (re.compile(r"^/api/commands/(?P<cid>[0-9a-f]{8,64})/(?P<verb>done|fail)\Z"), {
+    (re.compile(r"^/api/commands/(?P<cid>%s)/(?P<verb>done|fail)\Z" % _CID), {
         "POST": ("producer", DeskHTTPRequestHandler.h_finish)}),
+    (re.compile(r"^/api/commands/(?P<cid>%s)/notes\.md\Z" % _CID), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_command_notes),
+        "PUT": ("producer", DeskHTTPRequestHandler.h_put_command_notes)}),
 
     (re.compile(r"^/api/directives\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_list_directives),
@@ -849,12 +1010,21 @@ _ROUTES = [
     (re.compile(r"^/api/schedule/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_schedule_next)}),
 
+    (re.compile(r"^/api/watchlist\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_watchlist),
+        "PUT": ("operator", DeskHTTPRequestHandler.h_put_watchlist)}),
+
+    (re.compile(r"^/api/quotes\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_quotes)}),
+
     (re.compile(r"^/api/state\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_state)}),
     (re.compile(r"^/api/publish\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_publish)}),
     (re.compile(r"^/api/hold\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_hold)}),
+    (re.compile(r"^/api/audit\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_audit)}),
 ]
 
 
@@ -932,6 +1102,36 @@ def _epoch_field(doc: dict, key: str) -> float | None:
     :func:`~claudepost.errors.epoch_seconds`.
     """
     return epoch_seconds(doc.get(key), key)
+
+
+def _parse_symbols(query: dict) -> list[str]:
+    """The ``symbols`` query parameter as a normalised, capped list.
+
+    Split on commas, stripped, upper-cased and deduplicated preserving order
+    -- the same normalisation :func:`watchlist._symbol` applies to one
+    ticker, done here for a whole comma list, because the phone sends its
+    entire watchlist in one call rather than one request per company.
+
+    Validated against :data:`watchlist.SYMBOL_RE`, the *wider* shape a
+    watchlist item may take -- a KR listing is numeric -- and deliberately
+    not :data:`quotes.SYMBOL_RE`, which is narrower because it decides only
+    what is worth asking Alpaca about. A single Korean holding among the
+    tickers must not turn the whole request into a 400 and cost every other
+    company its price, so this only refuses a string that cannot be a
+    symbol *at all*; a symbol this route accepts but the provider cannot
+    quote is `QuoteService.quotes`'s to drop silently, not this function's.
+    """
+    raw = (query.get("symbols") or [""])[0]
+    symbols = list(dict.fromkeys(
+        s for s in (part.strip().upper() for part in raw.split(",")) if s))
+    if not symbols:
+        raise BadRequest(message="symbols is required")
+    if len(symbols) > Q.MAX_SYMBOLS:
+        raise BadRequest(message="%d symbols at most" % Q.MAX_SYMBOLS)
+    for symbol in symbols:
+        if not wl.SYMBOL_RE.match(symbol):
+            raise BadRequest(message="%r is not a symbol" % symbol)
+    return symbols
 
 
 def _query_int(query: dict, key: str, default: int) -> int:
