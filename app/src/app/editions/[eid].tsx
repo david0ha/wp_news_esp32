@@ -96,11 +96,11 @@ export default function EditionDetail() {
         <ScrollView contentContainerStyle={styles.scroll}>
           <Card style={styles.metaCard}>
             <InfoRow label="ID" value={edition.data.id.slice(0, 8)} />
-            <InfoRow
-              label="When"
-              value={editionWhen(edition.data, now) || '—'}
-              tone={edition.data.published_at !== null ? 'up' : 'neutral'}
-            />
+            {/* Neutral, not `up` — green on this design means DIRECTION (a price moved, a change
+                is positive), never "this happened successfully". `editionWhen()`'s own text
+                already carries published-vs-filed; a colour on top of it would be decoration
+                wearing the one colour that means something else on every other screen. */}
+            <InfoRow label="When" value={editionWhen(edition.data, now) || '—'} />
             <InfoRow label="Tiles" value={String(edition.data.tile_count)} last />
           </Card>
 
