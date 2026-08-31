@@ -188,7 +188,7 @@ export default function Today() {
                       figures={payload.figures}
                       hasNotes={edition.data?.has_notes ?? false}
                       onPressNotes={
-                        currentEid ? () => router.push(`/notes/edition/${currentEid}`) : undefined
+                        currentEid ? () => router.push(`/notes/editions/${currentEid}`) : undefined
                       }
                     />
                   </>

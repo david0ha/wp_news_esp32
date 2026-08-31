@@ -4,8 +4,9 @@
 // every face comes from a theme token, never a literal, so a thesis note reads as this app's type
 // rather than as whatever the markdown happened to ask for.
 import { Fragment, type ReactNode } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { Linking, StyleSheet, Text, View } from 'react-native'
 import type { Block, Span } from '../lib/md'
+import { openMdLink } from '../lib/links'
 import { colors } from '../theme/colors'
 import { spacing } from '../theme/spacing'
 import { typography, type TypographyRole } from '../theme/typography'
@@ -87,7 +88,20 @@ function renderSpan(span: Span, tone: MarkdownTone): ReactNode {
         </Text>
       )
     case 'link':
-      return <Text style={[styles.link, { color: TEXT[tone] }]}>{span.text}</Text>
+      // On both tones — a dossier's own source links are as much the point as a thesis note's.
+      // `openMdLink` swallows whatever `Linking.openURL` rejects with (src/lib/links.ts), so a
+      // malformed or unsupported href reads as a tap that quietly did nothing rather than a crash.
+      return (
+        <Text
+          accessibilityRole="link"
+          style={[styles.link, { color: TEXT[tone] }]}
+          onPress={() => {
+            void openMdLink(span.href, Linking.openURL)
+          }}
+        >
+          {span.text}
+        </Text>
+      )
   }
 }
 

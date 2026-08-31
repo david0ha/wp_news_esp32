@@ -20,6 +20,19 @@ import { colors as theme } from '../theme/index'
 // faces are ready or have given up."
 SplashScreen.preventAutoHideAsync()
 
+// The platform's native header, styled to this app's chrome — shared by every route in this stack
+// that gets one: `watch/[symbol]` (Task 28) and the editions/notes routes below it (Task 30). All
+// of them are reached only from a tap or a deep link, never a tab of its own, so the platform's own
+// back control is the right one rather than this app's hand-built chrome header. One definition
+// rather than one copy per screen, so the four never drift out of matching each other.
+const NATIVE_HEADER = {
+  headerShown: true,
+  headerStyle: { backgroundColor: theme.desk },
+  headerTintColor: theme.signal.chrome.tint,
+  headerTitleStyle: { color: theme.deskText },
+  headerShadowVisible: false,
+} as const
+
 export default function RootLayout() {
   const [loaded, error] = useAppFonts()
 
@@ -67,20 +80,18 @@ export default function RootLayout() {
               }}
             >
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              {/* The one screen in this stack with a header at all — reached only from a
-                  `WatchRow` tap or a deep link, never a tab of its own, so the platform's native
-                  back control (Task 28) is the right one rather than this app's usual hand-built
-                  chrome header. `title` is set per-screen, dynamically, by the route itself. */}
-              <Stack.Screen
-                name="watch/[symbol]"
-                options={{
-                  headerShown: true,
-                  headerStyle: { backgroundColor: theme.desk },
-                  headerTintColor: theme.signal.chrome.tint,
-                  headerTitleStyle: { color: theme.deskText },
-                  headerShadowVisible: false,
-                }}
-              />
+              {/* Reached only from a `WatchRow` tap or a deep link, never a tab of its own, so the
+                  platform's native back control (Task 28) is the right one rather than this app's
+                  usual hand-built chrome header. `title` is set per-screen, dynamically, by the
+                  route itself. */}
+              <Stack.Screen name="watch/[symbol]" options={NATIVE_HEADER} />
+              {/* The editorial history and its dossiers (Task 30) — reached from the Desk tab's
+                  EDITIONS row, a StateStrip pointer, or a "The dossier" / "What came of it" link,
+                  never a tab of its own. Same reasoning as `watch/[symbol]` above: the platform's
+                  native header rather than this app's hand-built chrome one, and the same styling. */}
+              <Stack.Screen name="editions/index" options={NATIVE_HEADER} />
+              <Stack.Screen name="editions/[eid]" options={NATIVE_HEADER} />
+              <Stack.Screen name="notes/[kind]/[id]" options={NATIVE_HEADER} />
               {/* `settings/index`, not `settings`: there is no `settings/_layout.tsx`, so the
                   directory is flattened into this stack rather than becoming a navigator of its
                   own. `settings/pair` *is* one — its `_layout` carries the wizard's state across
