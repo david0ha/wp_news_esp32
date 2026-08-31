@@ -94,18 +94,26 @@ export default function Today() {
           />
         }
       >
-        <Animated.View
-          key={`head-${revealKey}`}
-          entering={reducedMotion ? undefined : FadeInDown.duration(260)}
-          style={styles.header}
-        >
-          <Masthead
-            dateline={payload?.dateline ?? ''}
-            edition={payload?.edition ?? ''}
-            style={styles.masthead}
-          />
-          <HeaderGear />
-        </Animated.View>
+        {payload ? (
+          // Keyed and animated only once there is real content: gating this on `payload` (rather
+          // than rendering unconditionally with `revealKey` falling back to a sentinel) is what
+          // keeps the cold-load sequence a single cascade — mount once, with the dateline already
+          // populated — instead of an empty FadeIn immediately followed by a second one when the
+          // fetch resolves.
+          <Animated.View
+            key={`head-${revealKey}`}
+            entering={reducedMotion ? undefined : FadeInDown.duration(260)}
+            style={styles.header}
+          >
+            <Masthead dateline={payload.dateline} edition={payload.edition} style={styles.masthead} />
+            <HeaderGear />
+          </Animated.View>
+        ) : (
+          <View style={styles.header}>
+            <Masthead dateline="" edition="" style={styles.masthead} />
+            <HeaderGear />
+          </View>
+        )}
 
         {news.isLoading ? (
           <ScreenMessage loading />
@@ -150,7 +158,7 @@ export default function Today() {
                     <Briefs briefs={payload.briefs} />
                   </>
                 ) : null}
-                {payload.figures.length > 0 ? (
+                {payload.figures.length > 0 || edition.data?.has_notes ? (
                   <>
                     <Standing label="THE DOSSIER" tone="paper" />
                     <DossierRail
