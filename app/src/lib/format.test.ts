@@ -9,9 +9,11 @@ import {
   formatCents,
   formatChange,
   formatCount,
+  formatDateline,
   formatGeneratedAt,
   formatInterval,
   formatMs,
+  formatSinceTime,
   pageLabel,
   pollSourceLabel,
   sleepPresetInForce,
@@ -256,5 +258,37 @@ describe('sleepPresetInForce', () => {
     // A board carrying 20 minutes from somewhere else lights nothing, which is honest: none of the
     // chips describes it. The caller compares, so this need not know what is on offer.
     expect(sleepPresetInForce('nvs', 1200)).toBe(1200)
+  })
+})
+
+describe('formatDateline', () => {
+  it('abbreviates the wire’s all-caps dateline for the masthead row', () => {
+    // The committed fixture's own dateline (components/news_core/test/host/fixtures/news.json).
+    expect(formatDateline('FRIDAY, AUGUST 14, 2026')).toBe('FRI, AUG 14')
+    expect(formatDateline('SATURDAY, AUGUST 15, 2026')).toBe('SAT, AUG 15')
+    expect(formatDateline('SUNDAY, JANUARY 2, 2026')).toBe('SUN, JAN 2')
+  })
+
+  it('shows the raw string on anything that does not parse', () => {
+    // A producer bug should be visible on screen, not silently blanked — same posture as
+    // formatGeneratedAt() above.
+    expect(formatDateline('')).toBe('')
+    expect(formatDateline('this morning')).toBe('this morning')
+    expect(formatDateline('14 August 2026')).toBe('14 August 2026')
+  })
+})
+
+describe('formatSinceTime', () => {
+  it('renders an edition’s published_at as a UTC HH:MM clock', () => {
+    // UTC, not the phone's local zone — same reasoning as formatGeneratedAt(): deterministic
+    // across machines, and it never draws a different hour than the desk's own record.
+    expect(formatSinceTime(1786684320)).toBe('05:12') // 2026-08-14T05:12:00Z
+    expect(formatSinceTime(1735689599)).toBe('23:59') // 2024-12-31T23:59:59Z, floored
+  })
+
+  it('is empty for an unknown or absent instant, so the caller can omit the stamp', () => {
+    expect(formatSinceTime(0)).toBe('')
+    expect(formatSinceTime(-5)).toBe('')
+    expect(formatSinceTime(NaN)).toBe('')
   })
 })

@@ -241,3 +241,60 @@ export function sleepPresetInForce(source: SleepSource, sleepSeconds: number): n
   if (source === 'default') return SLEEP_PRESET_DEFAULT
   return sleepSeconds
 }
+
+const DAY_ABBR: Record<string, string> = {
+  SUNDAY: 'SUN',
+  MONDAY: 'MON',
+  TUESDAY: 'TUE',
+  WEDNESDAY: 'WED',
+  THURSDAY: 'THU',
+  FRIDAY: 'FRI',
+  SATURDAY: 'SAT',
+}
+
+const MONTH_ABBR: Record<string, string> = {
+  JANUARY: 'JAN',
+  FEBRUARY: 'FEB',
+  MARCH: 'MAR',
+  APRIL: 'APR',
+  MAY: 'MAY',
+  JUNE: 'JUN',
+  JULY: 'JUL',
+  AUGUST: 'AUG',
+  SEPTEMBER: 'SEP',
+  OCTOBER: 'OCT',
+  NOVEMBER: 'NOV',
+  DECEMBER: 'DEC',
+}
+
+/**
+ * `news.dateline` ("FRIDAY, AUGUST 14, 2026") to the masthead's dateline row ("FRI, AUG 14").
+ *
+ * Shown as it arrived on anything that doesn't parse — same posture as `formatGeneratedAt()`: a
+ * producer bug belongs on screen, not silently hidden behind a fallback that looks plausible.
+ */
+export function formatDateline(dateline: string): string {
+  const m = /^([A-Za-z]+),\s*([A-Za-z]+)\s+(\d{1,2}),?\s*\d{4}$/.exec(dateline.trim())
+  if (!m) return dateline
+  const day = DAY_ABBR[m[1].toUpperCase()]
+  const month = MONTH_ABBR[m[2].toUpperCase()]
+  if (!day || !month) return dateline
+  return `${day}, ${month} ${Number(m[3])}`
+}
+
+/**
+ * An edition's `published_at` (epoch seconds) as a "06:04" stamp — Today's `<SheetPreview>`'s
+ * "hangs there since" line.
+ *
+ * UTC, not the phone's own zone: `formatGeneratedAt()`'s reasoning applies again — a reader must
+ * not see a different hour than the desk's own record because of where the phone happens to be.
+ * Empty for anything that isn't a real past instant, so the caller omits the stamp rather than
+ * printing a clock reading midnight 1970.
+ */
+export function formatSinceTime(epochSeconds: number): string {
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return ''
+  const d = new Date(epochSeconds * 1000)
+  const hh = String(d.getUTCHours()).padStart(2, '0')
+  const mm = String(d.getUTCMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
+}
