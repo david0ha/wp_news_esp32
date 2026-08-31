@@ -80,7 +80,13 @@ export default function Board() {
   const retry = useCallback(async () => {
     const saved = await getDeviceBaseUrl()
     const found = await discoverDevice([saved, baseUrl, `http://${DEFAULT_HOST}`])
-    if (found && found !== baseUrl) await setBaseUrl(found)
+    if (found && found !== baseUrl) {
+      await setBaseUrl(found)
+      // `useDevice()`'s client is recreated from the new baseUrl on the next render, so the
+      // refetch right below can still land on the stale client if it races that render. Not a
+      // bug to chase: `useDeviceState`'s own 5s `refetchInterval` self-corrects a beat later
+      // either way, hitting the rediscovered board on its next tick.
+    }
     await deviceState.refetch()
   }, [baseUrl, setBaseUrl, deviceState])
 

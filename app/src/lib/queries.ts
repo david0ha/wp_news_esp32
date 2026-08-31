@@ -345,7 +345,12 @@ export function useAudit(limit?: number) {
 /**
  * The live board snapshot. `enabled` is the caller's call, not this hook's — Board and Today are
  * the only screens that poll it, and every other screen must not wake a sleeping board just by
- * being open.
+ * being open. The board only redraws when the edition changed, so there is nothing to gain from
+ * polling faster than this 5s interval — it is "keep the phone screen roughly current", not a
+ * live feed. It is also what holds a sleeping board awake while a screen has this enabled: every
+ * request restarts the board's awake window (docs/app-control.md), which is the other half of why
+ * `enabled` matters — a screen that turns this on is spending the board's battery, not just its
+ * own bandwidth.
  */
 export function useDeviceState(enabled: boolean) {
   const { client } = useDevice()
