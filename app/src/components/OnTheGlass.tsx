@@ -13,7 +13,7 @@ import Svg, { Circle } from 'react-native-svg'
 import { Sheet } from './Sheet'
 import { Stamp } from './Stamp'
 import { SCREEN_H, SCREEN_W } from '../lib/screen'
-import { colors, motion, pressTransition, pressedScale, spacing, typography } from '../theme/index'
+import { colors, motion, spacing, typography, usePressedScale } from '../theme/index'
 
 // Portrait 1200 x 1600 — the panel's own geometry, taken from lib/screen.ts rather than spelled
 // out again, because it is the same number the decoder reads a framebuffer with and two spellings
@@ -90,7 +90,7 @@ export function OnTheGlass({
   style?: ViewStyle
 }) {
   const reducedMotion = useReducedMotion()
-  const [pressed, setPressed] = useState(false)
+  const [press, pressStyle] = usePressedScale()
   // A sheet that would not load, said on the paper rather than left as a white rectangle. The
   // fetch happens inside expo-image (`useSheet` builds the URL and nothing else), so this is the
   // only place the failure is observable at all. Reset whenever the source changes, or a sheet
@@ -222,10 +222,9 @@ export function OnTheGlass({
           }
           accessibilityHint="Opens the sheet full size, where it can be pinched to zoom."
           onPress={onPress}
-          onPressIn={() => setPressed(true)}
-          onPressOut={() => setPressed(false)}
+          {...press}
         >
-          <Animated.View style={[pressTransition, pressed && !reducedMotion && pressedScale]}>
+          <Animated.View style={pressStyle}>
             {paper}
           </Animated.View>
         </Pressable>

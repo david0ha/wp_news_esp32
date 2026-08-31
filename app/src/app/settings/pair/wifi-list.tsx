@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { StepScaffold } from '../../../components/StepScaffold'
 import { IconBadge } from '../../../components/IconBadge'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../../onboarding/flow'
 import { esp32, type ScanNetwork } from '../../../lib/esp32'
-import { colors, pressTransition, pressedScale, radius } from '../../../theme/index'
+import { colors, radius, usePressedScale } from '../../../theme/index'
 
 // "Other…" sentinel — lets the user provision a hidden/unlisted SSID typed on the password step.
 const OTHER = '__other__'
@@ -21,10 +21,9 @@ export default function WifiList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [other, setOther] = useState(false)
-  const [rescanPressed, setRescanPressed] = useState(false)
-  const [retryPressed, setRetryPressed] = useState(false)
-  const [otherPressed, setOtherPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [rescanPress, rescanPressStyle] = usePressedScale()
+  const [retryPress, retryPressStyle] = usePressedScale()
+  const [otherPress, otherPressStyle] = usePressedScale()
 
   const scan = useCallback(async () => {
     setLoading(true)
@@ -77,15 +76,12 @@ export default function WifiList() {
         <Pressable
           accessibilityLabel="Rescan networks"
           onPress={scan}
-          onPressIn={() => setRescanPressed(true)}
-          onPressOut={() => setRescanPressed(false)}
+          {...rescanPress}
           // 18 pt glyph -> 44 pt target: the hitSlop makes up the rest rather than growing the icon.
           hitSlop={13}
           disabled={loading}
         >
-          <Animated.View
-            style={[pressTransition, rescanPressed && !reducedMotion && pressedScale]}
-          >
+          <Animated.View style={rescanPressStyle}>
             <Ionicons name="refresh" size={18} color={loading ? colors.deskFaint : colors.deskText} />
           </Animated.View>
         </Pressable>
@@ -100,13 +96,10 @@ export default function WifiList() {
         ) : error ? (
           <Pressable
             onPress={scan}
-            onPressIn={() => setRetryPressed(true)}
-            onPressOut={() => setRetryPressed(false)}
+            {...retryPress}
             accessibilityRole="button"
           >
-            <Animated.View
-              style={[styles.state, pressTransition, retryPressed && !reducedMotion && pressedScale]}
-            >
+            <Animated.View style={[styles.state, retryPressStyle]}>
               <Text style={styles.stateText}>Couldn’t reach the board. Make sure you’re on its setup Wi-Fi.</Text>
               <Text style={styles.retry}>TAP TO RETRY</Text>
             </Animated.View>
@@ -138,16 +131,10 @@ export default function WifiList() {
                 setSelectedNetwork(null)
                 setSelectedSecured(true)
               }}
-              onPressIn={() => setOtherPressed(true)}
-              onPressOut={() => setOtherPressed(false)}
+              {...otherPress}
             >
               <Animated.View
-                style={[
-                  styles.row,
-                  styles.rowBordered,
-                  pressTransition,
-                  otherPressed && !reducedMotion && pressedScale,
-                ]}
+                style={[styles.row, styles.rowBordered, otherPressStyle]}
               >
                 <Text style={[styles.ssid, other && styles.ssidSelected]}>Other…</Text>
                 {other ? <Ionicons name="checkmark" size={20} color={colors.signal.chrome.tint} /> : null}
@@ -172,22 +159,19 @@ function NetworkRow({
   selected: boolean
   onPress: () => void
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected }}
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
       <Animated.View
         style={[
           styles.row,
           bordered && styles.rowBordered,
-          pressTransition,
-          pressed && !reducedMotion && pressedScale,
+          pressStyle,
         ]}
       >
         <Text style={[styles.ssid, selected && styles.ssidSelected]} numberOfLines={1}>

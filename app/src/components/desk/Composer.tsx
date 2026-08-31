@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native'
-import * as Haptics from 'expo-haptics'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Button } from '../Button'
 import { SegmentedControl } from '../SegmentedControl'
 import { Stamp } from '../Stamp'
 import { useCustomCommand, useOrderEdition, useResearch } from '../../lib/queries'
-import { DeskError, deskHumanError } from '../../lib/desk'
-import { colors, radius, spacing, typography } from '../../theme/index'
+import { deskHumanError } from '../../lib/desk'
+import { useRaisedHeaderInset } from '../../lib/layout'
+import { colors, radius, spacing, tapLight, typography } from '../../theme/index'
 
 /** The three things a phone can ask the desk for, in the order the segmented control shows them. */
 export const COMPOSER_KINDS = ['edition', 'research', 'custom'] as const
@@ -53,26 +52,15 @@ const DISMISS_MS = 900
  */
 export function Composer({
   initialKind,
-  fullScreen,
   onDone,
 }: {
   initialKind: ComposerKind
-  /**
-   * True when this route is the FIRST screen of the stack and therefore renders full-screen rather
-   * than as a form sheet — a deep link, or a cold start straight into `/compose`. `compose.tsx`
-   * derives it from the same `router.canGoBack()` it already needs for `onDone`.
-   */
-  fullScreen: boolean
   onDone: () => void
 }) {
-  // THE INSET IS CONDITIONAL, and it was measured rather than assumed. Inside the form sheet this
-  // route normally is, `insets.top` still reports the device's full status-bar allowance — 62 pt on
-  // an iPhone 17 Pro, measured off two screenshots of the same sheet with and without it — even
-  // though iOS has already presented the sheet below the bar. Applied unconditionally that is a
-  // band of dead chrome above a sheet only half a screen tall. Dropped unconditionally, the header
-  // lands on the clock in the one case `compose.tsx` explicitly documents. So it is applied exactly
-  // where the view really does start at the top of the screen.
-  const insets = useSafeAreaInsets()
+  // Computed here rather than threaded in as a `fullScreen` prop: it is a question about how THIS
+  // view is presented, which is a thing this view can ask. `useRaisedHeaderInset` carries the
+  // measurement and the reasoning, once, for both routes that need it.
+  const headerInset = useRaisedHeaderInset()
   const [kind, setKind] = useState<ComposerKind>(initialKind)
   const [text, setText] = useState('')
 
@@ -103,7 +91,7 @@ export function Composer({
         onSuccess: () => {
           // One haptic, paired with the line above it — the gate's rule is that a tap the phone
           // acknowledges in the hand must also be acknowledged on the screen.
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+          tapLight()
         },
       },
     )
@@ -114,7 +102,7 @@ export function Composer({
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={[styles.header, { paddingTop: (fullScreen ? insets.top : 0) + spacing[8] }]}>
+      <View style={[styles.header, { paddingTop: headerInset + spacing[8] }]}>
         <Stamp tone="chrome">order</Stamp>
         <Button label={sent ? 'Done' : 'Cancel'} variant="ghost" onPress={onDone} />
       </View>
@@ -162,9 +150,7 @@ export function Composer({
 
         {mutation.isError ? (
           <Text style={styles.error}>
-            {mutation.error instanceof DeskError
-              ? deskHumanError(mutation.error)
-              : 'The desk didn’t take that.'}
+            {deskHumanError(mutation.error, 'The desk didn’t take that.')}
           </Text>
         ) : null}
       </View>
@@ -200,10 +186,8 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   hint: {
-    ...typography.ui,
-    fontSize: 12,
+    ...typography.note,
     color: colors.deskFaint,
-    lineHeight: 17,
     marginTop: -spacing[8],
   },
   confirm: {

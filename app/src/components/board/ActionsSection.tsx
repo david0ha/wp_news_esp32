@@ -86,9 +86,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   note: {
-    ...typography.ui,
-    fontSize: 12,
+    ...typography.note,
     color: colors.deskFaint,
-    lineHeight: 17,
   },
 })

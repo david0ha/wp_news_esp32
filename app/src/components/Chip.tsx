@@ -1,8 +1,7 @@
-import { useState } from 'react'
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, pressTransition, pressedScale, radius, typography } from '../theme/index'
+import Animated from 'react-native-reanimated'
+import { colors, radius, typography, usePressedScale } from '../theme/index'
 
 /**
  * A small rounded label/toggle — desk chrome, system font. With `onPress` it acts as a selectable
@@ -30,8 +29,7 @@ export function Chip({
   disabled?: boolean
   style?: ViewStyle
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   const toneColor =
     tone === 'up'
       ? colors.signal.chrome.up
@@ -66,16 +64,14 @@ export function Chip({
       disabled={disabled}
       hitSlop={10}
       pressRetentionOffset={12}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
       <Animated.View
         style={[
           styles.chip,
-          pressTransition,
           active && styles.active,
           disabled && styles.disabled,
-          pressed && !reducedMotion && pressedScale,
+          pressStyle,
           style,
         ]}
       >

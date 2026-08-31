@@ -7,7 +7,7 @@ import { ScreenMessage } from '../../../components/ScreenMessage'
 import { Sheet } from '../../../components/Sheet'
 import { Standing } from '../../../components/Standing'
 import { useDeskClient, useNotes } from '../../../lib/queries'
-import { DeskError, deskHumanError, type NotesKind } from '../../../lib/desk'
+import { deskHumanError, type NotesKind } from '../../../lib/desk'
 import { parse } from '../../../lib/md'
 import { colors, spacing, typography } from '../../../theme/index'
 
@@ -81,7 +81,7 @@ export default function Notes() {
       ) : notes.isError ? (
         <ScreenMessage
           error={
-            notes.error instanceof DeskError ? deskHumanError(notes.error) : 'Couldn’t load these notes.'
+            deskHumanError(notes.error, 'Couldn’t load these notes.')
           }
           onRetry={() => notes.refetch()}
         />

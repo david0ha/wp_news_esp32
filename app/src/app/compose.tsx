@@ -13,14 +13,12 @@ import { Composer, composerKind } from '../components/desk/Composer'
  *
  * `canGoBack()` before `back()`: this route is reachable directly (a deep link, a cold start into
  * it), and `back()` with nothing behind it is a dismissal that leaves the app on no screen at all.
- * The same question answers a second one — a stack's FIRST screen does not get its
- * `presentation: 'formSheet'`, so nothing to go back to also means "this is rendering full-screen",
- * which is the only case where the composer's header needs the status bar's own allowance.
+ * The same question decides the composer's own header inset, and `<Composer>` now asks it directly
+ * through `useRaisedHeaderInset()` rather than taking the answer as a prop from here.
  */
 export default function Compose() {
   const router = useRouter()
   const { kind } = useLocalSearchParams<{ kind?: string }>()
-  const raised = router.canGoBack()
 
   const onDone = useCallback(() => {
     if (router.canGoBack()) {
@@ -30,5 +28,5 @@ export default function Compose() {
     }
   }, [router])
 
-  return <Composer initialKind={composerKind(kind)} fullScreen={!raised} onDone={onDone} />
+  return <Composer initialKind={composerKind(kind)} onDone={onDone} />
 }

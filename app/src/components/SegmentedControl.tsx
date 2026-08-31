@@ -1,7 +1,6 @@
-import { useState } from 'react'
 import { StyleSheet, Pressable, Text, View } from 'react-native'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, pressTransition, pressedScale, radius, typography } from '../theme/index'
+import Animated from 'react-native-reanimated'
+import { colors, radius, typography, usePressedScale } from '../theme/index'
 
 /**
  * A horizontal segmented selector — used by the dashboard to switch the page on the panel
@@ -45,24 +44,21 @@ function Segment({
   disabled: boolean
   onPress: () => void
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected, disabled }}
       disabled={disabled}
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
       style={styles.segmentWrap}
     >
       <Animated.View
         style={[
           styles.segment,
-          pressTransition,
           selected && styles.segmentActive,
-          pressed && !reducedMotion && pressedScale,
+          pressStyle,
         ]}
       >
         <Text style={[typography.ui, styles.label, selected && styles.labelActive]}>{label}</Text>

@@ -1,10 +1,9 @@
 import { StyleSheet, Text, View } from 'react-native'
-import * as Haptics from 'expo-haptics'
 import { Button } from '../Button'
 import { useDeskNow, useHold, usePublish } from '../../lib/queries'
-import { DeskError, deskHumanError, type DeskState } from '../../lib/desk'
+import { deskHumanError, type DeskState } from '../../lib/desk'
 import { formatWhen } from '../../lib/format'
-import { colors, spacing, typography } from '../../theme/index'
+import { colors, spacing, tapLight, typography } from '../../theme/index'
 
 /**
  * How long "Hold the desk" holds for.
@@ -51,7 +50,7 @@ export function HoldCard({ state }: { state: DeskState | undefined }) {
   const onPublish = () => {
     publish.mutate(undefined, {
       onSuccess: () => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+        tapLight()
       },
     })
   }
@@ -59,7 +58,7 @@ export function HoldCard({ state }: { state: DeskState | undefined }) {
   const onHold = () => {
     hold.mutate(held === null ? Math.round(now) + HOLD_SECONDS : null, {
       onSuccess: () => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+        tapLight()
       },
     })
   }
@@ -123,7 +122,7 @@ export function HoldCard({ state }: { state: DeskState | undefined }) {
 function ErrorLine({ error }: { error: unknown }) {
   return (
     <Text style={styles.error}>
-      {error instanceof DeskError ? deskHumanError(error) : 'The desk didn’t take that.'}
+      {deskHumanError(error, 'The desk didn’t take that.')}
     </Text>
   )
 }
@@ -133,10 +132,8 @@ const styles = StyleSheet.create({
     gap: spacing[8],
   },
   note: {
-    ...typography.ui,
-    fontSize: 12,
+    ...typography.note,
     color: colors.deskFaint,
-    lineHeight: 17,
   },
   result: {
     ...typography.ui,

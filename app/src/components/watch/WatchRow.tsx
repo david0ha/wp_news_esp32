@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useMemo } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { GradeDisc } from '../GradeDisc'
 import { Change } from '../Change'
-import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
+import { colors, spacing, typography, usePressedScale } from '../../theme/index'
 import { formatCents, formatPrintedDate } from '../../lib/format'
 import { thesisLine } from '../../lib/watchlist'
 import type { Quote, WatchlistItem } from '../../lib/desk'
@@ -31,24 +31,25 @@ export function WatchRow({
   /** Whether this is the last row in the list — the one hairline rule that does not print. */
   last?: boolean
 }) {
-  const thesis = thesisLine(item.note)
+  // `thesisLine` parses markdown. One row's note does not change between renders, but this row
+  // re-renders whenever the list around it does — a pull, a quote landing, a filter tap — and
+  // re-parsing every note on the list each time is a parse per row per render for one unchanged
+  // string.
+  const thesis = useMemo(() => thesisLine(item.note), [item.note])
   const printed = item.last_printed ? formatPrintedDate(item.last_printed) : ''
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${item.symbol}, ${item.name}`}
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
       <Animated.View
         style={[
           styles.row,
-          pressTransition,
           !last && styles.divider,
-          pressed && !reducedMotion && pressedScale,
+          pressStyle,
         ]}
       >
         <View style={styles.left}>

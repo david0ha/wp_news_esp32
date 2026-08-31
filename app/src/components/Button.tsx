@@ -1,7 +1,6 @@
-import { useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, type ViewStyle } from 'react-native'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, pressTransition, pressedScale, radius, typography } from '../theme/index'
+import Animated from 'react-native-reanimated'
+import { colors, radius, typography, usePressedScale } from '../theme/index'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
@@ -30,8 +29,7 @@ export function Button({
   variant?: Variant
   style?: ViewStyle
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   const isDisabled = disabled || loading
   const fill =
     variant === 'primary'
@@ -58,18 +56,16 @@ export function Button({
       accessibilityState={{ disabled: isDisabled, busy: loading }}
       disabled={isDisabled}
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
       hitSlop={8}
       pressRetentionOffset={12}
     >
       <Animated.View
         style={[
           styles.base,
-          pressTransition,
           fill,
           isDisabled && styles.disabled,
-          pressed && !reducedMotion && pressedScale,
+          pressStyle,
           style,
         ]}
       >

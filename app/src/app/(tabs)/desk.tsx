@@ -1,13 +1,12 @@
-import { useState } from 'react'
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { EmptyState } from '../../components/EmptyState'
-import { HeaderGear } from '../../components/HeaderGear'
 import { Screen } from '../../components/Screen'
+import { TabHeader } from '../../components/TabHeader'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Standing } from '../../components/Standing'
 import { DirectiveList } from '../../components/desk/DirectiveList'
@@ -24,9 +23,9 @@ import {
   useDeskState,
   usePullRefresh,
 } from '../../lib/queries'
-import { DeskError, deskHumanError } from '../../lib/desk'
+import { deskHumanError } from '../../lib/desk'
 import { auditEventLine, auditWhen } from '../../lib/audit'
-import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
+import { colors, spacing, typography, usePressedScale } from '../../theme/index'
 
 /** The last twenty rows of the desk's own record — the foot of this tab. */
 const AUDIT_ROWS = 20
@@ -55,8 +54,7 @@ export default function Desk() {
   const state = useDeskState()
   const audit = useAudit(AUDIT_ROWS)
   const now = useDeskNow()
-  const [editionsPressed, setEditionsPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [editionsPress, editionsPressStyle] = usePressedScale()
 
   // The whole desk namespace: every section on this tab reads a different key off the same server,
   // and a pull that refreshed only the state strip would leave the queue underneath it describing a
@@ -68,7 +66,7 @@ export default function Desk() {
   if (client === null) {
     return (
       <Screen edges={['top']}>
-        <Header />
+        <TabHeader title="Desk" />
         <EmptyState
           title="No desk yet"
           body="Add its address and operator token in Settings, and what it’s holding appears here."
@@ -81,7 +79,7 @@ export default function Desk() {
 
   return (
     <Screen edges={['top']}>
-      <Header />
+      <TabHeader title="Desk" />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -105,11 +103,7 @@ export default function Desk() {
         {state.isError && state.data === undefined ? (
           <Card style={styles.stateError}>
             <ScreenMessage
-              error={
-                state.error instanceof DeskError
-                  ? deskHumanError(state.error)
-                  : 'Couldn’t read what the desk is doing.'
-              }
+              error={deskHumanError(state.error, 'Couldn’t read what the desk is doing.')}
               onRetry={() => state.refetch()}
             />
           </Card>
@@ -117,9 +111,7 @@ export default function Desk() {
           <>
             {state.isError ? (
               <Text style={styles.stale}>
-                {state.error instanceof DeskError
-                  ? deskHumanError(state.error)
-                  : 'Couldn’t reach the desk just now.'}{' '}
+                {deskHumanError(state.error, 'Couldn’t reach the desk just now.')}{' '}
                 What follows is the last answer that came back.
               </Text>
             ) : null}
@@ -164,15 +156,10 @@ export default function Desk() {
               accessibilityRole="link"
               accessibilityLabel="Recent editions"
               onPress={() => router.push('/editions')}
-              onPressIn={() => setEditionsPressed(true)}
-              onPressOut={() => setEditionsPressed(false)}
+              {...editionsPress}
             >
               <Animated.View
-                style={[
-                  styles.linkRow,
-                  pressTransition,
-                  editionsPressed && !reducedMotion && pressedScale,
-                ]}
+                style={[styles.linkRow, editionsPressStyle]}
               >
                 <Text style={[typography.ui, styles.linkText]}>
                   {editionsLine(state.data?.editions.length)}
@@ -196,11 +183,7 @@ export default function Desk() {
             ) : audit.isError ? (
               <View style={styles.recordMessage}>
                 <ScreenMessage
-                  error={
-                    audit.error instanceof DeskError
-                      ? deskHumanError(audit.error)
-                      : 'Couldn’t read the desk’s record.'
-                  }
+                  error={deskHumanError(audit.error, 'Couldn’t read the desk’s record.')}
                   onRetry={() => audit.refetch()}
                 />
               </View>
@@ -228,15 +211,6 @@ export default function Desk() {
   )
 }
 
-function Header() {
-  return (
-    <View style={styles.header}>
-      <Text style={styles.title}>Desk</Text>
-      <HeaderGear />
-    </View>
-  )
-}
-
 /**
  * "5 recent ⇢", or what to say before `/api/state` has answered.
  *
@@ -252,18 +226,6 @@ function editionsLine(count: number | undefined): string {
 }
 
 const styles = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[16],
-    paddingTop: spacing[8],
-  },
-  title: {
-    ...typography.uiStrong,
-    fontSize: 22,
-    color: colors.deskText,
-  },
   scroll: {
     padding: spacing[16],
     gap: spacing[24],

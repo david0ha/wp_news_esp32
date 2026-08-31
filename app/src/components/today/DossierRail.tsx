@@ -1,7 +1,6 @@
-import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, pressTransition, pressedScale, radius, spacing, typography } from '../../theme/index'
+import Animated from 'react-native-reanimated'
+import { colors, radius, spacing, typography, usePressedScale } from '../../theme/index'
 import { Change } from '../Change'
 import type { NewsFigure } from '../../lib/desk'
 
@@ -24,8 +23,7 @@ export function DossierRail({
   hasNotes?: boolean
   onPressNotes?: () => void
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <View style={styles.wrap}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rail}>
@@ -49,12 +47,11 @@ export function DossierRail({
       {hasNotes && onPressNotes ? (
         <Pressable
           onPress={onPressNotes}
-          onPressIn={() => setPressed(true)}
-          onPressOut={() => setPressed(false)}
+          {...press}
           accessibilityRole="button"
           hitSlop={8}
         >
-          <Animated.View style={[pressTransition, pressed && !reducedMotion && pressedScale]}>
+          <Animated.View style={pressStyle}>
             <Text style={[typography.label, styles.link]}>The dossier ›</Text>
           </Animated.View>
         </Pressable>

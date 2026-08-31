@@ -25,7 +25,7 @@ import {
   usePullRefresh,
   useSheet,
 } from '../../lib/queries'
-import { DeskError, deskHumanError } from '../../lib/desk'
+import { deskHumanError } from '../../lib/desk'
 import { formatSinceTime } from '../../lib/format'
 import { sheetForPage } from '../../lib/sheets'
 import { colors, spacing } from '../../theme/index'
@@ -129,11 +129,7 @@ export default function Today() {
           <ScreenMessage loading />
         ) : news.isError ? (
           <ScreenMessage
-            error={
-              news.error instanceof DeskError
-                ? deskHumanError(news.error)
-                : 'Couldn’t load today’s edition.'
-            }
+            error={deskHumanError(news.error, 'Couldn’t load today’s edition.')}
             onRetry={() => news.refetch()}
           />
         ) : payload ? (

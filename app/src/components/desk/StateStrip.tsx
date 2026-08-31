@@ -1,15 +1,15 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { Card } from '../Card'
 import { Stamp } from '../Stamp'
 import { useDeskNow, useNews, useScheduleNext } from '../../lib/queries'
 import { formatWhen } from '../../lib/format'
 import { transitionClock } from '../../lib/scheduleform'
 import type { DeskState, ScheduleEvent } from '../../lib/desk'
-import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
+import { colors, spacing, typography, usePressedScale } from '../../theme/index'
 
 /**
  * What the desk is holding, in four rows — plan Design > Wireframes ("Current SNDK · 06:04 /
@@ -140,8 +140,7 @@ function StripRow({
   last?: boolean
   onPress?: () => void
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   const body: ReactNode = (
     <>
       <Text style={[typography.ui, styles.label]}>{label}</Text>
@@ -174,15 +173,13 @@ function StripRow({
       accessibilityRole="button"
       accessibilityLabel={`${label}: ${value}`}
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
       <Animated.View
         style={[
           styles.row,
-          pressTransition,
           !last && styles.bordered,
-          pressed && !reducedMotion && pressedScale,
+          pressStyle,
         ]}
       >
         {body}

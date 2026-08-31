@@ -60,9 +60,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   note: {
-    ...typography.ui,
-    fontSize: 12,
+    ...typography.note,
     color: colors.deskFaint,
-    lineHeight: 17,
   },
 })

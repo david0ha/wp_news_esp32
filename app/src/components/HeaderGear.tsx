@@ -1,9 +1,8 @@
-import { useState } from 'react'
 import { Pressable, StyleSheet } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { useRouter } from 'expo-router'
-import { colors, pressTransition, pressedScale } from '../theme/index'
+import { colors, usePressedScale } from '../theme/index'
 
 /**
  * The gear that opens Settings, in the top-right of every tab — plan Design > Wireframes, where
@@ -19,19 +18,17 @@ import { colors, pressTransition, pressedScale } from '../theme/index'
  */
 export function HeaderGear() {
   const router = useRouter()
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Settings"
       hitSlop={4}
       onPress={() => router.push('/settings')}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
       <Animated.View
-        style={[styles.tap, pressTransition, pressed && !reducedMotion && pressedScale]}
+        style={[styles.tap, pressStyle]}
       >
         <Ionicons name="settings-outline" size={22} color={colors.deskDim} />
       </Animated.View>

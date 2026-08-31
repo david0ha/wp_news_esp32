@@ -12,14 +12,14 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { Screen } from '../../../components/Screen'
 import { BackButton } from '../../../components/BackButton'
 import { useOnboarding } from '../../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES } from '../../../onboarding/flow'
 import { esp32, Esp32Error } from '../../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../../lib/newsurl'
-import { colors, pressTransition, pressedScale, radius, spacing } from '../../../theme/index'
+import { colors, radius, spacing, usePressedScale } from '../../../theme/index'
 
 // Map a provisioning failure to a short, user-facing reason.
 function failureMessage(e: unknown): string {
@@ -55,9 +55,7 @@ export default function Password() {
   const [reveal, setReveal] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [revealPressed, setRevealPressed] = useState(false)
-  const [ctaPressed, setCtaPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [revealPress, revealPressStyle] = usePressedScale()
 
   // The provision + poll can run up to ~45s; if the user leaves, don't run setState or fire a
   // router.replace from an unmounted screen.
@@ -69,6 +67,9 @@ export default function Password() {
   const passwordOk = selectedSecured === false || password.trim().length > 0
   const ssidOk = !!ssid && ssid.length > 0
   const enabled = ssidOk && passwordOk && !pending
+  // The CTA is inert until the password is long enough, so it must not answer a press either —
+  // `usePressedScale`'s `active` is exactly that condition.
+  const [ctaPress, ctaPressStyle] = usePressedScale(enabled)
 
   const join = async () => {
     if (!enabled || !ssid) return
@@ -172,15 +173,12 @@ export default function Password() {
               <Pressable
                 accessibilityLabel="Toggle password visibility"
                 onPress={() => setReveal((r) => !r)}
-                onPressIn={() => setRevealPressed(true)}
-                onPressOut={() => setRevealPressed(false)}
+                {...revealPress}
                 // 22 pt glyph -> 44 pt target: the hitSlop makes up the rest rather than growing
                 // the icon itself.
                 hitSlop={11}
               >
-                <Animated.View
-                  style={[pressTransition, revealPressed && !reducedMotion && pressedScale]}
-                >
+                <Animated.View style={revealPressStyle}>
                   <Ionicons name={reveal ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.deskDim} />
                 </Animated.View>
               </Pressable>
@@ -210,15 +208,13 @@ export default function Password() {
             accessibilityState={{ disabled: !enabled, busy: pending }}
             onPress={join}
             disabled={!enabled}
-            onPressIn={() => setCtaPressed(true)}
-            onPressOut={() => setCtaPressed(false)}
+            {...ctaPress}
           >
             <Animated.View
               style={[
                 styles.cta,
-                pressTransition,
                 !enabled && styles.ctaDisabled,
-                ctaPressed && enabled && !reducedMotion && pressedScale,
+                ctaPressStyle,
               ]}
             >
               {pending ? (

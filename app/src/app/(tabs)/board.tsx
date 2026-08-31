@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { RefreshControl, ScrollView, StyleSheet, Text } from 'react-native'
 import { useIsFocused, useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
-import { HeaderGear } from '../../components/HeaderGear'
+import { TabHeader } from '../../components/TabHeader'
 import { EmptyState } from '../../components/EmptyState'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { GlassSection } from '../../components/board/GlassSection'
@@ -18,7 +18,7 @@ import {
   useSetPage,
   useSetSleep,
 } from '../../lib/queries'
-import { Esp32Error, humanError } from '../../lib/esp32'
+import { humanError } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice } from '../../lib/discovery'
 import { getDeviceBaseUrl } from '../../lib/store'
 import { refreshWindowMs } from '../../lib/format'
@@ -97,11 +97,7 @@ export default function Board() {
   // One error handler for all four commands, because they are four commands to one board and the
   // reader wants the board's sentence rather than the button's. `humanError` carries the one that
   // matters most — a timeout is a board asleep, not a fault to go looking for.
-  const onCommandError = useCallback((e: unknown) => {
-    setCommandError(
-      e instanceof Esp32Error ? humanError(e) : 'That command failed. Please try again.',
-    )
-  }, [])
+  const onCommandError = useCallback((e: unknown) => setCommandError(humanError(e)), [])
   // Fired the moment a button is pressed: the previous failure is about the previous attempt, and
   // leaving it up beside a command in flight reads as this one having failed already.
   const clearCommandError = useCallback(() => setCommandError(null), [])
@@ -129,7 +125,7 @@ export default function Board() {
   if (baseUrl === null) {
     return (
       <Screen edges={['top']}>
-        <Header />
+        <TabHeader title="Board" />
         <ScreenMessage loading message="Connecting…" />
       </Screen>
     )
@@ -138,7 +134,7 @@ export default function Board() {
   if (!hasDevice) {
     return (
       <Screen edges={['top']}>
-        <Header />
+        <TabHeader title="Board" />
         <EmptyState
           title="No board paired"
           body="Pair a board in Settings and this page shows what is on its glass."
@@ -152,14 +148,12 @@ export default function Board() {
   if (state === undefined) {
     return (
       <Screen edges={['top']}>
-        <Header />
+        <TabHeader title="Board" />
         <ScreenMessage
           loading={!deviceState.isError}
           error={
             deviceState.isError
-              ? deviceState.error instanceof Esp32Error
-                ? humanError(deviceState.error)
-                : 'Couldn’t reach the board.'
+              ? humanError(deviceState.error, 'Couldn’t reach the board.')
               : null
           }
           onRetry={retry}
@@ -170,7 +164,7 @@ export default function Board() {
 
   return (
     <Screen edges={['top']}>
-      <Header />
+      <TabHeader title="Board" />
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={
@@ -231,9 +225,10 @@ export default function Board() {
         {commandError ? <Text style={styles.errorLine}>{commandError}</Text> : null}
         {deviceState.isError ? (
           <Text style={styles.errorLine}>
-            {deviceState.error instanceof Esp32Error
-              ? humanError(deviceState.error)
-              : 'Couldn’t reach the board just now. Everything above is the last answer that came back.'}
+            {humanError(
+              deviceState.error,
+              'Couldn’t reach the board just now. Everything above is the last answer that came back.',
+            )}
           </Text>
         ) : null}
       </ScrollView>
@@ -241,27 +236,7 @@ export default function Board() {
   )
 }
 
-function Header() {
-  return (
-    <View style={styles.header}>
-      <Text style={[typography.uiStrong, styles.title]}>Board</Text>
-      <HeaderGear />
-    </View>
-  )
-}
-
 const styles = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[16],
-    paddingTop: spacing[8],
-  },
-  title: {
-    fontSize: 22,
-    color: colors.deskText,
-  },
   scroll: {
     padding: spacing[16],
     gap: spacing[24],

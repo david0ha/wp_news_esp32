@@ -1,9 +1,8 @@
 import { useCallback, useMemo, useState } from 'react'
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { RefreshControl, ScrollView, StyleSheet } from 'react-native'
 import { useRouter } from 'expo-router'
-import * as Haptics from 'expo-haptics'
 import { Screen } from '../../components/Screen'
-import { HeaderGear } from '../../components/HeaderGear'
+import { TabHeader } from '../../components/TabHeader'
 import { Sheet } from '../../components/Sheet'
 import { EmptyState } from '../../components/EmptyState'
 import { ScreenMessage } from '../../components/ScreenMessage'
@@ -17,9 +16,9 @@ import {
   useQuotes,
   useWatchlist,
 } from '../../lib/queries'
-import { DeskError, deskHumanError } from '../../lib/desk'
+import { deskHumanError } from '../../lib/desk'
 import { WATCH_GRADE_FILTERS, filterByGrade, sortWatchlist, watchGradeFilterLabel, type WatchGradeFilter } from '../../lib/watchlist'
-import { colors, spacing, typography } from '../../theme/index'
+import { colors, spacing, tapSelection } from '../../theme/index'
 
 /**
  * Watch — the companies the desk is watching, each row led by its grade and the argument behind
@@ -51,16 +50,20 @@ export default function Watch() {
     const next = WATCH_GRADE_FILTERS[index]
     if (next === undefined) return
     setFilter(next)
-    Haptics.selectionAsync()
+    tapSelection()
   }, [])
+
+  // ABOVE the `client === null` return, because a hook after a conditional return is a hook that
+  // sometimes does not run. Memoized on the two things that can change the answer: a sort and a
+  // filter over a human-curated list is cheap, but re-deriving it on every render of a screen that
+  // also re-renders for a pull, a quote and a segment tap is work with no reader behind it.
+  const items = useMemo(() => watchlist.data?.items ?? [], [watchlist.data])
+  const visible = useMemo(() => sortWatchlist(filterByGrade(items, filter)), [items, filter])
 
   if (client === null) {
     return (
       <Screen edges={['top']}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Watch</Text>
-          <HeaderGear />
-        </View>
+        <TabHeader title="Watch" />
         <EmptyState
           title="No desk yet"
           body="Add its address and operator token in Settings, and the companies it’s watching appear here."
@@ -71,15 +74,9 @@ export default function Watch() {
     )
   }
 
-  const items = watchlist.data?.items ?? []
-  const visible = sortWatchlist(filterByGrade(items, filter))
-
   return (
     <Screen edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Watch</Text>
-        <HeaderGear />
-      </View>
+      <TabHeader title="Watch" />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -101,11 +98,7 @@ export default function Watch() {
           <ScreenMessage loading />
         ) : watchlist.isError ? (
           <ScreenMessage
-            error={
-              watchlist.error instanceof DeskError
-                ? deskHumanError(watchlist.error)
-                : 'Couldn’t load the watchlist.'
-            }
+            error={deskHumanError(watchlist.error, 'Couldn’t load the watchlist.')}
             onRetry={() => watchlist.refetch()}
           />
         ) : items.length === 0 ? (
@@ -134,18 +127,6 @@ export default function Watch() {
 }
 
 const styles = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[16],
-    paddingTop: spacing[8],
-  },
-  title: {
-    ...typography.uiStrong,
-    fontSize: 22,
-    color: colors.deskText,
-  },
   scroll: {
     padding: spacing[16],
     gap: spacing[16],

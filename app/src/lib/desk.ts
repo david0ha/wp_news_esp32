@@ -103,8 +103,17 @@ export class DeskError extends Error {
  * And a **timeout** is a statement about the tunnel, not about the phone's Wi-Fi — a desk is
  * reachable from anywhere by construction, so "check your connection" would send its owner to
  * look for a fault at the wrong end of the wire.
+ *
+ * TAKES `unknown`, AND THE GUARD IS THE POINT. Typed to `DeskError` this function forced every
+ * caller to write `e instanceof DeskError ? deskHumanError(e) : '<something>'` — and once they were
+ * writing a branch, each of two dozen of them improvised its own sentence for it, none of which
+ * could be kept in step with the others. The `instanceof` is one decision about one client's
+ * errors, so it belongs to the client. `fallback` is for the handful of call sites whose own
+ * sentence is genuinely more useful than the generic one ("Couldn't load these notes.") rather
+ * than a restatement of it; everywhere else it is left off.
  */
-export function deskHumanError(e: DeskError): string {
+export function deskHumanError(e: unknown, fallback = 'That didn’t work. Please try again.'): string {
+  if (!(e instanceof DeskError)) return fallback
   switch (e.code) {
     case 'unauthorized':
       return 'The desk didn’t accept that token. Check it in Settings.'
@@ -127,7 +136,7 @@ export function deskHumanError(e: DeskError): string {
     case 'bad_request':
       return 'The desk couldn’t use that. This is a bug in the app, not something you did.'
     default:
-      return 'That didn’t work. Please try again.'
+      return fallback
   }
 }
 

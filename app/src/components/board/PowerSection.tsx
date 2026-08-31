@@ -104,7 +104,7 @@ export function PowerSection({
 const styles = StyleSheet.create({
   section: { gap: spacing[12] },
   rows: { padding: 0, overflow: 'hidden' },
-  note: { ...typography.ui, fontSize: 12, color: colors.deskFaint, lineHeight: 17 },
+  note: { ...typography.note, color: colors.deskFaint },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   sleep: {
     gap: 10,

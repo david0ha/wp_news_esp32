@@ -1,7 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
-import * as Haptics from 'expo-haptics'
 import { Screen } from '../../components/Screen'
 import { Sheet } from '../../components/Sheet'
 import { Standing } from '../../components/Standing'
@@ -14,10 +13,10 @@ import { ScreenMessage } from '../../components/ScreenMessage'
 import { Markdown } from '../../components/Markdown'
 import { Sparkline } from '../../components/watch/Sparkline'
 import { useDeskClient, useOrderEdition, useQuotes, useResearch, useWatchlist } from '../../lib/queries'
-import { DeskError, deskHumanError } from '../../lib/desk'
+import { deskHumanError } from '../../lib/desk'
 import { formatCents, formatPrintedDate } from '../../lib/format'
 import { thesisBlocks } from '../../lib/watchlist'
-import { colors, spacing, typography } from '../../theme/index'
+import { colors, spacing, tapLight, typography } from '../../theme/index'
 
 /**
  * One company off the watchlist, in full — the grade and every reason behind it, the sparkline and
@@ -46,6 +45,10 @@ export default function WatchDetail() {
   // worth fetching, and useQuotes' own `enabled` already treats an empty array as "don't ask".
   const quotes = useQuotes(item ? [item.symbol] : [])
   const quote = item ? quotes.data?.quotes[item.symbol] : undefined
+  // The closes, pulled out of the bars once. `<Sparkline>` scans them for a min and a max and then
+  // maps them again, so handing it a fresh array on every render is that whole pass repeated for a
+  // series that has not changed.
+  const closes = useMemo(() => (quote ? quote.bars.map((b) => b.c) : []), [quote])
 
   const research = useResearch()
   const orderEdition = useOrderEdition()
@@ -59,7 +62,7 @@ export default function WatchDetail() {
       {
         onSuccess: () => {
           setResearchQueued(true)
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+          tapLight()
         },
       },
     )
@@ -71,7 +74,7 @@ export default function WatchDetail() {
       {
         onSuccess: () => {
           setEditionQueued(true)
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+          tapLight()
         },
       },
     )
@@ -101,11 +104,7 @@ export default function WatchDetail() {
         <ScreenMessage loading />
       ) : watchlist.isError ? (
         <ScreenMessage
-          error={
-            watchlist.error instanceof DeskError
-              ? deskHumanError(watchlist.error)
-              : 'Couldn’t load the watchlist.'
-          }
+          error={deskHumanError(watchlist.error, 'Couldn’t load the watchlist.')}
           onRetry={() => watchlist.refetch()}
         />
       ) : !item ? (
@@ -136,7 +135,7 @@ export default function WatchDetail() {
 
             {quote ? (
               <View style={styles.quoteRow}>
-                <Sparkline values={quote.bars.map((b) => b.c)} />
+                <Sparkline values={closes} />
                 <View style={styles.priceCol}>
                   <Text style={[typography.figure, styles.last]}>{formatCents(quote.lastCents)}</Text>
                   <Change bp={quote.changeBp} tone="paper" />
@@ -180,9 +179,7 @@ export default function WatchDetail() {
             </View>
             {research.isError ? (
               <Text style={styles.errorLine}>
-                {research.error instanceof DeskError
-                  ? deskHumanError(research.error)
-                  : 'That didn’t reach the desk.'}
+                {deskHumanError(research.error, 'That didn’t reach the desk.')}
               </Text>
             ) : null}
 
@@ -198,9 +195,7 @@ export default function WatchDetail() {
             </View>
             {orderEdition.isError ? (
               <Text style={styles.errorLine}>
-                {orderEdition.error instanceof DeskError
-                  ? deskHumanError(orderEdition.error)
-                  : 'That didn’t reach the desk.'}
+                {deskHumanError(orderEdition.error, 'That didn’t reach the desk.')}
               </Text>
             ) : null}
           </View>

@@ -1,8 +1,7 @@
-import { useState } from 'react'
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { Stack, useRouter } from 'expo-router'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { Screen } from '../../components/Screen'
 import { EmptyState } from '../../components/EmptyState'
 import { ScreenMessage } from '../../components/ScreenMessage'
@@ -15,9 +14,9 @@ import {
   useEditions,
   usePullRefresh,
 } from '../../lib/queries'
-import { DeskError, deskHumanError, type EditionMeta } from '../../lib/desk'
+import { deskHumanError, type EditionMeta } from '../../lib/desk'
 import { editionPointer, editionWhen } from '../../lib/editions'
-import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
+import { colors, spacing, typography, usePressedScale } from '../../theme/index'
 
 /**
  * The editorial history — every edition the desk still keeps a directory for, newest first as the
@@ -67,11 +66,7 @@ export default function Editions() {
         <ScreenMessage loading />
       ) : editions.isError ? (
         <ScreenMessage
-          error={
-            editions.error instanceof DeskError
-              ? deskHumanError(editions.error)
-              : 'Couldn’t load the editorial history.'
-          }
+          error={deskHumanError(editions.error, 'Couldn’t load the editorial history.')}
           onRetry={() => editions.refetch()}
         />
       ) : rows.length === 0 ? (
@@ -121,22 +116,19 @@ function EditionRow({
   last: boolean
   onPress: () => void
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Edition ${edition.id.slice(0, 8)}${pointer ? `, ${pointer}` : ''}`}
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
       <Animated.View
         style={[
           styles.row,
-          pressTransition,
           !last && styles.bordered,
-          pressed && !reducedMotion && pressedScale,
+          pressStyle,
         ]}
       >
         <View style={styles.rowText}>

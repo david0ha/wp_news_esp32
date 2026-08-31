@@ -1,16 +1,15 @@
 import { useState } from 'react'
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
-import * as Haptics from 'expo-haptics'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { Button } from '../Button'
 import { Card } from '../Card'
 import { ScreenMessage } from '../ScreenMessage'
 import { Stamp } from '../Stamp'
 import { useAddDirective, useDeleteDirective, useDeskNow, useDirectives } from '../../lib/queries'
-import { DeskError, deskHumanError, type Directive } from '../../lib/desk'
-import { formatPrintedDate } from '../../lib/format'
+import { deskHumanError, type Directive } from '../../lib/desk'
+import { formatDateStamp } from '../../lib/format'
 import { canRestoreDirective } from '../../lib/directives'
-import { colors, pressTransition, pressedScale, radius, spacing, typography } from '../../theme/index'
+import { colors, radius, spacing, tapLight, typography, usePressedScale } from '../../theme/index'
 
 /**
  * The standing rules — "Never lead with executive compensation."
@@ -59,7 +58,7 @@ export function DirectiveList() {
         onSuccess: () => {
           setRule('')
           setRemoved(null)
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+          tapLight()
         },
       },
     )
@@ -69,7 +68,7 @@ export function DirectiveList() {
     remove.mutate(directive.id, {
       onSuccess: () => {
         setRemoved(directive)
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+        tapLight()
       },
     })
   }
@@ -87,7 +86,7 @@ export function DirectiveList() {
       {
         onSuccess: () => {
           setRemoved(null)
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+          tapLight()
         },
       },
     )
@@ -102,11 +101,7 @@ export function DirectiveList() {
       ) : directives.isError ? (
         <View style={styles.message}>
           <ScreenMessage
-            error={
-              directives.error instanceof DeskError
-                ? deskHumanError(directives.error)
-                : 'Couldn’t read the directives.'
-            }
+            error={deskHumanError(directives.error, 'Couldn’t read the directives.')}
             onRetry={() => directives.refetch()}
           />
         </View>
@@ -185,8 +180,7 @@ function DirectiveRow({
   removing: boolean
   onRemove: () => void
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <View style={styles.row}>
       <View style={styles.ruleWrap}>
@@ -200,15 +194,13 @@ function DirectiveRow({
         disabled={removing}
         hitSlop={8}
         onPress={onRemove}
-        onPressIn={() => setPressed(true)}
-        onPressOut={() => setPressed(false)}
+        {...press}
       >
         <Animated.View
           style={[
             styles.remove,
-            pressTransition,
             removing && styles.removeBusy,
-            pressed && !reducedMotion && pressedScale,
+            pressStyle,
           ]}
         >
           <Text style={[typography.ui, styles.removeGlyph]}>✕</Text>
@@ -228,8 +220,7 @@ function UndoAction({
   disabled: boolean
   rule: string
 }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="button"
@@ -238,12 +229,9 @@ function UndoAction({
       disabled={disabled}
       hitSlop={8}
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
-      <Animated.View
-        style={[styles.undoAction, pressTransition, pressed && !reducedMotion && pressedScale]}
-      >
+      <Animated.View style={[styles.undoAction, pressStyle]}>
         <Text style={[typography.uiStrong, styles.undoActionText]}>Put it back</Text>
       </Animated.View>
     </Pressable>
@@ -254,21 +242,19 @@ function UndoAction({
  * "always", or the date the rule runs out.
  *
  * `expires_at` is UTC, printed through the same month table the paper's own stamps use — this is a
- * date on a stamp, not a clock reading, so it is the one `formatPrintedDate()` already spells.
+ * date on a stamp, not a clock reading. `formatDateStamp()` is that conversion, and its own doc
+ * comment says it exists so epoch-to-UTC-ymd is not re-implemented beside each caller; this
+ * function was the re-implementation.
  */
 function scopeStamp(d: Directive): string {
   if (d.scope !== 'until' || d.expires_at === null) return 'always'
-  const t = new Date(d.expires_at * 1000)
-  const ymd = `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(
-    t.getUTCDate(),
-  ).padStart(2, '0')}`
-  return `until ${formatPrintedDate(ymd)}`
+  return `until ${formatDateStamp(d.expires_at)}`
 }
 
 function ErrorLine({ error, fallback }: { error: unknown; fallback: string }) {
   return (
     <Text style={styles.error}>
-      {error instanceof DeskError ? deskHumanError(error) : fallback}
+      {deskHumanError(error, fallback)}
     </Text>
   )
 }
@@ -330,10 +316,8 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   undoNote: {
-    ...typography.ui,
-    fontSize: 12,
+    ...typography.note,
     color: colors.deskFaint,
-    lineHeight: 17,
   },
   undoAction: {
     minHeight: 32,

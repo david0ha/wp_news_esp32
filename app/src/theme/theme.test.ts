@@ -78,7 +78,7 @@ describe('typography — two materials, two type systems', () => {
     'label',
     'figure',
   ] as const
-  const chromeRoles = ['ui', 'uiStrong'] as const
+  const chromeRoles = ['ui', 'uiStrong', 'note'] as const
 
   it('every paper role carries a fontFamily — the paper faces never appear on chrome, and vice versa', () => {
     for (const role of paperRoles) {
@@ -87,9 +87,16 @@ describe('typography — two materials, two type systems', () => {
     }
   })
 
-  it('ui and uiStrong carry no fontFamily — every control is the system font', () => {
+  it('the chrome roles carry no fontFamily — every control is the system font', () => {
     for (const role of chromeRoles) {
       expect(typography[role].fontFamily).toBeUndefined()
+    }
+  })
+
+  it('every role is on one list or the other — a role that is on neither dodges the rule silently', () => {
+    const named = new Set<string>([...paperRoles, ...chromeRoles])
+    for (const role of Object.keys(typography)) {
+      expect(named.has(role)).toBe(true)
     }
   })
 })

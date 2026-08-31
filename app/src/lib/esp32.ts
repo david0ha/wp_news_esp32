@@ -293,8 +293,13 @@ export class Esp32Error extends Error {
  * screen that happened to ask. A board with deep sleep on is unreachable most of the time by
  * design; telling its owner to check their Wi-Fi would send them to look for a fault that is not
  * there.
+ *
+ * Takes `unknown` for the reason `deskHumanError` does: typed to the class, every caller had to
+ * write the `instanceof` itself, and every caller then invented its own sentence for the other
+ * branch. `fallback` keeps the few that are genuinely more specific than the generic one.
  */
-export function humanError(e: Esp32Error): string {
+export function humanError(e: unknown, fallback = 'That command failed. Please try again.'): string {
+  if (!(e instanceof Esp32Error)) return fallback
   switch (e.code) {
     case 'timeout':
       return 'No answer — the board is probably asleep. It wakes for a few seconds at a time and runs no server in between; press a button on it, then try again.'
@@ -329,7 +334,7 @@ export function humanError(e: Esp32Error): string {
     case 'http_error':
       return 'The board answered with an error. Try again in a moment.'
     default:
-      return 'That command failed. Please try again.'
+      return fallback
   }
 }
 

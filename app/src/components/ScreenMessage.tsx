@@ -1,7 +1,6 @@
-import { useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
-import { colors, pressTransition, pressedScale, typography } from '../theme/index'
+import Animated from 'react-native-reanimated'
+import { colors, typography, usePressedScale } from '../theme/index'
 
 /**
  * Centered loading / error / empty state shared across screens. Pass `loading` for a spinner,
@@ -36,17 +35,15 @@ export function ScreenMessage({
 }
 
 function RetryButton({ onRetry }: { onRetry: () => void }) {
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onRetry}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
       hitSlop={8}
     >
-      <Animated.View style={[styles.retry, pressTransition, pressed && !reducedMotion && pressedScale]}>
+      <Animated.View style={[styles.retry, pressStyle]}>
         <Text style={[typography.uiStrong, styles.retryText]}>Try again</Text>
       </Animated.View>
     </Pressable>

@@ -1,14 +1,13 @@
-import { useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { Card } from '../Card'
 import { ScreenMessage } from '../ScreenMessage'
 import { useCancelCommand, useCommands } from '../../lib/queries'
-import { DeskError, deskHumanError, type Command } from '../../lib/desk'
+import { deskHumanError, type Command } from '../../lib/desk'
 import { canCancelCommand, commandKindLabel, commandStatus } from '../../lib/queue'
-import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
+import { colors, spacing, typography, usePressedScale } from '../../theme/index'
 
 /**
  * How many rows the queue prints before it stops.
@@ -44,11 +43,7 @@ export function QueueList() {
     return (
       <Card style={styles.messageCard}>
         <ScreenMessage
-          error={
-            commands.error instanceof DeskError
-              ? deskHumanError(commands.error)
-              : 'Couldn’t read the queue.'
-          }
+          error={deskHumanError(commands.error, 'Couldn’t read the queue.')}
           onRetry={() => commands.refetch()}
         />
       </Card>
@@ -90,9 +85,7 @@ export function QueueList() {
       ) : null}
       {cancel.isError ? (
         <Text style={styles.error}>
-          {cancel.error instanceof DeskError
-            ? deskHumanError(cancel.error)
-            : 'The desk didn’t take that cancel.'}
+          {deskHumanError(cancel.error, 'The desk didn’t take that cancel.')}
         </Text>
       ) : null}
     </Card>
@@ -113,9 +106,8 @@ function QueueRow({
   const router = useRouter()
   const mark = commandStatus(command.status)
   const cancellable = canCancelCommand(command.status)
-  const [cancelPressed, setCancelPressed] = useState(false)
-  const [dossierPressed, setDossierPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [cancelPress, cancelPressStyle] = usePressedScale()
+  const [dossierPress, dossierPressStyle] = usePressedScale()
 
   return (
     <View style={[styles.row, !last && styles.bordered]}>
@@ -135,15 +127,13 @@ function QueueRow({
             disabled={cancelling}
             hitSlop={8}
             onPress={onCancel}
-            onPressIn={() => setCancelPressed(true)}
-            onPressOut={() => setCancelPressed(false)}
+            {...cancelPress}
           >
             <Animated.View
               style={[
                 styles.cancel,
-                pressTransition,
                 cancelling && styles.cancelBusy,
-                cancelPressed && !reducedMotion && pressedScale,
+                cancelPressStyle,
               ]}
             >
               <Text style={[typography.ui, styles.cancelGlyph]}>✕</Text>
@@ -173,15 +163,10 @@ function QueueRow({
           accessibilityLabel="What came of this command"
           hitSlop={8}
           onPress={() => router.push(`/notes/commands/${encodeURIComponent(command.id)}`)}
-          onPressIn={() => setDossierPressed(true)}
-          onPressOut={() => setDossierPressed(false)}
+          {...dossierPress}
         >
           <Animated.View
-            style={[
-              styles.dossier,
-              pressTransition,
-              dossierPressed && !reducedMotion && pressedScale,
-            ]}
+            style={[styles.dossier, dossierPressStyle]}
           >
             <Text style={[typography.ui, styles.dossierText]}>What came of it</Text>
             <Ionicons name="arrow-forward" size={13} color={colors.signal.chrome.tint} />

@@ -2,9 +2,8 @@ import { useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Image } from 'expo-image'
 import { Ionicons } from '@expo/vector-icons'
-import * as Haptics from 'expo-haptics'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
-import Animated, { useReducedMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { EmptyState } from '../../components/EmptyState'
@@ -21,12 +20,12 @@ import {
   usePromote,
   useSheet,
 } from '../../lib/queries'
-import { DeskError, deskHumanError } from '../../lib/desk'
+import { deskHumanError } from '../../lib/desk'
 import { editionWhen, promoteResultLine } from '../../lib/editions'
 import { sheetForPage } from '../../lib/sheets'
 import { pageLabel } from '../../lib/format'
 import { SCREEN_W, SCREEN_H } from '../../lib/screen'
-import { colors, pressTransition, pressedScale, radius, spacing, typography } from '../../theme/index'
+import { colors, radius, spacing, tapLight, typography, usePressedScale } from '../../theme/index'
 
 const SHEET_ASPECT = SCREEN_W / SCREEN_H
 const PAGES = [0, 1] as const
@@ -57,7 +56,7 @@ export default function EditionDetail() {
         setPromoteMessage(promoteResultLine(result))
         // One haptic, paired with the line above it (`Composer`'s own rule): the desk answered,
         // whether or not anything on the wall actually changed — "unchanged" is still an answer.
-        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+        tapLight()
       },
     })
   }
@@ -84,11 +83,7 @@ export default function EditionDetail() {
         <ScreenMessage loading />
       ) : edition.isError ? (
         <ScreenMessage
-          error={
-            edition.error instanceof DeskError
-              ? deskHumanError(edition.error)
-              : 'Couldn’t load this edition.'
-          }
+          error={deskHumanError(edition.error, 'Couldn’t load this edition.')}
           onRetry={() => edition.refetch()}
         />
       ) : !edition.data ? (
@@ -132,9 +127,7 @@ export default function EditionDetail() {
             {promoteMessage ? <Stamp tone="chrome">{promoteMessage}</Stamp> : null}
             {promote.isError ? (
               <Text style={styles.error}>
-                {promote.error instanceof DeskError
-                  ? deskHumanError(promote.error)
-                  : 'The desk didn’t take that promote.'}
+                {deskHumanError(promote.error, 'The desk didn’t take that promote.')}
               </Text>
             ) : null}
 
@@ -150,23 +143,19 @@ export default function EditionDetail() {
 function SheetThumb({ eid, page, name }: { eid: string; page: 0 | 1; name: string }) {
   const router = useRouter()
   const sheet = useSheet(eid, name)
-  const [pressed, setPressed] = useState(false)
+  const [press, pressStyle] = usePressedScale()
   // The thumbnail's own image failure — a 401, a pruned sheet, a cold tunnel. Without it the
   // thumb's blank branch stops showing its spinner the moment `sheet.data` resolves (immediately,
   // since it is only a URL) and sits there as an empty frame with nothing to read.
   const [failed, setFailed] = useState(false)
-  const reducedMotion = useReducedMotion()
   return (
     <Pressable
       accessibilityRole="imagebutton"
       accessibilityLabel={`${pageLabel(page)} proof. Opens it full size.`}
       onPress={() => router.push(`/sheet/proof?eid=${encodeURIComponent(eid)}&page=${page}`)}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
-      <Animated.View
-        style={[styles.thumbWrap, pressTransition, pressed && !reducedMotion && pressedScale]}
-      >
+      <Animated.View style={[styles.thumbWrap, pressStyle]}>
         <Sheet style={styles.thumbFrame}>
           {sheet.data && !failed ? (
             <Image
@@ -196,19 +185,17 @@ function SheetThumb({ eid, page, name }: { eid: string; page: 0 | 1; name: strin
 /** "The dossier" — the link to this edition's own filed notes, when it has any. */
 function DossierLink({ eid }: { eid: string }) {
   const router = useRouter()
-  const [pressed, setPressed] = useState(false)
-  const reducedMotion = useReducedMotion()
+  const [press, pressStyle] = usePressedScale()
   return (
     <Pressable
       accessibilityRole="link"
       accessibilityLabel="The dossier filed with this edition"
       hitSlop={8}
       onPress={() => router.push(`/notes/editions/${encodeURIComponent(eid)}`)}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...press}
     >
       <Animated.View
-        style={[styles.dossier, pressTransition, pressed && !reducedMotion && pressedScale]}
+        style={[styles.dossier, pressStyle]}
       >
         <Text style={[typography.ui, styles.dossierText]}>The dossier</Text>
         <Ionicons name="arrow-forward" size={13} color={colors.signal.chrome.tint} />

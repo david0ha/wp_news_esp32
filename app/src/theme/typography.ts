@@ -21,6 +21,7 @@ export type TypographyRole =
   | 'figure'
   | 'ui'
   | 'uiStrong'
+  | 'note'
 
 export const typography: Record<TypographyRole, TextStyle> = {
   // Playfair Display — heads. "Today only" for the masthead; heads everywhere else.
@@ -74,5 +75,15 @@ export const typography: Record<TypographyRole, TextStyle> = {
   uiStrong: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  // The quiet caption under a control, saying what it will do or what just happened — the sentence
+  // under a Board action, a Composer hint, a schedule's warning. Written out identically in nine
+  // StyleSheets before it was a role, which is eight more places than a type decision should live.
+  // The COLOUR is deliberately not here: it is `deskFaint` at most call sites and
+  // `signal.chrome.down` where the note is a warning, and folding one of those in would make the
+  // other look like it was overriding the system rather than using it.
+  note: {
+    fontSize: 12,
+    lineHeight: 17,
   },
 }

@@ -147,7 +147,7 @@ function DeskSection() {
     } catch (e) {
       setTest({
         kind: 'error',
-        message: e instanceof DeskError ? deskHumanError(e) : 'Couldn’t reach the desk. Check the address.',
+        message: deskHumanError(e, 'Couldn’t reach the desk. Check the address.'),
       })
     }
   }
@@ -286,7 +286,7 @@ function BoardSection() {
         </Card>
       ) : deviceState.isError ? (
         <Text style={styles.error}>
-          {deviceState.error instanceof Esp32Error ? humanError(deviceState.error) : 'Couldn’t reach the board.'}
+          {humanError(deviceState.error, 'Couldn’t reach the board.')}
         </Text>
       ) : (
         <Text style={styles.help}>Reading the board…</Text>

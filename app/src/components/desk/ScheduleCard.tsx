@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { StyleSheet, Text, TextInput, View } from 'react-native'
-import * as Haptics from 'expo-haptics'
 import { Button } from '../Button'
 import { Card } from '../Card'
 import { ScreenMessage } from '../ScreenMessage'
 import { SegmentedControl } from '../SegmentedControl'
 import { useSchedule, usePutSchedule } from '../../lib/queries'
-import { DeskError, deskHumanError, type PublishPolicy, type Schedule } from '../../lib/desk'
+import { deskHumanError, type PublishPolicy, type Schedule } from '../../lib/desk'
 import {
   MIN_GAP_MINUTES_MAX,
   POLL_SECONDS_MAX,
@@ -17,7 +16,7 @@ import {
   quietToText,
   wakeToText,
 } from '../../lib/scheduleform'
-import { colors, radius, spacing, typography } from '../../theme/index'
+import { colors, radius, spacing, tapLight, typography } from '../../theme/index'
 
 const POLICIES: readonly PublishPolicy[] = ['immediate', 'on_wake', 'manual']
 const POLICY_LABELS = ['Immediate', 'On wake', 'Manual']
@@ -120,11 +119,7 @@ export function ScheduleCard() {
     return (
       <Card style={styles.message}>
         <ScreenMessage
-          error={
-            schedule.error instanceof DeskError
-              ? deskHumanError(schedule.error)
-              : 'Couldn’t read the schedule.'
-          }
+          error={deskHumanError(schedule.error, 'Couldn’t read the schedule.')}
           onRetry={() => schedule.refetch()}
         />
       </Card>
@@ -259,7 +254,7 @@ export function ScheduleCard() {
             save.mutate(document, {
               onSuccess: () => {
                 setJustSaved(true)
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                tapLight()
               },
             })
           }}
@@ -271,9 +266,7 @@ export function ScheduleCard() {
         ) : null}
         {save.isError ? (
           <Text style={styles.error}>
-            {save.error instanceof DeskError
-              ? deskHumanError(save.error)
-              : 'The desk didn’t take that schedule.'}
+            {deskHumanError(save.error, 'The desk didn’t take that schedule.')}
           </Text>
         ) : null}
       </View>
@@ -381,16 +374,12 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   hint: {
-    ...typography.ui,
-    fontSize: 12,
+    ...typography.note,
     color: colors.deskFaint,
-    lineHeight: 17,
   },
   bad: {
-    ...typography.ui,
-    fontSize: 12,
+    ...typography.note,
     color: colors.signal.chrome.down,
-    lineHeight: 17,
   },
   footer: {
     padding: spacing[16],
