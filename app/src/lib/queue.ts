@@ -33,10 +33,19 @@ export interface CommandStatusMark {
  * Two decisions are load-bearing. **The failed glyph is `!`, not `✗`**, because every cancellable
  * row carries a `✕` button a few points to its right and a mark one stroke away from it would read
  * as "this one was cancelled" — two different facts, and the reader has no way to tell which they
- * are looking at. **`done` is green and `failed` is red** because that is already how this app
- * colours an outcome (`format.ts`'s `fetchResultTone`), and the three that are merely over —
- * expired, cancelled, and a status this app cannot read — are grey rather than red: nothing went
- * wrong in any of them, they simply are not going to happen.
+ * are looking at.
+ *
+ * **`failed` is red and `done` is NOT green**, which is the asymmetry to hold onto. On the app's
+ * chrome, red is already the error colour in twenty-odd places (`ScreenMessage`, `Button`,
+ * `Composer`, `HoldCard`), so a red `!` says what the rest of the app says. Green does not have
+ * that second meaning: it means DIRECTION — a price moved, a change is positive — and nothing else.
+ * The edition detail's When row refuses it for exactly this reason (`editions/[eid].tsx`), and
+ * `<SourceSection>` clamps `fetchResultTone`'s `'up'` back to neutral at the render site rather
+ * than painting a successful poll green. This was the last place a green outcome still reached the
+ * glass. A green tick spends the one colour that already means something on saying "this happened",
+ * which the `✓` and the word "done" have already said. The three that are merely over — expired,
+ * cancelled, and a status this app cannot read — are grey rather than red: nothing went wrong in
+ * any of them, they simply are not going to happen.
  */
 export function commandStatus(status: CommandStatus): CommandStatusMark {
   switch (status) {
@@ -45,7 +54,7 @@ export function commandStatus(status: CommandStatus): CommandStatusMark {
     case 'claimed':
       return { glyph: '⟳', word: 'claimed', tone: 'neutral' }
     case 'done':
-      return { glyph: '✓', word: 'done', tone: 'up' }
+      return { glyph: '✓', word: 'done', tone: 'neutral' }
     case 'failed':
       return { glyph: '!', word: 'failed', tone: 'down' }
     case 'expired':

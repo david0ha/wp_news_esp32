@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native'
 import { Image } from 'expo-image'
 import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated'
 import { ResumableZoom, fitContainer } from 'react-native-zoom-toolkit'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router'
 import { Button } from '../../components/Button'
 import { Stamp } from '../../components/Stamp'
 import { Esp32Error, humanError } from '../../lib/esp32'
@@ -56,10 +56,15 @@ export default function SheetViewer() {
   const eid = params.eid ?? ''
   const page = params.page === '1' ? 1 : 0
 
-  // Poll the board only on the board route. Every other screen that merely mentions the glass must
-  // not wake a sleeping board by being open (queries.ts's own rule for `useDeviceState`).
-  const deviceState = useDeviceState(wantsBoard)
-  const board = useBoardScreen(deviceState.data, wantsBoard)
+  // Poll the board only on the board route, and only while this sheet is the thing on screen.
+  // Every other screen that merely mentions the glass must not wake a sleeping board by being open
+  // (queries.ts's own rule for `useDeviceState`) — and a form sheet left mounted under something
+  // pushed over it is the same leak the Board tab had, on a five-second interval that restarts the
+  // board's awake window every time it fires.
+  const isFocused = useIsFocused()
+  const live = wantsBoard && isFocused
+  const deviceState = useDeviceState(live)
+  const board = useBoardScreen(deviceState.data, live)
 
   const edition = useEdition(eid)
   const sheetName = sheetForPage(edition.data?.sheets ?? [], page)
@@ -86,6 +91,25 @@ export default function SheetViewer() {
   const showingBoard = shown === 'board'
   const fellBackToProof = wantsBoard && shown === 'proof'
 
+  // THE IMAGE IS WHERE A PROOF ACTUALLY FAILS. `useSheet` builds a URL and a header pair and
+  // fetches nothing (its own docstring says so), so the 401 from a rotated token, the 404 from a
+  // pruned sheet, the cold tunnel and the truncated PNG all land inside expo-image's own request —
+  // where, before this, nobody was watching. The symptom was the worst kind: a blank white
+  // rectangle the size of a broadsheet, no sentence, no retry, indistinguishable from a sheet that
+  // is genuinely empty.
+  //
+  // `reloadKey` is what makes the retry mean anything. The URL does not change between attempts, so
+  // a react-query refetch would hand back the identical string and expo-image would answer from its
+  // own cache; remounting under a new key after clearing that cache is the only way to ask again.
+  const [imageFailed, setImageFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const retryImage = useCallback(() => {
+    setImageFailed(false)
+    void Image.clearMemoryCache()
+    void Image.clearDiskCache()
+    setReloadKey((k) => k + 1)
+  }, [])
+
   const [box, setBox] = useState({ width: 0, height: 0 })
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout
@@ -108,11 +132,14 @@ export default function SheetViewer() {
         ? humanError(readError)
         : 'Couldn’t read the page off the board.'
       : null
-  const proofError = proof.isError
-    ? proof.error instanceof DeskError
-      ? deskHumanError(proof.error)
-      : 'Couldn’t load the desk’s proof of this edition.'
-    : null
+  // Both halves of "the proof did not arrive": the query, which can only fail for a desk that is
+  // not configured at all, and the image request, which is where every real failure happens.
+  const proofError =
+    proof.isError || (shown === 'proof' && imageFailed)
+      ? proof.error instanceof DeskError
+        ? deskHumanError(proof.error)
+        : 'Couldn’t load the desk’s proof of this edition.'
+      : null
 
   const uri = showingBoard ? boardUri : shown === 'proof' ? proof.data?.uri : undefined
   const headers = showingBoard ? undefined : shown === 'proof' ? proof.data?.headers : undefined
@@ -125,6 +152,9 @@ export default function SheetViewer() {
       void deviceState.refetch()
       return
     }
+    // A board frame that decoded to nothing is not a stale slot — clearing the failure and asking
+    // the board again is the same gesture as a re-read, so both happen.
+    if (imageFailed) setImageFailed(false)
     void board.refetchFromBoard()
   }
 
@@ -150,7 +180,7 @@ export default function SheetViewer() {
           paper, and the sheet would be drawn wider than the space it has to sit in. */}
       <View style={styles.body}>
         <View style={styles.measure} onLayout={onLayout}>
-          {uri && fitted ? (
+          {uri && fitted && !imageFailed ? (
             <Animated.View
               // The one animation this screen owns, so it is the one that takes the app's spring.
               // ResumableZoom's own settle after a pinch is the library's hardcoded `withTiming`
@@ -174,7 +204,11 @@ export default function SheetViewer() {
                 scaleMode="bounce"
               >
                 <Image
+                  // Remounted on a retry, so the request is genuinely made again rather than
+                  // answered out of expo-image's cache with the same failure.
+                  key={`sheet-${reloadKey}`}
                   source={{ uri, ...(headers ? { headers } : null) }}
+                  onError={() => setImageFailed(true)}
                   // The paper's own edge, on the IMAGE rather than on a frame around it, so the
                   // hairline scales with the sheet under a pinch instead of standing still while the
                   // page grows through it.
@@ -201,7 +235,11 @@ export default function SheetViewer() {
           ) : (
             <View style={styles.center}>
               <Text style={styles.error}>
-                {boardError ?? proofError ?? 'Nothing to show for this page yet.'}
+                {boardError ??
+                  proofError ??
+                  (imageFailed
+                    ? 'The frame came off the board but couldn’t be drawn. Fetch it again.'
+                    : 'Nothing to show for this page yet.')}
               </Text>
               {/* The awake window, said in full. A board with deep sleep on is unreachable most of
                   the time BY DESIGN — it wakes for about three seconds, asks its desk one question,
@@ -218,13 +256,19 @@ export default function SheetViewer() {
                   re-runs on its own, so without a button this screen is a dead end until it is
                   dismissed — and it is exactly the branch a sleeping board lands on, which is to
                   say the common one rather than the exotic one. */}
-              {wantsBoard && boardError ? (
+              {wantsBoard && (boardError || imageFailed) ? (
                 <Button
                   label="Try again"
                   loading={boardInFlight}
                   onPress={askAgain}
                   style={styles.retry}
                 />
+              ) : proofError ? (
+                // The same argument, on the route that had no button at all. `staleTime: Infinity`
+                // means nothing here re-runs on its own either, so a proof that failed to load left
+                // this screen a dead end until it was dismissed — and a tunnel that was cold for a
+                // moment is the common way to get here, not an exotic one.
+                <Button label="Try again" onPress={retryImage} style={styles.retry} />
               ) : null}
             </View>
           )}

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
@@ -15,7 +15,15 @@ import { HoldCard } from '../../components/desk/HoldCard'
 import { QueueList } from '../../components/desk/QueueList'
 import { ScheduleCard } from '../../components/desk/ScheduleCard'
 import { StateStrip } from '../../components/desk/StateStrip'
-import { deskKeys, queryClient, useAudit, useDeskClient, useDeskNow, useDeskState } from '../../lib/queries'
+import {
+  deskKeys,
+  queryClient,
+  useAudit,
+  useDeskClient,
+  useDeskNow,
+  useDeskState,
+  usePullRefresh,
+} from '../../lib/queries'
 import { DeskError, deskHumanError } from '../../lib/desk'
 import { auditEventLine, auditWhen } from '../../lib/audit'
 import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
@@ -50,22 +58,12 @@ export default function Desk() {
   const [editionsPressed, setEditionsPressed] = useState(false)
   const reducedMotion = useReducedMotion()
 
-  // The pull is tracked HERE rather than read off `state.isRefetching`, and that is not a style
-  // choice: `useDeskState` carries a `refetchInterval` of fifteen seconds, so `isRefetching` is
-  // true for a moment four times a minute on its own. Bound to the control, it would put a spinner
-  // at the top of a tab nobody had touched, every fifteen seconds, forever.
-  const [pulling, setPulling] = useState(false)
-  const onRefresh = useCallback(async () => {
-    setPulling(true)
-    try {
-      // The whole desk namespace: every section on this tab reads a different key off the same
-      // server, and a pull that refreshed only the state strip would leave the queue underneath it
-      // describing a moment that has passed.
-      await queryClient.invalidateQueries({ queryKey: deskKeys.all })
-    } finally {
-      setPulling(false)
-    }
-  }, [])
+  // The whole desk namespace: every section on this tab reads a different key off the same server,
+  // and a pull that refreshed only the state strip would leave the queue underneath it describing a
+  // moment that has passed. (Why the spinner is local state and not a query flag: `usePullRefresh`.)
+  const { pulling, onRefresh } = usePullRefresh(() =>
+    queryClient.invalidateQueries({ queryKey: deskKeys.all }),
+  )
 
   if (client === null) {
     return (
@@ -92,9 +90,7 @@ export default function Desk() {
         refreshControl={
           <RefreshControl
             refreshing={pulling}
-            onRefresh={() => {
-              void onRefresh()
-            }}
+            onRefresh={onRefresh}
             tintColor={colors.signal.chrome.tint}
           />
         }

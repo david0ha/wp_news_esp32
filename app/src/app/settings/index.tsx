@@ -8,7 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useIsFocused, useRouter } from 'expo-router'
 import Constants from 'expo-constants'
 import { Screen } from '../../components/Screen'
 import { BackButton } from '../../components/BackButton'
@@ -235,7 +235,11 @@ function DeskSection() {
 function BoardSection() {
   const router = useRouter()
   const { client, baseUrl, hasDevice, setBaseUrl } = useDevice()
-  const deviceState = useDeviceState(hasDevice)
+  // Gated on focus for the same reason the Board tab is: this poll runs every five seconds and
+  // every request restarts the board's awake window. Settings stays mounted underneath the pairing
+  // wizard pushed over it, and the wizard is precisely when the board is being asked other things.
+  const isFocused = useIsFocused()
+  const deviceState = useDeviceState(hasDevice && isFocused)
   const state = deviceState.data
 
   const [reconnecting, setReconnecting] = useState(false)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useIsFocused, useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
 import { HeaderGear } from '../../components/HeaderGear'
 import { EmptyState } from '../../components/EmptyState'
@@ -13,6 +13,7 @@ import { useDevice } from '../../lib/device'
 import {
   useDeviceState,
   useDisplayTest,
+  usePullRefresh,
   useRefreshBoard,
   useSetPage,
   useSetSleep,
@@ -38,18 +39,37 @@ export default function Board() {
   const router = useRouter()
   const { baseUrl, hasDevice, setBaseUrl } = useDevice()
 
-  const deviceState = useDeviceState(hasDevice)
+  // THE POLL IS GATED ON FOCUS, and this is the one line on this screen that costs somebody's
+  // battery if it is wrong. `useDeviceState` carries a five-second `refetchInterval`, and every
+  // request restarts the board's awake window (docs/app-control.md) — so a poll that keeps running
+  // from another tab is this app holding a sleeping board awake for as long as the phone is open.
+  //
+  // `hasDevice` alone will not do it. It is a property of storage, not of what is on screen, and
+  // `NativeTabs` keeps a tab mounted once it has been visited — so without this, opening Board
+  // once and walking away to Today polls the board forever. `focusManager` does not cover it
+  // either: it is wired to AppState (`app/_layout.tsx`), so it pauses a backgrounded app and knows
+  // nothing about which tab is in front. The screen this replaced said the same thing with
+  // `useFocusEffect` around its own interval — "pauses polling when the user navigates away".
+  const isFocused = useIsFocused()
+  const deviceState = useDeviceState(hasDevice && isFocused)
   const setPage = useSetPage()
   const refreshBoard = useRefreshBoard()
   const setSleep = useSetSleep()
   const displayTest = useDisplayTest()
 
-  const [pulling, setPulling] = useState(false)
   // A page the user asked for that the board has not confirmed yet. A page change is a full
   // refresh of a 13.3" Spectra 6 panel — twenty to thirty seconds — so without this the segmented
   // control snaps back to the old page and looks like the tap was lost.
   const [pendingPage, setPendingPage] = useState<number | null>(null)
   const [refreshingUntilMs, setRefreshingUntilMs] = useState<number | undefined>(undefined)
+  // A command that came back an error, in its own state — NOT read off `deviceState`, which is the
+  // poll and answers a different question. Without this a failed command is silent: a self-test or
+  // a sleep write that the board refused shows nothing at all, and a failed page switch is worse
+  // than silent, because `pendingPage` is already set and the reconcile effect below cannot clear
+  // it (its dependency is `state?.page`, which does not change when the switch never happened) —
+  // so the control keeps showing the page the user tapped and the note keeps saying "Switching…"
+  // indefinitely. Clearing it on the error path is what ends that.
+  const [commandError, setCommandError] = useState<string | null>(null)
 
   const state = deviceState.data
 
@@ -74,6 +94,18 @@ export default function Board() {
     setRefreshingUntilMs(Date.now() + refreshWindowMs(state?.panel.refreshMs ?? 0))
   }, [state?.panel.refreshMs])
 
+  // One error handler for all four commands, because they are four commands to one board and the
+  // reader wants the board's sentence rather than the button's. `humanError` carries the one that
+  // matters most — a timeout is a board asleep, not a fault to go looking for.
+  const onCommandError = useCallback((e: unknown) => {
+    setCommandError(
+      e instanceof Esp32Error ? humanError(e) : 'That command failed. Please try again.',
+    )
+  }, [])
+  // Fired the moment a button is pressed: the previous failure is about the previous attempt, and
+  // leaving it up beside a command in flight reads as this one having failed already.
+  const clearCommandError = useCallback(() => setCommandError(null), [])
+
   // "Couldn't reach the board" retry: the saved address may be stale after the user rejoined their
   // home Wi-Fi or the board took a new DHCP lease. Re-probe the LAN (saved address + the mDNS
   // name), persist whichever answers, then reload.
@@ -90,14 +122,7 @@ export default function Board() {
     await deviceState.refetch()
   }, [baseUrl, setBaseUrl, deviceState])
 
-  const onRefresh = useCallback(async () => {
-    setPulling(true)
-    try {
-      await deviceState.refetch()
-    } finally {
-      setPulling(false)
-    }
-  }, [deviceState])
+  const { pulling, onRefresh } = usePullRefresh(() => deviceState.refetch())
 
   // Still resolving the base URL from storage — a brief moment on cold start, before `hasDevice`
   // is known either way.
@@ -151,25 +176,40 @@ export default function Board() {
         refreshControl={
           <RefreshControl
             refreshing={pulling}
-            onRefresh={() => {
-              void onRefresh()
-            }}
+            onRefresh={onRefresh}
             tintColor={colors.signal.chrome.tint}
           />
         }
       >
-        <GlassSection state={state} refreshingUntilMs={refreshingUntilMs} />
+        <GlassSection state={state} focused={isFocused} refreshingUntilMs={refreshingUntilMs} />
 
         <ActionsSection
           state={state}
+          focused={isFocused}
           pendingPage={pendingPage}
           busy={busy}
           onSetPage={(page) => {
+            clearCommandError()
             setPendingPage(page)
-            setPage.mutate(page, { onSuccess: armRing })
+            setPage.mutate(page, {
+              onSuccess: armRing,
+              onError: (e) => {
+                // The board never took the page, so the optimistic one is a lie with nothing left
+                // to correct it. Snapping the control back is half the fix; the sentence is the
+                // other half, or the tap simply appears to have been lost.
+                setPendingPage(null)
+                onCommandError(e)
+              },
+            })
           }}
-          onPollNow={() => refreshBoard.mutate(undefined, { onSuccess: armRing })}
-          onSelfTest={() => displayTest.mutate()}
+          onPollNow={() => {
+            clearCommandError()
+            refreshBoard.mutate(undefined, { onSuccess: armRing, onError: onCommandError })
+          }}
+          onSelfTest={() => {
+            clearCommandError()
+            displayTest.mutate(undefined, { onError: onCommandError })
+          }}
         />
 
         <SourceSection source={state.source} />
@@ -178,14 +218,22 @@ export default function Board() {
           power={state.power}
           battery={state.battery}
           busy={busy}
-          onPickSleep={(seconds) => setSleep.mutate(seconds)}
+          onPickSleep={(seconds) => {
+            clearCommandError()
+            setSleep.mutate(seconds, { onError: onCommandError })
+          }}
         />
 
+        {/* TWO ERROR LINES, because they are two different failures and the copy this screen used
+            to carry said "That command failed" on the branch that can only be a poll. A command is
+            something the reader just asked for and is waiting on; a failed poll is the background
+            read going quiet under content that is still on screen and still true. */}
+        {commandError ? <Text style={styles.errorLine}>{commandError}</Text> : null}
         {deviceState.isError ? (
           <Text style={styles.errorLine}>
             {deviceState.error instanceof Esp32Error
               ? humanError(deviceState.error)
-              : 'That command failed. Please try again.'}
+              : 'Couldn’t reach the board just now. Everything above is the last answer that came back.'}
           </Text>
         ) : null}
       </ScrollView>

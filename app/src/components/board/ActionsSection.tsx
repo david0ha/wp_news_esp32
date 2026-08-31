@@ -15,6 +15,7 @@ import { colors, spacing, typography } from '../../theme/index'
  */
 export function ActionsSection({
   state,
+  focused,
   pendingPage,
   busy,
   onSetPage,
@@ -22,6 +23,10 @@ export function ActionsSection({
   onSelfTest,
 }: {
   state: DeviceState
+  /** Whether the Board tab is the one on screen — the same flag `<GlassSection>` takes, and for the
+   * same reason. `refetchFromBoard` below still works while it is false: react-query's `refetch`
+   * runs a disabled query on purpose, which is what a button press is. */
+  focused: boolean
   /** A page the user asked for that the board has not confirmed yet — without it the segmented
    * control snaps back to the old page while a switch (twenty to thirty seconds) is in flight, and
    * looks like the tap was lost. */
@@ -31,7 +36,7 @@ export function ActionsSection({
   onPollNow: () => void
   onSelfTest: () => void
 }) {
-  const board = useBoardScreen(state, true)
+  const board = useBoardScreen(state, focused)
   const shownPage = pendingPage ?? state.page
 
   return (

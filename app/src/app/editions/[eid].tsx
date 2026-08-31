@@ -151,6 +151,10 @@ function SheetThumb({ eid, page, name }: { eid: string; page: 0 | 1; name: strin
   const router = useRouter()
   const sheet = useSheet(eid, name)
   const [pressed, setPressed] = useState(false)
+  // The thumbnail's own image failure — a 401, a pruned sheet, a cold tunnel. Without it the
+  // thumb's blank branch stops showing its spinner the moment `sheet.data` resolves (immediately,
+  // since it is only a URL) and sits there as an empty frame with nothing to read.
+  const [failed, setFailed] = useState(false)
   const reducedMotion = useReducedMotion()
   return (
     <Pressable
@@ -164,16 +168,22 @@ function SheetThumb({ eid, page, name }: { eid: string; page: 0 | 1; name: strin
         style={[styles.thumbWrap, pressTransition, pressed && !reducedMotion && pressedScale]}
       >
         <Sheet style={styles.thumbFrame}>
-          {sheet.data ? (
+          {sheet.data && !failed ? (
             <Image
               source={{ uri: sheet.data.uri, headers: sheet.data.headers }}
               style={styles.thumbImage}
               contentFit="contain"
               accessibilityIgnoresInvertColors
+              onError={() => setFailed(true)}
             />
           ) : (
             <View style={styles.thumbBlank}>
-              {sheet.isLoading ? <ActivityIndicator color={colors.signal.chrome.tint} /> : null}
+              {failed ? (
+                // Tapping it still opens the viewer, which carries the sentence and the retry.
+                <Text style={styles.thumbMissingText}>didn’t load</Text>
+              ) : sheet.isLoading ? (
+                <ActivityIndicator color={colors.signal.chrome.tint} />
+              ) : null}
             </View>
           )}
         </Sheet>

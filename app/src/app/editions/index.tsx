@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { Stack, useRouter } from 'expo-router'
@@ -7,7 +7,14 @@ import { Screen } from '../../components/Screen'
 import { EmptyState } from '../../components/EmptyState'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Stamp } from '../../components/Stamp'
-import { deskKeys, queryClient, useDeskClient, useDeskNow, useEditions } from '../../lib/queries'
+import {
+  deskKeys,
+  queryClient,
+  useDeskClient,
+  useDeskNow,
+  useEditions,
+  usePullRefresh,
+} from '../../lib/queries'
 import { DeskError, deskHumanError, type EditionMeta } from '../../lib/desk'
 import { editionPointer, editionWhen } from '../../lib/editions'
 import { colors, pressTransition, pressedScale, spacing, typography } from '../../theme/index'
@@ -26,9 +33,14 @@ export default function Editions() {
   const editions = useEditions()
   const now = useDeskNow()
 
-  const onRefresh = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: deskKeys.editions() })
-  }, [])
+  // `usePullRefresh` rather than `editions.isRefetching`, which is what this screen used to bind
+  // and is reachable two ways it has no gesture behind: `refetchOnWindowFocus` is react-query's
+  // default and `focusManager` is wired to AppState, so backgrounding the app and coming back
+  // spins it; and `deskInvalidates.promote` reaches `editions()`, so promoting from the detail
+  // screen and tapping back spins it on arrival.
+  const { pulling, onRefresh } = usePullRefresh(() =>
+    queryClient.invalidateQueries({ queryKey: deskKeys.editions() }),
+  )
 
   if (client === null) {
     return (
@@ -76,7 +88,7 @@ export default function Editions() {
           contentContainerStyle={styles.list}
           refreshControl={
             <RefreshControl
-              refreshing={editions.isRefetching}
+              refreshing={pulling}
               onRefresh={onRefresh}
               tintColor={colors.signal.chrome.tint}
             />

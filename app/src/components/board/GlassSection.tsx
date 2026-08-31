@@ -12,16 +12,22 @@ import type { DeviceState } from '../../lib/esp32'
  */
 export function GlassSection({
   state,
+  focused,
   refreshingUntilMs,
 }: {
   state: DeviceState
+  /** Whether the Board tab is the one on screen — passed down rather than assumed, because reading
+   * the framebuffer is a megabyte off a board that may be asleep and `useBoardScreen` is explicit
+   * that `enabled` is the caller's call. A `true` literal here would contradict that in the one
+   * component it is documented for. */
+  focused: boolean
   /** Epoch ms the ring counts down to — armed by a page switch or a poll-now succeeding
    * (`board.tsx` owns the mutations, since the ring has to survive whichever button fired it).
    * Past or undefined = idle. */
   refreshingUntilMs?: number
 }) {
   const router = useRouter()
-  const board = useBoardScreen(state, true)
+  const board = useBoardScreen(state, focused)
   // The desk's current edition id, so a tap can carry `eid` even on the board route — the fallback
   // to the desk's proof (`resolveGlassSource`, read by `sheet/[source].tsx`) only works once the
   // viewer knows which edition to fall back TO.

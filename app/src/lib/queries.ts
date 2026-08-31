@@ -16,7 +16,7 @@
 // address or token — a plain function, not a hook, since a save handler is not always inside a
 // component that could call `useQueryClient()`.
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   focusManager,
   QueryClient,
@@ -166,6 +166,51 @@ function useDeskSettingsQuery() {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Pull to refresh.
+// ---------------------------------------------------------------------------
+
+/**
+ * The pull's own state, and the reason it is not a query flag.
+ *
+ * `<RefreshControl refreshing>` must mean "the reader is pulling THIS list, right now". Every
+ * candidate query flag means something broader:
+ *
+ *   - `isRefetching` goes true on its own. `useDeskState` polls every fifteen seconds, so bound to
+ *     the control it is a spinner at the top of a tab nobody touched, four times a minute, forever.
+ *   - even on a query with no `refetchInterval` it is still wrong, because a query key is shared.
+ *     `refetchOnWindowFocus` is react-query's default and `focusManager` is wired to AppState
+ *     (`app/_layout.tsx`), so backgrounding the app and coming back flashes a spinner nobody
+ *     pulled; and a mutation on another screen that invalidates the same family does it again on
+ *     arrival — `deskInvalidates.promote` reaches `editions()`, which is exactly the trip back from
+ *     an edition detail.
+ *
+ * So the flag has to be local to the gesture, which is what this holds. `run` is whatever the
+ * pull should actually do — usually one or more `invalidateQueries` — and the spinner is up for
+ * precisely as long as that takes. `finally` rather than `then`: a failed invalidate must still put
+ * the spinner away, or the list is left pulling at nothing.
+ *
+ * `run` is called through on every pull rather than captured in a dependency list, so a call site
+ * can pass an inline arrow without memoizing it.
+ */
+export function usePullRefresh(run: () => Promise<unknown>): {
+  pulling: boolean
+  onRefresh: () => void
+} {
+  const [pulling, setPulling] = useState(false)
+  const onRefresh = () => {
+    setPulling(true)
+    void (async () => {
+      try {
+        await run()
+      } finally {
+        setPulling(false)
+      }
+    })()
+  }
+  return { pulling, onRefresh }
+}
+
 /** Call after Settings saves a new desk address or token, so every open screen picks it up. */
 export function invalidateDeskSettings(): Promise<void> {
   return queryClient.invalidateQueries({ queryKey: deskKeys.settings() })
@@ -250,11 +295,27 @@ export interface SheetSource {
   headers: Record<string, string>
 }
 
+/**
+ * THIS QUERY FETCHES NOTHING, and that is the thing to know before reading an error branch off it.
+ *
+ * It builds two strings. The bytes are fetched by whatever `<Image>` is handed the pair, which
+ * means the failures that actually happen to a proof sheet — a 401 from a rotated token, a 404 from
+ * a pruned sheet, a cold tunnel, a truncated PNG — happen inside the image request and surface as
+ * `onError` THERE, not as `isError` here. Every consumer needs its own image-failure state; see
+ * `sheet/[source].tsx` and `editions/[eid].tsx`'s `SheetThumb` for the shape.
+ *
+ * The guard is still real rather than decorative: it replaces a `client!` assertion that was safe
+ * only because of the `enabled` two lines below it — a coupling between two options that a later
+ * edit to either one breaks silently.
+ */
 export function useSheet(eid: string, name: string) {
   const client = useDeskClient()
   return useQuery<SheetSource>({
     queryKey: deskKeys.sheet(eid, name),
-    queryFn: () => Promise.resolve({ uri: client!.sheetUrl(eid, name), headers: client!.sheetHeaders() }),
+    queryFn: async () => {
+      if (client === null) throw new DeskError('network', 'no desk configured')
+      return { uri: client.sheetUrl(eid, name), headers: client.sheetHeaders() }
+    },
     enabled: client !== null && eid !== '' && name !== '',
     // The URL and the header are derived from the base URL and the token, neither of which
     // changes without `invalidateDeskSettings()` — which already tears this client down.

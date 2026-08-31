@@ -45,11 +45,14 @@ describe('commandStatus', () => {
     }
   })
 
-  it('is green only for done and red only for failed — the tone rule the rest of the app keeps', () => {
-    expect(commandStatus('done').tone).toBe('up')
+  it('is red only for failed, and green for NOTHING — on this app green means direction, never "it worked"', () => {
     expect(commandStatus('failed').tone).toBe('down')
+    expect(commandStatus('done').tone).toBe('neutral')
     expect(commandStatus('pending').tone).toBe('neutral')
     expect(commandStatus('claimed').tone).toBe('neutral')
+    for (const s of ['pending', 'claimed', 'done', 'failed', 'expired', 'cancelled'] as CommandStatus[]) {
+      expect(commandStatus(s).tone).not.toBe('up')
+    }
   })
 
   it('greys out the three that are over without having been done', () => {

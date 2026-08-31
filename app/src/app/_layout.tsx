@@ -8,12 +8,11 @@ import * as SplashScreen from 'expo-splash-screen'
 import { DeviceProvider } from '../lib/device'
 import { onAppStateChange, queryClient } from '../lib/queries'
 import { useAppFonts } from '../lib/fonts'
-import { colors } from '../theme/legacy'
-// The redesign's own token set (src/theme/index.ts) — named apart from the legacy `colors` above
-// because the one screen with a native header (Task 28's watch detail) needs tokens the legacy
-// dark-terminal palette does not carry (`desk`, `deskText`, `signal.chrome.tint`). `../theme`, the
-// pre-redesign compatibility shim that used to resolve to `theme/legacy` under the old names, is
-// gone as of Task 31 — every screen that carried it now imports `theme/legacy` directly.
+// The redesign's token set, and now the only one. `src/theme/legacy.ts` — the pre-redesign
+// dark-terminal palette — is gone: this file was its last importer, for one token
+// (`colors.bg`, #0B0E11) that painted the navigation container a different near-black from the
+// #16151A every screen inside it paints. Two near-blacks, visible during a push transition and on
+// overscroll, which is the one place the container is ever seen.
 import { colors as theme } from '../theme/index'
 
 // Module scope, before the component ever renders — the one place this call is allowed to work.
@@ -77,7 +76,7 @@ export default function RootLayout() {
             <Stack
               screenOptions={{
                 headerShown: false,
-                contentStyle: { backgroundColor: colors.bg },
+                contentStyle: { backgroundColor: theme.desk },
               }}
             >
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

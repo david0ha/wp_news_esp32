@@ -91,6 +91,12 @@ export function OnTheGlass({
 }) {
   const reducedMotion = useReducedMotion()
   const [pressed, setPressed] = useState(false)
+  // A sheet that would not load, said on the paper rather than left as a white rectangle. The
+  // fetch happens inside expo-image (`useSheet` builds the URL and nothing else), so this is the
+  // only place the failure is observable at all. Reset whenever the source changes, or a sheet
+  // that failed once would stay failed through every edition after it.
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [imageUri])
 
   // `refreshing` changes exactly twice per refresh — on arrival and when the window closes — and
   // drives only the stamp's wording. The ring itself never touches this.
@@ -143,12 +149,13 @@ export function OnTheGlass({
 
   const paper = (
     <Sheet style={styles.frame}>
-      {source && state !== 'none' ? (
+      {source && state !== 'none' && !failed ? (
         <Image
           source={source}
           style={styles.image}
           contentFit="contain"
           accessibilityIgnoresInvertColors
+          onError={() => setFailed(true)}
         />
       ) : (
         // Nothing to show, said on the paper itself rather than over it. The label face is the
@@ -157,7 +164,12 @@ export function OnTheGlass({
         // empty states ("No desk yet", "No board paired") are chrome and belong to the screen; this
         // is what the object itself says when it is blank.
         <View style={styles.blank}>
-          <Text style={styles.blankLabel}>nothing on the glass yet</Text>
+          {/* Two different facts, and a reader can act on only one of them. An empty page is the
+              board's honest state; a sheet that would not load is worth tapping through to, where
+              the viewer carries the sentence and the retry. */}
+          <Text style={styles.blankLabel}>
+            {failed ? 'the sheet didn’t load' : 'nothing on the glass yet'}
+          </Text>
         </View>
       )}
 

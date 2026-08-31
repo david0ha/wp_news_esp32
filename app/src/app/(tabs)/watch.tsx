@@ -9,7 +9,14 @@ import { EmptyState } from '../../components/EmptyState'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { WatchRow } from '../../components/watch/WatchRow'
-import { deskKeys, queryClient, useDeskClient, useQuotes, useWatchlist } from '../../lib/queries'
+import {
+  deskKeys,
+  queryClient,
+  useDeskClient,
+  usePullRefresh,
+  useQuotes,
+  useWatchlist,
+} from '../../lib/queries'
 import { DeskError, deskHumanError } from '../../lib/desk'
 import { WATCH_GRADE_FILTERS, filterByGrade, sortWatchlist, watchGradeFilterLabel, type WatchGradeFilter } from '../../lib/watchlist'
 import { colors, spacing, typography } from '../../theme/index'
@@ -31,22 +38,14 @@ export default function Watch() {
   const symbols = useMemo(() => (watchlist.data?.items ?? []).map((i) => i.symbol), [watchlist.data])
   const quotes = useQuotes(symbols)
 
-  // Tracked locally rather than read off `watchlist.isRefetching`/`quotes.isRefetching` — neither
-  // query polls on an interval today, but binding the spinner to a query flag couples it to
-  // whichever screen happens to read the same key next; `desk.tsx`/`(tabs)/index.tsx` use the same
-  // local-state shape for the query that does.
-  const [pulling, setPulling] = useState(false)
-  const onRefresh = useCallback(async () => {
-    setPulling(true)
-    try {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: deskKeys.watchlist() }),
-        queryClient.invalidateQueries({ queryKey: deskKeys.quotes(symbols) }),
-      ])
-    } finally {
-      setPulling(false)
-    }
-  }, [symbols])
+  // The list and the prices beside it, together — a pull that refreshed one would leave the other
+  // describing a different minute. (Why the spinner is local state: `usePullRefresh`.)
+  const { pulling, onRefresh } = usePullRefresh(() =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: deskKeys.watchlist() }),
+      queryClient.invalidateQueries({ queryKey: deskKeys.quotes(symbols) }),
+    ]),
+  )
 
   const onChangeFilter = useCallback((index: number) => {
     const next = WATCH_GRADE_FILTERS[index]
@@ -87,9 +86,7 @@ export default function Watch() {
         refreshControl={
           <RefreshControl
             refreshing={pulling}
-            onRefresh={() => {
-              void onRefresh()
-            }}
+            onRefresh={onRefresh}
             tintColor={colors.signal.chrome.tint}
           />
         }

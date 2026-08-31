@@ -1114,7 +1114,10 @@ const server = http.createServer(async (req, res) => {
   res.end('not found\n')
 })
 
-server.listen(PORT, () => {
+// Loopback only. Without a host argument Node binds 0.0.0.0, which puts a dev fixture server on
+// the LAN for anyone on the same Wi-Fi — and `http://localhost:PORT` is what every line this logs,
+// and the README, already tells you to point the app at.
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`mock desk listening on http://localhost:${PORT}`)
   console.log(`  EXPO_PUBLIC_DESK_BASE_URL=http://localhost:${PORT} EXPO_PUBLIC_DESK_TOKEN=dev-operator npx expo start`)
   console.log(`  current edition ${currentId.slice(0, 12)}…, staged edition ${stagedId.slice(0, 12)}…`)

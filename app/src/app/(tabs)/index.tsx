@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated'
@@ -22,6 +22,7 @@ import {
   useDeskState,
   useEdition,
   useNews,
+  usePullRefresh,
   useSheet,
 } from '../../lib/queries'
 import { DeskError, deskHumanError } from '../../lib/desk'
@@ -58,22 +59,13 @@ export default function Today() {
   const sheetName = sheetForPage(edition.data?.sheets ?? [], pageIndex)
   const sheet = useSheet(currentEid ?? '', sheetName ?? '')
 
-  // The pull is tracked HERE rather than read off `deskState.isRefetching`/`news.isRefetching`, for
-  // the same reason `desk.tsx` tracks its own: `useDeskState` carries a `refetchInterval` of fifteen
-  // seconds, so `isRefetching` goes true for a moment four times a minute on its own — bound to the
-  // control, that is a spinner at the top of Today nobody pulled, every fifteen seconds, forever.
-  const [pulling, setPulling] = useState(false)
-  const onRefresh = useCallback(async () => {
-    setPulling(true)
-    try {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: deskKeys.state() }),
-        queryClient.invalidateQueries({ queryKey: deskKeys.news() }),
-      ])
-    } finally {
-      setPulling(false)
-    }
-  }, [])
+  // The two keys this screen reads. The spinner is local to the gesture — see `usePullRefresh`.
+  const { pulling, onRefresh } = usePullRefresh(() =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: deskKeys.state() }),
+      queryClient.invalidateQueries({ queryKey: deskKeys.news() }),
+    ]),
+  )
 
   if (client === null) {
     return (
@@ -107,9 +99,7 @@ export default function Today() {
         refreshControl={
           <RefreshControl
             refreshing={pulling}
-            onRefresh={() => {
-              void onRefresh()
-            }}
+            onRefresh={onRefresh}
             tintColor={colors.signal.chrome.tint}
           />
         }
