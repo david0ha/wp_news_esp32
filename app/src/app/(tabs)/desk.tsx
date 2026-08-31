@@ -1,12 +1,303 @@
-import { TabPlaceholder } from '../../components/TabPlaceholder'
+import { useCallback, useState } from 'react'
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
+import { useRouter } from 'expo-router'
+import { Button } from '../../components/Button'
+import { Card } from '../../components/Card'
+import { EmptyState } from '../../components/EmptyState'
+import { HeaderGear } from '../../components/HeaderGear'
+import { Screen } from '../../components/Screen'
+import { ScreenMessage } from '../../components/ScreenMessage'
+import { Standing } from '../../components/Standing'
+import { DirectiveList } from '../../components/desk/DirectiveList'
+import { HoldCard } from '../../components/desk/HoldCard'
+import { QueueList } from '../../components/desk/QueueList'
+import { ScheduleCard } from '../../components/desk/ScheduleCard'
+import { StateStrip } from '../../components/desk/StateStrip'
+import { deskKeys, queryClient, useAudit, useDeskClient, useDeskState } from '../../lib/queries'
+import { DeskError, deskHumanError } from '../../lib/desk'
+import { auditEventLine, auditWhen } from '../../lib/audit'
+import { colors, spacing, typography } from '../../theme/index'
 
-// Desk — the state strip, the order form, the queue, the directives and the recent editions
-// (plan Design > Wireframes). Task 29 builds it.
+/** The last twenty rows of the desk's own record — the foot of this tab. */
+const AUDIT_ROWS = 20
+
+/**
+ * Desk — what the desk is holding, what it is about to print, and the queue behind it (plan Design
+ * > Wireframes).
+ *
+ * The one tab that is nearly all chrome. Today and Watch are about paper and carry the newspaper
+ * faces; this one issues commands, so it is the system font and rounded corners the whole way down
+ * — the two rules a diff can check, applied to the screen that is furthest from being a sheet.
+ *
+ * NOTHING HERE ASKS "ARE YOU SURE". Cancel, publish and hold are all reversible on the desk's own
+ * terms — a hold lifts with the button beside it, a cancelled command can be filed again, and every
+ * edition is still a directory that `promote` can put back up. What the controls do instead is go
+ * quiet while their request is in flight, so a second tap cannot land on a request that is already
+ * running. See `<HoldCard>` for the same argument at the point it costs the most.
+ *
+ * ORDER is two buttons onto ONE sheet. `compose` takes a `?kind=`, so "Order today's edition" and
+ * "Research a ticker" are the same form with a different segment preselected — the reader can
+ * change their mind inside the sheet without backing out of it.
+ */
 export default function Desk() {
+  const router = useRouter()
+  const client = useDeskClient()
+  const state = useDeskState()
+  const audit = useAudit(AUDIT_ROWS)
+
+  // The pull is tracked HERE rather than read off `state.isRefetching`, and that is not a style
+  // choice: `useDeskState` carries a `refetchInterval` of fifteen seconds, so `isRefetching` is
+  // true for a moment four times a minute on its own. Bound to the control, it would put a spinner
+  // at the top of a tab nobody had touched, every fifteen seconds, forever.
+  const [pulling, setPulling] = useState(false)
+  const onRefresh = useCallback(async () => {
+    setPulling(true)
+    try {
+      // The whole desk namespace: every section on this tab reads a different key off the same
+      // server, and a pull that refreshed only the state strip would leave the queue underneath it
+      // describing a moment that has passed.
+      await queryClient.invalidateQueries({ queryKey: deskKeys.all })
+    } finally {
+      setPulling(false)
+    }
+  }, [])
+
+  if (client === null) {
+    return (
+      <Screen edges={['top']}>
+        <Header />
+        <EmptyState
+          title="No desk yet"
+          body="Add its address and operator token in Settings, and what it’s holding appears here."
+          actionLabel="Open settings"
+          onAction={() => router.push('/settings')}
+        />
+      </Screen>
+    )
+  }
+
   return (
-    <TabPlaceholder
-      title="Desk"
-      note="What the desk is holding, what it is about to print, and the queue behind it."
-    />
+    <Screen edges={['top']}>
+      <Header />
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={pulling}
+            onRefresh={() => {
+              void onRefresh()
+            }}
+            tintColor={colors.signal.chrome.tint}
+          />
+        }
+      >
+        {state.isError ? (
+          <Card style={styles.stateError}>
+            <ScreenMessage
+              error={
+                state.error instanceof DeskError
+                  ? deskHumanError(state.error)
+                  : 'Couldn’t read what the desk is doing.'
+              }
+              onRetry={() => state.refetch()}
+            />
+          </Card>
+        ) : (
+          <StateStrip state={state.data} />
+        )}
+
+        <HoldCard state={state.data} />
+
+        <View style={styles.section}>
+          <Standing label="ORDER" tone="chrome" />
+          <Button
+            label="Order today’s edition"
+            onPress={() => router.push('/compose?kind=edition')}
+          />
+          <Button
+            label="Research a ticker"
+            variant="secondary"
+            onPress={() => router.push('/compose?kind=research')}
+          />
+        </View>
+
+        <View style={styles.section}>
+          <Standing label="QUEUE" tone="chrome" />
+          <QueueList />
+        </View>
+
+        <View style={styles.section}>
+          <Standing label="DIRECTIVES" tone="chrome" />
+          <DirectiveList />
+        </View>
+
+        <View style={styles.section}>
+          <Standing label="SCHEDULE" tone="chrome" />
+          <ScheduleCard />
+        </View>
+
+        <View style={styles.section}>
+          <Standing label="EDITIONS" tone="chrome" />
+          <Card style={styles.linkCard}>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel="Recent editions"
+              onPress={() => router.push('/editions')}
+              style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+            >
+              <Text style={[typography.ui, styles.linkText]}>
+                {editionsLine(state.data?.editions.length)}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.deskFaint} />
+            </Pressable>
+          </Card>
+        </View>
+
+        {/* The desk's own record of what IT has done — a publish, a hold, a schedule edit. Not the
+            editorial history, which is EDITIONS above. It sits at the foot because it is the
+            section nobody comes here for and everybody needs once. */}
+        <View style={styles.section}>
+          <Standing label="THE RECORD" tone="chrome" />
+          <Card style={styles.recordCard}>
+            {audit.isLoading ? (
+              <View style={styles.recordMessage}>
+                <ScreenMessage loading />
+              </View>
+            ) : audit.isError ? (
+              <View style={styles.recordMessage}>
+                <ScreenMessage
+                  error={
+                    audit.error instanceof DeskError
+                      ? deskHumanError(audit.error)
+                      : 'Couldn’t read the desk’s record.'
+                  }
+                  onRetry={() => audit.refetch()}
+                />
+              </View>
+            ) : (audit.data ?? []).length === 0 ? (
+              <Text style={styles.recordEmpty}>The desk has done nothing worth recording yet.</Text>
+            ) : (
+              (audit.data ?? []).map((entry) => (
+                <View key={entry.seq} style={styles.recordRow}>
+                  <Text style={[typography.ui, styles.recordEvent]} numberOfLines={2}>
+                    {auditEventLine(entry)}
+                  </Text>
+                  {/* The desk's clock, not the phone's — every instant in `/api/state` is to be
+                      read against `now`, and an age measured against a phone a minute fast would
+                      report the newest row as being in the future. */}
+                  <Text style={styles.recordWhen}>
+                    {auditWhen(entry.at, state.data?.now ?? entry.at)}
+                  </Text>
+                </View>
+              ))
+            )}
+          </Card>
+        </View>
+      </ScrollView>
+    </Screen>
   )
 }
+
+function Header() {
+  return (
+    <View style={styles.header}>
+      <Text style={styles.title}>Desk</Text>
+      <HeaderGear />
+    </View>
+  )
+}
+
+/**
+ * "5 recent ⇢", or what to say before `/api/state` has answered.
+ *
+ * `editions` on the state document is the desk's own recent slice, so the count is a fact this
+ * screen already holds rather than a second request. Undefined is "not known yet" and must not
+ * render as zero — a desk that has published all week would announce itself as empty for the second
+ * before its state lands.
+ */
+function editionsLine(count: number | undefined): string {
+  if (count === undefined) return 'Recent editions'
+  if (count === 0) return 'Nothing filed yet'
+  return count === 1 ? '1 recent' : `${count} recent`
+}
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[16],
+    paddingTop: spacing[8],
+  },
+  title: {
+    ...typography.uiStrong,
+    fontSize: 22,
+    color: colors.deskText,
+  },
+  scroll: {
+    padding: spacing[16],
+    gap: spacing[24],
+    paddingBottom: spacing[40],
+  },
+  section: {
+    gap: spacing[12],
+  },
+  stateError: {
+    minHeight: 120,
+    justifyContent: 'center',
+  },
+  linkCard: {
+    padding: 0,
+    overflow: 'hidden',
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    paddingHorizontal: spacing[16],
+  },
+  pressed: {
+    opacity: 0.55,
+  },
+  linkText: {
+    fontSize: 15,
+    color: colors.deskText,
+  },
+  recordCard: {
+    padding: 0,
+    overflow: 'hidden',
+  },
+  recordMessage: {
+    minHeight: 100,
+    justifyContent: 'center',
+  },
+  recordRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: spacing[12],
+    paddingVertical: spacing[8],
+    paddingHorizontal: spacing[16],
+  },
+  recordEvent: {
+    fontSize: 13,
+    color: colors.deskDim,
+    flexShrink: 1,
+    lineHeight: 18,
+  },
+  recordWhen: {
+    ...typography.label,
+    color: colors.deskFaint,
+  },
+  recordEmpty: {
+    ...typography.ui,
+    fontSize: 13,
+    color: colors.deskFaint,
+    padding: spacing[16],
+  },
+})

@@ -1,31 +1,30 @@
-import { StyleSheet, Text, View } from 'react-native'
-import { colors } from '../theme/colors'
-import { typography } from '../theme/typography'
+import { useCallback } from 'react'
+import { useLocalSearchParams, useRouter } from 'expo-router'
+import { Composer, composerKind } from '../components/desk/Composer'
 
 /**
  * The composer — a form sheet for ordering an edition or filing a research request, raised from
- * Desk (plan Design > Wireframes, "ORDER"). Task 29 builds it; this reserves the route and its
- * presentation so the sheet's own chrome is settled before anything is written into it.
+ * Desk (plan Design > Wireframes, "ORDER"). `formSheet` on purpose (see `app/_layout.tsx`): what
+ * raised it stays visible behind, so the queue the order is about to land in is still on screen.
+ *
+ * `?kind=` preselects the segmented control, so "Order today's edition" and "Research a ticker" are
+ * two buttons onto one sheet rather than two sheets. Anything else — a deep link with a kind this
+ * app does not file, or none at all — lands on `edition`, which is the ordinary case.
+ *
+ * `canGoBack()` before `back()`: this route is reachable directly (a deep link, a cold start into
+ * it), and `back()` with nothing behind it is a dismissal that leaves the app on no screen at all.
  */
 export default function Compose() {
-  return (
-    <View style={styles.root}>
-      <Text style={styles.note}>Compose — an order for the desk. Not yet built.</Text>
-    </View>
-  )
-}
+  const router = useRouter()
+  const { kind } = useLocalSearchParams<{ kind?: string }>()
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.desk,
-    padding: 24,
-  },
-  note: {
-    ...typography.ui,
-    color: colors.deskDim,
-    textAlign: 'center',
-  },
-})
+  const onDone = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back()
+    } else {
+      router.replace('/desk')
+    }
+  }, [router])
+
+  return <Composer initialKind={composerKind(kind)} onDone={onDone} />
+}
