@@ -298,13 +298,15 @@ export function useDeviceState(enabled: boolean) {
  * nothing — and, more to the point, exactly ONE 2.6 MB decode is resident however many times this
  * mounts. Leaving it to `gcTime` would keep a second reference alive for five minutes for free.
  *
- * WHICH IS WHY `refetchFromBoard` EXISTS RATHER THAN `refetch`. Consulting the slot first is right
- * for a remount and wrong for a deliberate ask: a bare `refetch()` re-runs the query function,
- * which returns the slot under the same fingerprint, and the caller gets byte-identical pixels
- * having never reached the board. `/api/screen` can hand over a frame caught mid-render — the
- * firmware says so and says the remedy is to ask again — so a screen that offers "Fetch it again"
- * needs a path that actually can. The pairing lives here, on the hook, so that no caller has to
- * remember it; forgetting it is silent, and the symptom is a button that spins and changes nothing.
+ * WHICH IS WHY `refetch` IS NOT RETURNED AT ALL. Consulting the slot first is right for a remount
+ * and wrong for a deliberate ask: a bare `refetch()` re-runs the query function, which returns the
+ * slot under the same fingerprint, and the caller gets byte-identical pixels having never reached
+ * the board. `/api/screen` can hand over a frame caught mid-render — the firmware says so and says
+ * the remedy is to ask again — so a screen that offers "Fetch it again" needs a path that actually
+ * can. `refetchFromBoard` is that path, and it is the ONLY one this hook hands out: leaving
+ * `refetch` on the returned object next to it would leave the broken call reachable, spelled almost
+ * identically, for the next caller to reach for. Forgetting the pairing is silent — the symptom is
+ * a button that spins and changes nothing — so the pairing is not left to be remembered.
  *
  * THE YIELD BEFORE THE DECODE is not a stylistic `await`. Everything after it is synchronous and
  * takes a beat: 1.92 million pixels expanded out of 960,000 bytes, deflated, and base64'd, all on
@@ -331,14 +333,18 @@ export function useBoardScreen(state: ScreenIdentity | undefined, enabled: boole
     gcTime: 60_000,
   })
 
-  const { refetch } = query
-  /** Ask the BOARD again, not the slot. The one call a "Fetch it again" button may make. */
+  // `refetch` is destructured OFF the result rather than out of it: everything else is spread back,
+  // and the one method that could ask again without clearing the slot does not survive into the
+  // returned object. There is no bare-refetch escape hatch to find, which is the point.
+  const { refetch, ...rest } = query
+
+  /** Ask the BOARD again, not the slot. The only way this hook offers to re-read the glass. */
   const refetchFromBoard = useCallback(() => {
     screenCacheClear()
     return refetch()
   }, [refetch])
 
-  return { ...query, refetchFromBoard }
+  return { ...rest, refetchFromBoard }
 }
 
 // ---------------------------------------------------------------------------
