@@ -8,7 +8,7 @@ ESP-IDF is installed under `~/esp/`. Run this **every time you open a new termin
 lands on PATH:
 
 ```bash
-. ~/esp/v5.4.3/esp-idf/export.sh
+. ~/esp/esp-idf/export.sh
 ```
 
 Verify:
@@ -17,11 +17,25 @@ Verify:
 idf.py --version      # ESP-IDF v5.4.3
 ```
 
-> Older notes in this repository referenced a `~/.espressif/tools/activate_idf_v6.0.1.sh` script and
-> ESP-IDF v6.0.1. That script does not exist on this machine; v5.4.1 and v5.4.3 are what is
-> installed, and v5.4.3 is what the firmware is verified against. If you move to v6, note that it
-> removed cJSON from core — this project already vendors it at `third_party/cJSON`, so that
-> particular migration is a non-issue.
+> **Ask the tool, not the path.** `~/esp/esp-idf` is the only IDF here, and its directory name says
+> nothing about its version on purpose. This repository has now described its own environment wrongly
+> three times: the `~/.espressif/tools/activate_idf_v6.0.1.sh` script named by the oldest notes was
+> inherited verbatim from the project this one forked and never described this machine at all; a later
+> revision documented two installs under `~/esp/v5.4.1` and `~/esp/v5.4.3` that have since been
+> deleted; and a draft of *this* section announced v6.0.2. `idf.py --version` has been right every
+> time.
+>
+> **v6.0 was attempted and rolled back.** Little of the migration is the firmware's problem —
+> everything here is already the modern API (`esp_adc/adc_oneshot.h`, `esp_netif_sntp.h`, no legacy
+> timer/I2S/RMT drivers), and cJSON, which v6 drops from core, has been vendored at
+> `third_party/cJSON` since the port began. What the attempt left behind is a `~/.espressif` holding
+> two cross-compilers and two python environments, which is a real trap: see the quick start in
+> [CLAUDE.md](../CLAUDE.md) before debugging a `Tool doesn't match supported version` error.
+>
+> One repository change did survive the rollback, because it was never a v6 change. `port_bsp` asked
+> for the catch-all `driver` component, which **IDF 5.3** had already emptied down to i2c, twai and
+> the touch sensor when it split the peripheral drivers into `esp_driver_gpio`, `esp_driver_spi` and
+> the rest. It now names `esp_driver_gpio`, as `board_io` and `buttons` already did.
 
 ## 2. Creating a project
 
@@ -130,7 +144,7 @@ here. Adding an I2C device means finding two free pins first — see [pinout.md]
 ## 8. Summary of frequently used commands
 
 ```bash
-. ~/esp/v5.4.3/esp-idf/export.sh   # environment
+. ~/esp/esp-idf/export.sh          # environment
 idf.py set-target esp32s3        # target
 idf.py menuconfig                # configuration
 idf.py build                     # build

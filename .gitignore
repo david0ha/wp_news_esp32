@@ -6,6 +6,10 @@ build/
 sdkconfig.old
 # Generated per-developer config (may hold a WiFi password) — never commit. Shared config goes in sdkconfig.defaults
 sdkconfig
+# ...and the copies made by hand before switching IDF versions. `sdkconfig.old`
+# is the one idf.py writes; a person reaching for a backup names it whatever
+# they like, and the rule is about the contents, not the suffix.
+sdkconfig.bak*
 *.pyc
 __pycache__/
 

@@ -37,7 +37,7 @@ months rather than two days.
 ## Quick start
 
 ```bash
-. ~/esp/v5.4.3/esp-idf/export.sh    # once per shell
+. ~/esp/esp-idf/export.sh           # once per shell
 
 idf.py set-target esp32s3           # once per checkout
 idf.py build
