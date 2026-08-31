@@ -9,6 +9,11 @@ import { DeviceProvider } from '../lib/device'
 import { onAppStateChange, queryClient } from '../lib/queries'
 import { useAppFonts } from '../lib/fonts'
 import { colors } from '../theme'
+// The redesign's own token set (src/theme/index.ts) — named apart from the legacy `colors` above
+// because `../theme` resolves to the pre-redesign compatibility shim (src/theme.ts, deleted in
+// Task 31) rather than this directory, and the one screen with a native header (Task 28's watch
+// detail) needs the tokens that shim does not carry (`desk`, `deskText`, `signal.chrome.tint`).
+import { colors as theme } from '../theme/index'
 
 // Module scope, before the component ever renders — the one place this call is allowed to work.
 // It holds the launch image up until something explicitly hides it, which here is "the paper
@@ -62,6 +67,20 @@ export default function RootLayout() {
               }}
             >
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              {/* The one screen in this stack with a header at all — reached only from a
+                  `WatchRow` tap or a deep link, never a tab of its own, so the platform's native
+                  back control (Task 28) is the right one rather than this app's usual hand-built
+                  chrome header. `title` is set per-screen, dynamically, by the route itself. */}
+              <Stack.Screen
+                name="watch/[symbol]"
+                options={{
+                  headerShown: true,
+                  headerStyle: { backgroundColor: theme.desk },
+                  headerTintColor: theme.signal.chrome.tint,
+                  headerTitleStyle: { color: theme.deskText },
+                  headerShadowVisible: false,
+                }}
+              />
               {/* `settings/index`, not `settings`: there is no `settings/_layout.tsx`, so the
                   directory is flattened into this stack rather than becoming a navigator of its
                   own. `settings/pair` *is* one — its `_layout` carries the wizard's state across
