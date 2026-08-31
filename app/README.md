@@ -23,8 +23,8 @@ into.
 |---|---|---|---|
 | **Today** | `src/app/(tabs)/index.tsx` | The masthead, the desk's own proof render of the current edition, and the day's stories, briefs and dossier in one column | desk `GET /api/state`, `GET /api/editions/<id>`, `GET /api/editions/<id>/proof/<name>`, `GET /news.json` |
 | **Watch** | `src/app/(tabs)/watch.tsx` | Every company the vault is watching, led by its grade and the argument behind it — read-only, the vault owns this list | desk `GET /api/watchlist`, `GET /api/quotes?symbols=…` |
-| **Desk** | `src/app/(tabs)/desk.tsx` | What the desk is holding, the queue, the standing directives, the schedule, the last twenty audit rows, and the order sheet (`compose`) that asks it for something | desk `GET /api/state`, `GET /api/audit`, `GET/POST /api/commands`, `GET /api/directives`, `GET /api/schedule[/next]`, plus `POST /api/hold` / `POST /api/publish` |
-| **Board** | `src/app/(tabs)/board.tsx` | The hardware: the live glass, the page switcher, where the edition comes from, and the deep-sleep design measuring itself | board `GET /api/state`, `GET /api/screen`, `POST /api/refresh`, `POST /api/page`, `POST /api/sleep`, `POST /api/display/test` |
+| **Desk** | `src/app/(tabs)/desk.tsx` | What the desk is holding, the queue, the standing directives, the schedule, the last twenty audit rows, and the order sheet (`compose`) that asks it for something | desk `GET /api/state`, `GET /news.json` (the strip's own line), `GET /api/audit`, `GET/POST /api/commands`, `GET /api/directives`, `GET /api/schedule[/next]`, plus `POST /api/hold` / `POST /api/publish` |
+| **Board** | `src/app/(tabs)/board.tsx` | The hardware: the live glass, the page switcher, where the edition comes from, and the deep-sleep design measuring itself | board `GET /api/state`, `GET /api/screen`, `POST /api/refresh`, `POST /api/page`, `POST /api/sleep`, `POST /api/display/test`; desk `GET /api/state` (for the edition id a tap on the glass carries) |
 
 Two screens are reached only by a tap or a deep link, never a tab of their own — a company's full
 detail (`src/app/watch/[symbol].tsx`, off a `WatchRow`) and the editorial history

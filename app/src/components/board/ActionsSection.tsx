@@ -41,7 +41,7 @@ export function ActionsSection({
 
   return (
     <View style={styles.section}>
-      <Standing label="ON THE PANEL" tone="chrome" />
+      <Standing label="ON THE GLASS" tone="chrome" />
       <SegmentedControl
         segments={[...PAGE_LABELS]}
         selectedIndex={shownPage}

@@ -19,7 +19,7 @@ import { Standing } from '../../components/Standing'
 import { useDevice } from '../../lib/device'
 import { invalidateDeskSettings, useDeviceState } from '../../lib/queries'
 import { Esp32Error, humanError } from '../../lib/esp32'
-import { createDeskClient, DeskError, deskHumanError } from '../../lib/desk'
+import { createDeskClient, deskHumanError } from '../../lib/desk'
 import {
   clearDeskToken,
   deskTestResultLine,
@@ -177,7 +177,7 @@ function DeskSection() {
         {urlError ? <Text style={styles.error}>{urlError}</Text> : null}
         {urlSaved ? <Text style={styles.saved}>Saved.</Text> : null}
         <Button
-          label="Save address"
+          label="Save the address"
           variant="secondary"
           disabled={!urlLoaded || urlDraft.trim() === ''}
           loading={urlSaving}
@@ -391,7 +391,7 @@ function NewsUrlEditor({
         </Text>
       ) : null}
       <Button
-        label={dirty && !draft.trim() ? 'Clear and use demo data' : 'Save address'}
+        label={dirty && !draft.trim() ? 'Clear and use demo data' : 'Save the address'}
         variant="secondary"
         disabled={!result.ok || !dirty}
         loading={saving}
