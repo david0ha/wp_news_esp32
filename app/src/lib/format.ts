@@ -283,6 +283,23 @@ export function formatDateline(dateline: string): string {
 }
 
 /**
+ * `WatchlistItem.last_printed` ("2026-08-12") as the Watch row's "printed AUG 12" stamp (Task 27).
+ * The caller supplies "printed "; this only turns the date into the paper's own month
+ * abbreviation, reusing the `MONTHS` table `formatGeneratedAt()` already carries.
+ *
+ * Shown as it arrived on anything that isn't `YYYY-MM-DD` — `formatDateline()`'s own posture: a
+ * desk sending something else is a desk bug, and this is where it would be seen, not hidden.
+ * The caller omits the whole stamp for `null`; this function is never asked about that case.
+ */
+export function formatPrintedDate(dateISO: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateISO)
+  if (!m) return dateISO
+  const month = MONTHS[Number(m[2]) - 1]
+  if (!month) return dateISO
+  return `${month.toUpperCase()} ${Number(m[3])}`
+}
+
+/**
  * An edition's `published_at` (epoch seconds) as a "06:04" stamp — `<OnTheGlass>`'s
  * "hangs there since" line.
  *

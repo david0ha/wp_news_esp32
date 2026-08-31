@@ -148,3 +148,26 @@ export function parse(src: string): Block[] {
 
   return blocks
 }
+
+/**
+ * Spans reduced to plain text — every formatting mark stripped, a link's visible text kept over
+ * its `href`. For a caller that wants a summary line rather than a rendering (Task 27's watchlist
+ * row: the thesis's first line), not a substitute for `<Markdown>`, which draws the formatting
+ * rather than discarding it.
+ */
+export function flattenSpans(spans: Span[]): string {
+  return spans.map(flattenSpan).join('')
+}
+
+function flattenSpan(span: Span): string {
+  switch (span.type) {
+    case 'text':
+    case 'code':
+      return span.text
+    case 'bold':
+    case 'italic':
+      return flattenSpans(span.spans)
+    case 'link':
+      return span.text
+  }
+}

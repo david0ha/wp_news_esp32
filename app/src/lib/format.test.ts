@@ -13,6 +13,7 @@ import {
   formatGeneratedAt,
   formatInterval,
   formatMs,
+  formatPrintedDate,
   formatSinceTime,
   pageLabel,
   pollSourceLabel,
@@ -275,6 +276,21 @@ describe('formatDateline', () => {
     expect(formatDateline('')).toBe('')
     expect(formatDateline('this morning')).toBe('this morning')
     expect(formatDateline('14 August 2026')).toBe('14 August 2026')
+  })
+})
+
+describe('formatPrintedDate', () => {
+  it('renders a wire date as the paper’s own month abbreviation, uppercased', () => {
+    expect(formatPrintedDate('2026-08-12')).toBe('AUG 12')
+    expect(formatPrintedDate('2026-01-02')).toBe('JAN 2')
+    // scripts/mock-desk.js's watchlist fixture computes last_printed with a full ISO timestamp
+    // sliced to 10 characters — this still matches on the leading YYYY-MM-DD.
+    expect(formatPrintedDate('2026-08-22T00:00:00.000Z')).toBe('AUG 22')
+  })
+
+  it('shows the raw string on anything that does not parse — same posture as formatDateline()', () => {
+    expect(formatPrintedDate('')).toBe('')
+    expect(formatPrintedDate('12 Aug 2026')).toBe('12 Aug 2026')
   })
 })
 
