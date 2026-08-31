@@ -177,6 +177,43 @@ class DeskTestCase(unittest.TestCase):
             with e:
                 return e.code, e.read(), dict(e.headers)
 
+    def assert_body_refused_as_too_large(self, method, path, body, token=None,
+                                          ctype="application/json"):
+        """Assert a request is refused for exceeding a body-size cap, honouring
+        both faces that refusal can arrive in.
+
+        ``_body()`` in ``http.py`` checks ``Content-Length`` against the limit
+        before it drains the socket: on an oversized body it writes the 413
+        and deliberately sets ``close_connection``, so the unread bytes are
+        never drained and the connection closes with them still in flight
+        (see the comment at that call site -- draining what was just refused
+        would spend exactly what the header check exists to save). The
+        socket then carries two things at once: the 413 this client is
+        trying to read, and a kernel RST for the request body bytes the
+        server never read. Which one this client observes first is a TCP
+        race neither side of this test controls -- and losing it does not
+        even leave a readable response: `http.client.send()` can hit the RST
+        while it is still writing the oversized body, before a response
+        exists to read, so urllib never gets as far as an ``HTTPError``. What
+        it raises instead is a plain ``URLError`` wrapping the underlying
+        ``OSError`` (``do_open()`` catches ``OSError`` from the send/receive
+        and re-raises it as ``URLError(err)`` -- see ``urllib/request.py``),
+        so that is the shape this checks for, not a bare
+        ``ConnectionResetError``. A ``URLError`` whose reason is a
+        ``ConnectionResetError`` or ``BrokenPipeError`` (EPIPE is the same
+        close, met while still writing) is that other honest face of the
+        refusal. A 200, a different status, or any other error is not
+        covered by that and still fails the test.
+        """
+        try:
+            status, raw, _ = self.call(method, path, body, token, ctype)
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, (ConnectionResetError, BrokenPipeError)):
+                return
+            raise
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(raw)["error"], "too_large")
+
     def api(self, method, path, doc=None, scope="operator"):
         body = json.dumps(doc).encode() if doc is not None else None
         status, raw, _ = self.call(method, path, body, self.tokens[scope])
@@ -623,9 +660,12 @@ class DraftNotesTest(DeskTestCase):
         self.assertEqual(raw, big)
 
     def test_a_note_past_the_cap_is_refused_from_the_header_alone(self):
-        status, raw, _ = self.put_notes(self.draft(), b"m" * (256 * 1024 + 1))
-        self.assertEqual(status, 413)
-        self.assertEqual(json.loads(raw)["error"], "too_large")
+        # See assert_body_refused_as_too_large for why a torn-down connection
+        # counts here alongside a readable 413 -- this is the same refusal
+        # `put_notes` would otherwise wrap in a helper that hides the race.
+        self.assert_body_refused_as_too_large(
+            "PUT", "/api/drafts/%s/notes.md" % self.draft(), b"m" * (256 * 1024 + 1),
+            self.tokens["producer"], "text/markdown")
 
     def test_a_note_on_a_draft_that_is_not_there_is_a_404(self):
         # 32 hex, so it passes the route's own pattern and is refused by the
@@ -867,10 +907,12 @@ class ControlPlaneTest(DeskTestCase):
         status, doc = self.api("POST", "/api/drafts", {})
         draft = doc["draft_id"]
         huge = b"x" * (300 * 1024 + 1)
-        status, raw, _ = self.call("PUT", "/api/drafts/%s/news.json" % draft, huge,
-                                   self.tokens["producer"])
-        self.assertEqual(status, 413)
-        self.assertEqual(json.loads(raw)["error"], "too_large")
+        # See assert_body_refused_as_too_large: with 300KB+1 in flight the
+        # RST racing the 413 to this client is rarer than it is at the
+        # 256KB+1 the notes cap tests with, but it is the same race and the
+        # same two honest outcomes.
+        self.assert_body_refused_as_too_large(
+            "PUT", "/api/drafts/%s/news.json" % draft, huge, self.tokens["producer"])
 
     def test_malformed_json_is_bad_json_and_not_a_crash(self):
         status, raw, _ = self.call("POST", "/api/commands", b"{not json",
