@@ -16,7 +16,7 @@
 // address or token — a plain function, not a hook, since a save handler is not always inside a
 // component that could call `useQueryClient()`.
 
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import {
   focusManager,
   QueryClient,
@@ -38,8 +38,8 @@ import { useDevice } from './device'
 import { Esp32Error, type Esp32Client } from './esp32'
 import { decode } from './screen'
 import {
-  screenCacheGet,
-  screenCachePut,
+  screenCached,
+  screenCacheClear,
   screenFingerprint,
   type ScreenIdentity,
 } from './screencache'
@@ -293,10 +293,18 @@ export function useDeviceState(enabled: boolean) {
  * nothing and the key tells you everything. A board that redraws gets a new key and a new read; a
  * board that has quietly done nothing all afternoon is never asked for a megabyte again.
  *
- * THE MODULE CACHE IS THE STORE, react-query is the plumbing. `screenCacheGet` is consulted inside
+ * THE MODULE CACHE IS THE STORE, react-query is the plumbing. `screenCached` is consulted inside
  * the query function, so a remount after react-query has garbage-collected its entry still costs
  * nothing — and, more to the point, exactly ONE 2.6 MB decode is resident however many times this
  * mounts. Leaving it to `gcTime` would keep a second reference alive for five minutes for free.
+ *
+ * WHICH IS WHY `refetchFromBoard` EXISTS RATHER THAN `refetch`. Consulting the slot first is right
+ * for a remount and wrong for a deliberate ask: a bare `refetch()` re-runs the query function,
+ * which returns the slot under the same fingerprint, and the caller gets byte-identical pixels
+ * having never reached the board. `/api/screen` can hand over a frame caught mid-render — the
+ * firmware says so and says the remedy is to ask again — so a screen that offers "Fetch it again"
+ * needs a path that actually can. The pairing lives here, on the hook, so that no caller has to
+ * remember it; forgetting it is silent, and the symptom is a button that spins and changes nothing.
  *
  * THE YIELD BEFORE THE DECODE is not a stylistic `await`. Everything after it is synchronous and
  * takes a beat: 1.92 million pixels expanded out of 960,000 bytes, deflated, and base64'd, all on
@@ -308,23 +316,29 @@ export function useDeviceState(enabled: boolean) {
 export function useBoardScreen(state: ScreenIdentity | undefined, enabled: boolean) {
   const { client } = useDevice()
   const fingerprint = screenFingerprint(state)
-  return useQuery<string>({
+  const query = useQuery<string>({
     queryKey: deviceKeys.screenAt(fingerprint),
-    queryFn: async () => {
-      const cached = screenCacheGet(fingerprint)
-      if (cached) return cached
-      const fb = await client!.fetchScreen()
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      const png = decode(fb).pngBase64
-      screenCachePut(fingerprint, png)
-      return png
-    },
+    queryFn: () =>
+      screenCached(fingerprint, async () => {
+        const fb = await client!.fetchScreen()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        return decode(fb).pngBase64
+      }),
     // No fingerprint means the board has not answered `/api/state`, so there would be no way to
     // know when to throw the result away. Not asking is the correct behaviour, not a limitation.
     enabled: enabled && client !== null && fingerprint !== '',
     staleTime: Infinity,
     gcTime: 60_000,
   })
+
+  const { refetch } = query
+  /** Ask the BOARD again, not the slot. The one call a "Fetch it again" button may make. */
+  const refetchFromBoard = useCallback(() => {
+    screenCacheClear()
+    return refetch()
+  }, [refetch])
+
+  return { ...query, refetchFromBoard }
 }
 
 // ---------------------------------------------------------------------------

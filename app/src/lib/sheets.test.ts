@@ -65,6 +65,20 @@ describe('sheetForPage — by name first, by position second', () => {
     expect(sheetForPage(sheets, -1)).toBeNull()
   })
 
+  it('takes the one sheet that makes no claim, when the other sheets claim the other page', () => {
+    // "This one is A1" is a statement about ONE sheet. A sheet that names no page has made no
+    // claim at all, and treating the presence of a name anywhere in the list as a reason to
+    // discard it orphans a perfectly good sheet.
+    expect(sheetForPage(['01_a1_full.png', 'accounts.png'], 1)).toBe('accounts.png')
+    expect(sheetForPage(['thumb.png', '02_a2_full.png'], 0)).toBe('thumb.png')
+  })
+
+  it('refuses to guess when more than one sheet could be the unclaimed page', () => {
+    // Two candidates and nothing to separate them: null beats a coin toss, because the cost of
+    // being wrong is printing the front page under an "accounts" heading.
+    expect(sheetForPage(['01_a1_full.png', 'x.png', 'y.png'], 1)).toBeNull()
+  })
+
   it('never hands back an A1 sheet for page 1 just because it is first', () => {
     // One sheet, named A1, and a caller asking for A2: position would say "the only one there is".
     // A named A1 is positive evidence that it is NOT A2, which is the whole reason names beat

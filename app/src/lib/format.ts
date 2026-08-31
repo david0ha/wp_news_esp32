@@ -283,7 +283,7 @@ export function formatDateline(dateline: string): string {
 }
 
 /**
- * An edition's `published_at` (epoch seconds) as a "06:04" stamp — Today's `<SheetPreview>`'s
+ * An edition's `published_at` (epoch seconds) as a "06:04" stamp — `<OnTheGlass>`'s
  * "hangs there since" line.
  *
  * UTC, not the phone's own zone: `formatGeneratedAt()`'s reasoning applies again — a reader must

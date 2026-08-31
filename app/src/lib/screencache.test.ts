@@ -5,8 +5,9 @@
 // (device_api_json.c never emits one), so the key has to be assembled here out of the fields that
 // CAN change what is on the glass. Over-invalidating costs one re-fetch. Under-invalidating shows
 // a sheet that is not the one hanging on the wall, which is the failure worth being careful about.
-import { describe, it, expect, beforeEach } from '@jest/globals'
+import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 import {
+  screenCached,
   screenCacheClear,
   screenCacheGet,
   screenCachePut,
@@ -16,6 +17,7 @@ import {
 
 function identity(over: Partial<{
   page: number
+  pageTitle: string
   valid: boolean
   demo: boolean
   edition: string
@@ -25,6 +27,7 @@ function identity(over: Partial<{
 }> = {}): ScreenIdentity {
   return {
     page: over.page ?? 0,
+    pageTitle: over.pageTitle ?? 'FRONT PAGE',
     news: {
       valid: over.valid ?? true,
       demo: over.demo ?? false,
@@ -52,6 +55,16 @@ describe('screenFingerprint', () => {
 
   it('changes with the page — A1 and A2 are two different framebuffers', () => {
     expect(screenFingerprint(identity({ page: 0 }))).not.toBe(screenFingerprint(identity({ page: 1 })))
+  })
+
+  it('changes with pageTitle — the board’s own account of what it drew', () => {
+    // esp32.ts calls pageTitle "the ground truth for what is on the glass", and it is the only
+    // field that can move when nothing about the EDITION did. The case that forced it: the
+    // display self-test writes colour bars, a checkerboard and then white straight into the same
+    // `s_fb` that `/api/screen` serves, and not one news field moves while it does.
+    expect(screenFingerprint(identity({ pageTitle: 'FRONT PAGE' }))).not.toBe(
+      screenFingerprint(identity({ pageTitle: 'THE ACCOUNTS' })),
+    )
   })
 
   it('changes with a new edition', () => {
@@ -111,6 +124,53 @@ describe('the one-entry cache', () => {
   it('is empty after a clear', () => {
     screenCachePut('k', 'PNG')
     screenCacheClear()
+    expect(screenCacheGet('k')).toBeNull()
+  })
+})
+
+describe('screenCached — and the escape hatch "Fetch it again" depends on', () => {
+  beforeEach(() => screenCacheClear())
+
+  it('produces once and serves the cache after that', async () => {
+    const produce = jest.fn(async () => 'PNG')
+    expect(await screenCached('k', produce)).toBe('PNG')
+    expect(await screenCached('k', produce)).toBe('PNG')
+    expect(produce).toHaveBeenCalledTimes(1)
+  })
+
+  it('produces again after a clear — this is what makes the button reach the board', () => {
+    // The bug this test exists for: the query function consulted the cache first, so `refetch()`
+    // re-ran it, hit the slot under the SAME fingerprint and handed back byte-identical pixels.
+    // A frame caught mid-render was then permanent for as long as the fingerprint held — which is
+    // the rest of the day, since a board quietly doing its job moves none of those fields. The
+    // firmware promises the opposite (device_api.c: a torn frame "is a preview artifact rather
+    // than a defect", and the remedy is to ask again), and the sentence directly above the button
+    // repeats the promise.
+    const produce = jest.fn(async () => 'PNG')
+    return screenCached('k', produce)
+      .then(() => {
+        screenCacheClear()
+        return screenCached('k', produce)
+      })
+      .then((png) => {
+        expect(png).toBe('PNG')
+        expect(produce).toHaveBeenCalledTimes(2)
+      })
+  })
+
+  it('produces every time under the empty key, and stores nothing', async () => {
+    const produce = jest.fn(async () => 'PNG')
+    await screenCached('', produce)
+    await screenCached('', produce)
+    expect(produce).toHaveBeenCalledTimes(2)
+    expect(screenCacheGet('')).toBeNull()
+  })
+
+  it('does not cache a failed read', async () => {
+    const produce = jest.fn(async () => {
+      throw new Error('socket closed')
+    })
+    await expect(screenCached('k', produce)).rejects.toThrow('socket closed')
     expect(screenCacheGet('k')).toBeNull()
   })
 })

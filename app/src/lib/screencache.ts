@@ -26,6 +26,8 @@
  */
 export interface ScreenIdentity {
   page: number
+  /** The board's own title for that page — esp32.ts: "the ground truth for what is on the glass". */
+  pageTitle: string
   news: {
     valid: boolean
     demo: boolean
@@ -51,6 +53,9 @@ export function screenFingerprint(state: ScreenIdentity | undefined | null): str
     // Which page is up. A1 and A2 are two different framebuffers, and switching between them is
     // the one thing a reader does that changes the glass without changing the edition.
     String(state.page),
+    // What the board says it drew there. The only field that can move when nothing about the
+    // EDITION has, which is why it is worth carrying beside `page` rather than folding into it.
+    state.pageTitle,
     // Whether the board has ever parsed an edition, and whether this is the built-in demo. Both
     // print a different sheet from a real edition, and neither moves `generatedAt` on its own.
     n.valid ? 'ok' : 'unset',
@@ -82,8 +87,42 @@ export function screenCachePut(key: string, pngBase64: string): void {
   slotPng = pngBase64
 }
 
-/** Drop it. Tests use this; so does anything that repoints the app at a different board. */
+/**
+ * Drop it.
+ *
+ * Three callers, and the third is the important one: tests, anything that repoints the app at a
+ * different board, and **an explicit "Fetch it again"**. A deliberate request and an incidental
+ * remount are different events and must not share a path — see `screenCached` below.
+ */
 export function screenCacheClear(): void {
   slotKey = ''
   slotPng = null
+}
+
+/**
+ * Serve the slot if it holds this key, otherwise produce and keep.
+ *
+ * This is the whole of the caching policy, in one place, because getting it wrong is invisible:
+ * consulting the cache first is right for a REMOUNT (the sheet is already known, and 1.92 million
+ * pixels of inflate for a picture we have is pure cost) and wrong for a REFETCH. `refetch()`
+ * re-runs the producer, the producer's first act is to return the slot under the same key, and the
+ * button hands back byte-identical pixels having never touched the board.
+ *
+ * That is not a tidiness point. `/api/screen` can return a frame caught mid-render — the firmware
+ * says so, and says the remedy is to ask again — and a fingerprint does not move for a board that
+ * is quietly doing its job. Without a way out, a torn capture is permanent for the rest of the day.
+ * The way out is `screenCacheClear()` immediately before the refetch; the cache is not asked to
+ * distinguish the two events, the caller is asked to say which one it is.
+ *
+ * A failed produce stores nothing, so a dropped socket is retried rather than remembered.
+ */
+export async function screenCached(
+  key: string,
+  produce: () => Promise<string>,
+): Promise<string> {
+  const hit = screenCacheGet(key)
+  if (hit) return hit
+  const png = await produce()
+  screenCachePut(key, png)
+  return png
 }

@@ -12,12 +12,15 @@ import Animated, {
 import Svg, { Circle } from 'react-native-svg'
 import { Sheet } from './Sheet'
 import { Stamp } from './Stamp'
+import { SCREEN_H, SCREEN_W } from '../lib/screen'
 import { colors, motion, spacing, typography } from '../theme/index'
 
-// Portrait 1200 x 1600 — the panel's own geometry (CLAUDE.md's framebuffer note), and the one
-// proportion this component will not let anything stretch. A sheet drawn at the wrong shape cannot
-// be compared with the thing hanging on the wall, which is the only reason to draw it at all.
-const SHEET_ASPECT = 1200 / 1600
+// Portrait 1200 x 1600 — the panel's own geometry, taken from lib/screen.ts rather than spelled
+// out again, because it is the same number the decoder reads a framebuffer with and two spellings
+// of one geometry is one spelling too many. It is the proportion this component will not let
+// anything stretch: a sheet drawn at the wrong shape cannot be compared with the thing hanging on
+// the wall, which is the only reason to draw it at all.
+const SHEET_ASPECT = SCREEN_W / SCREEN_H
 
 /** The refresh ring, in the top-right corner of the sheet. */
 const RING_BOX = 34

@@ -3,12 +3,14 @@ import { ActivityIndicator, StyleSheet, Text, View, type LayoutChangeEvent } fro
 import { Image } from 'expo-image'
 import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated'
 import { ResumableZoom, fitContainer } from 'react-native-zoom-toolkit'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Button } from '../../components/Button'
 import { Stamp } from '../../components/Stamp'
 import { Esp32Error, humanError } from '../../lib/esp32'
 import { DeskError, deskHumanError } from '../../lib/desk'
 import { useBoardScreen, useDeviceState, useEdition, useSheet } from '../../lib/queries'
+import { resolveGlassSource } from '../../lib/glass'
 import { sheetForPage } from '../../lib/sheets'
 import { pageLabel } from '../../lib/format'
 import { SCREEN_H, SCREEN_W } from '../../lib/screen'
@@ -35,6 +37,10 @@ const SHEET_ASPECT = SCREEN_W / SCREEN_H
 export default function SheetViewer() {
   const router = useRouter()
   const reducedMotion = useReducedMotion()
+  // Zero inside a form sheet, which iOS already presents below the status bar — so this costs
+  // nothing on the normal path and saves the header from landing on the clock when the route is
+  // opened directly as the first screen (a deep link, or a cold start into it).
+  const insets = useSafeAreaInsets()
   const params = useLocalSearchParams<{ source: string; eid?: string; page?: string }>()
 
   const wantsBoard = params.source === 'board'
@@ -51,8 +57,21 @@ export default function SheetViewer() {
   const proof = useSheet(eid, sheetName ?? '')
 
   const boardUri = board.data ? `data:image/png;base64,${board.data}` : null
-  const showingBoard = wantsBoard && boardUri !== null
-  const fellBackToProof = wantsBoard && !showingBoard && proof.data !== undefined
+
+  // "The board is still being asked" covers BOTH halves of the exchange, because they are one
+  // question: `/api/state` produces the fingerprint the read is keyed on, and only then can
+  // `/api/screen` run. `isLoading` rather than `isFetching` on the state query — that one polls
+  // every five seconds, and a flag that flickered with it would flicker the whole screen.
+  const boardInFlight = wantsBoard && (deviceState.isLoading || board.isFetching)
+  const shown = resolveGlassSource({
+    wantsBoard,
+    boardInFlight,
+    hasBoardImage: boardUri !== null,
+    hasProof: proof.data !== undefined,
+    proofLoading: proof.isLoading,
+  })
+  const showingBoard = shown === 'board'
+  const fellBackToProof = wantsBoard && shown === 'proof'
 
   const [box, setBox] = useState({ width: 0, height: 0 })
   const onLayout = (e: LayoutChangeEvent) => {
@@ -66,26 +85,49 @@ export default function SheetViewer() {
     [box],
   )
 
-  const boardError = board.isError
-    ? board.error instanceof Esp32Error
-      ? humanError(board.error)
-      : 'Couldn’t read the page off the board.'
-    : null
+  // Either half failing is "the board did not answer", and the sentence is the same one. A board
+  // asleep fails at `/api/state` and never reaches the read at all, so reporting only the read's
+  // error would leave the commonest failure of all describing itself as "nothing to show".
+  const readError = board.isError ? board.error : deviceState.isError ? deviceState.error : null
+  const boardError =
+    wantsBoard && readError
+      ? readError instanceof Esp32Error
+        ? humanError(readError)
+        : 'Couldn’t read the page off the board.'
+      : null
   const proofError = proof.isError
     ? proof.error instanceof DeskError
       ? deskHumanError(proof.error)
       : 'Couldn’t load the desk’s proof of this edition.'
     : null
 
-  const busy = wantsBoard ? board.isFetching : proof.isLoading
-  const uri = showingBoard ? boardUri : proof.data?.uri
-  const headers = showingBoard ? undefined : proof.data?.headers
+  const uri = showingBoard ? boardUri : shown === 'proof' ? proof.data?.uri : undefined
+  const headers = showingBoard ? undefined : shown === 'proof' ? proof.data?.headers : undefined
+
+  // Ask the board again — the slot is cleared first, or the button spins and returns the same
+  // pixels. When it was `/api/state` that failed there is no fingerprint yet and therefore nothing
+  // to re-read; that question has to be asked again before this one can be.
+  const askAgain = () => {
+    if (deviceState.isError) {
+      void deviceState.refetch()
+      return
+    }
+    void board.refetchFromBoard()
+  }
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + spacing[8] }]}>
         <Stamp tone="chrome">
-          {showingBoard ? 'on the glass' : `proof — ${pageLabel(page)}`}
+          {/* Names what is ACTUALLY up, and when nothing is up, what was asked for — a board route
+              showing an error is not showing a proof, and must not say it is. The board's own
+              `pageTitle` rather than the URL's idea of the page: the same field the fingerprint
+              trusts as ground truth, with `pageLabel` standing in until the board answers. */}
+          {shown === 'proof'
+            ? `proof — ${pageLabel(page)}`
+            : wantsBoard
+              ? `on the glass — ${deviceState.data?.pageTitle || pageLabel(deviceState.data?.page ?? page)}`
+              : `proof — ${pageLabel(page)}`}
         </Stamp>
         <Button label="Done" variant="ghost" onPress={() => router.back()} />
       </View>
@@ -134,7 +176,7 @@ export default function SheetViewer() {
                 />
               </ResumableZoom>
             </Animated.View>
-          ) : busy ? (
+          ) : shown === 'busy' ? (
             <View style={styles.center}>
               <ActivityIndicator color={colors.signal.chrome.tint} />
               {wantsBoard ? (
@@ -158,6 +200,19 @@ export default function SheetViewer() {
                   holds it awake for a couple of minutes, and every request restarts the clock.
                 </Text>
               ) : null}
+              {/* The retry belongs HERE and not only in the footer, which does not render on this
+                  branch. `retry: 1` is already spent and `staleTime: Infinity` means nothing
+                  re-runs on its own, so without a button this screen is a dead end until it is
+                  dismissed — and it is exactly the branch a sleeping board lands on, which is to
+                  say the common one rather than the exotic one. */}
+              {wantsBoard && boardError ? (
+                <Button
+                  label="Try again"
+                  loading={boardInFlight}
+                  onPress={askAgain}
+                  style={styles.retry}
+                />
+              ) : null}
             </View>
           )}
         </View>
@@ -174,6 +229,22 @@ export default function SheetViewer() {
                 : 'This is the desk’s proof of the same edition, not a fresh read of the glass.'}
             </Text>
           ) : null}
+          {/* A failed REFRESH, said out loud over the sheet it failed to replace.
+              This is not the same case as a failed first load, and it is the more common one: a
+              board on a cell answers while it is awake, and the visit after that finds it asleep.
+              Keeping the last sheet is right — it is still what is on the glass — but leaving the
+              failure silent would make "Fetch it again" a button that spins and does nothing, at
+              exactly the moment the awake-window sentence needs to be read. humanError() carries
+              that sentence; this is the dashboard's own idiom, an error line at the foot of the
+              scroll under the content it could not update. */}
+          {showingBoard && boardError ? (
+            <View style={styles.staleNote}>
+              <Text style={styles.error}>{boardError}</Text>
+              <Text style={styles.note}>
+                The sheet above is the last one that came back, not a fresh read.
+              </Text>
+            </View>
+          ) : null}
           {showingBoard ? (
             <>
               <Text style={styles.note}>
@@ -184,8 +255,8 @@ export default function SheetViewer() {
               <Button
                 label="Fetch it again"
                 variant="secondary"
-                loading={board.isFetching}
-                onPress={() => board.refetch()}
+                loading={boardInFlight}
+                onPress={askAgain}
               />
             </>
           ) : null}
@@ -206,7 +277,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingLeft: spacing[16],
     paddingRight: spacing[8],
-    paddingTop: spacing[8],
   },
   body: {
     flex: 1,
@@ -230,6 +300,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing[12],
     paddingHorizontal: spacing[24],
+  },
+  retry: {
+    // No `alignSelf` — `Button` puts this style on its inner view, while the Pressable around it is
+    // what `center`'s `alignItems` lays out, so a stretch here would be a declaration that does
+    // nothing. Content width, centred, is what it renders as and what it should be.
+    marginTop: spacing[4],
+  },
+  staleNote: {
+    gap: spacing[4],
   },
   footer: {
     gap: spacing[12],
