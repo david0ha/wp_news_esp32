@@ -29,7 +29,57 @@ inside Docker.
 The desk validates, typesets and decides when a page may be published. The
 worker owns the half a language model is actually for.
 
-## Running it
+## Running it on your Claude subscription
+
+The container cannot do this and it is not a bug: `claude --print` inside an
+image has no login session to inherit, so the only ways in are an
+`ANTHROPIC_API_KEY` or a `CLAUDE_CODE_OAUTH_TOKEN`. On the machine you are
+already signed in on there is a third way and it needs no credential handling at
+all — the CLI reads its own `~/.claude/.credentials.json`.
+
+```sh
+cp agent/.env.example agent/.env      # CLAUDEPOST_DESK=http://127.0.0.1:8790, AGENT_TOOLS
+./agent/run-host.sh                   # claim, file, repeat
+./agent/run-host.sh --once            # one instruction, then exit
+```
+
+Same `loop.py`, same desk, same gates; only the process boundary moves. The
+script sets the four paths the image's defaults get wrong (`/repo`, `/scratch`,
+`/run/secrets`, `http://desk:8080`), refuses to start if this machine is not
+signed in, and **unsets `ANTHROPIC_API_KEY`** unless `CLAUDEPOST_USE_API_KEY=1`
+— a key beside a login is the one failure nothing downstream can see, because
+`claude` starts either way and the difference is a statement four weeks later.
+It also sets `DISABLE_OMC=1` and leaves `AGENT_STRICT_MCP=1` in force, because a
+child on your own machine otherwise inherits your whole Claude Code setup —
+global `CLAUDE.md`, plugins, every MCP server. That is not a theoretical worry:
+the first live run of this arrangement pulled in a browser-automation server,
+wrote `.playwright-mcp/` into the edition directory and spent twelve minutes
+browsing instead of filing. It did not fail; it wandered, which is worse,
+because a failure is a log line somebody reads.
+
+It also builds `~/.claudepost/venv` on first run and puts it on `PATH`, because
+`tools/make_tile.py` needs Pillow and a Homebrew python refuses to install into
+itself; without that the photograph step fails forty minutes into a filing run.
+
+To have it always up, [`com.claudepost.worker.plist.example`](com.claudepost.worker.plist.example):
+
+```sh
+sed "s/YOUR-USERNAME/$(id -un)/g" agent/com.claudepost.worker.plist.example \
+    > ~/Library/LaunchAgents/com.claudepost.worker.plist
+launchctl load ~/Library/LaunchAgents/com.claudepost.worker.plist
+tail -f ~/Library/Logs/claudepost-worker.log
+```
+
+A **GUI agent** and not a LaunchDaemon, deliberately: the login belongs to this
+user's session, and a daemon running as root before anybody logs in would find
+no credentials at all. `KeepAlive` rather than a calendar interval, because the
+desk's queue is the schedule — this end only has to be there to claim.
+
+The trade against the container is worth naming: a container is isolated and
+restarts itself; this is a process on a laptop that sleeps. Use the container
+with a token if the paper must appear whether or not this machine is awake.
+
+## Running it in a container
 
 **1. The network, once.** Both compose files join it and neither creates it, so
 that neither owns the other:
@@ -159,11 +209,35 @@ only file in this directory that touches the environment.
 | `CLAUDEPOST_SECRETS` | `/run/secrets` | where `~/.claudepost` is mounted: `agent.env`, or `tokens.json` as a fallback |
 | `CLAUDEPOST_REPO` | `/repo` | the repository in the image — `PROMPT.md` and `tools/` |
 | `CLAUDEPOST_SCRATCH` | `/scratch` | one workdir per command: the payload, the tiles, the sheets fetched back |
+| `CLAUDEPOST_WATCHLIST` | `<secrets>/watchlist.json` | the candidates and the rotation cursor. Seeded into each edition directory and taken back after a commit — see below |
+| `CLAUDEPOST_ONCE` | `0` | handle one instruction (or one empty queue) and exit, instead of staying resident |
 | `AGENT_CONTEXT_DIR` | unset | your context directory. Unset, missing or empty are all "no context". That is a **host** path in `agent/.env` or a bare run; under `docker compose` the container always sees `/context`, so there the commented volume line is the switch and this variable is what it mounts |
 | `AGENT_WRITE_BRIEFS` | `0` | whether the worker may append to `<context>/briefs/`. Needs a context directory too |
 | `AGENT_TOOLS` | see above | the `claude --print` allowlist. Empty means the default |
+| `AGENT_STRICT_MCP` | `1` | keep this machine's own MCP servers out of the child. Set `0` to let them in for market data, and then name each tool in `AGENT_TOOLS` |
 | `CLAUDEPOST_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |
 | `TZ` | `UTC` | log timestamps and the date a brief is filed under |
+
+## The watch list
+
+`tools/edition/PROMPT.md` tells the model to read `watchlist.json` from the
+edition directory, take the next symbol after `last` **unless the day's research
+outranks the rotation**, and update `last` when it files. The edition directory
+is made fresh per command, so on its own that contract runs against a file that
+is never there: the universe is whatever the model remembers and the cursor
+resets every morning. The symptom is not an error — it is a paper that circles
+the same four companies forever.
+
+So the worker seeds it from `CLAUDEPOST_WATCHLIST` before the first turn and
+copies it back **after the commit** (not before: a rotation that advanced past a
+company whose page never reached the desk skips it for a cycle). What comes back
+was last written by a language model in a scratch directory, so it is parsed
+first — a dict, a non-empty list of strings under `symbols` — and a read-only
+secrets mount is a warning rather than a failure. Losing a cursor is not a reason
+to fail a filing that already reached the glass.
+
+Both ends write that file and neither owns it: you add what you are watching,
+the worker adds what it found.
 
 ## Verifying
 

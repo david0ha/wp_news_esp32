@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.claudepost.worker.plist -- keep the worker claiming, on this machine's
+  Claude subscription rather than on a metered API key.
+
+  Copy to ~/Library/LaunchAgents/com.claudepost.worker.plist, replace
+  YOUR-USERNAME, then:
+
+      launchctl load ~/Library/LaunchAgents/com.claudepost.worker.plist
+      launchctl kickstart -k gui/$(id -u)/com.claudepost.worker   # restart it now
+      tail -f ~/Library/Logs/claudepost-worker.log
+
+  This is a GUI agent (~/Library/LaunchAgents, not /Library/LaunchDaemons) and
+  that is load-bearing rather than incidental: `claude` reads the login this user
+  made, so the job has to run as this user in this user's session. A LaunchDaemon
+  runs as root before anybody logs in and would find no credentials at all.
+
+  KeepAlive rather than StartCalendarInterval, because the desk's queue is the
+  schedule: vault/order_today.py puts one command on it every morning, the desk
+  decides when the resulting edition may publish, and this end only has to be
+  there to claim. A worker on its own timer would be a third opinion about when
+  the paper comes out.
+
+  PATH is set here because launchd starts with almost none and `claude` lives in
+  ~/.local/bin. This is the failure that looks like the tool being uninstalled.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claudepost.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR-USERNAME/Documents/claudepost-agents-server/agent/run-host.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/YOUR-USERNAME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/YOUR-USERNAME</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- A worker that dies at start-up must not be restarted ten times a
+         second. Ten seconds is long enough to read the log and short enough
+         that a desk restart is invisible. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR-USERNAME/Library/Logs/claudepost-worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR-USERNAME/Library/Logs/claudepost-worker.log</string>
+</dict>
+</plist>

@@ -585,6 +585,14 @@ headers, counted from what the desk sends — rather than a whole edition. See
 
 ## The worker
 
+**A container or a process on your own machine, and the difference is a bill.**
+`claude --print` inside an image has no login session to inherit, so a container
+needs an `ANTHROPIC_API_KEY` or a `CLAUDE_CODE_OAUTH_TOKEN`. On the machine you
+are already signed in on there is a third route and it needs no credential
+handling at all — `agent/run-host.sh` runs the same `loop.py` against the same
+desk and spends the subscription. The trade is availability: a container
+restarts itself, a laptop sleeps.
+
 A separate container from the desk, and separate for the reason
 [`agent/README.md`](../agent/README.md) gives for splitting filing from
 serving: **filing is an event that can fail, serving is a condition that must
