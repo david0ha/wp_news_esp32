@@ -350,7 +350,8 @@ def load_agent_env(secrets: str) -> dict:
         is no such file, which is a warning at startup rather than an error
         here.
 
-    ``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN`` has to be one of these:
+    In a container, ``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN`` has
+    to be one of these:
     headless Claude Code in a container will not find a desktop login session,
     and discovering that at 06:00 is exactly the silent failure
     ``agent/standalone/file-edition.sh`` guards against by checking ``PATH``

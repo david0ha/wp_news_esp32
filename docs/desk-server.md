@@ -342,7 +342,9 @@ inspectable instead of a thing to be trusted.
 companies a private morning script — the vault, or whoever it is run by — is
 watching, a red/yellow/green grade on each, why, a markdown thesis note, and
 the dates something happened. `GET` is `producer` scope, so the phone app and
-a worker read it with the token they already have; `PUT` is `operator` scope,
+a worker read it with the token they already have (the worker's own rotation
+file — `agent/README.md`, "The watch list" — is a different, narrower document:
+a universe and a cursor on the worker's disk, not this one); `PUT` is `operator` scope,
 because unlike an edition this is not something a remote worker files, it is
 the operator's own call.
 

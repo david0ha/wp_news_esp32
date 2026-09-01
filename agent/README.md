@@ -49,7 +49,8 @@ script sets the four paths the image's defaults get wrong (`/repo`, `/scratch`,
 signed in, and **unsets `ANTHROPIC_API_KEY`** unless `CLAUDEPOST_USE_API_KEY=1`
 — a key beside a login is the one failure nothing downstream can see, because
 `claude` starts either way and the difference is a statement four weeks later.
-It also sets `DISABLE_OMC=1` and leaves `AGENT_STRICT_MCP=1` in force, because a
+`loop.py` itself keeps `DISABLE_OMC=1` on the child (`child_env()`, switchable
+with `CLAUDEPOST_KEEP_PLUGINS=1`) and leaves `AGENT_STRICT_MCP=1` in force, because a
 child on your own machine otherwise inherits your whole Claude Code setup —
 global `CLAUDE.md`, plugins, every MCP server. That is not a theoretical worry:
 the first live run of this arrangement pulled in a browser-automation server,
@@ -216,6 +217,8 @@ only file in this directory that touches the environment.
 | `AGENT_WRITE_BRIEFS` | `0` | whether the worker may append to `<context>/briefs/`. Needs a context directory too |
 | `AGENT_TOOLS` | see above | the `claude --print` allowlist. Empty means the default |
 | `AGENT_STRICT_MCP` | `1` | keep this machine's own MCP servers out of the child. Set `0` to let them in for market data, and then name each tool in `AGENT_TOOLS` |
+| `CLAUDEPOST_KEEP_PLUGINS` | `0` | leave the operator's plugins/orchestration layer in force inside the child instead of setting `DISABLE_OMC` |
+| `CLAUDEPOST_USE_API_KEY` | `0` | spend the metered key even when a CLI login is present; otherwise the key is kept out of the child so the subscription pays |
 | `CLAUDEPOST_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |
 | `TZ` | `UTC` | log timestamps and the date a brief is filed under |
 

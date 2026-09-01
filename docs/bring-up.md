@@ -14,7 +14,7 @@ anything at all, guessing costs a great deal of waiting.
 ## 1. Flash
 
 ```bash
-. ~/esp/esp-idf/export.sh           # once per shell (or ~/esp/v5.4.3/esp-idf — see CLAUDE.md)
+. "$(ls -d ~/esp/esp-idf ~/esp/v*/esp-idf 2>/dev/null | head -1)/export.sh"   # once per shell
 idf.py build
 ./tools/flash.sh                    # finds the port, flashes, opens the monitor
 ```

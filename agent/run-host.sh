@@ -94,7 +94,8 @@ fi
 # can see: claude starts either way, the paper is identical, and the difference
 # is a bill four weeks later. This script is the answer to "run it on the
 # subscription", so the key comes out of the environment unless somebody says
-# otherwise in so many words.
+# otherwise in so many words. The file route — a key sitting in agent.env — is
+# closed on the other side, in loop.py's child_env(), for the same reason.
 if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ "${CLAUDEPOST_USE_API_KEY:-0}" != "1" ]; then
     echo "run-host: ANTHROPIC_API_KEY is set; unsetting it for this run so the" >&2
     echo "  subscription is what pays. Set CLAUDEPOST_USE_API_KEY=1 to keep it." >&2

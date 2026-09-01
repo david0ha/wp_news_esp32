@@ -449,6 +449,8 @@ class HandleCustomTest(unittest.TestCase):
         self.assertEqual(desk.notes_calls,
                          [{"text": note_text, "draft": None, "command": cid}])
         self.assertEqual(desk.finished, [(cid, True, note_text)])
+
+
 class AuthRouteTest(unittest.TestCase):
     """Which credentials `claude --print` can start from, and the expensive tie.
 
@@ -593,6 +595,38 @@ class ArgvTest(unittest.TestCase):
         cfg = loop.Settings.from_env({"CLAUDEPOST_KEEP_PLUGINS": "1"})
         self.assertNotIn("DISABLE_OMC", loop.child_env(cfg, "/work", {}))
 
+    def test_a_metered_key_is_kept_out_when_a_login_is_present(self):
+        # run-host.sh unsets ANTHROPIC_API_KEY from its own environment, but
+        # agent.env flows through load_agent_env -> extra_env -> the child, and
+        # that file is the very one the docs tell a container operator to keep.
+        # The stated policy -- the subscription pays unless somebody says
+        # otherwise in so many words -- has to hold at the last door, which is
+        # the child's environment.
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, ".claude"))
+        open(os.path.join(home, ".claude", ".credentials.json"), "w").close()
+        cfg = loop.Settings.from_env({})
+        env = loop.child_env(cfg, "/work", {"ANTHROPIC_API_KEY": "k"}, home=home)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+
+    def test_the_key_stays_when_it_is_the_only_route(self):
+        # A container has no login session; the key is how it works at all.
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        cfg = loop.Settings.from_env({})
+        env = loop.child_env(cfg, "/work", {"ANTHROPIC_API_KEY": "k"}, home=home)
+        self.assertEqual(env.get("ANTHROPIC_API_KEY"), "k")
+
+    def test_the_operator_can_insist_on_the_key(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, ".claude"))
+        open(os.path.join(home, ".claude", ".credentials.json"), "w").close()
+        cfg = loop.Settings.from_env({"CLAUDEPOST_USE_API_KEY": "1"})
+        env = loop.child_env(cfg, "/work", {"ANTHROPIC_API_KEY": "k"}, home=home)
+        self.assertEqual(env.get("ANTHROPIC_API_KEY"), "k")
+
     def test_the_repository_is_substituted_into_the_allowlist(self):
         cfg = loop.Settings.from_env({
             "CLAUDEPOST_REPO": "/srv/claudepost",
@@ -715,6 +749,8 @@ class WatchlistTest(unittest.TestCase):
                 self.assertFalse(loop.persist_watchlist(self.settings(), self.work))
                 self.assertEqual(self.back(), good)
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
+                     "root ignores directory modes; the refusal cannot be staged")
     def test_a_read_only_secrets_mount_is_a_warning_not_a_failure(self):
         # The container mounts ~/.claudepost read-only, which is right: it holds
         # the token. Losing a rotation cursor is not a reason to fail a filing
@@ -730,6 +766,22 @@ class WatchlistTest(unittest.TestCase):
         self.addCleanup(os.chmod, self.tmp, 0o755)
         self.assertFalse(loop.persist_watchlist(self.settings(), self.work))
         self.assertEqual(self.back()["last"], "NVDA")
+
+
+class StandaloneParityTest(unittest.TestCase):
+    """agent/standalone/file-edition.sh promises to keep loop.py's deny-list
+    and system note "in step by hand". By test, actually: both run on the same
+    operator machine whose measured failures earned the flags, and a divergence
+    would be silent until a morning with no paper.
+    """
+
+    def test_the_standalone_script_carries_the_same_note_and_deny_list(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "standalone",
+                            "file-edition.sh")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn('--disallowedTools "%s"' % loop.DENY_TOOLS, text)
+        self.assertIn(loop.SYSTEM_NOTE, text)
 
 
 if __name__ == "__main__":

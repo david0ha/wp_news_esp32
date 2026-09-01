@@ -8,7 +8,7 @@ ESP-IDF is installed under `~/esp/`. Run this **every time you open a new termin
 lands on PATH:
 
 ```bash
-. ~/esp/esp-idf/export.sh      # or ~/esp/v5.4.3/esp-idf — wherever this machine keeps it
+. "$(ls -d ~/esp/esp-idf ~/esp/v*/esp-idf 2>/dev/null | head -1)/export.sh"   # whichever layout this machine has
 ```
 
 Verify:
@@ -145,7 +145,7 @@ here. Adding an I2C device means finding two free pins first — see [pinout.md]
 ## 8. Summary of frequently used commands
 
 ```bash
-. ~/esp/esp-idf/export.sh          # environment (or ~/esp/v5.4.3/esp-idf)
+. "$(ls -d ~/esp/esp-idf ~/esp/v*/esp-idf 2>/dev/null | head -1)/export.sh"   # environment
 idf.py set-target esp32s3        # target
 idf.py menuconfig                # configuration
 idf.py build                     # build

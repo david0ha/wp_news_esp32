@@ -46,7 +46,10 @@ services:
       AGENT_TOOLS: ${AGENT_TOOLS:-}
       # On by default: the child inherits no MCP servers -- see claude_argv.
       AGENT_STRICT_MCP: ${AGENT_STRICT_MCP:-1}
-      # Empty means <secrets>/watchlist.json -- see agent/.env.example.
+      # Empty means <secrets>/watchlist.json -- which the mount below makes
+      # READ-ONLY, so a container seeds the rotation but cannot advance it.
+      # Deliberate: the secrets hold the token. Point this at a writable mount
+      # if this container should keep the cursor itself; see agent/.env.example.
       CLAUDEPOST_WATCHLIST: ${CLAUDEPOST_WATCHLIST:-}
       CLAUDEPOST_ONCE: ${CLAUDEPOST_ONCE:-0}
       CLAUDEPOST_LOG_LEVEL: ${CLAUDEPOST_LOG_LEVEL:-INFO}

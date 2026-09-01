@@ -150,6 +150,7 @@ class Settings:
     once: bool
     strict_mcp: bool
     keep_plugins: bool
+    use_api_key: bool
     tools: str
     log_level: str
 
@@ -182,6 +183,10 @@ class Settings:
             strict_mcp=env.get("AGENT_STRICT_MCP", "1").strip().lower() in _TRUTHY,
             # The plugin half of the same policy; applied in child_env().
             keep_plugins=env.get("CLAUDEPOST_KEEP_PLUGINS", "0").strip().lower()
+            in _TRUTHY,
+            # "The subscription pays unless somebody says otherwise in so many
+            # words" -- the saying-so, read here, applied in child_env().
+            use_api_key=env.get("CLAUDEPOST_USE_API_KEY", "0").strip().lower()
             in _TRUTHY,
             # `or` rather than a default argument: compose passes an unset
             # variable through as an empty string, and an empty allowlist is
@@ -266,7 +271,7 @@ def claude_argv(cfg: Settings, workdir: str) -> list:
     return argv
 
 
-def child_env(cfg: Settings, workdir: str, extra_env: dict) -> dict:
+def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = None) -> dict:
     """The child's environment: the parent's, the caller's, and the policy.
 
     ``DISABLE_OMC`` lives here and not in ``run-host.sh``: it is the other half
@@ -281,6 +286,19 @@ def child_env(cfg: Settings, workdir: str, extra_env: dict) -> dict:
     env["EDITION_DIR"] = workdir
     if not cfg.keep_plugins:
         env["DISABLE_OMC"] = "1"
+    # The metered key comes out when the subscription can pay instead.
+    # run-host.sh unsets it from its own environment, but agent.env -- the file
+    # a container operator is told to keep, and the file run-host.sh advertises
+    # sharing -- arrives here as extra_env and would put it straight back. This
+    # is the last door, so the policy holds here or it does not hold.
+    if ("ANTHROPIC_API_KEY" in env and not cfg.use_api_key
+            and os.path.exists(os.path.join(
+                home if home is not None else os.path.expanduser("~"),
+                ".claude", ".credentials.json"))):
+        env.pop("ANTHROPIC_API_KEY")
+        LOG.warning("ANTHROPIC_API_KEY is set beside a CLI login; keeping it "
+                    "out of the child so the subscription pays. "
+                    "CLAUDEPOST_USE_API_KEY=1 spends the key instead.")
     return env
 
 
@@ -695,9 +713,10 @@ def main() -> int:
     else:
         LOG.info("claude auth: %s", ", ".join(routes))
         if "ANTHROPIC_API_KEY" in routes and CLI_LOGIN in routes:
-            LOG.warning("an API key is set beside a subscription login; the key is "
-                        "metered and the paper looks identical either way. Unset "
-                        "ANTHROPIC_API_KEY to spend the subscription.")
+            LOG.warning("an API key is set beside a subscription login; the key "
+                        "is metered and the paper looks identical either way. It "
+                        "will be kept out of the child so the subscription pays "
+                        "-- CLAUDEPOST_USE_API_KEY=1 spends the key instead.")
 
     # Read once at startup only to say how many files were found. The trap this
     # catches is setting AGENT_CONTEXT_DIR and forgetting to uncomment the
@@ -725,6 +744,14 @@ def main() -> int:
             # id off one would raise below, outside every try. The message
             # carries what was answered, because "which endpoint returned HTML"
             # is the only question anybody has once this starts.
+            if cfg.once:
+                # A one-shot that cannot reach the desk must end, not stack:
+                # launchd fires again on its own schedule, and a resident
+                # backoff loop is exactly what --once asked not to be. A
+                # resident worker keeps retrying, which is the other promise.
+                LOG.error("could not reach the desk (%s) and --once was asked "
+                          "for; giving up", e)
+                return 1
             LOG.warning("claim failed (%s); retrying in %.0fs", e, backoff)
             time.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF)

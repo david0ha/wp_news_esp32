@@ -18,7 +18,7 @@ model or the wire contract; everything below is what the code does about it.
 Activate the ESP-IDF environment — **once per new shell session**:
 
 ```bash
-. ~/esp/esp-idf/export.sh      # or ~/esp/v5.4.3/esp-idf — wherever this machine keeps it
+. "$(ls -d ~/esp/esp-idf ~/esp/v*/esp-idf 2>/dev/null | head -1)/export.sh"   # whichever layout this machine has
 ```
 
 More than one machine develops this repository and they do not share a layout: one keeps the IDF
@@ -29,8 +29,9 @@ tries both spellings before giving up, and the block below discovers the paths i
 them.
 
 The trap a rolled-back v6.0 migration leaves behind: on a machine where one was attempted,
-`~/.espressif` still carries **both** cross-compilers — `esp-14.2.0`, which 5.4.3 wants, and
-`esp-15.2.0`, which it does not — and a python environment for each. Let the wrong one onto `PATH`
+`~/.espressif` can still carry **two** cross-compilers — the one 5.4.3 wants and the newer one the
+migration installed (ask `ls ~/.espressif/tools/xtensa-esp-elf/` rather than this paragraph for the
+versions) — and a python environment for each. Let the wrong one onto `PATH`
 and the build compiles most of the tree before dying in the *bootloader* subproject with `Tool
 doesn't match supported version from list [...]`, a message that reads like a broken toolchain
 install and actually means the environment handed 5.4.3 the other IDF's compiler. It ends by
@@ -45,7 +46,7 @@ a message about `PATH` that is really about the missing step:
 
 ```bash
 export IDF_PATH="$(ls -d "$HOME"/esp/esp-idf "$HOME"/esp/v*/esp-idf 2>/dev/null | head -1)"
-export IDF_PYTHON_ENV_PATH="$(ls -d "$HOME"/.espressif/python_env/idf5.4_py3* | head -1)"
+export IDF_PYTHON_ENV_PATH="$(ls -d "$HOME"/.espressif/python_env/idf5.4_py3* | tail -1)"   # lexically last — see below
 PY="$IDF_PYTHON_ENV_PATH/bin/python"
 TOOLS="$("$PY" "$IDF_PATH/tools/idf_tools.py" export)"   # never 2>/dev/null this
 eval "$TOOLS"
@@ -54,9 +55,12 @@ eval "$TOOLS"
 
 Do not silence that export. Discarding its stderr hides the one line that says which tool is
 missing, and leaves you with the same misleading `CMAKE_C_COMPILER` failure a hundred lines later.
-If `python_env/` holds more than one `idf5.4` environment, pick deliberately rather than by glob:
-`idf.py` refuses to start on an out-of-date `idf-component-manager` (`~=2.2` today), and it names
-the version it found when it does.
+If `python_env/` holds more than one `idf5.4` environment, know which the glob is handing you: it
+takes the lexically **last**, which on the three-environment layout this file once described
+(`py3.13`, `py3.14`, `py3.9`) is `idf5.4_py3.9_env` — one of the two that work. The one that does
+not is `idf5.4_py3.13_env`, carrying `idf-component-manager` 2.1.2 against a required `~=2.2`;
+`idf.py` refuses to start on it and names the version, which is a failure to recognise rather than
+debug. (`head -1` would select exactly that one, which is why the glob above says `tail`.)
 
 Standard workflow after activation, run from the **repository root** (the root *is* the IDF project):
 

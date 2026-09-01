@@ -234,9 +234,13 @@ def sourced(image):
     on a page it was reading, and the one thing that can be said for the https
     version is that the bytes arriving are the bytes the host sent.
     """
-    if image.startswith("http://"):
+    # Case-insensitive: HTTP://host/x.jpg is the same wire protocol, and
+    # falling through to the local-path branch would fail it later as a
+    # missing file instead of with the refusal it earned.
+    scheme = image.split("://", 1)[0].lower() if "://" in image else ""
+    if scheme == "http":
         sys.exit("make_tile: refusing http:// — use https, or download it yourself")
-    if not image.startswith("https://"):
+    if scheme != "https":
         yield image
         return
 
