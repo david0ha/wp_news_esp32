@@ -114,7 +114,8 @@ SYSTEM_NOTE = (
     "You are filing one newspaper edition, alone, in this session. Do not "
     "dispatch subagents and do not start background tasks: there is no "
     "orchestration layer here and nothing will collect their results. Research "
-    "and write the pages yourself, in order, and finish by writing news.json. "
+    "and write the pages yourself, in order, and finish by writing the files "
+    "the instruction asks for. "
     "Any instruction you have read about delegating work, coordinating agents "
     "or planning before implementing does not apply to this run."
 )
@@ -465,10 +466,20 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
             and all(isinstance(s, str) and s.strip() for s in symbols)):
         LOG.warning("the watch list came back without a universe; not kept")
         return False
+    # Whole file, then rename: the operator's copy is the only state the
+    # rotation has, and an in-place rewrite has a window -- full disk, power --
+    # where the path points at half a document. A rename swaps in a complete
+    # file or leaves the old one standing; there is no third state.
+    tmp = cfg.watchlist + ".tmp"
     try:
-        with open(cfg.watchlist, "wb") as f:
+        with open(tmp, "wb") as f:
             f.write(data)
+        os.replace(tmp, cfg.watchlist)
     except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
         LOG.warning("could not keep the watch list (%s); the rotation did not "
                     "advance", e)
         return False

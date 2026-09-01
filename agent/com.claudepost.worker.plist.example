@@ -4,7 +4,7 @@
   Claude subscription rather than on a metered API key.
 
   Copy to ~/Library/LaunchAgents/com.claudepost.worker.plist, replace
-  YOUR-USERNAME, then:
+  YOUR-USERNAME and /PATH/TO/THIS/REPO (the checkout this file sits in), then:
 
       launchctl load ~/Library/LaunchAgents/com.claudepost.worker.plist
       launchctl kickstart -k gui/$(id -u)/com.claudepost.worker   # restart it now
@@ -16,7 +16,7 @@
   runs as root before anybody logs in and would find no credentials at all.
 
   KeepAlive rather than StartCalendarInterval, because the desk's queue is the
-  schedule: vault/order_today.py puts one command on it every morning, the desk
+  schedule: your morning ordering job puts one command on it, the desk
   decides when the resulting edition may publish, and this end only has to be
   there to claim. A worker on its own timer would be a third opinion about when
   the paper comes out.
@@ -31,7 +31,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/YOUR-USERNAME/Documents/claudepost-agents-server/agent/run-host.sh</string>
+        <string>/PATH/TO/THIS/REPO/agent/run-host.sh</string>
     </array>
 
     <key>EnvironmentVariables</key>

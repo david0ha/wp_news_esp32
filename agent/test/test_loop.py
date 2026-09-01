@@ -570,6 +570,14 @@ class ArgvTest(unittest.TestCase):
         appended = argv[argv.index("--append-system-prompt") + 1]
         self.assertIn("subagent", appended.lower())
 
+    def test_the_system_note_does_not_name_the_deliverable(self):
+        # The note rides every run, and the runs do not share a deliverable: a
+        # filing ends in news.json, but PROMPT.md's research contract is
+        # "notes.md and nothing else -- no news.json". One sentence naming
+        # news.json here would contradict, on every research command, the very
+        # instruction it is appended to.
+        self.assertNotIn("news.json", loop.SYSTEM_NOTE)
+
     def test_the_repository_is_substituted_into_the_allowlist(self):
         cfg = loop.Settings.from_env({
             "CLAUDEPOST_REPO": "/srv/claudepost",
@@ -652,6 +660,26 @@ class WatchlistTest(unittest.TestCase):
         loop.persist_watchlist(self.settings(), self.work)
         self.assertEqual(self.back()["symbols"], ["NVDA", "ETN"])
 
+    def test_the_kept_list_replaces_the_file_rather_than_rewriting_it(self):
+        # The operator's copy is the only state the rotation has, and a write
+        # that dies halfway -- full disk, power -- must not leave it half a
+        # document. Whole-file-then-rename means the path points at a complete
+        # list at every instant: the old inode until the swap, the new one
+        # after. An in-place rewrite keeps the inode, and has a window where
+        # the file is truncated junk.
+        self.write({"symbols": ["NVDA", "AAPL"], "last": "NVDA"})
+        before = os.stat(self.path).st_ino
+        loop.seed_watchlist(self.settings(), self.work)
+        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["NVDA", "AAPL"], "last": "AAPL"}, f)
+
+        self.assertTrue(loop.persist_watchlist(self.settings(), self.work))
+        self.assertNotEqual(os.stat(self.path).st_ino, before)
+        # ...and nothing half-finished left beside it.
+        leftovers = [n for n in os.listdir(self.tmp)
+                     if n.startswith("watchlist") and n != "watchlist.json"]
+        self.assertEqual(leftovers, [])
+
     def test_junk_does_not_replace_a_good_universe(self):
         # The file that comes back was last written by a language model in a
         # scratch directory, and it is the only state the rotation has. An empty
@@ -677,11 +705,13 @@ class WatchlistTest(unittest.TestCase):
         loop.seed_watchlist(self.settings(), self.work)
         with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
             json.dump({"symbols": ["NVDA"], "last": "AAPL"}, f)
-        # The file rather than the directory: opening an existing file for
-        # writing never consults the directory's mode, so a test that chmodded
-        # the directory would pass while proving nothing.
-        os.chmod(self.path, 0o444)
-        self.addCleanup(os.chmod, self.path, 0o600)
+        # The directory rather than the file: the container mounts the whole
+        # secrets directory read-only, and a rename-based write never opens the
+        # target file at all -- the temp file beside it is what cannot be
+        # created. (The earlier in-place writer was tested with a chmodded
+        # file; that write path no longer exists.)
+        os.chmod(self.tmp, 0o555)
+        self.addCleanup(os.chmod, self.tmp, 0o755)
         self.assertFalse(loop.persist_watchlist(self.settings(), self.work))
         self.assertEqual(self.back()["last"], "NVDA")
 

@@ -26,11 +26,16 @@ MONITOR=1
 [ "${1:-}" = "--no-monitor" ] && MONITOR=0
 
 if ! command -v idf.py > /dev/null 2>&1; then
-    # Activate the IDF environment if the caller has not. Same version the
-    # project is documented against; a different one is the caller's business.
-    EXPORT=~/esp/esp-idf/export.sh
-    if [ ! -f "$EXPORT" ]; then
-        echo "idf.py not on PATH and $EXPORT not found." >&2
+    # Activate the IDF environment if the caller has not. More than one
+    # machine develops this repo and they do not share a layout — one keeps the
+    # IDF at ~/esp/esp-idf, another at ~/esp/v5.4.3/esp-idf — so both spellings
+    # are tried rather than either machine being encoded here.
+    EXPORT=""
+    for c in "$HOME"/esp/esp-idf/export.sh "$HOME"/esp/v*/esp-idf/export.sh; do
+        if [ -f "$c" ]; then EXPORT="$c"; break; fi
+    done
+    if [ -z "$EXPORT" ]; then
+        echo "idf.py not on PATH and no export.sh under ~/esp." >&2
         echo "Run '. <your-idf>/export.sh' first — see docs/esp-idf-development.md." >&2
         exit 1
     fi

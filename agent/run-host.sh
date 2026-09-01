@@ -69,7 +69,8 @@ export CLAUDEPOST_LOG_LEVEL="${CLAUDEPOST_LOG_LEVEL:-INFO}"
 
 # A context directory is opt-in in the container because a default there would
 # be somebody's disk. Out here the default is this machine's own, and only when
-# it exists — vault/order_today.py is what fills it.
+# it exists — your own morning ordering job is what fills it (see "Bring
+# your own continuity" in agent/README.md).
 if [ -z "${AGENT_CONTEXT_DIR:-}" ] && [ -d "$CLAUDEPOST_SECRETS/context" ]; then
     export AGENT_CONTEXT_DIR="$CLAUDEPOST_SECRETS/context"
 fi
@@ -84,8 +85,6 @@ fi
 if [ "${CLAUDEPOST_KEEP_PLUGINS:-0}" != "1" ]; then
     export DISABLE_OMC=1
 fi
-
-mkdir -p "$CLAUDEPOST_SCRATCH"
 
 die() { echo "run-host: $1" >&2; exit 1; }
 
@@ -121,6 +120,11 @@ fi
 # and a desk that is not up looks identical from there.
 [ -d "$CLAUDEPOST_SECRETS" ] || die "no $CLAUDEPOST_SECRETS — mint a producer token first:
   server/tools/mint-token.sh producer agent"
+
+# Only now: under the defaults the scratch directory lives inside the secrets
+# directory, and creating it above the guard would create the secrets directory
+# too — so the guard could never fire and the friendly message never printed.
+mkdir -p "$CLAUDEPOST_SCRATCH"
 
 if ! curl -fsS --max-time 5 "$CLAUDEPOST_DESK/healthz" >/dev/null 2>&1; then
     echo "run-host: the desk at $CLAUDEPOST_DESK did not answer /healthz." >&2

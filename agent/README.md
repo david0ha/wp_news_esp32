@@ -64,7 +64,8 @@ itself; without that the photograph step fails forty minutes into a filing run.
 To have it always up, [`com.claudepost.worker.plist.example`](com.claudepost.worker.plist.example):
 
 ```sh
-sed "s/YOUR-USERNAME/$(id -un)/g" agent/com.claudepost.worker.plist.example \
+sed -e "s/YOUR-USERNAME/$(id -un)/g" -e "s|/PATH/TO/THIS/REPO|$(pwd)|g" \
+    agent/com.claudepost.worker.plist.example \
     > ~/Library/LaunchAgents/com.claudepost.worker.plist
 launchctl load ~/Library/LaunchAgents/com.claudepost.worker.plist
 tail -f ~/Library/Logs/claudepost-worker.log

@@ -8,7 +8,7 @@ ESP-IDF is installed under `~/esp/`. Run this **every time you open a new termin
 lands on PATH:
 
 ```bash
-. ~/esp/esp-idf/export.sh
+. ~/esp/esp-idf/export.sh      # or ~/esp/v5.4.3/esp-idf — wherever this machine keeps it
 ```
 
 Verify:
@@ -17,13 +17,14 @@ Verify:
 idf.py --version      # ESP-IDF v5.4.3
 ```
 
-> **Ask the tool, not the path.** `~/esp/esp-idf` is the only IDF here, and its directory name says
-> nothing about its version on purpose. This repository has now described its own environment wrongly
-> three times: the `~/.espressif/tools/activate_idf_v6.0.1.sh` script named by the oldest notes was
-> inherited verbatim from the project this one forked and never described this machine at all; a later
-> revision documented two installs under `~/esp/v5.4.1` and `~/esp/v5.4.3` that have since been
-> deleted; and a draft of *this* section announced v6.0.2. `idf.py --version` has been right every
-> time.
+> **Ask the tool, not the path.** The IDF lives under `~/esp` — as `~/esp/esp-idf` on one machine
+> and `~/esp/v5.4.3/esp-idf` on another — and neither directory name is authoritative about the
+> version. This repository has now described its own environment wrongly three times: the
+> `~/.espressif/tools/activate_idf_v6.0.1.sh` script named by the oldest notes was inherited
+> verbatim from the project this one forked and never described any machine here; a later revision
+> documented a two-install layout the other machine never had; and a draft of *this* section
+> announced v6.0.2 after the v6 attempt had already been rolled back. `idf.py --version` has been
+> right every time.
 >
 > **v6.0 was attempted and rolled back.** Little of the migration is the firmware's problem —
 > everything here is already the modern API (`esp_adc/adc_oneshot.h`, `esp_netif_sntp.h`, no legacy
@@ -144,7 +145,7 @@ here. Adding an I2C device means finding two free pins first — see [pinout.md]
 ## 8. Summary of frequently used commands
 
 ```bash
-. ~/esp/esp-idf/export.sh          # environment
+. ~/esp/esp-idf/export.sh          # environment (or ~/esp/v5.4.3/esp-idf)
 idf.py set-target esp32s3        # target
 idf.py menuconfig                # configuration
 idf.py build                     # build

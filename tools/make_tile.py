@@ -246,6 +246,12 @@ def sourced(image):
         with os.fdopen(fd, "wb") as out:
             try:
                 with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+                    # urllib follows redirects, https -> http included, so the
+                    # refusal above only covered the first hop. What matters is
+                    # the connection the bytes actually crossed: the final one.
+                    if not r.url.startswith("https://"):
+                        sys.exit("make_tile: %s redirected off https; refusing"
+                                 % image)
                     data = r.read(MAX_IMAGE_BYTES + 1)
             except (urllib.error.URLError, OSError) as e:
                 sys.exit(f"make_tile: could not fetch {image}: {e}")

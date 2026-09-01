@@ -18,17 +18,17 @@ model or the wire contract; everything below is what the code does about it.
 Activate the ESP-IDF environment — **once per new shell session**:
 
 ```bash
-. ~/esp/esp-idf/export.sh      # the only IDF here; idf.py --version says v5.4.3
+. ~/esp/esp-idf/export.sh      # or ~/esp/v5.4.3/esp-idf — wherever this machine keeps it
 ```
 
-The path deliberately does **not** name a version: there is one install, and a versioned directory
-only earns its keep when there are two to tell apart. Ask `idf.py --version` — not a path, and not
-this paragraph. What stood here pointed at a `~/esp/v5.4.3/` that has since been deleted and called
-this directory a second install carrying v5.4.1; the draft written to replace it announced v6.0.2,
-which had already been rolled back by the time it was written. Three descriptions, none of them
-true now, and one that was never true.
+More than one machine develops this repository and they do not share a layout: one keeps the IDF
+at `~/esp/esp-idf`, another at `~/esp/v5.4.3/esp-idf`. Ask `idf.py --version` — not a path, and
+not this paragraph, which has now described the disk wrongly three times (a deleted `~/esp/v5.4.1`,
+a phantom second install, an announced v6.0.2 that had already been rolled back). `tools/flash.sh`
+tries both spellings before giving up, and the block below discovers the paths instead of naming
+them.
 
-What is left of the second install is the trap. A v6.0 migration was attempted and rolled back, so
+The trap a rolled-back v6.0 migration leaves behind: on a machine where one was attempted,
 `~/.espressif` still carries **both** cross-compilers — `esp-14.2.0`, which 5.4.3 wants, and
 `esp-15.2.0`, which it does not — and a python environment for each. Let the wrong one onto `PATH`
 and the build compiles most of the tree before dying in the *bootloader* subproject with `Tool
@@ -44,8 +44,8 @@ of this block fails at `The CMAKE_C_COMPILER: ... is not a full path and was not
 a message about `PATH` that is really about the missing step:
 
 ```bash
-export IDF_PATH="$HOME/esp/esp-idf"
-export IDF_PYTHON_ENV_PATH="$HOME/.espressif/python_env/idf5.4_py3.14_env"   # the 5.4 one
+export IDF_PATH="$(ls -d "$HOME"/esp/esp-idf "$HOME"/esp/v*/esp-idf 2>/dev/null | head -1)"
+export IDF_PYTHON_ENV_PATH="$(ls -d "$HOME"/.espressif/python_env/idf5.4_py3* | head -1)"
 PY="$IDF_PYTHON_ENV_PATH/bin/python"
 TOOLS="$("$PY" "$IDF_PATH/tools/idf_tools.py" export)"   # never 2>/dev/null this
 eval "$TOOLS"
@@ -54,6 +54,9 @@ eval "$TOOLS"
 
 Do not silence that export. Discarding its stderr hides the one line that says which tool is
 missing, and leaves you with the same misleading `CMAKE_C_COMPILER` failure a hundred lines later.
+If `python_env/` holds more than one `idf5.4` environment, pick deliberately rather than by glob:
+`idf.py` refuses to start on an out-of-date `idf-component-manager` (`~=2.2` today), and it names
+the version it found when it does.
 
 Standard workflow after activation, run from the **repository root** (the root *is* the IDF project):
 
