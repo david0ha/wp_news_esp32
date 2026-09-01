@@ -37,9 +37,9 @@ if [ -f "$REPO/agent/.env" ]; then
         case "$line" in ''|\#*) continue ;; *=*) ;; *) continue ;; esac
         key=${line%%=*}
         value=${line#*=}
-        # A key that is not a shell name is not a setting, and it is about to be
-        # spliced into an `eval` below. The file is the operator's own, so this
-        # is about a typo producing a legible skip rather than an obscure error.
+        # A key that is not a shell name is not a setting, and it is about to
+        # be handed to `export`. The file is the operator's own, so this is
+        # about a typo producing a legible skip rather than an obscure error.
         case "$key" in
             [A-Za-z_]*) case "$key" in *[!A-Za-z0-9_]*) continue ;; esac ;;
             *) continue ;;
@@ -52,7 +52,7 @@ if [ -f "$REPO/agent/.env" ]; then
         esac
         # An already-set variable wins: the environment is what the operator
         # typed on this run, the file is what they wrote once.
-        if [ -z "$(eval "printf '%s' \"\${$key:-}\"" 2>/dev/null)" ]; then
+        if [ -z "${!key:-}" ]; then
             export "$key=$value"
         fi
     done < "$REPO/agent/.env"
@@ -75,16 +75,10 @@ if [ -z "${AGENT_CONTEXT_DIR:-}" ] && [ -d "$CLAUDEPOST_SECRETS/context" ]; then
     export AGENT_CONTEXT_DIR="$CLAUDEPOST_SECRETS/context"
 fi
 
-# Running on the operator's own machine means the headless run inherits the
-# operator's own Claude Code configuration -- their global CLAUDE.md, their
-# plugins, their orchestration layer. None of that was written about producing a
-# newspaper, and an agent framework that answers "file an edition" by planning a
-# fleet of subagents will spend a research budget arriving nowhere. This is
-# oh-my-claudecode's own documented kill switch; set CLAUDEPOST_KEEP_PLUGINS=1
-# to leave it alone.
-if [ "${CLAUDEPOST_KEEP_PLUGINS:-0}" != "1" ]; then
-    export DISABLE_OMC=1
-fi
+# Keeping the operator's plugins and orchestration layer out of the child
+# (DISABLE_OMC) happens in loop.py's child_env(), beside --strict-mcp-config:
+# one policy, one place, and a bare `python3 loop.py` on a host gets it too.
+# CLAUDEPOST_KEEP_PLUGINS=1 switches it off there.
 
 die() { echo "run-host: $1" >&2; exit 1; }
 
@@ -107,8 +101,14 @@ if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ "${CLAUDEPOST_USE_API_KEY:-0}" != "1" ];
     unset ANTHROPIC_API_KEY
 fi
 
+# The preflight mirrors loop.claude_auth's three routes *including* the
+# agent.env file -- the file this message names. An earlier version never read
+# it, so an operator who followed the printed instruction was still refused on
+# the next run.
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] \
-   && [ ! -f "$HOME/.claude/.credentials.json" ]; then
+   && [ ! -f "$HOME/.claude/.credentials.json" ] \
+   && ! grep -qsE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=.' \
+        "$CLAUDEPOST_SECRETS/agent.env"; then
     echo "run-host: this machine is not signed in to Claude Code." >&2
     echo "  Run 'claude' once and sign in, or put CLAUDE_CODE_OAUTH_TOKEN" >&2
     echo "  (from 'claude setup-token') in $CLAUDEPOST_SECRETS/agent.env." >&2

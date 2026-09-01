@@ -149,6 +149,7 @@ class Settings:
     write_briefs: bool
     once: bool
     strict_mcp: bool
+    keep_plugins: bool
     tools: str
     log_level: str
 
@@ -179,6 +180,9 @@ class Settings:
             # On by default, and the default is the interesting half: see
             # `claude_argv`.
             strict_mcp=env.get("AGENT_STRICT_MCP", "1").strip().lower() in _TRUTHY,
+            # The plugin half of the same policy; applied in child_env().
+            keep_plugins=env.get("CLAUDEPOST_KEEP_PLUGINS", "0").strip().lower()
+            in _TRUTHY,
             # `or` rather than a default argument: compose passes an unset
             # variable through as an empty string, and an empty allowlist is
             # never what anybody meant -- it is a worker that can do nothing.
@@ -262,11 +266,27 @@ def claude_argv(cfg: Settings, workdir: str) -> list:
     return argv
 
 
-def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict) -> int:
-    """One headless turn. Returns the exit status; the transcript goes to the log."""
+def child_env(cfg: Settings, workdir: str, extra_env: dict) -> dict:
+    """The child's environment: the parent's, the caller's, and the policy.
+
+    ``DISABLE_OMC`` lives here and not in ``run-host.sh``: it is the other half
+    of the keep-the-operator's-setup-out policy whose first half is
+    ``--strict-mcp-config`` in :func:`claude_argv`, and a wrapper-only switch
+    would mean a bare ``python3 loop.py`` on a host gets one half and not the
+    other. It is oh-my-claudecode's own documented kill switch, and harmless
+    where there is no such layer -- which is every container.
+    """
     env = dict(os.environ)
     env.update(extra_env)
     env["EDITION_DIR"] = workdir
+    if not cfg.keep_plugins:
+        env["DISABLE_OMC"] = "1"
+    return env
+
+
+def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict) -> int:
+    """One headless turn. Returns the exit status; the transcript goes to the log."""
+    env = child_env(cfg, workdir, extra_env)
 
     argv = claude_argv(cfg, workdir)
     prompt_text = text + "\n\nThe repository is at %s. The edition directory is %s." % (
@@ -399,6 +419,24 @@ def fetch_sheets(desk: DeskClient, draft: str, names, into: str):
     return paths
 
 
+def _read_watchlist(path: str, oversize_msg: str) -> "bytes | None":
+    """One capped read of a watch-list file; None when unreadable or oversized.
+
+    Unreadable is silent -- a missing file is the documented first run on the
+    seed side and no rotation at all on the persist side, and neither is worth
+    a warning. Oversized is warned, in the caller's words.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_WATCHLIST_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > MAX_WATCHLIST_BYTES:
+        LOG.warning("%s", oversize_msg)
+        return None
+    return data
+
+
 def seed_watchlist(cfg: Settings, workdir: str) -> bool:
     """Put the operator's universe and rotation cursor in the edition directory.
 
@@ -416,14 +454,9 @@ def seed_watchlist(cfg: Settings, workdir: str) -> bool:
     A missing file is the documented first run ("if it is missing, write one and
     say so in your summary"), so it is not an error here either.
     """
-    try:
-        with open(cfg.watchlist, "rb") as f:
-            data = f.read(MAX_WATCHLIST_BYTES + 1)
-    except OSError:
-        return False
-    if len(data) > MAX_WATCHLIST_BYTES:
-        LOG.warning("%s is larger than a universe and a cursor; not seeded",
-                    cfg.watchlist)
+    data = _read_watchlist(cfg.watchlist, "%s is larger than a universe and "
+                           "a cursor; not seeded" % cfg.watchlist)
+    if data is None:
         return False
     with open(os.path.join(workdir, WATCHLIST_NAME), "wb") as f:
         f.write(data)
@@ -448,13 +481,9 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
     glass.
     """
     path = os.path.join(workdir, WATCHLIST_NAME)
-    try:
-        with open(path, "rb") as f:
-            data = f.read(MAX_WATCHLIST_BYTES + 1)
-    except OSError:
-        return False
-    if len(data) > MAX_WATCHLIST_BYTES:
-        LOG.warning("the watch list came back too large to be one; not kept")
+    data = _read_watchlist(path, "the watch list came back too large to be "
+                           "one; not kept")
+    if data is None:
         return False
     try:
         doc = json.loads(data.decode("utf-8"))
@@ -701,25 +730,25 @@ def main() -> int:
             backoff = min(backoff * 2, MAX_BACKOFF)
             continue
 
+        # Whatever the poll answered, it answered: the backoff is for a desk
+        # that cannot be reached, not for one with an empty queue.
+        backoff = 1.0
+
         if command is None:
-            # The long poll expired with nothing queued: the healthy idle
-            # answer, and an answer, so the backoff resets with it.
-            backoff = 1.0
+            # The long poll expired with nothing queued -- the healthy idle.
             if cfg.once:
                 LOG.info("nothing queued and --once was asked for; done")
-                return 0
-            continue
-
-        backoff = 1.0
-        LOG.info("claimed %s: %s", command["id"], command.get("text", "")[:120])
-        try:
-            handle(cfg, desk, command, agent_env)
-        except Exception as e:                          # noqa: BLE001
-            LOG.exception("command %s failed", command["id"])
+        else:
+            LOG.info("claimed %s: %s", command["id"], command.get("text", "")[:120])
             try:
-                desk.finish(command["id"], False, "%s: %s" % (type(e).__name__, e))
-            except Exception:                           # noqa: BLE001
-                LOG.error("could not report the failure either")
+                handle(cfg, desk, command, agent_env)
+            except Exception as e:                      # noqa: BLE001
+                LOG.exception("command %s failed", command["id"])
+                try:
+                    desk.finish(command["id"], False,
+                                "%s: %s" % (type(e).__name__, e))
+                except Exception:                       # noqa: BLE001
+                    LOG.error("could not report the failure either")
 
         if cfg.once:
             # One pass, for a launchd job that fires after the morning order

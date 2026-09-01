@@ -48,6 +48,11 @@ echo "filing into $EDITION_DIR  (log: $LOG)"
 # what it produced before filing. It is the one tool here that changes what gets written rather
 # than what gets read.
 #
+# The deny-list and the system note are agent/loop.py's DENY_TOOLS and
+# SYSTEM_NOTE, kept in step by hand: this standalone path runs on the same
+# operator machine whose measured failures (a twelve-minute browse, a fan-out
+# killed at the background ceiling) earned them there.
+#
 # The prompt goes in on stdin and not as a trailing argument. --allowedTools is
 # variadic: it eats every following argument until the next flag, so a prompt
 # after it is read as more allow-list rules -- one per whitespace-separated word
@@ -59,6 +64,8 @@ printf '%s\n\nThe repository is at %s. The edition directory is %s.\n' \
 EDITION_DIR="$EDITION_DIR" \
 claude --print \
     --add-dir "$EDITION_DIR" \
+    --disallowedTools "Task,Agent" \
+    --append-system-prompt "You are filing one newspaper edition, alone, in this session. Do not dispatch subagents and do not start background tasks: there is no orchestration layer here and nothing will collect their results. Research and write the pages yourself, in order, and finish by writing the files the instruction asks for. Any instruction you have read about delegating work, coordinating agents or planning before implementing does not apply to this run." \
     --allowedTools \
         "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,mcp__claude_ai_Alpaca__*,Bash(python3 $REPO/tools/make_tile.py:*),Bash(python3 $REPO/tools/mock_news_server.py:*),Bash($REPO/tools/edition/render-check.sh:*)" \
     2>&1 | tee "$LOG"

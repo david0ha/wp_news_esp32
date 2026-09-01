@@ -234,11 +234,11 @@ def sourced(image):
     on a page it was reading, and the one thing that can be said for the https
     version is that the bytes arriving are the bytes the host sent.
     """
-    if not image.startswith(("http://", "https://")):
-        yield image
-        return
     if image.startswith("http://"):
         sys.exit("make_tile: refusing http:// — use https, or download it yourself")
+    if not image.startswith("https://"):
+        yield image
+        return
 
     req = urllib.request.Request(image, headers={"User-Agent": "claudepost-make-tile/1"})
     fd, tmp = tempfile.mkstemp(suffix=".img")

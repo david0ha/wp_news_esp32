@@ -578,6 +578,21 @@ class ArgvTest(unittest.TestCase):
         # instruction it is appended to.
         self.assertNotIn("news.json", loop.SYSTEM_NOTE)
 
+    def test_the_operators_plugin_layer_is_kept_out_of_the_child_too(self):
+        # The other half of "keep the operator's setup out": --strict-mcp-config
+        # keeps the servers out, DISABLE_OMC keeps the orchestration layer out.
+        # It lives here, in the child's environment, rather than in run-host.sh
+        # -- a wrapper-only switch would mean `python3 loop.py` on a host gets
+        # one half of the policy and not the other.
+        cfg = loop.Settings.from_env({})
+        env = loop.child_env(cfg, "/work", {})
+        self.assertEqual(env.get("DISABLE_OMC"), "1")
+        self.assertEqual(env.get("EDITION_DIR"), "/work")
+
+    def test_the_operator_can_keep_their_plugin_layer(self):
+        cfg = loop.Settings.from_env({"CLAUDEPOST_KEEP_PLUGINS": "1"})
+        self.assertNotIn("DISABLE_OMC", loop.child_env(cfg, "/work", {}))
+
     def test_the_repository_is_substituted_into_the_allowlist(self):
         cfg = loop.Settings.from_env({
             "CLAUDEPOST_REPO": "/srv/claudepost",
@@ -617,6 +632,11 @@ class WatchlistTest(unittest.TestCase):
         with open(os.path.join(self.work, "watchlist.json"), encoding="utf-8") as f:
             return json.load(f)
 
+    def write_work(self, doc) -> None:
+        with open(os.path.join(self.work, "watchlist.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(doc, f)
+
     def back(self):
         with open(self.path, encoding="utf-8") as f:
             return json.load(f)
@@ -642,8 +662,7 @@ class WatchlistTest(unittest.TestCase):
     def test_the_cursor_the_model_moved_comes_back(self):
         self.write({"symbols": ["NVDA", "AAPL"], "last": "NVDA"})
         loop.seed_watchlist(self.settings(), self.work)
-        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
-            json.dump({"symbols": ["NVDA", "AAPL"], "last": "AAPL"}, f)
+        self.write_work({"symbols": ["NVDA", "AAPL"], "last": "AAPL"})
 
         self.assertTrue(loop.persist_watchlist(self.settings(), self.work))
         self.assertEqual(self.back()["last"], "AAPL")
@@ -654,8 +673,7 @@ class WatchlistTest(unittest.TestCase):
         # tomorrow's run starts from the wider universe.
         self.write({"symbols": ["NVDA"], "last": "NVDA"})
         loop.seed_watchlist(self.settings(), self.work)
-        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
-            json.dump({"symbols": ["NVDA", "ETN"], "last": "ETN"}, f)
+        self.write_work({"symbols": ["NVDA", "ETN"], "last": "ETN"})
 
         loop.persist_watchlist(self.settings(), self.work)
         self.assertEqual(self.back()["symbols"], ["NVDA", "ETN"])
@@ -669,9 +687,9 @@ class WatchlistTest(unittest.TestCase):
         # the file is truncated junk.
         self.write({"symbols": ["NVDA", "AAPL"], "last": "NVDA"})
         before = os.stat(self.path).st_ino
-        loop.seed_watchlist(self.settings(), self.work)
-        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
-            json.dump({"symbols": ["NVDA", "AAPL"], "last": "AAPL"}, f)
+        # No seed: persist reads only the work copy, written here as the model
+        # would have left it.
+        self.write_work({"symbols": ["NVDA", "AAPL"], "last": "AAPL"})
 
         self.assertTrue(loop.persist_watchlist(self.settings(), self.work))
         self.assertNotEqual(os.stat(self.path).st_ino, before)
@@ -702,9 +720,7 @@ class WatchlistTest(unittest.TestCase):
         # the token. Losing a rotation cursor is not a reason to fail a filing
         # that has already reached the glass.
         self.write({"symbols": ["NVDA"], "last": "NVDA"})
-        loop.seed_watchlist(self.settings(), self.work)
-        with open(os.path.join(self.work, "watchlist.json"), "w", encoding="utf-8") as f:
-            json.dump({"symbols": ["NVDA"], "last": "AAPL"}, f)
+        self.write_work({"symbols": ["NVDA"], "last": "AAPL"})
         # The directory rather than the file: the container mounts the whole
         # secrets directory read-only, and a rename-based write never opens the
         # target file at all -- the temp file beside it is what cannot be

@@ -44,6 +44,11 @@ services:
       # Empty means "the image's default allowlist" -- see DEFAULT_TOOLS in
       # agent/loop.py. This is where a market-data MCP goes.
       AGENT_TOOLS: ${AGENT_TOOLS:-}
+      # On by default: the child inherits no MCP servers -- see claude_argv.
+      AGENT_STRICT_MCP: ${AGENT_STRICT_MCP:-1}
+      # Empty means <secrets>/watchlist.json -- see agent/.env.example.
+      CLAUDEPOST_WATCHLIST: ${CLAUDEPOST_WATCHLIST:-}
+      CLAUDEPOST_ONCE: ${CLAUDEPOST_ONCE:-0}
       CLAUDEPOST_LOG_LEVEL: ${CLAUDEPOST_LOG_LEVEL:-INFO}
       TZ: ${TZ:-UTC}
     volumes:
