@@ -18,28 +18,42 @@ model or the wire contract; everything below is what the code does about it.
 Activate the ESP-IDF environment — **once per new shell session**:
 
 ```bash
-. ~/esp/v5.4.3/esp-idf/export.sh      # v5.4.3 is what is installed here
+. ~/esp/esp-idf/export.sh      # the only IDF here; idf.py --version says v5.4.3
 ```
 
-There is a **second** IDF at `~/esp/esp-idf` (v5.4.1) and it exports a different cross-compiler.
-Either builds this project, but a `build/` tree records the absolute path of the compiler that
-configured it, so mixing them over one tree fails with `Tool doesn't match supported version from
-list [...]` — a message that reads like a broken install and means two IDFs over one build
-directory. Pick one per checkout; switching needs `idf.py fullclean` first.
+The path deliberately does **not** name a version: there is one install, and a versioned directory
+only earns its keep when there are two to tell apart. Ask `idf.py --version` — not a path, and not
+this paragraph. What stood here pointed at a `~/esp/v5.4.3/` that has since been deleted and called
+this directory a second install carrying v5.4.1; the draft written to replace it announced v6.0.2,
+which had already been rolled back by the time it was written. Three descriptions, none of them
+true now, and one that was never true.
 
-If `export.sh` is unavailable (some sandboxes refuse to source it), `idf.py` runs directly:
+What is left of the second install is the trap. A v6.0 migration was attempted and rolled back, so
+`~/.espressif` still carries **both** cross-compilers — `esp-14.2.0`, which 5.4.3 wants, and
+`esp-15.2.0`, which it does not — and a python environment for each. Let the wrong one onto `PATH`
+and the build compiles most of the tree before dying in the *bootloader* subproject with `Tool
+doesn't match supported version from list [...]`, a message that reads like a broken toolchain
+install and actually means the environment handed 5.4.3 the other IDF's compiler. It ends by
+advising `idf.py fullclean`, which does not work — fullclean has to configure first and fails the
+same check. Remove `build/` by hand and use the 5.4 environment.
+
+If `export.sh` is unavailable (some sandboxes refuse to source it), `idf.py` runs directly — but
+setting `IDF_PATH` is not enough on its own, because nothing has put the cross-compiler on `PATH`
+yet. `idf_tools.py export` is what does that, and skipping it is why the obvious four-line version
+of this block fails at `The CMAKE_C_COMPILER: ... is not a full path and was not found in the PATH`,
+a message about `PATH` that is really about the missing step:
 
 ```bash
-IDF_PATH="$HOME/esp/v5.4.3/esp-idf" \
-IDF_PYTHON_ENV_PATH="$HOME/.espressif/python_env/idf5.4_py3.14_env" \
-"$HOME/.espressif/python_env/idf5.4_py3.14_env/bin/python" \
-"$HOME/esp/v5.4.3/esp-idf/tools/idf.py" build
+export IDF_PATH="$HOME/esp/esp-idf"
+export IDF_PYTHON_ENV_PATH="$HOME/.espressif/python_env/idf5.4_py3.14_env"   # the 5.4 one
+PY="$IDF_PYTHON_ENV_PATH/bin/python"
+TOOLS="$("$PY" "$IDF_PATH/tools/idf_tools.py" export)"   # never 2>/dev/null this
+eval "$TOOLS"
+"$PY" "$IDF_PATH/tools/idf.py" build
 ```
 
-Choose that venv deliberately: `idf.py` refuses to start on an out-of-date `idf-component-manager`,
-and of the three environments in `~/.espressif/python_env/` the **middle** one — `idf5.4_py3.13_env`,
-carrying 2.1.2 against a required `~=2.2` — is the poisoned one. `idf5.4_py3.9_env` and
-`idf5.4_py3.14_env` both work.
+Do not silence that export. Discarding its stderr hides the one line that says which tool is
+missing, and leaves you with the same misleading `CMAKE_C_COMPILER` failure a hundred lines later.
 
 Standard workflow after activation, run from the **repository root** (the root *is* the IDF project):
 
