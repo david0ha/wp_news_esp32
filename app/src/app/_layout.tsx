@@ -1,10 +1,39 @@
+import { useEffect } from 'react'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { Stack } from 'expo-router'
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_800ExtraBold,
+} from '@expo-google-fonts/inter'
+import * as SplashScreen from 'expo-splash-screen'
 import { DeviceProvider } from '../lib/device'
 import { colors } from '../theme'
 
+// Hold the native splash until the five Inter faces are in, so no screen ever flashes the
+// system font. On a font *error* the app proceeds anyway — RN falls back per-Text, which is
+// the design's stated fallback. Never block the app on a font.
+SplashScreen.preventAutoHideAsync().catch(() => {})
+
 export default function RootLayout() {
+  const [fontsLoaded, fontError] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
+  })
+
+  useEffect(() => {
+    if (fontsLoaded || fontError) SplashScreen.hideAsync().catch(() => {})
+  }, [fontsLoaded, fontError])
+
+  if (!fontsLoaded && !fontError) return null
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
@@ -15,7 +44,14 @@ export default function RootLayout() {
               headerShown: false,
               contentStyle: { backgroundColor: colors.bg },
             }}
-          />
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="onboarding" />
+            {/* Full-screen pushes over the tab bar. */}
+            <Stack.Screen name="preview" />
+            <Stack.Screen name="market/[symbol]" />
+            <Stack.Screen name="add-ticker" options={{ presentation: 'modal' }} />
+          </Stack>
         </DeviceProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

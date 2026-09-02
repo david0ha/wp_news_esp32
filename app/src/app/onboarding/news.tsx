@@ -5,7 +5,7 @@ import { IconBadge } from '../../components/IconBadge'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
-import { colors, radius } from '../../theme'
+import { colors, fonts, radius } from '../../theme'
 
 // Where the board fetches its news snapshot from. Collected BEFORE the Wi-Fi handover so it is
 // written to NVS at provisioning time and the board's very first poll after joining already has
@@ -97,8 +97,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   label: {
+    fontFamily: fonts.semibold,
     fontSize: 14,
-    fontWeight: '600',
     color: colors.text,
   },
   inputRow: {

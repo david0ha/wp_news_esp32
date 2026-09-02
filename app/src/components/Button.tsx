@@ -1,12 +1,13 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, type ViewStyle } from 'react-native'
-import { colors, radius } from '../theme'
+import { colors, fonts, radius } from '../theme'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
 /**
- * The app's main button. `primary` is the filled accent CTA; `secondary` is a translucent
- * surface; `ghost` is borderless text; `danger` is the destructive (red) variant. Shows a
- * spinner and blocks taps while `loading`.
+ * The app's main button — always a full pill. `primary` is the navy filled CTA (pressed
+ * swaps to a darker fill); `secondary` is a 1px outline ghost; `ghost` is borderless
+ * accent text; `danger` is the destructive (red) variant. Shows a spinner and blocks
+ * taps while `loading`.
  */
 export function Button({
   label,
@@ -37,8 +38,8 @@ export function Button({
       ? colors.ink
       : variant === 'danger'
         ? colors.down
-        : isDisabled
-          ? colors.textFaint
+        : variant === 'ghost'
+          ? colors.accent
           : colors.text
 
   return (
@@ -51,7 +52,7 @@ export function Button({
         styles.base,
         fill,
         isDisabled && styles.disabled,
-        pressed && !isDisabled && styles.pressed,
+        pressed && !isDisabled && (variant === 'primary' ? styles.primaryPressed : styles.pressed),
         style,
       ]}
     >
@@ -67,16 +68,21 @@ export function Button({
 const styles = StyleSheet.create({
   base: {
     height: 52,
-    borderRadius: radius.md,
+    borderRadius: radius.pill,
     paddingHorizontal: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
   primary: {
-    backgroundColor: colors.accent,
+    backgroundColor: colors.navy,
+  },
+  primaryPressed: {
+    backgroundColor: colors.navyPressed,
   },
   secondary: {
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.textDim,
   },
   ghost: {
     backgroundColor: 'transparent',
@@ -91,8 +97,8 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   label: {
+    fontFamily: fonts.semibold,
     fontSize: 16,
-    fontWeight: '600',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
 })

@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors, radius } from '../theme'
+import { colors, fonts, radius, tabular, type } from '../theme'
 
 /**
  * One big number with a label, and an optional footnote under it. Sized to sit two per row.
@@ -21,7 +21,7 @@ export function StatTile({
   return (
     <View style={styles.tile}>
       <Text style={styles.label}>{label}</Text>
-      <Text style={[styles.value, tone === 'warn' && styles.valueWarn]} numberOfLines={1}>
+      <Text style={[styles.value, tabular, tone === 'warn' && styles.valueWarn]} numberOfLines={1}>
         {value}
       </Text>
       {footnote ? <Text style={styles.footnote}>{footnote}</Text> : null}
@@ -43,21 +43,17 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   label: {
-    fontSize: 12,
-    color: colors.textDim,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
+    ...type.label,
   },
   value: {
+    fontFamily: fonts.bold,
     fontSize: 26,
-    fontWeight: '700',
     color: colors.text,
   },
   valueWarn: {
     color: colors.warn,
   },
   footnote: {
-    fontSize: 12,
-    color: colors.textFaint,
+    ...type.caption,
   },
 })

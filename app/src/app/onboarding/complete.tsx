@@ -8,7 +8,7 @@ import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { useDevice } from '../../lib/device'
 import { markOnboardingComplete } from '../../lib/store'
 import { DEFAULT_BASE_URL } from '../../lib/discovery'
-import { colors, layout } from '../../theme'
+import { colors, fonts, layout } from '../../theme'
 
 export default function Complete() {
   const router = useRouter()
@@ -20,19 +20,19 @@ export default function Complete() {
     if (busy) return
     setBusy(true)
 
-    // The board has rebooted into station mode. Persist a control base URL for the dashboard:
+    // The board has rebooted into station mode. Persist a control base URL for the Board tab:
     // prefer the station IP it reported (most reliable, no mDNS needed), else fall back to the
-    // mDNS hostname. The dashboard will refine this once it can reach the device on the LAN.
+    // mDNS hostname. The Board tab will refine this once it can reach the device on the LAN.
     const ip = deviceInfo?.ip?.trim()
     const baseUrl = ip ? `http://${ip}` : DEFAULT_BASE_URL
     await setBaseUrl(baseUrl)
     await markOnboardingComplete()
     reset()
-    router.replace('/dashboard')
+    router.replace('/board')
   }
 
   return (
-    <Screen style={styles.screen}>
+    <Screen aurora style={styles.screen}>
       <View style={styles.center}>
         <IconBadge name="checkmark-circle" size={56} />
         <Text style={styles.title}>Setup complete</Text>
@@ -42,12 +42,12 @@ export default function Complete() {
             : 'Your board is connected.'}
         </Text>
         <Text style={styles.guidance}>
-          Reconnect your phone to that same Wi-Fi network, then tap Open Dashboard to control your
+          Reconnect your phone to that same Wi-Fi network, then tap Open the Board to control your
           board over the local network.
         </Text>
       </View>
 
-      <Button label={busy ? 'OPENING…' : 'OPEN DASHBOARD'} onPress={getStarted} loading={busy} />
+      <Button label={busy ? 'OPENING…' : 'OPEN THE BOARD'} onPress={getStarted} loading={busy} />
     </Screen>
   )
 }
@@ -64,10 +64,10 @@ const styles = StyleSheet.create({
     gap: 18,
   },
   title: {
+    fontFamily: fonts.bold,
     fontSize: 30,
-    fontWeight: '700',
     color: colors.text,
-    letterSpacing: 0.3,
+    letterSpacing: -0.4,
   },
   subtitle: {
     fontSize: 17,

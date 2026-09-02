@@ -1,24 +1,23 @@
 import { useCallback, useRef, useState } from 'react'
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
-import { Screen } from '../components/Screen'
-import { Card } from '../components/Card'
-import { Chip } from '../components/Chip'
-import { Button } from '../components/Button'
-import { InfoRow } from '../components/InfoRow'
-import { SegmentedControl } from '../components/SegmentedControl'
-import { ScreenMessage } from '../components/ScreenMessage'
-import { useDevice } from '../lib/device'
+import { Screen } from '../../components/Screen'
+import { Card } from '../../components/Card'
+import { Chip } from '../../components/Chip'
+import { Button } from '../../components/Button'
+import { InfoRow } from '../../components/InfoRow'
+import { SegmentedControl } from '../../components/SegmentedControl'
+import { ScreenMessage } from '../../components/ScreenMessage'
+import { useDevice } from '../../lib/device'
 import {
   Esp32Error,
   humanError,
   SLEEP_SECONDS_DEFAULT,
   type DeviceState,
   type PowerInfo,
-} from '../lib/esp32'
-import { DEFAULT_HOST, discoverDevice } from '../lib/discovery'
-import { getDeviceBaseUrl } from '../lib/store'
+} from '../../lib/esp32'
+import { DEFAULT_HOST, discoverDevice } from '../../lib/discovery'
+import { getDeviceBaseUrl } from '../../lib/store'
 import {
   PAGE_LABELS,
   changeTone,
@@ -35,8 +34,8 @@ import {
   pollSourceLabel,
   sleepPresetInForce,
   sleepSourceLabel,
-} from '../lib/format'
-import { colors, layout, radius, space } from '../theme'
+} from '../../lib/format'
+import { colors, fonts, layout, radius, space, tabular } from '../../theme'
 
 // The board polls its desk every few minutes and only redraws when the edition changed, so there
 // is nothing to gain from polling it fast. This is "keep the phone screen roughly current", not a
@@ -61,7 +60,7 @@ const SLEEP_PRESETS: ReadonlyArray<{ label: string; seconds: number }> = [
   { label: 'Default', seconds: SLEEP_SECONDS_DEFAULT },
 ]
 
-export default function Dashboard() {
+export default function Board() {
   const router = useRouter()
   const { client, baseUrl, setBaseUrl } = useDevice()
 
@@ -152,7 +151,7 @@ export default function Dashboard() {
 
   if (!client) {
     return (
-      <Screen>
+      <Screen edges={['top']}>
         <ScreenMessage loading message="Connecting…" />
       </Screen>
     )
@@ -160,8 +159,8 @@ export default function Dashboard() {
 
   if (!state) {
     return (
-      <Screen>
-        <Header baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
+      <Screen edges={['top']}>
+        <Header baseUrl={baseUrl} />
         <ScreenMessage loading={!error} error={error} message="Loading…" onRetry={retry} />
       </Screen>
     )
@@ -173,7 +172,7 @@ export default function Dashboard() {
 
   return (
     <Screen edges={['top']}>
-      <Header baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
+      <Header baseUrl={baseUrl} />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -321,11 +320,7 @@ export default function Dashboard() {
           {source.lastResult !== 'ok' ? (
             <Text style={styles.note}>{fetchResultMessage(source.lastResult)}</Text>
           ) : null}
-          <Button
-            label="Change the news URL"
-            variant="secondary"
-            onPress={() => router.push('/settings')}
-          />
+          <Text style={styles.note}>The address itself is changed from the Settings tab.</Text>
         </Section>
 
         <Section title="Power">
@@ -495,7 +490,7 @@ function toneText(tone: 'up' | 'down' | 'warn' | 'neutral') {
   }
 }
 
-function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: () => void }) {
+function Header({ baseUrl }: { baseUrl: string | null }) {
   return (
     <View style={styles.header}>
       <View style={styles.headerText}>
@@ -504,9 +499,6 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
           {baseUrl ?? ''}
         </Text>
       </View>
-      <Pressable accessibilityLabel="Settings" onPress={onSettings} hitSlop={8} style={styles.settingsBtn}>
-        <Ionicons name="settings-outline" size={22} color={colors.text} />
-      </Pressable>
     </View>
   )
 }
@@ -532,20 +524,14 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   headerTitle: {
+    fontFamily: fonts.bold,
     fontSize: 20,
-    fontWeight: '700',
     color: colors.text,
   },
   headerSub: {
     fontSize: 12,
     color: colors.textFaint,
     marginTop: 2,
-  },
-  settingsBtn: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   scroll: {
     paddingHorizontal: layout.gutter,
@@ -563,14 +549,14 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   heroSymbol: {
+    fontFamily: fonts.bold,
     fontSize: 13,
-    fontWeight: '700',
     letterSpacing: 2,
     color: colors.textDim,
   },
   heroName: {
+    fontFamily: fonts.bold,
     fontSize: 24,
-    fontWeight: '700',
     color: colors.text,
     textAlign: 'center',
   },
@@ -581,25 +567,28 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   heroPrice: {
+    fontFamily: fonts.bold,
     fontSize: 30,
-    fontWeight: '700',
     color: colors.text,
+    ...tabular,
   },
   heroChange: {
+    fontFamily: fonts.bold,
     fontSize: 16,
-    fontWeight: '700',
+    ...tabular,
   },
   heroMeta: {
     fontSize: 12,
     color: colors.textFaint,
     textAlign: 'center',
+    ...tabular,
   },
   section: {
     gap: 10,
   },
   sectionTitle: {
+    fontFamily: fonts.semibold,
     fontSize: 13,
-    fontWeight: '600',
     color: colors.textDim,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
@@ -622,6 +611,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: colors.textFaint,
     width: 14,
+    ...tabular,
   },
   headlineText: {
     flex: 1,
@@ -633,11 +623,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textFaint,
     lineHeight: 18,
+    ...tabular,
   },
   note: {
     fontSize: 12,
     color: colors.textFaint,
     lineHeight: 17,
+    ...tabular,
   },
   sleep: {
     gap: 10,
@@ -648,8 +640,8 @@ const styles = StyleSheet.create({
     padding: space.lg,
   },
   sleepTitle: {
+    fontFamily: fonts.semibold,
     fontSize: 14,
-    fontWeight: '600',
     color: colors.text,
   },
   actions: {

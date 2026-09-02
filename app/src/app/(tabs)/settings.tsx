@@ -9,19 +9,18 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
-import { Screen } from '../components/Screen'
-import { BackButton } from '../components/BackButton'
-import { Button } from '../components/Button'
-import { Card } from '../components/Card'
-import { InfoRow } from '../components/InfoRow'
-import { useDevice } from '../lib/device'
-import { Esp32Error, type DeviceInfo, type DeviceState } from '../lib/esp32'
-import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../lib/discovery'
-import { clearDeviceBaseUrl, getDeviceBaseUrl, resetOnboarding } from '../lib/store'
-import { validateNewsUrl, newsUrlErrorMessage } from '../lib/newsurl'
-import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../lib/format'
-import { colors, layout, radius, space } from '../theme'
+import { useFocusEffect, useRouter } from 'expo-router'
+import { Screen } from '../../components/Screen'
+import { Button } from '../../components/Button'
+import { Card } from '../../components/Card'
+import { InfoRow } from '../../components/InfoRow'
+import { useDevice } from '../../lib/device'
+import { Esp32Error, type DeviceInfo, type DeviceState } from '../../lib/esp32'
+import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
+import { clearDeviceBaseUrl, getDeviceBaseUrl, resetOnboarding } from '../../lib/store'
+import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
+import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
+import { colors, fonts, layout, radius, space, type } from '../../theme'
 
 export default function Settings() {
   const router = useRouter()
@@ -63,9 +62,14 @@ export default function Settings() {
     }
   }, [client])
 
-  useEffect(() => {
-    loadInfo()
-  }, [loadInfo])
+  // As a persistent tab this screen mounts once, so a mount-only effect would show the first
+  // visit's snapshot forever. Re-fetch on every focus (as the Board tab does) so the board card,
+  // the source rows and the URL editor's prefill reflect the board as it is now.
+  useFocusEffect(
+    useCallback(() => {
+      loadInfo()
+    }, [loadInfo]),
+  )
 
   // Re-probe the LAN for the board (its reported IP, the saved address, the mDNS name) and persist
   // whichever answers. Used after the user rejoins their home Wi-Fi or the board's lease changes.
@@ -110,12 +114,10 @@ export default function Settings() {
   }
 
   return (
-    <Screen>
+    <Screen edges={['top']}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.titleRow}>
-          <BackButton onPress={() => router.back()} />
           <Text style={styles.title}>Settings</Text>
-          <View style={styles.backSpacer} />
         </View>
 
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
@@ -308,19 +310,12 @@ function NewsUrlEditor({
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: layout.gutter,
-    height: 56,
+    paddingTop: space.sm,
+    paddingBottom: space.xs,
   },
   title: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  backSpacer: {
-    width: 42,
+    ...type.headingLg,
   },
   body: {
     paddingHorizontal: layout.gutter,
@@ -332,8 +327,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionTitle: {
+    fontFamily: fonts.semibold,
     fontSize: 13,
-    fontWeight: '600',
     color: colors.textDim,
     letterSpacing: 0.8,
     textTransform: 'uppercase',

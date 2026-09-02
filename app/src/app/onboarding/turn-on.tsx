@@ -75,6 +75,7 @@ export default function TurnOn() {
 
   return (
     <StepScaffold
+      aurora
       progress={progressFor('turn-on')}
       // First step: no Back. No SKIP — onboarding is required to discover the device.
       ctaLabel={ctaLabel}

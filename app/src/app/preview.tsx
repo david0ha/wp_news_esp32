@@ -15,7 +15,7 @@ import { Button } from '../components/Button'
 import { useDevice } from '../lib/device'
 import { Esp32Error, humanError } from '../lib/esp32'
 import { SCREEN_H, SCREEN_W, decode } from '../lib/screen'
-import { colors, layout, radius, space } from '../theme'
+import { colors, fonts, layout, radius, space } from '../theme'
 
 /**
  * The page on the glass, on the phone.
@@ -151,8 +151,8 @@ const styles = StyleSheet.create({
     height: 56,
   },
   title: {
+    fontFamily: fonts.bold,
     fontSize: 18,
-    fontWeight: '700',
     color: colors.text,
   },
   backSpacer: {
@@ -165,8 +165,8 @@ const styles = StyleSheet.create({
   },
   sheet: {
     borderRadius: radius.sm,
-    // The paper is a warm off-white and the app is near-black behind it. Without an edge the
-    // sheet bleeds into the background and stops reading as a sheet.
+    // The paper is a warm off-white and the app canvas is a pale lavender behind it. Without
+    // an edge the sheet bleeds into the background and stops reading as a sheet.
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderStrong,
     backgroundColor: colors.surface,

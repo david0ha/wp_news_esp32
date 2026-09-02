@@ -1,9 +1,9 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors } from '../theme'
+import { colors, fonts, tabular, type } from '../theme'
 
 /**
  * A label on the left, a value on the right, with a hairline under it unless it is the last row.
- * Used by the dashboard's source/panel cards and by the settings device card.
+ * Used by the board's source/panel cards and by the settings device card.
  *
  * The value is allowed to shrink and ellipsize; the label is not. A long snapshot URL should cut
  * itself off rather than push "URL" out of the card.
@@ -22,7 +22,7 @@ export function InfoRow({
   return (
     <View style={[styles.row, !last && styles.bordered]}>
       <Text style={styles.label}>{label}</Text>
-      <Text style={[styles.value, toneStyle(tone)]} numberOfLines={1}>
+      <Text style={[styles.value, tabular, toneStyle(tone)]} numberOfLines={1}>
         {value}
       </Text>
     </View>
@@ -57,10 +57,11 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   label: {
+    ...type.caption,
     fontSize: 14,
-    color: colors.textDim,
   },
   value: {
+    fontFamily: fonts.medium,
     fontSize: 14,
     color: colors.text,
     flexShrink: 1,

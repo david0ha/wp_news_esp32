@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, type ViewStyle } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { colors } from '../theme'
 
-/** The circular back control used across onboarding/settings screens. */
+/** The circular back control used across onboarding/settings/detail screens. */
 export function BackButton({
   onPress,
   label = 'Back',
@@ -30,6 +30,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
