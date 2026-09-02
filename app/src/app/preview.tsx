@@ -12,6 +12,8 @@ import { useRouter } from 'expo-router'
 import { Screen } from '../components/Screen'
 import { BackButton } from '../components/BackButton'
 import { Button } from '../components/Button'
+import { NoBoardYet } from '../components/NoBoardYet'
+import { ScreenMessage } from '../components/ScreenMessage'
 import { useDevice } from '../lib/device'
 import { Esp32Error, humanError } from '../lib/esp32'
 import { SCREEN_H, SCREEN_W, decode } from '../lib/screen'
@@ -30,7 +32,7 @@ import { colors, fonts, layout, radius, space } from '../theme'
  */
 export default function Preview() {
   const router = useRouter()
-  const { client } = useDevice()
+  const { client, hasDevice } = useDevice()
   const { width } = useWindowDimensions()
 
   const [png, setPng] = useState<string | null>(null)
@@ -66,13 +68,65 @@ export default function Preview() {
   const sheetWidth = width - layout.gutter * 2
   const sheetHeight = (sheetWidth * SCREEN_H) / SCREEN_W
 
+  // Lifted out because all three bodies below need it, and one of them is a body this screen did
+  // not use to have. Back is the only exit here — Preview is a root-stack route with no tab bar
+  // underneath it — so a branch that forgot to draw the header would be a dead end rather than an
+  // untidy one.
+  //
+  // Drawing the header is not the same as the exit working, though, and the gap between the two
+  // opens on precisely the journey the no-board branch below exists for. Being a root-stack route
+  // is what makes this screen deep-linkable, which is the branch's whole justification — and it is
+  // the same fact that empties the stack: `claudepost://preview` into a cold process builds a root
+  // stack of just [preview], because nothing under src/app declares an
+  // `unstable_settings.initialRouteName` to seed a screen underneath it. `canGoBack()` is false
+  // there, `router.back()` is a silent no-op, and a bare one would hand the skipper NoBoardYet on
+  // a screen with no tab bar and an arrow that does nothing — stranded by the very property that
+  // let them in. So the exit falls back to a destination instead of to silence, the idiom
+  // add-ticker.tsx and onboarding/turn-on.tsx already use. `/board` and not `/markets` even for a
+  // skipper: this screen is about the board, so the honest landing is the tab that answers "what
+  // board?" with the same NoBoardYet card, not a market list they never asked for.
+  const header = (
+    <View style={styles.titleRow}>
+      <BackButton onPress={() => (router.canGoBack() ? router.back() : router.replace('/board'))} />
+      <Text style={styles.title}>On the glass</Text>
+      <View style={styles.backSpacer} />
+    </View>
+  )
+
+  // Storage has not answered yet. Half-known is unknown: `hasDevice` is null for the first frame of
+  // a cold launch, and the ordinary body below would spend that frame saying "Nothing fetched yet"
+  // over a paragraph about holding a board awake — a wrong sentence, shown to somebody who does own
+  // a board, at the one moment nothing has actually failed. A spinner is the honest answer to "we
+  // do not know yet", and it is the same one the Board tab holds while it waits.
+  if (hasDevice === null) {
+    return (
+      <Screen>
+        {header}
+        <ScreenMessage loading />
+      </Screen>
+    )
+  }
+
+  // There is no board on this phone, said from storage — which is the only thing in this app
+  // allowed to say it. Preview is only pushed from Board's dashboard today, but it is a root-stack
+  // route and therefore deep-linkable, so a phone that took SET UP LATER can arrive here from a
+  // link with no hardware behind it at all. Without this branch that user gets the fetch path with
+  // a null client: nothing is requested, nothing comes back, and what they read is this screen's
+  // failure copy telling them to press a button on a board they have never owned. The comparison is
+  // against `false` on purpose; `!hasDevice` would fold the null case above back in and flash the
+  // no-board card at every board owner on every cold launch.
+  if (hasDevice === false) {
+    return (
+      <Screen>
+        {header}
+        <NoBoardYet />
+      </Screen>
+    )
+  }
+
   return (
     <Screen>
-      <View style={styles.titleRow}>
-        <BackButton onPress={() => router.back()} />
-        <Text style={styles.title}>On the glass</Text>
-        <View style={styles.backSpacer} />
-      </View>
+      {header}
 
       {png ? (
         <ScrollView
