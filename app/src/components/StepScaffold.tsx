@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Screen } from './Screen'
 import { Button } from './Button'
 import { BackButton } from './BackButton'
-import { colors, layout } from '../theme'
+import { colors, fonts, layout } from '../theme'
 
 /**
  * Shared chrome for every onboarding step: an optional back-circle + SKIP bar, the progress bar,
@@ -18,6 +18,7 @@ export function StepScaffold({
   canProceed = true,
   ctaVariant = 'primary',
   loading = false,
+  aurora = false,
   children,
 }: {
   progress: number
@@ -28,10 +29,12 @@ export function StepScaffold({
   canProceed?: boolean
   ctaVariant?: 'primary' | 'secondary'
   loading?: boolean
+  /** Forwarded to Screen — the hero steps (turn-on) get the aurora wash per §6.8. */
+  aurora?: boolean
   children: ReactNode
 }) {
   return (
-    <Screen>
+    <Screen aurora={aurora}>
       <View style={styles.topBar}>
         {onBack ? <BackButton onPress={onBack} /> : <View style={styles.backSpacer} />}
         {onSkip ? (
@@ -73,8 +76,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   skip: {
+    fontFamily: fonts.semibold,
     fontSize: 14,
-    fontWeight: '600',
     color: colors.textDim,
     letterSpacing: 0.5,
   },

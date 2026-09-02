@@ -14,11 +14,12 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
 import { BackButton } from '../../components/BackButton'
+import { Button } from '../../components/Button'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES } from '../../onboarding/flow'
 import { esp32, Esp32Error } from '../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
-import { colors, layout, radius } from '../../theme'
+import { colors, fonts, layout, radius } from '../../theme'
 
 // Map a provisioning failure to a short, user-facing reason.
 function failureMessage(e: unknown): string {
@@ -189,23 +190,7 @@ export default function Password() {
         </ScrollView>
 
         <View style={styles.ctaWrap}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ disabled: !enabled, busy: pending }}
-            onPress={join}
-            disabled={!enabled}
-            style={({ pressed }) => [
-              styles.cta,
-              !enabled && styles.ctaDisabled,
-              pressed && enabled && styles.ctaPressed,
-            ]}
-          >
-            {pending ? (
-              <ActivityIndicator color={colors.ink} />
-            ) : (
-              <Text style={[styles.ctaLabel, !enabled && styles.ctaLabelDisabled]}>JOIN</Text>
-            )}
-          </Pressable>
+          <Button label="JOIN" onPress={join} disabled={!enabled} loading={pending} />
         </View>
       </KeyboardAvoidingView>
     </Screen>
@@ -222,8 +207,8 @@ const styles = StyleSheet.create({
     height: 56,
   },
   title: {
+    fontFamily: fonts.bold,
     fontSize: 18,
-    fontWeight: '700',
     color: colors.text,
   },
   backSpacer: {
@@ -242,8 +227,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   label: {
+    fontFamily: fonts.semibold,
     fontSize: 14,
-    fontWeight: '600',
     color: colors.text,
   },
   inputRow: {
@@ -282,27 +267,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: layout.gutter,
     paddingBottom: 8,
     paddingTop: 8,
-  },
-  cta: {
-    height: 52,
-    borderRadius: radius.md,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ctaDisabled: {
-    opacity: 0.5,
-  },
-  ctaPressed: {
-    opacity: 0.8,
-  },
-  ctaLabel: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.ink,
-    letterSpacing: 0.5,
-  },
-  ctaLabelDisabled: {
-    color: colors.ink,
   },
 })

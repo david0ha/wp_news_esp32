@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { colors } from '../theme'
+import { colors, fonts, type } from '../theme'
 
 /** Centered illustration + title + body used by the info onboarding steps. */
 export function StepHero({
@@ -37,18 +37,18 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   title: {
+    ...type.heading,
     fontSize: 28,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
+    letterSpacing: -0.4,
     color: colors.text,
     textAlign: 'center',
-    letterSpacing: 0.3,
   },
   body: {
-    fontSize: 15,
-    lineHeight: 22,
+    ...type.body,
     color: colors.textDim,
     textAlign: 'center',
   },
 })
 
-export const heroBold = { fontWeight: '700', color: colors.text } as const
+export const heroBold = { fontFamily: fonts.bold, color: colors.text } as const

@@ -1,5 +1,5 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
-import { colors } from '../theme'
+import { colors, fonts } from '../theme'
 
 /**
  * Centered loading / error / empty state shared across screens. Pass `loading` for a spinner,
@@ -55,8 +55,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   retryText: {
+    fontFamily: fonts.semibold,
     fontSize: 14,
-    fontWeight: '600',
     color: colors.accent,
   },
   message: {

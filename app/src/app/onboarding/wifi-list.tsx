@@ -7,7 +7,7 @@ import { IconBadge } from '../../components/IconBadge'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../onboarding/flow'
 import { esp32, type ScanNetwork } from '../../lib/esp32'
-import { colors, radius } from '../../theme'
+import { colors, fonts, radius } from '../../theme'
 
 // "Other…" sentinel — lets the user provision a hidden/unlisted SSID typed on the password step.
 const OTHER = '__other__'
@@ -156,8 +156,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sectionLabel: {
+    fontFamily: fonts.semibold,
     fontSize: 12,
-    fontWeight: '600',
     color: colors.textDim,
     letterSpacing: 1,
   },
@@ -182,8 +182,8 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   retry: {
+    fontFamily: fonts.semibold,
     fontSize: 12,
-    fontWeight: '600',
     color: colors.accent,
     letterSpacing: 0.5,
   },
@@ -203,8 +203,8 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   ssidSelected: {
+    fontFamily: fonts.semibold,
     color: colors.accent,
-    fontWeight: '600',
   },
   icons: {
     flexDirection: 'row',

@@ -1,10 +1,11 @@
 import { StyleSheet, Pressable, Text, View } from 'react-native'
-import { colors, radius } from '../theme'
+import { colors, fonts, radius, shadow } from '../theme'
 
 /**
- * A horizontal segmented selector — used by the dashboard to switch the page on the panel
- * (A1, the front page / A2, the accounts). The selected segment is highlighted; `onChange` fires
- * the index. `disabled` blocks interaction while a command is in flight.
+ * A horizontal segmented selector — the iOS-style pill track with a lifted white thumb.
+ * Used to switch the page on the panel (A1 / A2) and Calls/Puts in the options chain.
+ * The selected segment is highlighted; `onChange` fires the index. `disabled` blocks
+ * interaction while a command is in flight.
  */
 export function SegmentedControl({
   segments,
@@ -42,7 +43,7 @@ const styles = StyleSheet.create({
   track: {
     flexDirection: 'row',
     backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.md,
+    borderRadius: radius.pill,
     padding: 4,
     gap: 4,
   },
@@ -52,19 +53,20 @@ const styles = StyleSheet.create({
   segment: {
     flex: 1,
     height: 36,
-    borderRadius: radius.sm,
+    borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
   segmentActive: {
-    backgroundColor: colors.accent,
+    backgroundColor: colors.surface,
+    ...shadow.soft,
   },
   label: {
+    fontFamily: fonts.semibold,
     fontSize: 13,
-    fontWeight: '600',
     color: colors.textDim,
   },
   labelActive: {
-    color: colors.ink,
+    color: colors.text,
   },
 })

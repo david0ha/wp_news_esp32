@@ -1,10 +1,11 @@
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { colors, radius } from '../theme'
+import { colors, fonts, radius } from '../theme'
 
 /**
- * A small rounded label/toggle. With `onPress` it acts as a selectable pill (the dashboard's
- * page/econ controls); without one it's a static status chip (sensor/battery readouts).
+ * A small pill label/toggle. With `onPress` it acts as a selectable pill (page/econ
+ * controls, expiry selectors); without one it's a static status chip. Active takes the
+ * accentDim-wash treatment — the app-wide selection idiom.
  */
 export function Chip({
   label,
@@ -32,7 +33,8 @@ export function Chip({
           ? colors.warn
           : tone === 'accent'
             ? colors.accent
-            : colors.text
+            : colors.textDim
+  const contentColor = active ? colors.accent : toneColor
   const content = (
     <View
       style={[
@@ -42,8 +44,8 @@ export function Chip({
         style,
       ]}
     >
-      {icon ? <Ionicons name={icon} size={14} color={active ? colors.ink : toneColor} /> : null}
-      <Text style={[styles.label, { color: active ? colors.ink : toneColor }]}>{label}</Text>
+      {icon ? <Ionicons name={icon} size={14} color={contentColor} /> : null}
+      <Text style={[styles.label, { color: contentColor }]}>{label}</Text>
     </View>
   )
 
@@ -70,13 +72,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: radius.pill,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
   active: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+    backgroundColor: colors.accentDim,
+    borderColor: colors.accentDim,
   },
   disabled: {
     opacity: 0.45,
@@ -85,8 +87,8 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   label: {
+    fontFamily: fonts.semibold,
     fontSize: 13,
-    fontWeight: '600',
     letterSpacing: 0.2,
   },
 })
