@@ -2,6 +2,7 @@ import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, space, tabular, type } from '../../../theme'
 import {
   TILE_HEAD,
+  TILE_MORE,
   FIGURES_ROW,
   FIGURES_SHOWN,
   type Tile,
@@ -102,7 +103,8 @@ const styles = StyleSheet.create({
   more: {
     fontFamily: fonts.semibold,
     fontSize: 12,
-    lineHeight: 20,
+    // The estimator adds exactly this for the "+N more" line; it is not a look choice.
+    lineHeight: TILE_MORE,
     color: colors.accent,
   },
 })

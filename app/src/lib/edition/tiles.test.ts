@@ -246,7 +246,7 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
 
   it('caps a row-led tile at the rows its body actually draws', () => {
     // One more than the cap must add the "+N more" line and NOT another row — the body shows
-    // `TILE_SHOWN_*` and no more, so a height that kept growing would be white paper.
+    // `*_SHOWN` and no more, so a height that kept growing would be white paper.
     const chrome = 2 * TILE_PADDING + TILE_HEAD
     const many: Tile = {
       kind: 'peers',

@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors, space, type } from '../../../theme'
+import { colors, type } from '../../../theme'
 import { type Tile } from '../../../lib/edition/tiles'
+import { HEADLINE_SM_LINE, HEADLINE_SM_SIZE, STORY_GAP, storyLines } from './story'
 
 /**
  * A story, with no picture — TYPE IS THE IMAGE here. The lead's headline at 22/26 is what carries
@@ -11,37 +12,51 @@ import { type Tile } from '../../../lib/edition/tiles'
  * it is CONTENT. It is not `type.label`: an all-caps eyebrow on every tile is one of the five
  * anti-patterns this design names, and it makes a feed look like a settings screen.
  *
- * Everything clamps with `numberOfLines` rather than resizing the tile. The height was decided
- * before this rendered (`estimateTileHeight`) and the body adapts to it; a tile that grew to fit
- * its text would reflow the column beside it.
+ * EVERY CLAMP HERE IS DERIVED, NONE IS FIXED. `storyLines` divides the height the estimator handed
+ * this tile among the kicker, the headline, the deck and the body, in that priority order. A
+ * constant asks for more lines than the box holds, and because Yoga gives a `flex: 1` child the
+ * leftover with no minimum, the surplus is sliced horizontally by the tile's `overflow: 'hidden'` —
+ * with the ellipsis that should have signalled it stranded on a line nobody sees. Deriving it also
+ * means the estimator's height formula can be retuned without this file being touched.
  */
 export function StoryTile({
   tile,
+  height,
 }: {
   tile: Extract<Tile, { kind: 'story' }>
   width: number
   height: number
 }) {
   const { story, lead } = tile
+  const lines = storyLines(height, {
+    lead,
+    hasKicker: story.kicker !== '',
+    hasDeck: story.deck !== '',
+  })
+
   return (
     <View style={styles.root}>
-      {story.kicker !== '' ? (
-        <Text style={type.caption} numberOfLines={1}>
+      {lines.kicker > 0 ? (
+        <Text style={type.caption} numberOfLines={lines.kicker}>
           {story.kicker}
         </Text>
       ) : null}
-      <Text style={lead ? type.pinHeadline : styles.headlineSm} numberOfLines={lead ? 4 : 3}>
+      <Text
+        style={lead ? type.pinHeadline : styles.headlineSm}
+        numberOfLines={lines.headline}
+      >
         {story.headline}
       </Text>
-      {story.deck !== '' ? (
-        <Text style={type.pinDeck} numberOfLines={2}>
+      {lines.deck > 0 ? (
+        <Text style={type.pinDeck} numberOfLines={lines.deck}>
           {story.deck}
         </Text>
       ) : null}
-      {/* Only the lead has room for body copy, and `flex: 1` lets it take exactly whatever the
-          estimator left over — the copy fills the tile instead of the tile shrinking to the copy. */}
-      {lead && story.body !== '' ? (
-        <Text style={styles.body} numberOfLines={6}>
+      {/* `flex: 1` lets the copy take exactly what the parts above it left, so the column fills
+          instead of ending in white paper. A secondary story reaches this too, whenever its own
+          arithmetic leaves room — the room, not the rank, is what decides. */}
+      {story.body !== '' && lines.body > 0 ? (
+        <Text style={styles.body} numberOfLines={lines.body}>
           {story.body}
         </Text>
       ) : null}
@@ -52,12 +67,12 @@ export function StoryTile({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    gap: space.xs,
+    gap: STORY_GAP,
   },
   headlineSm: {
     ...type.pinHeadline,
-    fontSize: 17,
-    lineHeight: 21,
+    fontSize: HEADLINE_SM_SIZE,
+    lineHeight: HEADLINE_SM_LINE,
     letterSpacing: -0.2,
   },
   body: {

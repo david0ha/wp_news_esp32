@@ -2,6 +2,35 @@ import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, radius, space, tabular, type } from '../../../theme'
 import { TILE_HEAD, type Tile } from '../../../lib/edition/tiles'
 import { DASH, formatPrice } from '../../../lib/edition/format'
+import { lineHeightOf } from '../metrics'
+
+// ---------------------------------------------------------------------------------------------
+// THE VERTICAL SUM. This tile's height is `colWidth` — it is not built from row constants the way
+// figures and peers are, so nothing makes it fit by construction and the arithmetic has to be
+// written down. At a 170 px column the content box is 170 − 2*14 = 142:
+//
+//   heading                                                    24   (TILE_HEAD)
+//   track box   4 pad + 14 track row + 4 gap + 18 caption + 4 pad = 44
+//   stat grid   2 wrapped rows of 37                            = 74
+//                                                              ----
+//                                                                142   exactly
+//
+// Every term is a constant below, and the two text rows inside a stat carry EXPLICIT line heights
+// so the sum is not at the mercy of a font's intrinsic metrics. The previous version left both
+// implicit, needed about 86 px for the grid where 75 were free, and — because the grid packed its
+// wrapped rows with `alignContent: 'flex-end'` — spilled the overflow past the TOP edge, landing
+// Open and Prev close on top of the "52 weeks" caption.
+// ---------------------------------------------------------------------------------------------
+
+/** The price at each end of the track: 11 px type, given a line height so the row is measurable. */
+const END_LINE = 14
+/** The track row is the taller of its text and the 6 px rail. */
+const TRACK_ROW = END_LINE
+const CAPTION_LINE = lineHeightOf(type.caption)
+/** The label and the value inside one stat, and the row they add up to. */
+const STAT_LABEL_LINE = 16
+const STAT_VALUE_LINE = 17
+const STAT_ROW = 37
 
 /**
  * Where today's price sits in the year's range, with the day's four numbers under it.
@@ -37,7 +66,7 @@ export function RangeTile({
 function Stat({ label, value }: { label: string; value: number | null }) {
   return (
     <View style={styles.stat}>
-      <Text style={type.caption} numberOfLines={1}>
+      <Text style={styles.statLabel} numberOfLines={1}>
         {label}
       </Text>
       <Text style={[styles.statValue, tabular]} numberOfLines={1}>
@@ -84,7 +113,9 @@ function Track({
           {formatPrice(high)}
         </Text>
       </View>
-      <Text style={type.caption}>{drawable ? caption : `${caption} ${DASH}`}</Text>
+      <Text style={styles.caption} numberOfLines={1}>
+        {drawable ? caption : `${caption} ${DASH}`}
+      </Text>
     </View>
   )
 }
@@ -96,10 +127,11 @@ const styles = StyleSheet.create({
     height: TILE_HEAD,
   },
   trackBox: {
-    gap: 4,
+    gap: space.xs,
     paddingVertical: space.xs,
   },
   trackRow: {
+    height: TRACK_ROW,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -122,23 +154,36 @@ const styles = StyleSheet.create({
   end: {
     fontFamily: fonts.regular,
     fontSize: 11,
+    lineHeight: END_LINE,
     color: colors.textDim,
   },
+  caption: {
+    ...type.caption,
+    lineHeight: CAPTION_LINE,
+  },
   grid: {
-    // The four day numbers sit at the FOOT of whatever the estimator left, so the track keeps
-    // its place under the heading whether the tile is 170 px or 200 px tall.
+    // Takes whatever the heading and the track box left, and clips DOWNWARD if a narrow phone
+    // leaves less than two rows. That direction is the whole fix: packing toward the bottom made
+    // a shortfall overflow upward, over the caption above it.
     flex: 1,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    alignContent: 'flex-end',
+    alignContent: 'flex-start',
+    overflow: 'hidden',
   },
   stat: {
     width: '50%',
-    paddingVertical: 4,
+    height: STAT_ROW,
+    justifyContent: 'center',
+  },
+  statLabel: {
+    ...type.caption,
+    lineHeight: STAT_LABEL_LINE,
   },
   statValue: {
     fontFamily: fonts.semibold,
     fontSize: 14,
+    lineHeight: STAT_VALUE_LINE,
     color: colors.text,
   },
 })

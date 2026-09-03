@@ -2,6 +2,7 @@ import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, type } from '../../../theme'
 import {
   TILE_HEAD,
+  TILE_MORE,
   BRIEFS_ROW,
   BRIEFS_SHOWN,
   type Tile,
@@ -32,7 +33,11 @@ export function BriefsTile({
       {tile.briefs.slice(0, BRIEFS_SHOWN).map((b, i) => (
         <View key={`${b.date}:${i}`} style={styles.row}>
           <View style={styles.meta}>
-            {b.date !== '' ? <Text style={type.caption}>{b.date}</Text> : null}
+            {b.date !== '' ? (
+              <Text style={type.caption} numberOfLines={1}>
+                {b.date}
+              </Text>
+            ) : null}
             {b.kicker !== '' ? (
               <Text style={type.caption} numberOfLines={1}>
                 {b.kicker}
@@ -70,7 +75,8 @@ const styles = StyleSheet.create({
   more: {
     fontFamily: fonts.semibold,
     fontSize: 12,
-    lineHeight: 20,
+    // The estimator adds exactly this for the "+N more" line; it is not a look choice.
+    lineHeight: TILE_MORE,
     color: colors.accent,
   },
 })

@@ -2,9 +2,10 @@ import { StyleSheet, Text, View } from 'react-native'
 import { space, type } from '../../../theme'
 import { TILE_HEAD, TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
 import { ChartFigure } from '../ChartFigure'
+import { lineHeightOf } from '../metrics'
 
-/** `type.caption`'s line height — the span line under the plot. */
-const CAPTION = 18
+/** The span line under the plot, read off the token it draws with. */
+const CAPTION = lineHeightOf(type.caption)
 /** `styles.root`'s gap, counted once for each gap between the children. */
 const GAP = space.xs
 
