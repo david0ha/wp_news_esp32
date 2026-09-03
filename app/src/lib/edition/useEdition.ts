@@ -99,6 +99,11 @@ export function useEdition(): {
     [settle],
   )
 
+  // Set once the cold-start effect below has fully settled — not merely started — so the focus
+  // effect can tell "still booting" apart from "booted, and now looking at a real focus event".
+  // See that effect for why this exists.
+  const bootedRef = useRef(false)
+
   useEffect(() => {
     let alive = true
     void (async () => {
@@ -111,6 +116,7 @@ export function useEdition(): {
       const u = url ?? ''
       dispatch({ type: 'url', url: u })
       await settle(u, u === '' ? null : cached)
+      bootedRef.current = true
     })()
     return () => {
       alive = false
@@ -124,6 +130,8 @@ export function useEdition(): {
       // Nothing to refresh against the demo; the bundled edition is the whole of it.
       if (url === null || url === '') return
       const state = current.state
+      // The one rule: any call with `fresh: true` fetches, unconditionally; a silent call needs
+      // a ready screen AND a `fetchedAt` older than the throttle.
       if (opts.fresh) {
         // An explicit pull-to-refresh — or a tap on Retry from the error screen — always goes,
         // and raises the spinner a ready screen shows while it runs. Retrying from `error` has
@@ -149,8 +157,18 @@ export function useEdition(): {
 
   // On return to the tab: pick up a URL changed in Settings, or otherwise defer to `refresh()`'s
   // own silent, throttled re-check — the same rule a bare `refresh()` call gets from anywhere.
+  //
+  // `useFocusEffect` fires once on mount (the screen starts focused) in addition to every later
+  // return to the tab, and it fires from its own effect independently of the plain `useEffect`
+  // above — so on a cold mount both run at nearly the same instant. This one would then read
+  // `machineRef.current.url` while it is still `null` (the mount effect's first `dispatch` has
+  // not landed yet), see a mismatch against the real URL, and call `adopt()` — a second disk read
+  // and a second network request racing the mount effect's own. Skipping this callback until the
+  // mount effect has fully settled makes the cold start one path; every later focus (by which
+  // time `bootedRef.current` is long since true) runs exactly as before.
   useFocusEffect(
     useCallback(() => {
+      if (!bootedRef.current) return
       void (async () => {
         const url = (await getNewsUrl()) ?? ''
         if (url !== machineRef.current.url) {
