@@ -186,43 +186,64 @@ export interface DecodedScreen {
 }
 
 /**
- * One framebuffer -> one indexed PNG, in the measured inks.
+ * `w*h/2` packed bytes -> one byte per pixel, row-major.
  *
- * Throws rather than guessing on anything that is not exactly `FB_SIZE` bytes. A short body is what
- * a socket closed mid-download looks like, and half a page rendered as a whole one is a picture the
- * user has no way to tell from the real thing.
+ * The walk is `sim/main_sim.c`'s: y outer, x inner, and within a byte the EVEN x first, because
+ * `epd6_fb_get()` (`epd6_transpose.h:142-146`) puts it in the HIGH nibble. Swapping the two
+ * mirrors every pair of pixels — invisible in a headline, and it destroys every hairline.
+ *
+ * Parameterised by geometry because a photo tile is the same format at a different size: the
+ * board's framebuffer is one 1200x1600 tile, and `edition/photo.ts` hands this 364x204 ones.
  */
-export function decode(fbBytes: Uint8Array): DecodedScreen {
-  if (fbBytes.length !== FB_SIZE) {
-    throw new Error(
-      `screen: expected ${FB_SIZE} bytes of framebuffer, got ${fbBytes.length}`,
-    )
+export function unpackNibbles(bytes: Uint8Array, w: number, h: number): Uint8Array {
+  // Odd widths cannot exist in this format at all: the last byte of a row would carry one pixel
+  // of that row and one of the next, and there is no partial byte to end on.
+  if (w <= 0 || h <= 0 || w % 2 !== 0) {
+    throw new Error(`screen: ${w}x${h} is not a 4bpp image (width must be even and positive)`)
+  }
+  const stride = w / 2
+  if (bytes.length !== stride * h) {
+    throw new Error(`screen: expected ${stride * h} bytes for ${w}x${h}, got ${bytes.length}`)
+  }
+  const out = new Uint8Array(w * h)
+  let o = 0
+  for (let y = 0; y < h; y++) {
+    const rowStart = y * stride
+    for (let b = 0; b < stride; b++) {
+      const byte = bytes[rowStart + b]
+      out[o++] = byte >>> 4
+      out[o++] = byte & 0x0f
+    }
+  }
+  return out
+}
+
+/**
+ * One byte per pixel -> a base64 indexed PNG in the measured Spectra 6 inks.
+ *
+ * Colour type 3 with a 16-entry PLTE means the pixel byte written IS the nibble read, and the
+ * palette is the only place a colour is decided: no mapping step to get backwards, a quarter the
+ * size of RGB, and a page of mostly one value that deflate is very good at.
+ *
+ * Filter 0 (None) on every row. Any other filter costs a per-pixel reconstruction pass on the
+ * phone, and this content is flat colour — the run-length matching in deflate already has
+ * everything it needs from an unfiltered row.
+ */
+export function encodeIndexedPng(indices: Uint8Array, w: number, h: number): string {
+  if (indices.length !== w * h) {
+    throw new Error(`screen: expected ${w * h} indices for ${w}x${h}, got ${indices.length}`)
   }
 
-  // One byte per pixel, each row prefixed with its filter type.
-  //
-  // Filter 0 (None) throughout. The reconstruction pass for any other filter runs over 1.92 million
-  // pixels on the phone, and this page is mostly one flat colour — the run-length matching in
-  // deflate already has everything it needs from an unfiltered row.
-  const rowBytes = 1 + SCREEN_W
-  const raw = new Uint8Array(SCREEN_H * rowBytes)
-  for (let y = 0; y < SCREEN_H; y++) {
-    let o = y * rowBytes
-    raw[o++] = 0
-    const rowStart = y * SCREEN_STRIDE
-    // The walk is sim/main_sim.c:246-252's: y outer, x inner, and within a byte the EVEN x first,
-    // because epd6_fb_get() (epd6_transpose.h:142-146) puts it in the HIGH nibble. Swapping the
-    // two mirrors every pair of pixels — which is invisible in a headline and destroys a hairline.
-    for (let b = 0; b < SCREEN_STRIDE; b++) {
-      const byte = fbBytes[rowStart + b]
-      raw[o++] = byte >>> 4
-      raw[o++] = byte & 0x0f
-    }
+  const rowBytes = 1 + w
+  const raw = new Uint8Array(h * rowBytes)
+  for (let y = 0; y < h; y++) {
+    raw[y * rowBytes] = 0
+    raw.set(indices.subarray(y * w, (y + 1) * w), y * rowBytes + 1)
   }
 
   const ihdr = new Uint8Array(13)
-  writeU32(ihdr, 0, SCREEN_W)
-  writeU32(ihdr, 4, SCREEN_H)
+  writeU32(ihdr, 0, w)
+  writeU32(ihdr, 4, h)
   ihdr[8] = 8 // bit depth: one whole byte per pixel, so a nibble indexes the palette directly
   ihdr[9] = 3 // colour type 3 — indexed
   ihdr[10] = 0 // compression: deflate, the only one PNG defines
@@ -251,6 +272,26 @@ export function decode(fbBytes: Uint8Array): DecodedScreen {
     png.set(p, at)
     at += p.length
   }
+  return toBase64(png)
+}
 
-  return { pngBase64: toBase64(png), width: SCREEN_W, height: SCREEN_H }
+/**
+ * One framebuffer -> one indexed PNG, in the measured inks.
+ *
+ * Throws rather than guessing on anything that is not exactly `FB_SIZE` bytes. A short body is
+ * what a socket closed mid-download looks like, and half a page rendered as a whole one is a
+ * picture the user has no way to tell from the real thing. The size check stays HERE, ahead of
+ * `unpackNibbles`, so the message still names 960,000 — that number is the contract, and the
+ * generic one below it would say "expected 960000 bytes for 1200x1600", which is true and less
+ * useful.
+ */
+export function decode(fbBytes: Uint8Array): DecodedScreen {
+  if (fbBytes.length !== FB_SIZE) {
+    throw new Error(`screen: expected ${FB_SIZE} bytes of framebuffer, got ${fbBytes.length}`)
+  }
+  return {
+    pngBase64: encodeIndexedPng(unpackNibbles(fbBytes, SCREEN_W, SCREEN_H), SCREEN_W, SCREEN_H),
+    width: SCREEN_W,
+    height: SCREEN_H,
+  }
 }
