@@ -4,6 +4,7 @@ import { colors, radius, type } from '../../../theme'
 import { TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
 import { editionClient, tileUrl } from '../../../lib/edition/client'
 import { decodeTile, getCachedTilePng, putCachedTilePng } from '../../../lib/edition/photo'
+import { useEditionUrl } from '../editionUrl'
 
 /**
  * A photograph, fetched beside the payload and decoded on the phone.
@@ -18,6 +19,10 @@ import { decodeTile, getCachedTilePng, putCachedTilePng } from '../../../lib/edi
  * the column beside it does not shift. That is also what the demo edition looks like, whose tiles
  * live in `sim/tiles/` and are on no server the phone can reach.
  *
+ * THE ADDRESS COMES FROM CONTEXT, not from a prop. This is the only component that needs to know
+ * where the edition was served from, and it sits three levels below the screen that holds it —
+ * see `../editionUrl.tsx` for why the string stopped being passed hand to hand.
+ *
  * THIS COMPONENT DOES NOT NOTICE A NEW EDITION BY ITSELF, and it is not supposed to. Its effect
  * keys on the tile URL and the geometry, and both of those repeat across days: the ids are the
  * producer's and the lead band is 1140x320 every edition. Every mount site therefore keys it on
@@ -28,15 +33,13 @@ export function PhotoTile({
   tile,
   width,
   height,
-  newsUrl,
 }: {
   tile: Extract<Tile, { kind: 'photo' }>
   width: number
   height: number
-  newsUrl: string
 }) {
   const { photo } = tile
-  const url = tileUrl(newsUrl, photo.id)
+  const url = tileUrl(useEditionUrl(), photo.id)
   // Seeded from the session cache so a tile scrolled back into view paints on its first frame
   // rather than flashing the placeholder while a decode it already did runs again.
   const [png, setPng] = useState<string | null>(() => (url === '' ? null : getCachedTilePng(url)))

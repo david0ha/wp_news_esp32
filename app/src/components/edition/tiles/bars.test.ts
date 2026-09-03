@@ -35,11 +35,30 @@ describe('barLayout', () => {
     expect(barLayout([1, 2, 3], 100, 50).barWidth).toBeCloseTo(94 / 3)
   })
 
-  it('keeps a minimum bar width when the series is too dense for the box', () => {
-    expect(barLayout(new Array(60).fill(1), 100, 50).barWidth).toBe(2)
+  it('compresses a dense series into the box instead of running off the end of it', () => {
+    // The board keeps the LAST 48 samples of a series (`NEWS_BARS_MAX`), and a chart tile's plot
+    // is about 142 px on a 360 dp phone. Floored at 2 px with a 3 px gap, 48 bars asked for 237 px
+    // and the newest ones — the right-hand end, the ones being read — fell outside the `<Svg>`
+    // and were simply not painted.
+    const { barWidth, gap } = barLayout(new Array(48).fill(1), 142, 50)
+    expect(48 * barWidth + 47 * gap).toBeLessThanOrEqual(142)
+    expect(barWidth).toBeGreaterThan(0)
+  })
+
+  it('gives up the gap before it gives up the bar', () => {
+    // 48 bars in 142 px still fit at a 1 px gap, so that is what it spends before thinning.
+    expect(barLayout(new Array(48).fill(1), 142, 50).gap).toBe(1)
+    // 60 in 100 px do not: the gap goes entirely and the bars share what is left.
+    const dense = barLayout(new Array(60).fill(1), 100, 50)
+    expect(dense.gap).toBe(0)
+    expect(60 * dense.barWidth).toBeLessThanOrEqual(100)
+  })
+
+  it('keeps the full gap while the bars are still comfortable', () => {
+    expect(barLayout([1, 2, 3], 100, 50).gap).toBe(3)
   })
 
   it('draws nothing for an empty series', () => {
-    expect(barLayout([], 100, 50)).toEqual({ barWidth: 0, heights: [] })
+    expect(barLayout([], 100, 50)).toEqual({ barWidth: 0, gap: 3, heights: [] })
   })
 })

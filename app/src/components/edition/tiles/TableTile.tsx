@@ -3,10 +3,13 @@ import { colors, fonts, space, tabular, type } from '../../../theme'
 import {
   TABLE_COLS_SHOWN,
   TABLE_GAP,
+  TABLE_HEAD_ROW_H,
   TABLE_NOTE_LINE,
+  TABLE_NOTE_LINES,
   TABLE_ROW_H,
   TABLE_ROWS,
   TABLE_TITLE_LINE,
+  TABLE_TITLE_LINES,
   type Tile,
 } from '../../../lib/edition/tiles'
 
@@ -23,9 +26,10 @@ import {
  * hairline under the column heads is the only rule on the tile.
  *
  * THE VERTICAL SUM, as `RangeTile` keeps its own: this body is fixed furniture, so every block it
- * draws is one of `tiles.ts`'s constants, IMPORTED, and the same terms `estimateTileHeight` floors
- * this kind at. Both text rows carry EXPLICIT line heights, because a sum built on a font's
- * intrinsic metrics is a sum nobody can check.
+ * draws is one of `tiles.ts`'s constants, IMPORTED — the heights, the row counts and the two
+ * `numberOfLines` alike — and the same terms `estimateTileHeight` floors this kind at. Both text
+ * rows carry EXPLICIT line heights, because a sum built on a font's intrinsic metrics is a sum
+ * nobody can check.
  *
  *   title       2 lines of 19                                       = 38
  *   head row    4 + a 14 px head line + 3 + the hairline             = 22
@@ -35,19 +39,13 @@ import {
  *                                                                    ----
  *                                                                     175 + 2*14 padding = 203
  */
-export function TableTile({
-  tile,
-}: {
-  tile: Extract<Tile, { kind: 'table' }>
-  width: number
-  height: number
-}) {
+export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) {
   const { table } = tile
   const from = Math.max(0, table.columns.length - TABLE_COLS_SHOWN)
   const columns = table.columns.slice(from)
   return (
     <View style={styles.root}>
-      <Text style={styles.head} numberOfLines={2}>
+      <Text style={styles.head} numberOfLines={TABLE_TITLE_LINES}>
         {table.title !== '' ? table.title : 'Statement'}
       </Text>
       <View style={styles.headRow}>
@@ -73,7 +71,7 @@ export function TableTile({
         </View>
       ))}
       {table.note !== '' ? (
-        <Text style={styles.note} numberOfLines={2}>
+        <Text style={styles.note} numberOfLines={TABLE_NOTE_LINES}>
           {table.note}
         </Text>
       ) : null}
@@ -98,6 +96,10 @@ const styles = StyleSheet.create({
   headRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    // Given as a height rather than left to 4 + the head line + 3 + a hairline to add up on their
+    // own, so the row the estimator reserved and the row this draws are the same number — the
+    // rule every other block on this tile already follows.
+    height: TABLE_HEAD_ROW_H,
     paddingTop: space.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,

@@ -3,6 +3,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import {
   demoCache,
+  isDemo,
   INITIAL_EDITION_MACHINE,
   nextEditionState,
   type EditionEvent,
@@ -81,7 +82,10 @@ describe('nextEditionState — the URL', () => {
     expect(m.url).toBe('')
     expect(m.state.status).toBe('ready')
     if (m.state.status !== 'ready') throw new Error('unreachable')
-    expect(m.state.demo).toBe(true)
+    // The INVARIANT and not a flag: the demo is the entry whose URL is empty, which is also what
+    // makes `fetchedAt` 0 and so leaves the freshness line off.
+    expect(isDemo(m.state.cached)).toBe(true)
+    expect(m.state.cached.url).toBe('')
     expect(m.state.refreshing).toBe(false)
     expect(m.state.error).toBeNull()
     expect(m.state.cached.edition.subject.symbol).toBe('SNDK') // the bundled demo
@@ -111,7 +115,7 @@ describe('nextEditionState — the URL', () => {
   it('switches from a real URL to the demo when the URL is cleared', () => {
     const ready = run(INITIAL_EDITION_MACHINE, { type: 'url', url: URL }, { type: 'cache', cached: cache() })
     const m = nextEditionState(ready, { type: 'url', url: '' })
-    expect(m.state.status === 'ready' && m.state.demo).toBe(true)
+    expect(m.state.status === 'ready' && isDemo(m.state.cached)).toBe(true)
   })
 })
 
@@ -120,7 +124,7 @@ describe('nextEditionState — the cache', () => {
     const m = run(INITIAL_EDITION_MACHINE, { type: 'url', url: URL }, { type: 'cache', cached: cache() })
     expect(m.state.status).toBe('ready')
     if (m.state.status !== 'ready') throw new Error('unreachable')
-    expect(m.state.demo).toBe(false)
+    expect(isDemo(m.state.cached)).toBe(false)
     expect(m.state.refreshing).toBe(true)
     expect(m.state.error).toBeNull()
     expect(m.state.cached.fetchedAt).toBe(1000)
@@ -167,7 +171,7 @@ describe('nextEditionState — a fetch that succeeded', () => {
     })
     expect(m.state.refreshing).toBe(false)
     expect(m.state.error).toBeNull()
-    expect(m.state.demo).toBe(false)
+    expect(isDemo(m.state.cached)).toBe(false)
   })
 
   it('clears a banner left by an earlier failure', () => {
@@ -199,7 +203,7 @@ describe('nextEditionState — a fetch that succeeded', () => {
       { type: 'url', url: URL },
       { type: 'fetched', result: ok('SNDK', null), url: URL, fetchedAt: 10 },
     )
-    expect(m.state.status === 'ready' && m.state.demo).toBe(false)
+    expect(m.state.status === 'ready' && isDemo(m.state.cached)).toBe(false)
   })
 
   it('discards a response for a URL that is no longer the one on screen', () => {
@@ -377,12 +381,17 @@ describe('the spec’s error-handling table, the row that crosses two modules', 
   })
 })
 
-describe('demoCache', () => {
+describe('demoCache and isDemo', () => {
   it('is the bundled edition, stamped as never confirmed', () => {
     const c = demoCache()
     expect(c.url).toBe('')
     expect(c.etag).toBeNull()
     expect(c.fetchedAt).toBe(0)
     expect(c.edition.stories).toHaveLength(4)
+  })
+
+  it('reads the demo off the entry itself, so the two can never disagree', () => {
+    expect(isDemo(demoCache())).toBe(true)
+    expect(isDemo({ url: URL, etag: null, fetchedAt: 1, edition: demoCache().edition })).toBe(false)
   })
 })

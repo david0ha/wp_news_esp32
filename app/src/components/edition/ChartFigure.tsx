@@ -1,6 +1,7 @@
 import Svg, { Polyline, Rect } from 'react-native-svg'
 import { colors } from '../../theme'
 import { changeTone } from '../../lib/edition/format'
+import { polylinePoints } from '../../lib/polyline'
 import { type EditionChart } from '../../lib/edition/types'
 import { toneGraphicsColor } from './tone'
 import { barLayout } from './tiles/bars'
@@ -45,22 +46,21 @@ export function ChartFigure({
   )
 }
 
-/** The gap between two bars, in pixels. `barLayout` takes it out of the width. */
-const BAR_GAP = 3
-
 /**
- * Bars as SVG rects, drawn from the baseline up. The scaling is `barLayout`, which is pure and
- * tested — see `tiles/bars.ts` for why scaling a bar chart from zero rather than from its own
- * minimum is the decision worth a test.
+ * Bars as SVG rects, drawn from the baseline up. The scaling AND the fit are `barLayout`, which
+ * is pure and tested — see `tiles/bars.ts` for why a bar chart is measured from zero, and why the
+ * gap it hands back has to be the one used to place the bars: a dense series is fitted by
+ * spending the gap, so a caller that placed on its own preferred 3 px would push the newest bars
+ * straight back out of the `<Svg>` this was written to keep them inside.
  */
 function Bars({ values, width, height }: { values: number[]; width: number; height: number }) {
-  const { barWidth, heights } = barLayout(values, width, height, BAR_GAP)
+  const { barWidth, gap, heights } = barLayout(values, width, height)
   return (
     <>
       {heights.map((barHeight, i) => (
         <Rect
           key={i}
-          x={i * (barWidth + BAR_GAP)}
+          x={i * (barWidth + gap)}
           y={height - barHeight}
           width={barWidth}
           height={barHeight}
@@ -73,30 +73,22 @@ function Bars({ values, width, height }: { values: number[]; width: number; heig
 }
 
 /**
- * The same polyline `Sparkline` draws, inlined so both kinds share one `<Svg>` and one box. Fewer
- * than two drawable points draws nothing and keeps the space, so the plot never collapses and the
- * tile below it never moves up.
+ * The same polyline `Sparkline` draws — the arithmetic is `lib/polyline.ts`, shared with it, so a
+ * chart and the sparkline beside it cannot end up with different insets. This owns only the
+ * `<Svg>`-less markup, because a `bar` and a `line` share one box on this component.
+ *
+ * Fewer than two drawable points draws nothing and keeps the space, so the plot never collapses
+ * and the tile below it never moves up.
  */
 function Line({ values, width, height }: { values: number[]; width: number; height: number }) {
+  const points = polylinePoints(values, width, height)
+  if (points === '') return null
+
+  // The stroke is the SERIES' OWN DIRECTION — its last close against its first — read off the
+  // same non-finite filter the points were plotted through, so the colour describes the line that
+  // was actually drawn.
   const usable = values.filter((v) => Number.isFinite(v))
-  if (usable.length < 2) return null
-
-  const first = usable[0]
-  const last = usable[usable.length - 1]
-  const stroke = toneGraphicsColor(changeTone(last - first))
-
-  const min = Math.min(...usable)
-  const max = Math.max(...usable)
-  const span = max - min
-  // x across [1, width-1] and y across [height-2, 2], so a 2 px stroke has room for its own
-  // width at the extremes instead of being clipped in half by the viewport.
-  const points = usable
-    .map((v, i) => {
-      const x = 1 + (i * (width - 2)) / (usable.length - 1)
-      const y = span === 0 ? height / 2 : height - 2 - ((v - min) * (height - 4)) / span
-      return `${x},${y}`
-    })
-    .join(' ')
+  const stroke = toneGraphicsColor(changeTone(usable[usable.length - 1] - usable[0]))
 
   return (
     <Polyline

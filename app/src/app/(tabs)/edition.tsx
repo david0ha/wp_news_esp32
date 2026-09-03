@@ -6,7 +6,9 @@ import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masthead } from '../../components/edition/Masthead'
 import { ChipRow } from '../../components/edition/ChipRow'
 import { Masonry } from '../../components/edition/Masonry'
+import { EditionUrlProvider } from '../../components/edition/editionUrl'
 import { PhotoTile } from '../../components/edition/tiles/PhotoTile'
+import { isDemo } from '../../lib/edition/editionState'
 import { useEdition } from '../../lib/edition/useEdition'
 import { freshnessLabel } from '../../lib/edition/freshness'
 import {
@@ -66,11 +68,12 @@ export default function EditionScreen() {
     void refresh({ fresh: true })
   }, [refresh])
 
+  // The id is the producer's own (`story:0`, `figures:1`) and travels in a path segment, so it is
+  // encoded here and decoded by the router on the other side. STABLE ACROSS RENDERS, and that is
+  // what it is for: it reaches every `EditionTile`, which is `React.memo`, so a fresh identity on
+  // each render of this screen — every refresh spinner, every chip tap — would re-render every
+  // tile on the page, SVG charts and decoded photographs included.
   const openTile = useCallback(
-    // The id is the producer's own (`story:0`, `figures:1`) and travels in a path segment, so it
-    // is encoded here and decoded by the router on the other side. Takes the whole tile, so this
-    // is `Masonry`'s `onPress` verbatim — an inline arrow that unwrapped it would allocate a new
-    // callback every render and spend the memo it was written for.
     (t: Tile) => router.push(`/tile/${encodeURIComponent(t.id)}`),
     [router],
   )
@@ -98,66 +101,60 @@ export default function EditionScreen() {
 
   return (
     <Screen edges={['top']}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={
-          <RefreshControl
-            refreshing={state.refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.accent}
+      {/* Where this edition came from, named once for the photographs three levels down. */}
+      <EditionUrlProvider url={state.cached.url}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={state.refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.accent}
+            />
+          }
+        >
+          <Masthead
+            edition={state.cached.edition}
+            demo={isDemo(state.cached)}
+            freshness={freshnessLabel(state.cached.fetchedAt, Date.now())}
+            error={state.error}
+            onRetry={onRefresh}
+            onPressSymbol={() => {
+              // Guarded here as well as in the masthead, which only offers the press when there is
+              // a symbol: `/market/` with nothing after it matches no route and this app has no
+              // `+not-found`, so the push would be a dead screen rather than a no-op.
+              const symbol = state.cached.edition.subject.symbol
+              if (symbol === '') return
+              router.push(`/market/${encodeURIComponent(symbol)}`)
+            }}
           />
-        }
-      >
-        <Masthead
-          edition={state.cached.edition}
-          demo={state.demo}
-          freshness={freshnessLabel(state.cached.fetchedAt, Date.now())}
-          error={state.error}
-          onRetry={onRefresh}
-          onPressSymbol={() => {
-            // Guarded here as well as in the masthead, which only offers the press when there is
-            // a symbol: `/market/` with nothing after it matches no route and this app has no
-            // `+not-found`, so the push would be a dead screen rather than a no-op.
-            const symbol = state.cached.edition.subject.symbol
-            if (symbol === '') return
-            router.push(`/market/${encodeURIComponent(symbol)}`)
-          }}
-        />
 
-        {/* The band: the lead photograph, too wide for a column, run across the page instead. It
-            is a `PhotoTile` at full width — same fetch, same decode, same silent failure — inside
-            a frame that owns the radius, because `PhotoTile` sets none of its own. */}
-        {band !== null ? (
-          <View style={styles.band}>
-            <View style={styles.bandFrame}>
-              <PhotoTile
-                // Keyed by the edition, like every tile in the masonry: the lead band is 1140x320
-                // under the same id every edition, so without this the reused mount keeps
-                // yesterday's photograph under today's headline.
-                key={`${key}:band`}
-                tile={{ kind: 'photo', id: 'band', photo: band }}
-                width={contentWidth}
-                height={photoBoxHeight(band, contentWidth)}
-                newsUrl={state.cached.url}
-              />
+          {/* The band: the lead photograph, too wide for a column, run across the page instead. It
+              is a `PhotoTile` at full width — same fetch, same decode, same silent failure — inside
+              a frame that owns the radius, because `PhotoTile` sets none of its own. */}
+          {band !== null ? (
+            <View style={styles.band}>
+              <View style={styles.bandFrame}>
+                <PhotoTile
+                  // Keyed by the edition, like every tile in the masonry: the lead band is 1140x320
+                  // under the same id every edition, so without this the reused mount keeps
+                  // yesterday's photograph under today's headline.
+                  key={`${key}:band`}
+                  tile={{ kind: 'photo', id: 'band', photo: band }}
+                  width={contentWidth}
+                  height={photoBoxHeight(band, contentWidth)}
+                />
+              </View>
             </View>
+          ) : null}
+
+          <ChipRow chips={chips} selected={active} onSelect={setChip} />
+
+          <View style={styles.grid}>
+            <Masonry tiles={tiles} colWidth={colWidth} editionKey={key} onPress={openTile} />
           </View>
-        ) : null}
-
-        <ChipRow chips={chips} selected={active} onSelect={setChip} />
-
-        <View style={styles.grid}>
-          <Masonry
-            tiles={tiles}
-            colWidth={colWidth}
-            newsUrl={state.cached.url}
-            editionKey={key}
-            gutter={COLUMN_GAP}
-            columns={2}
-            onPress={openTile}
-          />
-        </View>
-      </ScrollView>
+        </ScrollView>
+      </EditionUrlProvider>
     </Screen>
   )
 }

@@ -1,6 +1,7 @@
 // Pure display formatters for the dashboard. Kept tiny and testable so the same number is
 // rendered the same way everywhere and nothing throws on the board's loosely-typed JSON.
 
+import { MONTHS } from './months'
 import { SLEEP_SECONDS_DEFAULT, type NewsFetchResult, type PollSource, type SleepSource } from './esp32'
 
 /** The value that means "the board's own built-in interval" — POST /api/sleep's `0`. */
@@ -200,7 +201,6 @@ export function sleepSourceLabel(source: SleepSource): string {
   }
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /**
  * `news.generatedAt` — the producer's own timestamp — as a line a reader can compare with the

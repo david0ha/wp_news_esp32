@@ -7,8 +7,7 @@ import {
   FIGURES_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
-import { changeArrow, changeTone, formatPct } from '../../../lib/edition/format'
-import { toneTextColor } from '../tone'
+import { Change } from '../Change'
 
 /**
  * One group of figures — VALUATION, PER SHARE, THE STREET — as label/value rows.
@@ -21,44 +20,26 @@ import { toneTextColor } from '../tone'
  * same question. It still gets `tabular`, because a figure that changes tomorrow should not
  * shift the column it sits in.
  */
-export function FiguresTile({
-  tile,
-}: {
-  tile: Extract<Tile, { kind: 'figures' }>
-  width: number
-  height: number
-}) {
+export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }> }) {
   const rest = tile.figures.length - FIGURES_SHOWN
   return (
     <View style={styles.root}>
       <Text style={styles.head} numberOfLines={1}>
         {tile.group !== '' ? tile.group : 'Figures'}
       </Text>
-      {tile.figures.slice(0, FIGURES_SHOWN).map((f, i) => {
-        const tone = changeTone(f.changePct)
-        const arrow = changeArrow(f.changePct)
-        return (
-          <View key={`${f.label}:${i}`} style={styles.row}>
-            <Text style={styles.label} numberOfLines={1}>
-              {f.label}
+      {tile.figures.slice(0, FIGURES_SHOWN).map((f, i) => (
+        <View key={`${f.label}:${i}`} style={styles.row}>
+          <Text style={styles.label} numberOfLines={1}>
+            {f.label}
+          </Text>
+          <View style={styles.valueBox}>
+            <Text style={[f.emph ? styles.valueEmph : styles.value, tabular]} numberOfLines={1}>
+              {f.value}
             </Text>
-            <View style={styles.valueBox}>
-              <Text style={[f.emph ? styles.valueEmph : styles.value, tabular]} numberOfLines={1}>
-                {f.value}
-              </Text>
-              {f.changePct !== null ? (
-                <Text
-                  style={[styles.change, tabular, { color: toneTextColor(tone) }]}
-                  numberOfLines={1}
-                >
-                  {arrow !== '' ? `${arrow} ` : ''}
-                  {formatPct(f.changePct)}
-                </Text>
-              ) : null}
-            </View>
+            {f.changePct !== null ? <Change pct={f.changePct} /> : null}
           </View>
-        )
-      })}
+        </View>
+      ))}
       {rest > 0 ? <Text style={styles.more}>{`+${rest} more`}</Text> : null}
     </View>
   )
@@ -95,10 +76,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.extrabold,
     fontSize: 15,
     color: colors.text,
-  },
-  change: {
-    fontFamily: fonts.semibold,
-    fontSize: 12,
   },
   more: {
     fontFamily: fonts.semibold,

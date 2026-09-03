@@ -5,6 +5,7 @@ import { Screen } from '../../components/Screen'
 import { BackButton } from '../../components/BackButton'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masonry } from '../../components/edition/Masonry'
+import { EditionUrlProvider } from '../../components/edition/editionUrl'
 import { TileDetail } from '../../components/edition/detail/TileDetail'
 import { getNewsUrl } from '../../lib/store'
 import { getCurrentEdition, readCachedEdition, type CachedEdition } from '../../lib/edition/store'
@@ -99,6 +100,8 @@ export default function TileDetailRoute() {
   const rest: Tile[] = feed === null ? [] : feed.tiles.filter((t) => t.id !== id)
   const colWidth = columnWidth(width, layout.gutter, COLUMN_GAP)
 
+  // Stable across renders, for the same reason the Today tab's is: it is handed to every
+  // `React.memo`'d `EditionTile` in the masonry below.
   const openTile = useCallback(
     (t: Tile) => router.push(`/tile/${encodeURIComponent(t.id)}`),
     [router],
@@ -142,29 +145,19 @@ export default function TileDetailRoute() {
   return (
     <Screen>
       {header}
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <TileDetail
-          tile={tile}
-          edition={cached.edition}
-          newsUrl={cached.url}
-          editionKey={key}
-          width={width}
-        />
-        {rest.length > 0 ? (
-          <View style={styles.more}>
-            <Text style={type.headingSm}>More from this edition</Text>
-            <Masonry
-              tiles={rest}
-              colWidth={colWidth}
-              newsUrl={cached.url}
-              editionKey={key}
-              gutter={COLUMN_GAP}
-              columns={2}
-              onPress={openTile}
-            />
-          </View>
-        ) : null}
-      </ScrollView>
+      {/* This page's photographs come from the edition on screen, which may be the one read off
+          disk by a cold deep link rather than the tab's — so the address is this entry's own. */}
+      <EditionUrlProvider url={cached.url}>
+        <ScrollView contentContainerStyle={styles.scroll}>
+          <TileDetail tile={tile} edition={cached.edition} editionKey={key} width={width} />
+          {rest.length > 0 ? (
+            <View style={styles.more}>
+              <Text style={type.headingSm}>More from this edition</Text>
+              <Masonry tiles={rest} colWidth={colWidth} editionKey={key} onPress={openTile} />
+            </View>
+          ) : null}
+        </ScrollView>
+      </EditionUrlProvider>
     </Screen>
   )
 }

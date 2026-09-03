@@ -56,13 +56,7 @@ const STAT_VALUE_LINE = 17
  * inside a range is neither a direction nor a series, so it takes neither colour; that is the
  * firmware's rule for a hero figure's range bar, carried over unchanged.
  */
-export function RangeTile({
-  tile,
-}: {
-  tile: Extract<Tile, { kind: 'range' }>
-  width: number
-  height: number
-}) {
+export function RangeTile({ tile }: { tile: Extract<Tile, { kind: 'range' }> }) {
   const s = tile.subject
   return (
     <View style={styles.root}>

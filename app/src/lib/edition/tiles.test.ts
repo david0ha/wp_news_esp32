@@ -1,8 +1,7 @@
 import { describe, it, expect } from '@jest/globals'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { parseEdition } from './parse'
-import { emptyEdition } from './parse'
+import { emptyEdition, parseEdition } from './parse'
 import {
   availableChips,
   CHIPS,

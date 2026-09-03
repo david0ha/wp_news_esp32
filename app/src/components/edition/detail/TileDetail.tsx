@@ -1,9 +1,11 @@
+import { type ReactNode } from 'react'
 import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Sparkline } from '../../Sparkline'
 import { ChartFigure } from '../ChartFigure'
 import { PhotoTile } from '../tiles/PhotoTile'
-import { toneGraphicsColor, toneTextColor } from '../tone'
-import { changeArrow, changeTone, formatPct, formatPrice } from '../../../lib/edition/format'
+import { Change } from '../Change'
+import { toneGraphicsColor } from '../tone'
+import { changeTone, formatPrice } from '../../../lib/edition/format'
 import { photoBoxHeight } from '../../../lib/edition/feedLayout'
 import { type Tile } from '../../../lib/edition/tiles'
 import { type Edition, type EditionChart, type EditionPhoto } from '../../../lib/edition/types'
@@ -24,21 +26,19 @@ import { colors, fonts, layout, radius, space, tabular, type } from '../../../th
  * grid is the one thing here measured in pixels, and only across — its columns are fixed widths
  * so the periods line up under their headings, and it scrolls sideways rather than shrinking.
  *
- * Colour follows the same two rules as everywhere else. A percentage change takes the text pair
- * through `toneTextColor`, a drawn line takes the graphics pair through `toneGraphicsColor`, and
- * every other mark on the page — headings, rules, statement cells, the credit under a photograph
- * — is ink.
+ * Colour follows the same two rules as everywhere else. A percentage change takes the text pair,
+ * inside the shared `Change`; a drawn line takes the graphics pair through `toneGraphicsColor`;
+ * and every other mark on the page — headings, rules, statement cells, the credit under a
+ * photograph — is ink.
  */
 export function TileDetail({
   tile,
   edition,
-  newsUrl,
   editionKey,
   width,
 }: {
   tile: Tile
   edition: Edition
-  newsUrl: string
   /**
    * Which edition this is, from `feedLayout.ts`'s `editionKey`. Only the photograph needs it, and
    * it needs it for the same reason the masonry's tiles do: a photo id repeats across editions,
@@ -66,7 +66,6 @@ export function TileDetail({
               key={`${editionKey}:${story.photo.id}`}
               photo={story.photo}
               width={contentWidth}
-              newsUrl={newsUrl}
             />
           ) : null}
           {chart !== undefined ? <ChartBlock chart={chart} width={contentWidth} /> : null}
@@ -110,7 +109,6 @@ export function TileDetail({
             key={`${editionKey}:${tile.photo.id}`}
             photo={tile.photo}
             width={contentWidth}
-            newsUrl={newsUrl}
           />
         </View>
       )
@@ -160,26 +158,21 @@ export function TileDetail({
           <Text style={type.heading}>Peers</Text>
           <View>
             {tile.peers.map((p) => (
-              <View key={p.symbol} style={styles.peer}>
-                <View style={styles.peerName}>
-                  {/* The subject's own row is set in the extrabold face. That emphasis is weight
-                      and not colour: colour on this page means a direction, and being the company
-                      the edition is about is not a direction. */}
-                  <Text style={p.isSubject ? styles.peerSymbolSubject : styles.peerSymbol}>
-                    {p.symbol}
-                  </Text>
-                  {p.name !== '' ? <Text style={type.caption}>{p.name}</Text> : null}
-                </View>
-                <View style={styles.peerNums}>
-                  <Text style={[styles.value, tabular]}>{formatPrice(p.last)}</Text>
-                  <Change pct={p.changePct} />
-                </View>
-                {/* Preformatted by the producer — "22.4x", "$241.6B" — and rendered verbatim. */}
-                <View style={styles.peerRatios}>
-                  <Text style={[type.caption, tabular]}>{p.per}</Text>
-                  <Text style={[type.caption, tabular]}>{p.cap}</Text>
-                </View>
-              </View>
+              <QuoteRow
+                key={p.symbol}
+                symbol={p.symbol}
+                name={p.name}
+                subject={p.isSubject}
+                last={p.last}
+                changePct={p.changePct}
+                trailing={
+                  /* Preformatted by the producer — "22.4x", "$241.6B" — rendered verbatim. */
+                  <View style={styles.peerRatios}>
+                    <Text style={[type.caption, tabular]}>{p.per}</Text>
+                    <Text style={[type.caption, tabular]}>{p.cap}</Text>
+                  </View>
+                }
+              />
             ))}
           </View>
         </View>
@@ -234,26 +227,25 @@ export function TileDetail({
           <Text style={type.heading}>The tape</Text>
           <View>
             {tile.indices.map((ix) => (
-              <View key={ix.symbol} style={styles.peer}>
-                <View style={styles.peerName}>
-                  <Text style={styles.peerSymbol}>{ix.symbol}</Text>
-                  {ix.name !== '' ? <Text style={type.caption}>{ix.name}</Text> : null}
-                </View>
-                {/* `Sparkline` and not `ChartFigure`, because an index's `spark` is a bare array
-                    of closes with no `kind` behind it. `ChartFigure` exists so a tapped BAR chart
-                    opens as a bar chart; there is no such choice to get wrong here, and the tape
-                    tile draws the same polyline in the same graphics pair. */}
-                <Sparkline
-                  data={ix.spark}
-                  width={72}
-                  height={28}
-                  stroke={toneGraphicsColor(changeTone(ix.changePct))}
-                />
-                <View style={styles.peerNums}>
-                  <Text style={[styles.value, tabular]}>{formatPrice(ix.last)}</Text>
-                  <Change pct={ix.changePct} />
-                </View>
-              </View>
+              <QuoteRow
+                key={ix.symbol}
+                symbol={ix.symbol}
+                name={ix.name}
+                last={ix.last}
+                changePct={ix.changePct}
+                middle={
+                  /* `Sparkline` and not `ChartFigure`, because an index's `spark` is a bare array
+                     of closes with no `kind` behind it. `ChartFigure` exists so a tapped BAR chart
+                     opens as a bar chart; there is no such choice to get wrong here, and the tape
+                     tile draws the same polyline in the same graphics pair. */
+                  <Sparkline
+                    data={ix.spark}
+                    width={72}
+                    height={28}
+                    stroke={toneGraphicsColor(changeTone(ix.changePct))}
+                  />
+                }
+              />
             ))}
           </View>
         </View>
@@ -269,15 +261,7 @@ export function TileDetail({
  * wrong here: this page has room for the whole sentence, and a caption both over the picture and
  * under it is the same string twice. The producer's text still renders verbatim, in one place.
  */
-function DetailPhoto({
-  photo,
-  width,
-  newsUrl,
-}: {
-  photo: EditionPhoto
-  width: number
-  newsUrl: string
-}) {
+function DetailPhoto({ photo, width }: { photo: EditionPhoto; width: number }) {
   return (
     <View style={styles.photoBlock}>
       {/* The rounded frame lives on this wrapper. `PhotoTile` sets no radius of its own — inside
@@ -287,7 +271,6 @@ function DetailPhoto({
           tile={{ kind: 'photo', id: `detail:${photo.id}`, photo: { ...photo, caption: '' } }}
           width={width}
           height={photoBoxHeight(photo, width)}
-          newsUrl={newsUrl}
         />
       </View>
       {photo.caption !== '' ? <Text style={type.body}>{photo.caption}</Text> : null}
@@ -326,15 +309,51 @@ function ChartBlock({
   )
 }
 
-/** A percentage change: unsigned, with the arrow and the colour saying which way. */
-function Change({ pct }: { pct: number | null }) {
-  const tone = changeTone(pct)
-  const arrow = changeArrow(pct)
+/**
+ * ONE ROW FOR A QUOTED THING — a peer, or an index on the tape.
+ *
+ * They were written twice and were the same row: a symbol over a name, a price with its change
+ * beside it, and one slot each. The tape puts a sparkline in the middle and the peers put the
+ * producer's ratios on the end, which is the whole difference — so it is two slots rather than
+ * two components, because a second copy is how the two came to disagree about a rule that
+ * belongs to both.
+ *
+ * `subject` is the extrabold face on the company the edition is about. That emphasis is WEIGHT
+ * and not colour: colour on this page means a direction, and being the subject is not a
+ * direction.
+ */
+function QuoteRow({
+  symbol,
+  name,
+  subject = false,
+  last,
+  changePct,
+  middle = null,
+  trailing = null,
+}: {
+  symbol: string
+  name: string
+  subject?: boolean
+  last: number | null
+  changePct: number | null
+  /** Between the name and the numbers — the tape's sparkline. */
+  middle?: ReactNode
+  /** After the numbers — the peers' per and cap. */
+  trailing?: ReactNode
+}) {
   return (
-    <Text style={[styles.change, tabular, { color: toneTextColor(tone) }]}>
-      {arrow !== '' ? `${arrow} ` : ''}
-      {formatPct(pct)}
-    </Text>
+    <View style={styles.quoteRow}>
+      <View style={styles.quoteName}>
+        <Text style={subject ? styles.quoteSymbolSubject : styles.quoteSymbol}>{symbol}</Text>
+        {name !== '' ? <Text style={type.caption}>{name}</Text> : null}
+      </View>
+      {middle}
+      <View style={styles.quoteNums}>
+        <Text style={[styles.value, tabular]}>{formatPrice(last)}</Text>
+        <Change pct={changePct} size={13} style={styles.change} />
+      </View>
+      {trailing}
+    </View>
   )
 }
 
@@ -355,7 +374,9 @@ function Row({
     <View style={styles.row}>
       <Text style={[type.caption, styles.rowLabel]}>{label}</Text>
       <Text style={[emph ? styles.valueEmph : styles.value, tabular]}>{value}</Text>
-      {changePct !== undefined && changePct !== null ? <Change pct={changePct} /> : null}
+      {changePct !== undefined && changePct !== null ? (
+        <Change pct={changePct} size={13} style={styles.change} />
+      ) : null}
     </View>
   )
 }
@@ -395,8 +416,6 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   change: {
-    fontFamily: fonts.semibold,
-    fontSize: 13,
     minWidth: 68,
     textAlign: 'right',
   },
@@ -422,7 +441,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  peer: {
+  quoteRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
@@ -430,20 +449,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  peerName: {
+  quoteName: {
     flex: 1,
   },
-  peerSymbol: {
+  quoteSymbol: {
     fontFamily: fonts.medium,
     fontSize: 14,
     color: colors.text,
   },
-  peerSymbolSubject: {
+  quoteSymbolSubject: {
     fontFamily: fonts.extrabold,
     fontSize: 14,
     color: colors.text,
   },
-  peerNums: {
+  quoteNums: {
     alignItems: 'flex-end',
   },
   peerRatios: {

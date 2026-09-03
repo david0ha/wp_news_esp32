@@ -12,14 +12,20 @@
 // the honest result and not a bug to fix: a demo that shipped two hundred kilobytes of
 // base64 to look complete would be paying for a picture nobody asked for.
 
-import raw from './demo.json'
 import { parseEdition } from './parse'
 import { type Edition } from './types'
 
 let cached: Edition | null = null
 
-/** The bundled demo, parsed once. The result is shared, so treat it as read-only. */
+/**
+ * The bundled demo, loaded and parsed once. The result is shared, so treat it as read-only.
+ *
+ * The `require` is inside the function on purpose. A phone with a URL set — every phone past
+ * setup — never calls this, and a static import would still have Metro evaluate twenty kilobytes
+ * of object literal on every launch that reaches the tabs. The parse was already lazy; this makes
+ * the load lazy with it, so the demo costs nothing until it is the thing being shown.
+ */
 export function demoEdition(): Edition {
-  if (cached === null) cached = parseEdition(raw)
+  if (cached === null) cached = parseEdition(require('./demo.json'))
   return cached
 }

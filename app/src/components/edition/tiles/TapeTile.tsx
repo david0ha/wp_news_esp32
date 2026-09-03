@@ -1,49 +1,42 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { Sparkline } from '../../Sparkline'
-import { colors, fonts, space, tabular, type } from '../../../theme'
+import { colors, fonts, space, type } from '../../../theme'
 import {
   TILE_HEAD,
   TAPE_ROW,
   TAPE_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
-import { changeArrow, changeTone, formatPct } from '../../../lib/edition/format'
-import { toneGraphicsColor, toneTextColor } from '../tone'
+import { changeTone } from '../../../lib/edition/format'
+import { Change } from '../Change'
+import { toneGraphicsColor } from '../tone'
 
 /**
  * The tape: up to five indices, each with its own direction. The row height and the count come
  * from `lib/edition/tiles.ts`, which is what `estimateTileHeight` sized this tile with.
  *
- * The sparkline takes the graphics pair and the percentage takes the text pair, from the same
- * `changeTone` — so a row's stroke and its number can never disagree about which way the market
- * went.
+ * The sparkline takes the graphics pair from `changeTone` and the percentage takes the text pair
+ * inside `Change` — one direction, read twice from the same number, so a row's stroke and its
+ * figure can never disagree about which way the market went.
  */
-export function TapeTile({
-  tile,
-}: {
-  tile: Extract<Tile, { kind: 'tape' }>
-  width: number
-  height: number
-}) {
+export function TapeTile({ tile }: { tile: Extract<Tile, { kind: 'tape' }> }) {
   return (
     <View style={styles.root}>
       <Text style={styles.head}>The tape</Text>
-      {tile.indices.slice(0, TAPE_SHOWN).map((ix) => {
-        const tone = changeTone(ix.changePct)
-        const arrow = changeArrow(ix.changePct)
-        return (
-          <View key={ix.symbol} style={styles.row}>
-            <Text style={styles.symbol} numberOfLines={1}>
-              {ix.symbol}
-            </Text>
-            <Sparkline data={ix.spark} width={42} height={18} stroke={toneGraphicsColor(tone)} />
-            <Text style={[styles.change, tabular, { color: toneTextColor(tone) }]} numberOfLines={1}>
-              {arrow !== '' ? `${arrow} ` : ''}
-              {formatPct(ix.changePct)}
-            </Text>
-          </View>
-        )
-      })}
+      {tile.indices.slice(0, TAPE_SHOWN).map((ix) => (
+        <View key={ix.symbol} style={styles.row}>
+          <Text style={styles.symbol} numberOfLines={1}>
+            {ix.symbol}
+          </Text>
+          <Sparkline
+            data={ix.spark}
+            width={42}
+            height={18}
+            stroke={toneGraphicsColor(changeTone(ix.changePct))}
+          />
+          <Change pct={ix.changePct} style={styles.change} />
+        </View>
+      ))}
     </View>
   )
 }
@@ -67,8 +60,6 @@ const styles = StyleSheet.create({
     color: colors.textDim,
   },
   change: {
-    fontFamily: fonts.semibold,
-    fontSize: 12,
     width: 62,
     textAlign: 'right',
   },

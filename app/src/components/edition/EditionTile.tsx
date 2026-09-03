@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { memo, useRef } from 'react'
 import { Animated, Pressable, StyleSheet } from 'react-native'
 import { colors, radius } from '../../theme'
 import { TILE_PADDING, type Tile } from '../../lib/edition/tiles'
@@ -24,20 +24,23 @@ import { TapeTile } from './tiles/TapeTile'
  * The height comes in as a prop and is never measured. `estimateTileHeight` decided it before
  * anything rendered, which is what stops the page reflowing and what lets a return from the
  * detail land on the same scroll position.
+ *
+ * MEMOISED, AND `onPress` TAKES THE TILE. The screen above the masonry owns the refresh spinner,
+ * the chip row and the freshness line, so it re-renders on things no tile can see — and without
+ * the memo each of those re-rendered every SVG chart and every decoded photograph on the page.
+ * The memo only holds if the props are stable, which is why the press handler arrives as the
+ * feed's one tile-taking callback rather than as a closure built per tile per render.
  */
-export function EditionTile({
+export const EditionTile = memo(function EditionTile({
   tile,
   width,
   height,
-  newsUrl,
   onPress,
 }: {
   tile: Tile
   width: number
   height: number
-  /** For PhotoTile, which resolves its own bytes beside the payload. */
-  newsUrl: string
-  onPress: () => void
+  onPress: (t: Tile) => void
 }) {
   // RN core Animated on the native driver — the spec forbids reanimated, and a transform-only
   // scale is exactly what the native driver does well.
@@ -51,7 +54,7 @@ export function EditionTile({
       accessibilityLabel={tileLabel(tile)}
       onPressIn={() => to(0.97)}
       onPressOut={() => to(1)}
-      onPress={onPress}
+      onPress={() => onPress(tile)}
     >
       <Animated.View
         style={[
@@ -63,38 +66,43 @@ export function EditionTile({
           { width, height, transform: [{ scale }] },
         ]}
       >
-        {body(tile, width, height, newsUrl)}
+        {body(tile, width, height)}
       </Animated.View>
     </Pressable>
   )
-}
+})
 
 /**
- * Every body is handed the tile's OUTER box, not the padded content box, and subtracts
- * `TILE_PADDING` itself where it needs a pixel figure (`ChartTile`'s plot). One rule for all nine
- * beats a second set of dimensions that would be right for eight of them and wrong for the
- * photograph, which has no padding to subtract.
+ * A body that measures anything is handed the tile's OUTER box, not the padded content box, and
+ * subtracts `TILE_PADDING` itself where it needs a pixel figure (`ChartTile`'s plot). One rule
+ * for the three that measure beats a second set of dimensions that would be right for two of them
+ * and wrong for the photograph, which has no padding to subtract.
+ *
+ * The other six take the tile alone. Their bodies are rows and headings whose heights are
+ * `tiles.ts`'s constants — the same ones `estimateTileHeight` sized the box with — so the box's
+ * own pixels are a number they must NOT read: a body that measured would be a second opinion
+ * about a height the estimator has already decided.
  */
-function body(tile: Tile, width: number, height: number, newsUrl: string) {
+function body(tile: Tile, width: number, height: number) {
   switch (tile.kind) {
     case 'story':
-      return <StoryTile tile={tile} width={width} height={height} />
+      return <StoryTile tile={tile} height={height} />
     case 'range':
-      return <RangeTile tile={tile} width={width} height={height} />
+      return <RangeTile tile={tile} />
     case 'chart':
       return <ChartTile tile={tile} width={width} height={height} />
     case 'photo':
-      return <PhotoTile tile={tile} width={width} height={height} newsUrl={newsUrl} />
+      return <PhotoTile tile={tile} width={width} height={height} />
     case 'figures':
-      return <FiguresTile tile={tile} width={width} height={height} />
+      return <FiguresTile tile={tile} />
     case 'briefs':
-      return <BriefsTile tile={tile} width={width} height={height} />
+      return <BriefsTile tile={tile} />
     case 'peers':
-      return <PeersTile tile={tile} width={width} height={height} />
+      return <PeersTile tile={tile} />
     case 'table':
-      return <TableTile tile={tile} width={width} height={height} />
+      return <TableTile tile={tile} />
     case 'tape':
-      return <TapeTile tile={tile} width={width} height={height} />
+      return <TapeTile tile={tile} />
   }
 }
 

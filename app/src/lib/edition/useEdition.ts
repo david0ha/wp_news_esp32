@@ -88,10 +88,11 @@ export function useEdition(): {
         await written
         return
       }
-      // A 304 moves only the timestamp, and the entry it moves has to be read and rewritten
-      // first, so this one is awaited: there is no new content waiting behind it.
-      await touchCachedEdition(fetchedAt)
-      if (seqRef.current !== seq) return
+      // A 304 moves only the timestamp, and it moves it in memory: there is no content to write,
+      // and re-serialising a twenty-kilobyte edition to carry one integer to disk is the most
+      // expensive possible answer to the poll that found nothing new. Synchronous, so nothing
+      // between the guard above and the dispatch below can go stale.
+      touchCachedEdition(fetchedAt)
       dispatch({ type: 'fetched', result, url, fetchedAt })
     } catch (e) {
       if (seqRef.current !== seq) return

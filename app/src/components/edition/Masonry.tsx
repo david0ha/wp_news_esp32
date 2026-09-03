@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { EditionTile } from './EditionTile'
+import { COLUMN_GAP } from '../../lib/edition/feedLayout'
 import { splitColumns, type Tile } from '../../lib/edition/tiles'
 
 /**
@@ -13,6 +15,18 @@ import { splitColumns, type Tile } from '../../lib/edition/tiles'
  * The placement itself is `splitColumns`, which is pure and tested. This component only turns
  * the two arrays it returns into two `View`s.
  *
+ * TWO COLUMNS AND `COLUMN_GAP`, NOT PROPS. Both call sites passed exactly those, and the width
+ * they pass in `colWidth` was computed by `columnWidth` from the same two numbers — so a caller
+ * that overrode either would have produced columns that did not add up to the page. The one
+ * number is imported from `feedLayout.ts`, where the width already comes from.
+ *
+ * THE PLACEMENT IS MEMOISED AND THE TILES ARE `React.memo`, because this component re-renders on
+ * things that have nothing to do with it: the screen above it owns the pull-to-refresh spinner,
+ * the chip row and the freshness line, and every one of those state changes used to re-run
+ * `splitColumns` and re-render every tile — SVG charts and decoded photographs included. The
+ * `onPress` that comes in takes the TILE rather than being closed over one, so it is stable
+ * across renders and the memo actually holds.
+ *
  * EVERY TILE IS KEYED BY THE EDITION AS WELL AS BY ITS OWN ID. A tile id is the producer's and
  * repeats across days — `photo:0` is `photo:0` every edition — so an id alone tells React that
  * tomorrow's tile is the same component as today's, and it reuses the mount. For a text tile that
@@ -23,34 +37,27 @@ import { splitColumns, type Tile } from '../../lib/edition/tiles'
 export function Masonry({
   tiles,
   colWidth,
-  newsUrl,
   editionKey,
-  gutter = 12,
-  columns = 2,
   onPress,
 }: {
   tiles: Tile[]
   colWidth: number
-  newsUrl: string
   /** Which edition these tiles came out of — `lib/edition/feedLayout.ts`'s `editionKey`. */
   editionKey: string
-  gutter?: number
-  columns?: number
   onPress: (t: Tile) => void
 }) {
-  const placed = splitColumns(tiles, colWidth, columns)
+  const placed = useMemo(() => splitColumns(tiles, colWidth), [tiles, colWidth])
   return (
-    <View style={[styles.row, { gap: gutter }]}>
+    <View style={[styles.row, { gap: COLUMN_GAP }]}>
       {placed.map((column, i) => (
-        <View key={i} style={[styles.column, { width: colWidth, gap: gutter }]}>
+        <View key={i} style={[styles.column, { width: colWidth, gap: COLUMN_GAP }]}>
           {column.map((p) => (
             <EditionTile
               key={`${editionKey}:${p.tile.id}`}
               tile={p.tile}
               width={colWidth}
               height={p.height}
-              newsUrl={newsUrl}
-              onPress={() => onPress(p.tile)}
+              onPress={onPress}
             />
           ))}
         </View>

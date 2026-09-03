@@ -19,13 +19,7 @@ import {
  * dot: "AUG 13 · GUIDANCE" is the dot-separated meta line this design bans, and two facts pushed
  * apart read faster than two facts glued together.
  */
-export function BriefsTile({
-  tile,
-}: {
-  tile: Extract<Tile, { kind: 'briefs' }>
-  width: number
-  height: number
-}) {
+export function BriefsTile({ tile }: { tile: Extract<Tile, { kind: 'briefs' }> }) {
   const rest = tile.briefs.length - BRIEFS_SHOWN
   return (
     <View style={styles.root}>

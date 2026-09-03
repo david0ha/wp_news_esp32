@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   __resetEditionStoreForTests,
-  clearCachedEdition,
   EDITION_CACHE_KEY,
   getCurrentEdition,
   readCachedEdition,
@@ -110,30 +109,37 @@ describe('the on-disk edition cache', () => {
     expect(await readCachedEdition()).toBeNull()
   })
 
-  it('touch moves only fetchedAt', async () => {
+  it('touch moves only fetchedAt, and only in memory', async () => {
     await writeCachedEdition(entry())
-    await touchCachedEdition(1_700_000_999_000)
-    __resetEditionStoreForTests()
-    const got = await readCachedEdition()
+    touchCachedEdition(1_700_000_999_000)
+    const got = getCurrentEdition()
     expect(got?.fetchedAt).toBe(1_700_000_999_000)
     expect(got?.etag).toBe('W/"abc"')
     expect(got?.url).toBe(URL)
     expect(got?.edition.subject.symbol).toBe('SNDK')
+    // The disk still carries the last 200's stamp: a confirmation that changed no content is not
+    // worth re-serialising the edition for. The screen reads the reducer's copy, not this one.
+    const raw = await AsyncStorage.getItem(EDITION_CACHE_KEY)
+    expect(JSON.parse(raw ?? '{}').fetchedAt).toBe(entry().fetchedAt)
+  })
+
+  it('the next real write persists what touch left in memory', async () => {
+    await writeCachedEdition(entry())
+    touchCachedEdition(1_700_000_999_000)
+    const held = getCurrentEdition()
+    if (held === null) throw new Error('unreachable')
+    await writeCachedEdition(held)
+    __resetEditionStoreForTests()
+    expect((await readCachedEdition())?.fetchedAt).toBe(1_700_000_999_000)
   })
 
   it('touch on an empty store writes nothing', async () => {
-    await touchCachedEdition(123)
+    touchCachedEdition(123)
+    expect(getCurrentEdition()).toBeNull()
     expect(await AsyncStorage.getItem(EDITION_CACHE_KEY)).toBeNull()
   })
 
-  it('clear removes it', async () => {
-    await writeCachedEdition(entry())
-    await clearCachedEdition()
-    __resetEditionStoreForTests()
-    expect(await readCachedEdition()).toBeNull()
-  })
-
-  it('absorbs a storage failure on every write', async () => {
+  it('absorbs a storage failure on the write', async () => {
     // Swapped by hand rather than with jest.spyOn: AsyncStorage's mock is itself made of jest.fn
     // objects with real implementations, and restoreAllMocks() strips the implementation from a
     // spied one — which turns setItem into a silent no-op for every later test in the file.
@@ -141,16 +147,11 @@ describe('the on-disk edition cache', () => {
       throw new Error('disk is full')
     }
     const setItem = AsyncStorage.setItem
-    const removeItem = AsyncStorage.removeItem
     AsyncStorage.setItem = boom as typeof AsyncStorage.setItem
-    AsyncStorage.removeItem = boom as typeof AsyncStorage.removeItem
     try {
       await expect(writeCachedEdition(entry())).resolves.toBeUndefined()
-      await expect(touchCachedEdition(1)).resolves.toBeUndefined()
-      await expect(clearCachedEdition()).resolves.toBeUndefined()
     } finally {
       AsyncStorage.setItem = setItem
-      AsyncStorage.removeItem = removeItem
     }
   })
 
@@ -188,12 +189,6 @@ describe('the in-memory current edition', () => {
     expect(getCurrentEdition()).toBeNull()
     await readCachedEdition()
     expect(getCurrentEdition()?.edition.subject.symbol).toBe('SNDK')
-  })
-
-  it('is dropped by clear', async () => {
-    await writeCachedEdition(entry())
-    await clearCachedEdition()
-    expect(getCurrentEdition()).toBeNull()
   })
 
   it('holds an edition parsed anywhere, not only one off disk', () => {

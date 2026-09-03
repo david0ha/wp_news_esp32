@@ -9,8 +9,10 @@
 // `flat` is deliberately grey in both duties. Zero is not a small rise.
 //
 // This lives under `components/` and not `lib/` because a colour is a theme fact, and
-// `lib/edition` holds no colours by design. Five components need the mapping; two hand-written
-// copies of it is two places for a chart stroke and its label to end up different greens.
+// `lib/edition` holds no colours by design. Two hand-written copies of the mapping would be two
+// places for a chart stroke and its label to end up different greens. The text pair now has a
+// single caller — `Change`, which is every percentage on both of the edition's screens — and the
+// graphics pair has three, one per thing that draws.
 
 import { colors } from '../../theme'
 import { type ChangeTone } from '../../lib/edition/format'

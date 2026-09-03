@@ -1,7 +1,8 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, layout, radius, space, tabular, type } from '../../theme'
-import { changeArrow, changeTone, formatPct, formatPrice } from '../../lib/edition/format'
-import { toneTextColor } from './tone'
+import { formatPrice } from '../../lib/edition/format'
+import { Chip } from '../Chip'
+import { Change } from './Change'
 import { type Edition } from '../../lib/edition/types'
 
 /**
@@ -16,7 +17,9 @@ import { type Edition } from '../../lib/edition/types'
  * to `/market/`, a path no route matches in an app with no `+not-found`.
  *
  * The failure banner takes `warn`, never direction red. Red on this screen means a price fell;
- * spending it on "the server did not answer" would put a market signal on a network problem.
+ * spending it on "the server did not answer" would put a market signal on a network problem. The
+ * demo chip takes `accent` for the mirror-image reason: an unconfigured phone reading the bundled
+ * edition is a complete state and not a fault, so it must not borrow the colour of one.
  */
 export function Masthead({
   edition,
@@ -35,8 +38,6 @@ export function Masthead({
   onPressSymbol: () => void
 }) {
   const s = edition.subject
-  const tone = changeTone(s.changePct)
-  const arrow = changeArrow(s.changePct)
 
   return (
     <View style={styles.root}>
@@ -66,10 +67,7 @@ export function Masthead({
         <Text style={[styles.price, tabular]} numberOfLines={1}>
           {formatPrice(s.last)}
         </Text>
-        <Text style={[styles.change, tabular, { color: toneTextColor(tone) }]} numberOfLines={1}>
-          {arrow !== '' ? `${arrow} ` : ''}
-          {formatPct(s.changePct)}
-        </Text>
+        <Change pct={s.changePct} size={17} />
       </View>
 
       {edition.dateline !== '' ? (
@@ -85,11 +83,7 @@ export function Masthead({
 
       {/* The demo chip and the freshness line are mutually exclusive by construction: the demo's
           fetchedAt is 0, so freshnessLabel answers null for it. */}
-      {demo ? (
-        <View style={styles.demoChip}>
-          <Text style={styles.demoText}>Demo edition</Text>
-        </View>
-      ) : null}
+      {demo ? <Chip label="Demo edition" tone="accent" style={styles.demoChip} /> : null}
       {freshness !== null ? <Text style={styles.freshness}>{freshness}</Text> : null}
 
       {error !== null ? (
@@ -132,26 +126,16 @@ const styles = StyleSheet.create({
     fontSize: 38,
     lineHeight: 44,
   },
-  change: {
-    fontFamily: fonts.semibold,
-    fontSize: 17,
-  },
   freshness: {
     ...type.caption,
     paddingTop: space.xs,
   },
+  // The pill itself is the app's `Chip` — the same one `ChipRow` and the Board screen use, whose
+  // own comment says a second pill style would make one shape mean two things. Only the box is
+  // this screen's: a chip in a column of full-width text has to be told not to stretch.
   demoChip: {
     alignSelf: 'flex-start',
     marginTop: space.xs,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-    backgroundColor: colors.accentDim,
-  },
-  demoText: {
-    fontFamily: fonts.semibold,
-    fontSize: 12,
-    color: colors.accent,
   },
   banner: {
     marginTop: space.sm,

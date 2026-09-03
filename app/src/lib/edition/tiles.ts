@@ -207,8 +207,11 @@ export function editionToTiles(e: Edition): EditionLayout {
  *
  * `briefs` sits under Stories rather than Numbers because a brief is a sentence, and the reader
  * narrowing to "Stories" is asking for prose.
+ *
+ * Private: the two functions below are the whole of what a caller wants, and a screen that asked
+ * a tile for its chip would be re-deciding a question `filterTiles` has already answered.
  */
-export function tileChip(t: Tile): Exclude<Chip, 'all'> {
+function tileChip(t: Tile): Exclude<Chip, 'all'> {
   switch (t.kind) {
     case 'story':
     case 'briefs':

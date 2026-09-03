@@ -7,7 +7,8 @@
 // this small needs.
 //
 // `fetchedAt` is a confirmation, not a change: a 304 moves it (`touchCachedEdition`) without
-// touching a byte of content. That is exactly the question the freshness line answers.
+// touching a byte of content. That is exactly the question the freshness line answers, and it is
+// the one field that moves WITHOUT A DISK WRITE — see `touchCachedEdition`.
 //
 // The URL travels WITH the entry because it is what makes the cache safe. A phone that changes
 // desks must not be handed the old desk's edition as "today"; `useEdition` compares this field
@@ -101,21 +102,23 @@ export async function writeCachedEdition(c: CachedEdition): Promise<void> {
   }
 }
 
-/** After a 304 — the content did not move, but the server just confirmed it. */
-export async function touchCachedEdition(fetchedAt: number): Promise<void> {
-  const entry = current ?? (await readCachedEdition())
-  if (entry === null) return
-  await writeCachedEdition({ ...entry, fetchedAt })
-}
-
-export async function clearCachedEdition(): Promise<void> {
-  current = null
-  try {
-    await AsyncStorage.removeItem(EDITION_CACHE_KEY)
-  } catch {
-    // best-effort: a stale entry that survives is ignored on read anyway once its URL no longer
-    // matches, and overwritten by the next success
-  }
+/**
+ * After a 304 — the content did not move, but the server just confirmed it.
+ *
+ * IN MEMORY ONLY, AND SYNCHRONOUS. Re-serialising a whole edition — twenty kilobytes of JSON —
+ * to move one integer is the most expensive way to store the cheapest fact this cache holds, and
+ * the poll that triggers it is the one that found nothing new. The screen does not read this
+ * copy anyway: the reducer moves `fetchedAt` in React state from the same event, so the freshness
+ * line is right the instant the 304 lands, with or without a disk write.
+ *
+ * What that costs is one cold launch: the entry read back off disk carries the last 200's stamp
+ * rather than the last confirmation's, so the freshness line can open a second or so too old,
+ * until the fetch that always follows a cold read answers and moves it. The next real write —
+ * any 200 — persists whatever this left in memory.
+ */
+export function touchCachedEdition(fetchedAt: number): void {
+  if (current === null) return
+  current = { ...current, fetchedAt }
 }
 
 /** Test hook: drop the in-memory copy so a fresh read hits the (mocked) store. */

@@ -24,7 +24,6 @@ export function StoryTile({
   height,
 }: {
   tile: Extract<Tile, { kind: 'story' }>
-  width: number
   height: number
 }) {
   const { story, lead } = tile

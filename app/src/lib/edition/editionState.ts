@@ -28,8 +28,6 @@ export type EditionState =
   | {
       status: 'ready'
       cached: CachedEdition
-      /** The bundled edition is on screen because this phone has no URL. */
-      demo: boolean
       refreshing: boolean
       /** A failed refresh, with content still showing. The banner, never the whole screen. */
       error: string | null
@@ -68,6 +66,19 @@ export function demoCache(): CachedEdition {
   return { url: '', etag: null, fetchedAt: 0, edition: demoEdition() }
 }
 
+/**
+ * Whether what is on screen is the bundled demo.
+ *
+ * DERIVED, NOT STORED. The ready state used to carry a `demo: boolean` beside the cache entry,
+ * which made "is this the demo" two facts that had to be kept equal by hand — and the one that
+ * mattered was always the entry's own: `url === ''` is what `demoCache` stamps, what the reducer
+ * branches on, and what `fetchedAt: 0` (and so the absent freshness line) follows from. A cache
+ * entry with a real URL and `demo: true` was representable and meant nothing.
+ */
+export function isDemo(cached: CachedEdition): boolean {
+  return cached.url === ''
+}
+
 export function nextEditionState(prev: EditionMachine, event: EditionEvent): EditionMachine {
   switch (event.type) {
     case 'url': {
@@ -77,7 +88,7 @@ export function nextEditionState(prev: EditionMachine, event: EditionEvent): Edi
       if (event.url === '') {
         return {
           url: '',
-          state: { status: 'ready', cached: demoCache(), demo: true, refreshing: false, error: null },
+          state: { status: 'ready', cached: demoCache(), refreshing: false, error: null },
         }
       }
       // A different desk. Whatever is on screen belongs to the old one and is not today's paper
@@ -95,7 +106,6 @@ export function nextEditionState(prev: EditionMachine, event: EditionEvent): Edi
         state: {
           status: 'ready',
           cached: event.cached,
-          demo: false,
           refreshing: true,
           error: null,
         },
@@ -116,7 +126,6 @@ export function nextEditionState(prev: EditionMachine, event: EditionEvent): Edi
               fetchedAt: event.fetchedAt,
               edition: event.result.edition,
             },
-            demo: false,
             refreshing: false,
             error: null,
           },

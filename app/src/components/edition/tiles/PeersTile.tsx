@@ -6,8 +6,8 @@ import {
   PEERS_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
-import { changeArrow, changeTone, formatPct, formatPrice } from '../../../lib/edition/format'
-import { toneTextColor } from '../tone'
+import { formatPrice } from '../../../lib/edition/format'
+import { Change } from '../Change'
 
 /**
  * The company against its peers. The row height and the count come from `lib/edition/tiles.ts`,
@@ -17,34 +17,21 @@ import { toneTextColor } from '../tone'
  * That emphasis is weight, not colour: colour on this row would have to mean direction, and the
  * subject being the subject is not a direction.
  */
-export function PeersTile({
-  tile,
-}: {
-  tile: Extract<Tile, { kind: 'peers' }>
-  width: number
-  height: number
-}) {
+export function PeersTile({ tile }: { tile: Extract<Tile, { kind: 'peers' }> }) {
   return (
     <View style={styles.root}>
       <Text style={styles.head}>Peers</Text>
-      {tile.peers.slice(0, PEERS_SHOWN).map((p) => {
-        const tone = changeTone(p.changePct)
-        const arrow = changeArrow(p.changePct)
-        return (
-          <View key={p.symbol} style={styles.row}>
-            <Text style={p.isSubject ? styles.symbolSubject : styles.symbol} numberOfLines={1}>
-              {p.symbol}
-            </Text>
-            <Text style={[styles.last, tabular]} numberOfLines={1}>
-              {formatPrice(p.last)}
-            </Text>
-            <Text style={[styles.change, tabular, { color: toneTextColor(tone) }]} numberOfLines={1}>
-              {arrow !== '' ? `${arrow} ` : ''}
-              {formatPct(p.changePct)}
-            </Text>
-          </View>
-        )
-      })}
+      {tile.peers.slice(0, PEERS_SHOWN).map((p) => (
+        <View key={p.symbol} style={styles.row}>
+          <Text style={p.isSubject ? styles.symbolSubject : styles.symbol} numberOfLines={1}>
+            {p.symbol}
+          </Text>
+          <Text style={[styles.last, tabular]} numberOfLines={1}>
+            {formatPrice(p.last)}
+          </Text>
+          <Change pct={p.changePct} style={styles.change} />
+        </View>
+      ))}
     </View>
   )
 }
@@ -81,8 +68,6 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   change: {
-    fontFamily: fonts.semibold,
-    fontSize: 12,
     width: 62,
     textAlign: 'right',
   },

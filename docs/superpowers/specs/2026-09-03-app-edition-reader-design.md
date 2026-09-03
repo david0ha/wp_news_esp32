@@ -152,7 +152,12 @@ export interface Edition {
   indices: EditionIndex[]         // ≤ 5
   thumbs: EditionPhoto[]          // wire order
 }
-export const EDITION_CAPS = { stories: 5, figures: 28, briefs: 8, peers: 6, tables: 2, charts: 2, indices: 5 } as const
+export const EDITION_CAPS = {
+  stories: 5, figures: 28, briefs: 8, peers: 6, tables: 2, charts: 2, indices: 5,
+  bars: 48,        // NEWS_BARS_MAX — the LAST 48 samples of a series survive
+  tableRows: 10,   // NEWS_TABLE_ROWS
+  tableCols: 6,    // NEWS_TABLE_COLS
+} as const
 ```
 
 ### Parsing (`parse.ts`)

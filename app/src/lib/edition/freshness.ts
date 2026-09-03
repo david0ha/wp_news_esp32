@@ -9,11 +9,11 @@
 // time it changed. That is the question the line answers: "is what I am reading still what the
 // desk is serving?"
 
+import { MONTHS } from '../months'
+
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /**
  * `null` under five minutes, then `Updated 12m ago`, `Updated 3h ago`, `Last updated yesterday`,
