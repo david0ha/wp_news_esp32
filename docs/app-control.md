@@ -496,6 +496,10 @@ rules.
 Unauthenticated, and not under `/api/*` at all — the device plane, open to
 anything that can reach the desk: `GET /news.json`, the same edition the
 board polls, fetchable by the app exactly as the board fetches it.
+The companion app is now a client of it: the Today tab fetches `/news.json`
+and `/tiles/<id>.bin` straight from the address the phone stores, with the
+board's own conditional request and body cap, so an edition is readable on a
+phone whose board is asleep or was never set up.
 
 `operator` scope — the writes a `producer` token cannot make, and the ones a
 phone would offer:

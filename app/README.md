@@ -45,6 +45,41 @@ the user and a device with no keyboard:
   editor writes `POST /api/sleep`; when the desk's `policy` block is driving, no preset is shown as
   selected, because the stored value is waiting rather than in force.
 
+## Reading the edition
+
+The **Today** tab shows the edition itself, and it needs no board. The material is not on the
+board — it is at the edition URL, which this phone already stores as its own setting
+(`claudepost.newsUrl`) and which the desk serves unauthenticated on its device plane
+(`GET /news.json`, `GET /tiles/<id>.bin` — see [`../docs/desk-server.md`](../docs/desk-server.md)).
+The board fetches it; so does the phone, with the same conditional request, the same 15-second
+deadline and the same 320 KB cap. A payload the app refuses is one the board would refuse too.
+
+- **What it shows.** A masthead — the company, the price, the dateline — then a two-column
+  masonry of tiles cut from the payload: the day's range, the stories, the charts, one tile per
+  group of figures, the photographs, the briefs, the peers, each statement, and the tape. Tapping
+  one opens it in full, with the rest of the edition continuing underneath.
+- **Where the heights come from.** Every tile's height is computed by a pure estimator
+  (`src/lib/edition/tiles.ts`) *before* anything renders, never measured with `onLayout`. That is
+  what stops the page reflowing and what lets a return from a detail land on the same scroll
+  position. The content adapts to its height with `numberOfLines`; the tile never grows to fit.
+- **The demo.** A phone with no URL shows `src/lib/edition/demo.json`, which is byte-identical to
+  `components/news_core/test/host/fixtures/news.json` — the payload an unconfigured *board*
+  prints. A jest test holds the two files identical, the way `test_news_mock` holds the firmware
+  to the same fixture. Its photo tiles live in `sim/tiles/` and are on no server the phone can
+  reach, so they show their captions on a plain ground.
+- **The cache.** One AsyncStorage key, `claudepost.edition`, holding the URL, the ETag, when the
+  server last *confirmed* the content and the parsed edition. It is re-parsed on read, so a cache
+  written by a newer build degrades to defaults instead of crashing a launch. A cache whose URL is
+  no longer the stored one is ignored — another desk's paper is not today's.
+- **Why photographs are memory-only.** A decoded tile is about a hundred kilobytes of base64 and
+  an edition carries several. The text is the material; a picture that has to be re-fetched after
+  a cold launch costs a second on the same connection that just delivered the JSON, and the
+  alternative is hundreds of kilobytes of a phone's storage per day.
+- **The cadence.** No interval. The edition changes about once a day and the desk answers a
+  conditional GET with a 304 for the rest of it, so there is a refresh on return to the tab when
+  what is on screen is over five minutes old, and pull-to-refresh. A failed refresh keeps the
+  cached edition and raises a banner in `warn`, never in direction red.
+
 ## Seeing the page on the glass
 
 `GET /api/screen` hands over the framebuffer verbatim — 960,000 bytes, portrait 1200 × 1600 at
@@ -235,6 +270,8 @@ app/
    │  ├─ esp32.test.ts     thorough unit tests with a fake fetch
    │  ├─ screen.ts         framebuffer → indexed PNG, in the measured inks
    │  ├─ screen.test.ts    round-trips a synthetic page through an independent PNG reader
+   │  ├─ edition/          the edition layer: types, parse, client, cache, tiles, hook
+   │  │                    (types.ts is the ONLY file that knows an edition wire field name)
    │  ├─ discovery.ts      base-URL normalize/validate/resolve (pure)
    │  ├─ store.ts          AsyncStorage: board base URL + onboarding flag
    │  ├─ device.tsx        app-wide board connection context
