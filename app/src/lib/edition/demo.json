@@ -1,0 +1,576 @@
+{
+  "schema": 3,
+  "edition": "SEMICONDUCTORS",
+  "dateline": "FRIDAY, AUGUST 14, 2026",
+  "session": "U.S. MARKETS CLOSED — AUG 13",
+  "as_of": "AS OF 05:12 KST",
+  "generated_at": "2026-08-14T05:12:00Z",
+  "subject": {
+    "symbol": "SNDK",
+    "name": "Sandisk Corp.",
+    "exchange": "NASDAQ",
+    "sector": "Semiconductors",
+    "last": 1631.47,
+    "change_pct": 2.41,
+    "prev_close": 1593.09,
+    "open": 1598.2,
+    "high": 1642.0,
+    "low": 1590.55,
+    "wk52_high": 1712.4,
+    "wk52_low": 402.18
+  },
+  "stories": [
+    {
+      "rank": 0,
+      "kicker": "NAND PRICING",
+      "headline": "Sandisk clears $1,600 as NAND contract prices reset again",
+      "deck": "Third-quarter contract talks settled above spot, and the sell-side spent the session moving its targets up.",
+      "byline": "By CLAUDE · SEMICONDUCTOR DESK",
+      "body": "MILPITAS — Sandisk closed at $1,631.47, up 2.41 percent, after the last of the third-quarter NAND contract negotiations settled above where the spot market had been trading all summer. That is the wrong way round, and it is the whole point: contract buyers pay a premium for supply they can schedule, and this quarter they are paying it. Spot has lagged every settlement since the autumn, which is what a market looks like when the marginal buyer is no longer a distributor filling a warehouse but a hyperscaler filling a data centre eighteen months out. The distributors are still there. They are simply no longer the ones setting the price. The inversion is not a quirk of one negotiation. A distributor buys to resell inside a quarter and will wait a fortnight to save two cents a gigabyte, which is what has made spot the softer of the two prices in every ordinary year of this industry. A hyperscaler buys against a build schedule fixed long before the parts were quoted, and the cost of missing it is a hall of accelerators standing idle. With that buyer at the table the premium moves to whichever side of the market can promise delivery, and the spot tape stops being the leading indicator the trade has always read it as. No NAND maker has added a wafer of new capacity this year. The Yokkaichi joint venture, which Sandisk runs with Kioxia and which supplies most of its bits, is spending on layer count instead: the 232-layer node yields more gigabytes per wafer than the one it replaced, and stacking is the only supply growth the industry has left. Bit supply is therefore growing at the pace the existing fabs can be tuned to grow it, in single digits, against demand that is not. Layer count is also why the capacity question cannot be answered quickly. A new fab is three years and the better part of ten billion dollars, and it is qualified at a node two generations behind the one it was drawn for; a stacking upgrade to a line that is already running arrives in four quarters and carries none of that risk. Every maker in the industry has done the same arithmetic and reached the same answer, which is why the supply curve for 2027 is largely known already and why it does not bend. Demand has also changed shape. Cloud customers spent the year moving from quarterly purchase orders to multi-quarter agreements, and the company said in July that more than half of its cloud volume for fiscal 2027 is committed at a fixed price. Committed volume turns a cyclical business into a scheduled one for as long as the agreements run, and it removes the two quarters of price collapse that usually end a memory upcycle. It does not remove the cycle. It moves the turn out to whenever those agreements come up for renewal, and it makes the terms of that renewal the only date on the calendar worth marking. The mix underneath says the same thing from the other end. Cloud was 4.5 percent of revenue in the March quarter of 2025 and is 13.1 percent now, on a revenue base that has multiplied more than five times over the same span — a segment sixteen times the size it was six quarters ago, against a client business that is still 56.1 percent of the total and grew fivefold. A supplier whose fastest-growing customer signs eighteen-month contracts is a different business from one selling into a channel, and the multiple a market will pay for it is a different multiple. Eleven houses raised their targets on Thursday. The mean now stands at $1,993.25 against a high of $3,000 and a low of $750, and that spread is the whole argument: not what the company earns this quarter, but how many more quarters like it there are.",
+      "chart": 1,
+      "photo": {
+        "id": "sndk_fab",
+        "w": 1140,
+        "h": 320,
+        "caption": "The Yokkaichi joint-venture fab, where the bit supply is not growing.",
+        "credit": "DEMO IMAGE"
+      }
+    },
+    {
+      "rank": 1,
+      "kicker": "THE TAPE",
+      "headline": "Memory leads the semis higher for a fourth week",
+      "deck": "The PHLX index is up 1.87 percent; Micron rose with it.",
+      "byline": "By CLAUDE · MARKETS DESK",
+      "body": "The PHLX Semiconductor Index closed up 1.87 percent, its fourth consecutive weekly gain, and the move was almost entirely memory: Micron added 2.87 percent and SK hynix’s ADR 3.18. The logic names went nowhere, and Intel gave back 0.74 percent on no news of its own. Analog Devices, the other large analogue name in the group, managed 0.62 percent, which is what the broad market did — the S&P 500 closed up 0.62 percent and the Nasdaq 100 up 0.94. A tape that separates memory from the rest of the sector is a tape trading the price of a bit rather than the price of a design win. It has done that twice before in the past decade, in 2017 and again in 2021, and on both occasions the separation held until new capacity arrived to close it. What the multiples say is that the market does not believe it will hold this time either. Micron trades at 11.62 times earnings and SK hynix at 9.24, both of them near the bottom of their own ten-year ranges, while the logic names they are outrunning carry 62.50 times and 38.41. A market convinced that memory earnings were durable would not price them at a third of the sector; it prices them there because it has watched four cycles end the same way. Sandisk’s own 22.38 times sits between the two camps, which is as close to an argument as a multiple ever gets. Nothing else in the session pointed the other way. The ten-year yield eased to 4.13 percent and the VIX closed at 13.84, down 4.20 percent and the lowest of the month. Volatility that low under a tape this narrow is not calm. It is a market that has stopped hedging the thing it is long."
+    },
+    {
+      "rank": 2,
+      "kicker": "EARNINGS",
+      "headline": "Revenue nearly doubles again in the June quarter",
+      "deck": "Net income was $5.46 billion on revenue of $9.34 billion.",
+      "byline": "By CLAUDE · EARNINGS DESK",
+      "body": "Sandisk earned $5.46 billion in the June quarter on revenue of $9.34 billion, a net margin of 58.5 percent against a loss in the same quarter of 2025. Gross margin reached 72.6 percent from 24.0, and operating expenses grew twenty-two percent over the same span. That is the whole arithmetic of the year: five and a half times the revenue on a cost base that grew by less than a quarter. None of it is a cost programme. It is price, and it will run the other way with the same leverage when the cycle turns. The turn itself is worth reading off the row. The company lost $370 million on $1.67 billion of revenue in the March quarter of 2025 and $226 million on $1.95 billion in the June quarter that followed; the first profit came in September, $641 million at a 22.5 percent margin, and every quarter since has been better than the one before it. Operating income for the June quarter was $5.94 billion against operating expenses of $842 million, and net income is that figure after an effective tax rate near eight percent, which is what is left of the loss years. Diluted earnings were $36.87 a share in the quarter and $72.89 over the trailing four, on 148.1 million shares. All three end markets grew, but not at one rate: client revenue was $5.24 billion, consumer $2.88 billion and cloud $1.22 billion, and only the last of those is growing faster than the price of the parts. That is why a balance sheet carrying no debt at all, at a current ratio of 229 percent, is the line worth reading next. A company with no interest to cover does not have to sell into a falling market to make a payment."
+    },
+    {
+      "rank": 3,
+      "kicker": "THE STREET",
+      "headline": "Targets move up; three houses still say hold",
+      "deck": "The mean target implies 22 percent more upside.",
+      "byline": "By CLAUDE · THE STREET",
+      "body": "Twenty-two of the twenty-five analysts covering Sandisk rate it a buy, and the mean twelve-month target of $1,993.25 sits 22.2 percent above Thursday’s close. The dispersion is the story: the high target is $3,000 and the low $750, a spread of four to one, which is what an argument about the length of a cycle looks like written down. The bulls are pricing the multi-quarter agreements as a floor under 2027 earnings. The bears are pricing the four previous NAND cycles, each of which ended with a year of falling prices against a cost base built for the peak. Neither side disputes the June quarter. They dispute what follows it. The two targets are not two views of the same multiple. The mean is 27.3 times the $72.89 the company earned over the trailing four quarters, which sounds expensive until it is set against the $46.22 the same analysts expect for the September quarter alone: annualise that and the mean is 10.8 times, and the high target is 16.2. The low target of $750 is not a forecast of this year at all. It is 6.96 times book value, which is roughly where the shares traded in the loss quarters, and it prices a return to them. The estimates themselves are the aggressive part of the file. Consensus has September revenue at $10.60 billion and earnings at $46.22 a share, which on 148.1 million shares is a net margin of 64.6 percent — six points above the June quarter and the highest any NAND maker has reported. Every analyst on that list is therefore forecasting that contract prices rise again before they fall, and none of them is forecasting the fourth quarter.",
+      "chart": 0
+    }
+  ],
+  "figures": [
+    {
+      "group": "VALUATION",
+      "label": "52-WEEK RANGE",
+      "value": "$402–$1,712",
+      "emph": 1,
+      "bar": 938
+    },
+    {
+      "group": "VALUATION",
+      "label": "MARKET CAP",
+      "value": "$241.6B"
+    },
+    {
+      "group": "VALUATION",
+      "label": "P/E (TTM)",
+      "value": "22.38x"
+    },
+    {
+      "group": "VALUATION",
+      "label": "PRICE/BOOK",
+      "value": "15.14x"
+    },
+    {
+      "group": "PER SHARE",
+      "label": "EPS (TTM)",
+      "value": "$72.89"
+    },
+    {
+      "group": "PER SHARE",
+      "label": "BOOK/SHARE",
+      "value": "$107.78"
+    },
+    {
+      "group": "PER SHARE",
+      "label": "SHARES OUT",
+      "value": "148.09M"
+    },
+    {
+      "group": "PROFITABILITY",
+      "label": "NET MARGIN TTM",
+      "value": "46.7%",
+      "emph": 1,
+      "bar": 855
+    },
+    {
+      "group": "PROFITABILITY",
+      "label": "ROE",
+      "value": "67.6%"
+    },
+    {
+      "group": "PROFITABILITY",
+      "label": "NET INCOME TTM",
+      "value": "$10.79B"
+    },
+    {
+      "group": "REVENUE MIX",
+      "label": "CLIENT",
+      "value": "56.1%"
+    },
+    {
+      "group": "REVENUE MIX",
+      "label": "CONSUMER",
+      "value": "30.8%"
+    },
+    {
+      "group": "REVENUE MIX",
+      "label": "CLOUD",
+      "value": "13.1%"
+    },
+    {
+      "group": "BALANCE SHEET",
+      "label": "DEBT/EQUITY",
+      "value": "0.00%"
+    },
+    {
+      "group": "BALANCE SHEET",
+      "label": "CURRENT RATIO",
+      "value": "229.0%"
+    },
+    {
+      "group": "BALANCE SHEET",
+      "label": "INTEREST COVER",
+      "value": "68,516x"
+    },
+    {
+      "group": "BALANCE SHEET",
+      "label": "DIVIDEND",
+      "value": "NONE"
+    },
+    {
+      "group": "THE STREET",
+      "label": "MEAN TARGET",
+      "value": "$1,993.25",
+      "change_pct": 22.18,
+      "emph": 1
+    },
+    {
+      "group": "THE STREET",
+      "label": "CONSENSUS",
+      "value": "BUY 22 OF 25"
+    },
+    {
+      "group": "THE STREET",
+      "label": "TARGET RANGE",
+      "value": "$750–$3,000"
+    },
+    {
+      "group": "THE STREET",
+      "label": "3Q26 EPS EST",
+      "value": "$46.22"
+    },
+    {
+      "group": "THE STREET",
+      "label": "3Q26 REV EST",
+      "value": "$10.60B"
+    }
+  ],
+  "briefs": [
+    {
+      "date": "AUG 13",
+      "kicker": "GUIDANCE",
+      "text": "Management guided September-quarter revenue to $10.9 billion at the midpoint, above the $10.6 billion consensus going in."
+    },
+    {
+      "date": "AUG 12",
+      "kicker": "SUPPLY",
+      "text": "Contract NAND prices for the third quarter settled 18 percent above the second, the fourth consecutive quarterly increase."
+    },
+    {
+      "date": "AUG 11",
+      "kicker": "CAPACITY",
+      "text": "No new capacity has been announced by any of the six NAND makers since 2024. Sandisk’s 2026 capital budget is maintenance only."
+    },
+    {
+      "date": "AUG 07",
+      "kicker": "THE STREET",
+      "text": "Sandisk is now sixth by market value among integrated semiconductor makers, one place behind Micron, at $241.6 billion."
+    },
+    {
+      "date": "JUL 30",
+      "kicker": "MANAGEMENT",
+      "text": "David V. Goeckeler told analysts the company would not commit to new wafer starts until contract pricing had held four quarters."
+    },
+    {
+      "date": "FEB 2025",
+      "kicker": "HISTORY",
+      "text": "Sandisk was spun out of Western Digital and listed on Nasdaq on February 24, 2025. Its 52-week low, $402.18, came that autumn."
+    }
+  ],
+  "peers": [
+    {
+      "symbol": "MU",
+      "name": "Micron",
+      "per": "11.62x",
+      "cap": "$318.9B",
+      "last": 284.15,
+      "change_pct": 2.87,
+      "is_subject": false
+    },
+    {
+      "symbol": "SNDK",
+      "name": "Sandisk",
+      "per": "22.38x",
+      "cap": "$241.6B",
+      "last": 1631.47,
+      "change_pct": 2.41,
+      "is_subject": true
+    },
+    {
+      "symbol": "HXSCL",
+      "name": "SK hynix ADR",
+      "per": "9.24x",
+      "cap": "$227.4B",
+      "last": 312.6,
+      "change_pct": 3.18,
+      "is_subject": false
+    },
+    {
+      "symbol": "INTC",
+      "name": "Intel",
+      "per": "62.50x",
+      "cap": "$180.2B",
+      "last": 41.28,
+      "change_pct": -0.74,
+      "is_subject": false
+    },
+    {
+      "symbol": "ADI",
+      "name": "Analog Devices",
+      "per": "38.41x",
+      "cap": "$132.8B",
+      "last": 268.4,
+      "change_pct": 0.62,
+      "is_subject": false
+    }
+  ],
+  "tables": [
+    {
+      "title": "REVENUE, PROFIT AND MARGIN",
+      "note": "$ millions",
+      "render": "bars_line",
+      "columns": [
+        "1Q25",
+        "2Q25",
+        "3Q25",
+        "4Q25",
+        "1Q26",
+        "2Q26"
+      ],
+      "rows": [
+        {
+          "label": "Revenue",
+          "values": [
+            "1,672",
+            "1,952",
+            "2,845",
+            "4,190",
+            "6,720",
+            "9,340"
+          ],
+          "n": [
+            1672,
+            1952,
+            2845,
+            4190,
+            6720,
+            9340
+          ]
+        },
+        {
+          "label": "Net income",
+          "values": [
+            "(370)",
+            "(226)",
+            "641",
+            "1,535",
+            "3,158",
+            "5,460"
+          ],
+          "n": [
+            -370,
+            -226,
+            641,
+            1535,
+            3158,
+            5460
+          ]
+        },
+        {
+          "label": "Net margin",
+          "values": [
+            "(22.1%)",
+            "(11.6%)",
+            "22.5%",
+            "36.6%",
+            "47.0%",
+            "58.5%"
+          ],
+          "n": [
+            -2213,
+            -1158,
+            2253,
+            3663,
+            4699,
+            5846
+          ]
+        }
+      ]
+    },
+    {
+      "title": "REVENUE BY END MARKET",
+      "note": "$ millions",
+      "render": "stack",
+      "columns": [
+        "1Q25",
+        "2Q25",
+        "3Q25",
+        "4Q25",
+        "1Q26",
+        "2Q26"
+      ],
+      "rows": [
+        {
+          "label": "Client",
+          "values": [
+            "1,037",
+            "1,191",
+            "1,707",
+            "2,451",
+            "3,830",
+            "5,240"
+          ],
+          "n": [
+            1037,
+            1191,
+            1707,
+            2451,
+            3830,
+            5240
+          ]
+        },
+        {
+          "label": "Consumer",
+          "values": [
+            "560",
+            "644",
+            "925",
+            "1,341",
+            "2,117",
+            "2,877"
+          ],
+          "n": [
+            560,
+            644,
+            925,
+            1341,
+            2117,
+            2877
+          ]
+        },
+        {
+          "label": "Cloud",
+          "values": [
+            "75",
+            "117",
+            "213",
+            "398",
+            "773",
+            "1,223"
+          ],
+          "n": [
+            75,
+            117,
+            213,
+            398,
+            773,
+            1223
+          ]
+        }
+      ]
+    }
+  ],
+  "charts": [
+    {
+      "kind": "line",
+      "label": "PRICE",
+      "span": "6M",
+      "note": "Weekly close, in dollars",
+      "close": [
+        978.4,
+        1002.15,
+        964.8,
+        1018.6,
+        1055.3,
+        1031.75,
+        1088.4,
+        1142.9,
+        1118.25,
+        1176.5,
+        1234.8,
+        1205.6,
+        1268.35,
+        1322.7,
+        1291.45,
+        1358.9,
+        1416.2,
+        1389.75,
+        1452.3,
+        1508.65,
+        1476.2,
+        1544.85,
+        1612.4,
+        1712.4,
+        1658.9,
+        1631.47
+      ]
+    },
+    {
+      "kind": "bar",
+      "label": "NAND CONTRACT",
+      "span": "6Q",
+      "note": "Contract price per gigabyte, dollars",
+      "close": [
+        2.1,
+        1.98,
+        2.24,
+        2.61,
+        3.02,
+        3.56
+      ]
+    }
+  ],
+  "indices": [
+    {
+      "symbol": "SPX",
+      "name": "S&P 500",
+      "last": 6412.83,
+      "change_pct": 0.62,
+      "spark": [
+        402,
+        418,
+        396,
+        430,
+        455,
+        441,
+        468,
+        502,
+        488,
+        521,
+        546,
+        574
+      ]
+    },
+    {
+      "symbol": "NDX",
+      "name": "NASDAQ 100",
+      "last": 23841.55,
+      "change_pct": 0.94,
+      "spark": [
+        388,
+        402,
+        380,
+        425,
+        448,
+        434,
+        470,
+        508,
+        492,
+        530,
+        561,
+        596
+      ]
+    },
+    {
+      "symbol": "SOX",
+      "name": "PHLX SEMIS",
+      "last": 8214.6,
+      "change_pct": 1.87,
+      "spark": [
+        244,
+        272,
+        258,
+        306,
+        348,
+        330,
+        392,
+        448,
+        430,
+        502,
+        566,
+        640
+      ]
+    },
+    {
+      "symbol": "UST10Y",
+      "name": "10-YR YIELD",
+      "last": 4.13,
+      "change_pct": -0.72,
+      "spark": [
+        612,
+        640,
+        628,
+        597,
+        574,
+        588,
+        561,
+        540,
+        552,
+        519,
+        534,
+        508
+      ]
+    },
+    {
+      "symbol": "VIX",
+      "name": "VIX",
+      "last": 13.84,
+      "change_pct": -4.2,
+      "spark": [
+        744,
+        712,
+        758,
+        690,
+        651,
+        668,
+        612,
+        574,
+        590,
+        533,
+        501,
+        462
+      ]
+    }
+  ],
+  "thumbs": [
+    {
+      "id": "sndk_wafer",
+      "w": 364,
+      "h": 204,
+      "caption": "A 232-layer wafer at Yokkaichi. Output per wafer is the constraint.",
+      "credit": "DEMO IMAGE"
+    },
+    {
+      "id": "sndk_line",
+      "w": 364,
+      "h": 204,
+      "caption": "The Milpitas test floor, running three shifts since February.",
+      "credit": "DEMO IMAGE"
+    }
+  ]
+}
