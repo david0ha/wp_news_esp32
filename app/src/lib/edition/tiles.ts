@@ -44,16 +44,20 @@
 //   range           colWidth
 //   chart           round(colWidth * 3 / 4)
 //   photo           round(colWidth * clamp(h / w, 2/3, 3/2))
-//   figures         2P + 22 + 28 * min(n, 4) + (n > 4 ? 20 : 0)
-//   briefs          2P + 22 + 56 * min(n, 3) + (n > 3 ? 20 : 0)
-//   peers           2P + 22 + 28 * min(n, 6)
+//   figures         2P + 24 + 28 * min(n, 4) + (n > 4 ? 20 : 0)
+//   briefs          2P + 24 + 56 * min(n, 3) + (n > 3 ? 20 : 0)
+//   peers           2P + 24 + 28 * min(n, 6)
 //   table           round(colWidth * 5 / 4)
-//   tape            2P + 22 + 32 * min(n, 5)
+//   tape            2P + 24 + 32 * min(n, 5)
 //
-// where P = TILE_PADDING. The 22 is the tile's heading line; the per-row constants are the row
-// heights the bodies in `components/edition/tiles/` actually draw, and the trailing 20 is the
-// "+N more" line. CHANGE A ROW HEIGHT IN A TILE BODY AND CHANGE IT HERE IN THE SAME COMMIT, or
-// the tile clips its own last row.
+// where P = `TILE_PADDING`, 24 is `TILE_HEAD` (the heading line, equal to `type.headingSm`'s line
+// height), 20 is `TILE_MORE` (the "+N more" line) and the per-row constants are `TILE_ROW_*`.
+//
+// EVERY ONE OF THOSE IS EXPORTED, and the tile bodies in `components/edition/tiles/` import them
+// rather than declaring their own. That is deliberate: this arithmetic and the rows a body draws
+// have to agree exactly, a disagreement clips the last row silently, and nothing measures
+// afterwards to catch it. There is one place to change, not two — so do not re-declare a row
+// height beside a `StyleSheet`.
 //
 // =============================================================================================
 // IDS
@@ -233,13 +237,31 @@ function clamp(n: number, lo: number, hi: number): number {
   return n < lo ? lo : n > hi ? hi : n
 }
 
-/** The heading line every non-media tile draws. */
-const HEAD = 22
+/**
+ * The heading line every non-media tile draws, in `type.headingSm`.
+ *
+ * 24 and not 22 because that IS `type.headingSm`'s line height: a 24 px line in a 22 px box is
+ * two pixels of clipped descender on every tile with a heading, which is most of them.
+ */
+export const TILE_HEAD = 24
+
 /** The "+N more" line, drawn when a tile holds more than it shows. */
-const MORE = 20
+export const TILE_MORE = 20
+
+// The row heights and the row counts, per kind. Both halves belong here: a body that draws five
+// rows of 28 in a box sized for four is the same silent clipping as a body that draws four rows
+// of 30. The tile bodies import these; see the header comment.
+export const TILE_ROW_FIGURES = 28
+export const TILE_SHOWN_FIGURES = 4
+export const TILE_ROW_BRIEFS = 56
+export const TILE_SHOWN_BRIEFS = 3
+export const TILE_ROW_PEERS = 28
+export const TILE_SHOWN_PEERS = 6
+export const TILE_ROW_TAPE = 32
+export const TILE_SHOWN_TAPE = 5
 
 export function estimateTileHeight(t: Tile, colWidth: number): number {
-  const chrome = 2 * TILE_PADDING + HEAD
+  const chrome = 2 * TILE_PADDING + TILE_HEAD
   switch (t.kind) {
     case 'story':
       // The lead is the one tile allowed to be taller than it is wide: its headline at 22/26 is
@@ -257,18 +279,26 @@ export function estimateTileHeight(t: Tile, colWidth: number): number {
     }
     case 'figures': {
       const n = t.figures.length
-      return chrome + 28 * Math.min(n, 4) + (n > 4 ? MORE : 0)
+      return (
+        chrome +
+        TILE_ROW_FIGURES * Math.min(n, TILE_SHOWN_FIGURES) +
+        (n > TILE_SHOWN_FIGURES ? TILE_MORE : 0)
+      )
     }
     case 'briefs': {
       const n = t.briefs.length
-      return chrome + 56 * Math.min(n, 3) + (n > 3 ? MORE : 0)
+      return (
+        chrome +
+        TILE_ROW_BRIEFS * Math.min(n, TILE_SHOWN_BRIEFS) +
+        (n > TILE_SHOWN_BRIEFS ? TILE_MORE : 0)
+      )
     }
     case 'peers':
-      return chrome + 28 * Math.min(t.peers.length, 6)
+      return chrome + TILE_ROW_PEERS * Math.min(t.peers.length, TILE_SHOWN_PEERS)
     case 'table':
       return Math.round((colWidth * 5) / 4)
     case 'tape':
-      return chrome + 32 * Math.min(t.indices.length, 5)
+      return chrome + TILE_ROW_TAPE * Math.min(t.indices.length, TILE_SHOWN_TAPE)
   }
 }
 

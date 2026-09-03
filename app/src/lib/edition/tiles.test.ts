@@ -11,7 +11,15 @@ import {
   filterTiles,
   findTile,
   splitColumns,
+  TILE_HEAD,
+  TILE_MORE,
   TILE_PADDING,
+  TILE_ROW_BRIEFS,
+  TILE_ROW_FIGURES,
+  TILE_ROW_PEERS,
+  TILE_ROW_TAPE,
+  TILE_SHOWN_BRIEFS,
+  TILE_SHOWN_PEERS,
   type Tile,
 } from './tiles'
 import { type Edition, type EditionFigure } from './types'
@@ -205,19 +213,55 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
   }
 
   it('sizes each kind exactly as the table says', () => {
+    // The chrome the four row-built kinds share: 2 * 14 of padding + a 24 px heading line.
     expect(TILE_PADDING).toBe(14)
+    expect(TILE_HEAD).toBe(24)
+    expect(TILE_MORE).toBe(20)
     expect(estimateTileHeight(by('story:0'), W)).toBe(227) // lead: round(170 * 4/3)
     expect(estimateTileHeight(by('story:1'), W)).toBe(170) // other: the column, square
     expect(estimateTileHeight(by('range:0'), W)).toBe(170)
     expect(estimateTileHeight(by('chart:0'), W)).toBe(128) // round(170 * 3/4) = round(127.5)
     expect(estimateTileHeight(by('table:0'), W)).toBe(213) // round(170 * 5/4) = round(212.5)
     expect(estimateTileHeight(by('photo:0'), W)).toBe(113) // 364x204 is flatter than 2:3, clamped
-    expect(estimateTileHeight(by('figures:0'), W)).toBe(162) // VALUATION, 4 rows
-    expect(estimateTileHeight(by('figures:1'), W)).toBe(134) // PER SHARE, 3 rows
-    expect(estimateTileHeight(by('figures:5'), W)).toBe(182) // THE STREET, 5 rows -> 4 + "more"
-    expect(estimateTileHeight(by('briefs:0'), W)).toBe(238) // 6 briefs -> 3 + "more"
-    expect(estimateTileHeight(by('peers:0'), W)).toBe(190) // 5 peers
-    expect(estimateTileHeight(by('tape:0'), W)).toBe(210) // 5 indices
+    expect(estimateTileHeight(by('figures:0'), W)).toBe(164) // VALUATION, 4 rows: 52 + 4*28
+    expect(estimateTileHeight(by('figures:1'), W)).toBe(136) // PER SHARE, 3 rows: 52 + 3*28
+    expect(estimateTileHeight(by('figures:5'), W)).toBe(184) // THE STREET, 5 rows -> 4 + "more"
+    expect(estimateTileHeight(by('briefs:0'), W)).toBe(240) // 6 briefs -> 3 + "more": 52 + 3*56 + 20
+    expect(estimateTileHeight(by('peers:0'), W)).toBe(192) // 5 peers: 52 + 5*28
+    expect(estimateTileHeight(by('tape:0'), W)).toBe(212) // 5 indices: 52 + 5*32
+  })
+
+  it('builds each row-led height from the exported constants and nothing else', () => {
+    // The tile bodies import these same constants, so this is the whole two-place invariant the
+    // header comment used to police by hand: a body cannot draw a row height the estimator does
+    // not know about, because there is only one number.
+    const chrome = 2 * TILE_PADDING + TILE_HEAD
+    expect(estimateTileHeight(by('peers:0'), W)).toBe(chrome + TILE_ROW_PEERS * 5)
+    expect(estimateTileHeight(by('tape:0'), W)).toBe(chrome + TILE_ROW_TAPE * 5)
+    expect(estimateTileHeight(by('figures:0'), W)).toBe(chrome + TILE_ROW_FIGURES * 4)
+    expect(estimateTileHeight(by('briefs:0'), W)).toBe(
+      chrome + TILE_ROW_BRIEFS * TILE_SHOWN_BRIEFS + TILE_MORE,
+    )
+  })
+
+  it('caps a row-led tile at the rows its body actually draws', () => {
+    // One more than the cap must add the "+N more" line and NOT another row — the body shows
+    // `TILE_SHOWN_*` and no more, so a height that kept growing would be white paper.
+    const chrome = 2 * TILE_PADDING + TILE_HEAD
+    const many: Tile = {
+      kind: 'peers',
+      id: 'peers:9',
+      peers: new Array(TILE_SHOWN_PEERS + 3).fill(null).map((_, i) => ({
+        symbol: `S${i}`,
+        name: '',
+        per: '',
+        cap: '',
+        last: null,
+        changePct: null,
+        isSubject: false,
+      })),
+    }
+    expect(estimateTileHeight(many, W)).toBe(chrome + TILE_ROW_PEERS * TILE_SHOWN_PEERS)
   })
 
   it('clamps a photo’s aspect at both ends, so no tile is a smear or a tower', () => {
@@ -249,12 +293,12 @@ describe('splitColumns', () => {
   })
 
   it('appends to the shortest column, breaking a tie leftwards', () => {
-    // Heights at W=170: one figure is 78, four figures are 162.
-    // A(78) -> col0 (tie).  B(78) -> col1.  C(162) -> col0 (tie at 78).  D(78) -> col1 (78 < 240).
+    // Heights at W=170: one figure is 80 (52 + 28), four figures are 164 (52 + 4*28).
+    // A(80) -> col0 (tie).  B(80) -> col1.  C(164) -> col0 (tie at 80).  D(80) -> col1 (80 < 244).
     const tiles = [figuresTile('a', 1), figuresTile('b', 1), figuresTile('c', 4), figuresTile('d', 1)]
     const cols = splitColumns(tiles, W, 2)
     expect(cols.map((c) => c.map((p) => p.tile.id))).toEqual([['a', 'c'], ['b', 'd']])
-    expect(cols[0].map((p) => p.height)).toEqual([78, 162])
+    expect(cols[0].map((p) => p.height)).toEqual([80, 164])
   })
 
   it('places every tile exactly once, keeping feed order inside each column', () => {

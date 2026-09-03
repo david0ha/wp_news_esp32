@@ -173,4 +173,24 @@ export const type = {
     textTransform: 'uppercase',
     color: colors.textDim,
   } as TextStyle, // the small uppercase section labels
+  /**
+   * The tile headline. This design has no photograph on a story tile, so the headline at 22/26
+   * is what carries the visual weight a picture would — which is why it is a token of its own
+   * rather than `heading` reused a size down.
+   */
+  pinHeadline: {
+    fontFamily: fonts.extrabold,
+    fontSize: 22,
+    lineHeight: 26,
+    letterSpacing: -0.4,
+    color: colors.text,
+  } as TextStyle,
+  /** The deck under a tile headline: the sentence that says why the headline matters. */
+  pinDeck: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    lineHeight: 19,
+    letterSpacing: 0,
+    color: colors.textDim,
+  } as TextStyle,
 } as const
