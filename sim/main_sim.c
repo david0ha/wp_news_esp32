@@ -1897,7 +1897,9 @@ static void quiet_payload(news_t *v)
 #define SW_X_PAIR       (UI_CONTENT_X + 470)            /*  500 */
 #define SW_X_LINE       (UI_CONTENT_X + 670)            /*  700 */
 #define SW_X_STEM       (UI_CONTENT_X + 870)            /*  900 */
+#define SW_X_CROSS      (UI_CONTENT_X + 1000)           /* 1030 */
 #define SW_SPAN         180
+#define SW_CROSS_W      120
 
 /* sRGB relative luminance and the WCAG contrast ratio, over wp_palette_ink —
  * the MEASURED table, so these are numbers about the panel rather than about
@@ -1968,10 +1970,87 @@ static void sw_flat_row(lv_obj_t *par, int y, uint32_t rgb)
     }
 }
 
+/* A FIFTH FORM, AND THE ONE THIS SHEET IS A TEST FOR RATHER THAN A SPECIMEN OF.
+ *
+ * A keyline is only true of the pixels at the moment they are laid down, and a
+ * bars-and-line graphic draws a rate line ACROSS its bars afterwards — in
+ * colour, under a paper halo two pixels wider, because paper is the one thing
+ * that separates that line from a black bar. Over a KEYED bar the halo takes
+ * the keyline away and puts paper straight onto the 1.10:1 yellow. That is what
+ * Broadcom's 3Q26 sheet did: 211 yellow pixels open to the paper along the
+ * top-left corner of the net-income bar the falling margin line ran through,
+ * and not one of them visible in the source, where ui_series_draw_abs() had
+ * drawn a perfectly good keyline a few microseconds earlier.
+ *
+ * So this row draws exactly that construction — fill, then sleeve, then halo,
+ * then line, then the node's halo and the node — with a vertex parked ON the
+ * fill's top-left corner and a segment crossing its left keyline, which are the
+ * two places it failed. Nothing new asserts on it: it sits below the bare-
+ * yellow control, so ink_sheet_selftest()'s existing "no yellow below the
+ * control reaches the paper" and "no keyline edge below it is thinner than
+ * UI_SERIES_KEY_W" cover it. Delete the sleeve and this row fails them both.
+ *
+ * The geometry is written down here rather than taken from a payload on
+ * purpose. A payload-driven version of this case needs the rate line's scaling
+ * and the bars' scaling to keep landing on top of each other, and the day one
+ * of them moves by three pixels the test still passes and has stopped testing
+ * anything. */
+static void sw_cross_cb(lv_event_t *e)
+{
+    lv_obj_t   *o = lv_event_get_target_obj(e);
+    lv_layer_t *L = lv_event_get_layer(e);
+    if (!o || !L) return;
+
+    const ui_series_t s = (ui_series_t)(intptr_t)lv_obj_get_user_data(o);
+
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+
+    /* The fill, inset so the line has paper to arrive from and to leave for. */
+    const lv_area_t fill = { a.x1 + 24, a.y1 + 12, a.x2 - 8, a.y2 };
+
+    /* Two segments, the vertex between them sitting on the fill's top-left
+     * corner: P0 out on the paper, P1 over the corner, P2 off the right edge. */
+    const int px[3] = { a.x1,      a.x1 + 34,  a.x2      };
+    const int py[3] = { a.y1 + 44, a.y1 + 10,  a.y1 + 34 };
+
+    ui_series_draw_abs(L, fill.x1, fill.y1, fill.x2, fill.y2, s);
+
+    if (s == UI_SERIES_KEYED) {
+        for (int i = 1; i < 3; i++) {
+            ui_series_sleeve_line_abs(L, &fill, px[i - 1], py[i - 1],
+                                      px[i], py[i], UI_RULE_MID + 2);
+        }
+        for (int i = 0; i < 3; i++) {
+            ui_series_sleeve_rect_abs(L, &fill, px[i] - 3, py[i] - 3,
+                                      px[i] + 3, py[i] + 3);
+        }
+    }
+
+    for (int i = 1; i < 3; i++) {
+        ui_draw_line_c_abs(L, px[i - 1], py[i - 1], px[i], py[i],
+                           UI_RULE_MID + 2, UI_PAPER);
+    }
+    for (int i = 1; i < 3; i++) {
+        ui_draw_line_c_abs(L, px[i - 1], py[i - 1], px[i], py[i],
+                           UI_RULE_MID, UI_UP);
+    }
+    for (int i = 0; i < 3; i++) {
+        ui_draw_rect_c_abs(L, px[i] - 3, py[i] - 3, px[i] + 3, py[i] + 3,
+                           true, 0, UI_PAPER);
+    }
+    for (int i = 0; i < 3; i++) {
+        ui_draw_rect_c_abs(L, px[i] - 2, py[i] - 2, px[i] + 2, py[i] + 2,
+                           true, 0, UI_UP);
+    }
+}
+
 /* The same four forms through ui_series_fill(), which is the only call on the
  * board allowed to put blue or yellow down. The 3 px line is deliberately below
  * UI_SERIES_MIN_PX: what it shows is the documented fallback to SOLID, which is
- * a thing worth being able to see rather than to read about. */
+ * a thing worth being able to see rather than to read about. The fifth is
+ * sw_cross_cb()'s, and is drawn immediate-mode because the graphic it stands in
+ * for is. */
 static void sw_series_row(lv_obj_t *par, int y, ui_series_t s)
 {
     ui_series_fill(par, SW_X_BAR, y, SW_SPAN, SW_BAR_H, s);
@@ -1989,6 +2068,10 @@ static void sw_series_row(lv_obj_t *par, int y, ui_series_t s)
 
     ui_series_swatch(par, SW_X_STEM + 6 * SW_STEM_W + 20,
                      y + (SW_BAR_H - UI_SERIES_SWATCH) / 2, s);
+
+    lv_obj_t *cross = ui_pane(par, SW_X_CROSS, y, SW_CROSS_W, SW_BAR_H);
+    lv_obj_set_user_data(cross, (void *)(intptr_t)s);
+    lv_obj_add_event_cb(cross, sw_cross_cb, LV_EVENT_DRAW_MAIN, NULL);
 }
 
 /* The bare-yellow row's band, so the self-test can tell the control apart from
@@ -2074,18 +2157,19 @@ static void ink_sheet(const char *dir, lv_obj_t *news_scr)
     ui_rule(scr, UI_CONTENT_X, UI_CONTENT_Y + 56, UI_CONTENT_W, 2);
     cover_all("the ink sheet",
               "Contrast against the paper, measured off wp_palette_ink. Each ink "
-              "as a bar, as a bar abutting black, as a 3 px rule and as a 12 px "
-              "stem beside one.");
+              "as a bar, as a bar abutting black, as a 3 px rule, as a 12 px "
+              "stem beside one, and with a haloed rate line drawn across it.");
     ui_lab_box(scr, UI_CONTENT_X, UI_CONTENT_Y + 68, UI_CONTENT_W, 60,
                UI_F_BODY, LV_TEXT_ALIGN_LEFT,
                "Contrast against the paper, measured off wp_palette_ink. Each ink "
-               "as a bar, as a bar abutting black, as a 3 px rule and as a 12 px "
-               "stem beside one.");
+               "as a bar, as a bar abutting black, as a 3 px rule, as a 12 px "
+               "stem beside one, and with a haloed rate line drawn across it.");
 
     sw_lab(scr, SW_X_BAR,  UI_CONTENT_Y + 128, UI_F_LABEL, "BAR");
     sw_lab(scr, SW_X_PAIR, UI_CONTENT_Y + 128, UI_F_LABEL, "AGAINST BLACK");
     sw_lab(scr, SW_X_LINE, UI_CONTENT_Y + 128, UI_F_LABEL, "3 PX RULE");
     sw_lab(scr, SW_X_STEM, UI_CONTENT_Y + 128, UI_F_LABEL, "12 PX STEMS");
+    sw_lab(scr, SW_X_CROSS, UI_CONTENT_Y + 128, UI_F_LABEL, "RATE LINE");
 
     int y = UI_CONTENT_Y + SW_HEAD_H;
 

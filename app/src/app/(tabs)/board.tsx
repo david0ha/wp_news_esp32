@@ -19,6 +19,7 @@ import {
 } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice } from '../../lib/discovery'
 import { getDeviceBaseUrl } from '../../lib/store'
+import { syncPendingNewsUrl } from '../../lib/newsurlsync'
 import {
   PAGE_LABELS,
   changeTone,
@@ -85,6 +86,29 @@ export default function Board() {
         setState(s)
         setPendingPage((p) => (p === null || p === s.page ? null : p))
         setError(null)
+        // The board just answered, which is the one moment it is known to be awake — so this is
+        // where an address saved from Settings while it slept gets delivered. Usually there is
+        // nothing pending and this is one cached read. When it does send, the Source card below
+        // is showing the old URL, so read the state once more rather than wait five seconds to
+        // show the user the thing that just happened. That re-read is best-effort on its own: the
+        // snapshot above is already good, and a board that answered twice and not a third time
+        // must not turn a delivered address into an error line.
+        //
+        // A `rejected` here is deliberately not surfaced. The sync has already cleared the mark
+        // so this poll stops retrying it, and this tab has no editor to say it beside; what the
+        // user sees is the Source card below still naming the board's own address rather than
+        // the one they saved, and Settings — the screen that owns the field — says why in red
+        // the next time its own focus load makes the same delivery... which it cannot, the mark
+        // being clear. So a refusal seen only from here shows up as the address not changing.
+        // Rare by construction: `newsurl.ts` mirrors the board's validator, so the board refusing
+        // an address that passed it means the two have diverged.
+        if ((await syncPendingNewsUrl(client)).status === 'sent') {
+          try {
+            setState(await client.getState())
+          } catch {
+            // the next poll shows it
+          }
+        }
       } catch (e) {
         // Keep the last good snapshot on a transient poll failure; only surface an error when we
         // have nothing to show yet.

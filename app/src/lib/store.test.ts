@@ -3,13 +3,19 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   __resetStoreCacheForTests,
   clearDeviceBaseUrl,
+  clearNewsUrl,
+  clearNewsUrlPending,
   clearSetupSkipped,
   getDeviceBaseUrl,
+  getNewsUrl,
+  isNewsUrlPending,
   isOnboardingComplete,
   isSetupSkipped,
   markOnboardingComplete,
   markSetupSkipped,
   peekDeviceBaseUrl,
+  peekNewsUrl,
+  saveNewsUrl,
   setDeviceBaseUrl,
 } from './store'
 
@@ -224,11 +230,103 @@ describe('setup-skipped flag', () => {
   })
 })
 
-// These three literals are the app's contract with every phone that already has it installed.
+// The phone's copy of the edition address, and the mark that says the board has not got it yet.
+// The address is a setting on the phone now precisely so it can be changed while the board is
+// asleep, so the pair has to survive a relaunch together: an address without its mark is one the
+// app believes delivered and never sends.
+describe('news URL on the phone', () => {
+  it('is null until something is saved', async () => {
+    expect(await getNewsUrl()).toBeNull()
+    expect(await isNewsUrlPending()).toBe(false)
+  })
+
+  it('saves the address and marks it pending in one act', async () => {
+    await saveNewsUrl('https://desk.example/news.json')
+    __resetStoreCacheForTests()
+    expect(await getNewsUrl()).toBe('https://desk.example/news.json')
+    expect(await isNewsUrlPending()).toBe(true)
+  })
+
+  it('keeps the empty string as a saved value, distinct from nothing saved', async () => {
+    // Clearing the field and saving puts the board on its demo edition. That is a deliberate act
+    // and it has to be delivered like any other, so '' must not collapse into "never saved".
+    await saveNewsUrl('')
+    __resetStoreCacheForTests()
+    expect(await getNewsUrl()).toBe('')
+    expect(await isNewsUrlPending()).toBe(true)
+  })
+
+  it('clearNewsUrlPending leaves the address and drops the mark', async () => {
+    await saveNewsUrl('https://desk.example/news.json')
+    await clearNewsUrlPending()
+    __resetStoreCacheForTests()
+    expect(await getNewsUrl()).toBe('https://desk.example/news.json')
+    expect(await isNewsUrlPending()).toBe(false)
+  })
+
+  it('a later save re-arms the mark', async () => {
+    await saveNewsUrl('https://one.example/news.json')
+    await clearNewsUrlPending()
+    await saveNewsUrl('https://two.example/news.json')
+    __resetStoreCacheForTests()
+    expect(await getNewsUrl()).toBe('https://two.example/news.json')
+    expect(await isNewsUrlPending()).toBe(true)
+  })
+
+  it('answers pending from the cache before the write lands', async () => {
+    // The caller's next act is to POST and then read the mark back; it must see this save.
+    const p = saveNewsUrl('https://desk.example/news.json')
+    expect(await isNewsUrlPending()).toBe(true)
+    await p
+  })
+
+  // Strict mark, same shape as the skip mark. Only the exact '1' means pending; anything else —
+  // a hand-edited store, a value from some future format, the empty string a failed write can
+  // leave — reads as delivered. The save path is the only writer of the '1', so an address it
+  // wrote always has a legible mark beside it, and the strictness only ever bites a value the app
+  // did not write itself.
+  it.each(['yes', 'true', '', '0', ' 1'])('does not treat %p as the pending mark', async (stored) => {
+    await AsyncStorage.setItem('claudepost.newsUrlPending', stored)
+    expect(await isNewsUrlPending()).toBe(false)
+  })
+})
+
+// These literals are the app's contract with every phone that already has it installed.
 // Renaming one is not a refactor: the app would come up unable to find the board it configured
 // and unable to remember the wizard was ever finished, silently re-onboarding every shipped
 // install. If one of these assertions fails, the fix is to put the old string back.
 describe('persisted key strings', () => {
+  it('writes the news URL under claudepost.newsUrl and its mark under claudepost.newsUrlPending', async () => {
+    // JSON-encoded, quotes and all — see `encodeNewsUrl` for why the empty address needs it.
+    await saveNewsUrl('https://desk.example/news.json')
+    expect(await AsyncStorage.getItem('claudepost.newsUrl')).toBe('"https://desk.example/news.json"')
+    expect(await AsyncStorage.getItem('claudepost.newsUrlPending')).toBe('1')
+  })
+
+  it('reads a value it did not write as nothing saved', async () => {
+    await AsyncStorage.setItem('claudepost.newsUrl', 'https://desk.example/news.json')
+    expect(await getNewsUrl()).toBeNull()
+    // ...and that is a real answer, not a failed read: the delivery drops an orphaned mark on it.
+    expect(await peekNewsUrl()).toBeNull()
+  })
+
+  it('peekNewsUrl tells "no address" from "no answer"', async () => {
+    await saveNewsUrl('https://desk.example/news.json')
+    __resetStoreCacheForTests()
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk is having a moment'))
+    expect(await peekNewsUrl()).toBeUndefined()
+    expect(await peekNewsUrl()).toBe('https://desk.example/news.json')
+  })
+
+  it('clearNewsUrl removes the address and leaves the mark to its own call', async () => {
+    await saveNewsUrl('https://desk.example/news.json')
+    await clearNewsUrl()
+    __resetStoreCacheForTests()
+    expect(await getNewsUrl()).toBeNull()
+    expect(await AsyncStorage.getItem('claudepost.newsUrl')).toBeNull()
+    expect(await isNewsUrlPending()).toBe(true)
+  })
+
   it('writes the base URL under claudepost.deviceBaseUrl', async () => {
     await setDeviceBaseUrl('http://1.2.3.4')
     expect(await AsyncStorage.getItem('claudepost.deviceBaseUrl')).toBe('http://1.2.3.4')
@@ -275,5 +373,25 @@ describe('a failed read is never cached', () => {
 
     expect(await isSetupSkipped()).toBe(false)
     expect(await isSetupSkipped()).toBe(true)
+  })
+
+  it('getNewsUrl retries after a rejecting read', async () => {
+    await saveNewsUrl('https://desk.example/news.json')
+    __resetStoreCacheForTests()
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk is having a moment'))
+
+    expect(await getNewsUrl()).toBeNull()
+    expect(await getNewsUrl()).toBe('https://desk.example/news.json')
+  })
+
+  it('isNewsUrlPending retries after a rejecting read', async () => {
+    // The one that matters most: a pending mark misread as "delivered" and then cached would
+    // never be delivered, and nothing on any screen would say so.
+    await saveNewsUrl('https://desk.example/news.json')
+    __resetStoreCacheForTests()
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk is having a moment'))
+
+    expect(await isNewsUrlPending()).toBe(false)
+    expect(await isNewsUrlPending()).toBe(true)
   })
 })

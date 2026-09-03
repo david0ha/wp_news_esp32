@@ -2155,6 +2155,12 @@ static int table_cols(const news_table_t *t, int w, int *label_w, int *cell_w)
 #define MD_GRF_BAR_MAX   64      /* a stack wider than this is a slab         */
 #define MD_GRF_MIN_PLOT  90
 #define MD_GRF_MARK      10
+/* The node on the line, as a half-width: the haloed square is this each way
+ * from the point and the coloured one a pixel less. Named because the sleeve
+ * under it has to be drawn from the same number — a sleeve sized off a stale
+ * copy of the halo's radius is a keyline that is short on one side only, which
+ * is the failure that is hardest to see and easiest to write. */
+#define MD_GRF_NODE       3
 #define MD_GRF_SEG_GAP    1      /* the paper between two stacked segments    */
 
 /* The furniture over the plot: the title, the unit, and the rule they sit on. */
@@ -2253,7 +2259,53 @@ static void grf_cb(lv_event_t *e)
          * 4.75) or is itself keylined in black. Two pixels because the line is
          * UI_RULE_MID: one either side, which survives a bar edge landing mid-
          * halo. It is drawn as a first full pass rather than per segment so that
-         * a vertex's own halo cannot punch through the segment before it. */
+         * a vertex's own halo cannot punch through the segment before it.
+         *
+         * AND THAT LAST SENTENCE IS WHERE THIS GRAPHIC WENT WRONG. "Separates
+         * from every treatment" is a claim about CONTRAST, and a KEYED bar's
+         * yellow does not need contrast with the halo — it needs the keyline the
+         * halo is painting over. A paper halo across a keyed bar leaves 1.10:1
+         * yellow against bare paper, which is the one thing the colour policy
+         * forbids outright; Broadcom's 3Q26 sheet came back with 211 such pixels
+         * where the falling margin line crossed the net-income bar. So every
+         * pass below is laid on a sleeve of ink first, clipped to the keyed bars
+         * themselves — see ui_series_sleeve_line_abs(). The sleeve is drawn for
+         * the whole polyline before any halo, for the same reason the halo is:
+         * one pass cannot be allowed to punch through the pass before it. */
+        for (int r = 0; r < g->rows; r++) {
+            if (grf_series(r, g->rows) != UI_SERIES_KEYED) continue;
+
+            for (int c = 0; c < g->cols; c++) {
+                const ui_grf_box_t *b = &g->box[r][c];
+                if (b->w <= 0 || b->y1 < b->y0) continue;
+
+                const lv_area_t fill = { a.x1 + b->x,            a.y1 + b->y0,
+                                         a.x1 + b->x + b->w - 1, a.y1 + b->y1 };
+
+                for (int i = 1; i < g->ln; i++) {
+                    ui_series_sleeve_line_abs(L, &fill,
+                                              a.x1 + g->lx[i - 1],
+                                              a.y1 + g->ly[i - 1],
+                                              a.x1 + g->lx[i], a.y1 + g->ly[i],
+                                              UI_RULE_MID + 2);
+                }
+                for (int i = 0; i < g->ln; i++) {
+                    ui_series_sleeve_rect_abs(L, &fill,
+                                              a.x1 + g->lx[i] - MD_GRF_NODE,
+                                              a.y1 + g->ly[i] - MD_GRF_NODE,
+                                              a.x1 + g->lx[i] + MD_GRF_NODE,
+                                              a.y1 + g->ly[i] + MD_GRF_NODE);
+                }
+                /* The direction mark by its bounding box, triangle or not: what
+                 * has to be true is that no pixel of it ends up beside yellow,
+                 * and a grown outline of a triangle is arithmetic nobody needs
+                 * to get right twice. */
+                ui_series_sleeve_rect_abs(L, &fill,
+                                          a.x1 + g->mkx, a.y1 + g->mky,
+                                          a.x1 + g->mkx + MD_GRF_MARK - 1,
+                                          a.y1 + g->mky + MD_GRF_MARK - 1);
+            }
+        }
         for (int i = 1; i < g->ln; i++) {
             ui_draw_line_c_abs(L, a.x1 + g->lx[i - 1], a.y1 + g->ly[i - 1],
                                a.x1 + g->lx[i], a.y1 + g->ly[i],
@@ -2270,13 +2322,17 @@ static void grf_cb(lv_event_t *e)
          * makes to GREEN. A three-pixel disc is mostly rim. Haloed like the
          * segments, and for the same reason. */
         for (int i = 0; i < g->ln; i++) {
-            ui_draw_rect_c_abs(L, a.x1 + g->lx[i] - 3, a.y1 + g->ly[i] - 3,
-                               a.x1 + g->lx[i] + 3, a.y1 + g->ly[i] + 3,
+            ui_draw_rect_c_abs(L, a.x1 + g->lx[i] - MD_GRF_NODE,
+                               a.y1 + g->ly[i] - MD_GRF_NODE,
+                               a.x1 + g->lx[i] + MD_GRF_NODE,
+                               a.y1 + g->ly[i] + MD_GRF_NODE,
                                true, 0, UI_PAPER);
         }
         for (int i = 0; i < g->ln; i++) {
-            ui_draw_rect_c_abs(L, a.x1 + g->lx[i] - 2, a.y1 + g->ly[i] - 2,
-                               a.x1 + g->lx[i] + 2, a.y1 + g->ly[i] + 2,
+            ui_draw_rect_c_abs(L, a.x1 + g->lx[i] - MD_GRF_NODE + 1,
+                               a.y1 + g->ly[i] - MD_GRF_NODE + 1,
+                               a.x1 + g->lx[i] + MD_GRF_NODE - 1,
+                               a.y1 + g->ly[i] + MD_GRF_NODE - 1,
                                true, 0, col);
         }
         if (g->lbp == 0) {

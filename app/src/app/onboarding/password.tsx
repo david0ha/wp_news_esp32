@@ -19,6 +19,7 @@ import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { parseOnboardingFlow, wizardStepHref } from '../../onboarding/flow'
 import { esp32, Esp32Error } from '../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
+import { clearNewsUrlPending, saveNewsUrl } from '../../lib/store'
 import { colors, fonts, layout, radius } from '../../theme'
 
 // Map a provisioning failure to a short, user-facing reason.
@@ -96,6 +97,13 @@ export default function Password() {
       setError(failureMessage(e))
       return
     }
+
+    // The board accepted the address along with the credentials, so the phone's own copy is
+    // brought level with it: saved, and marked delivered in the same breath. Without this the two
+    // would disagree from the first minute — the board on the wizard's address, the phone on
+    // whatever Settings last saved, with nothing pending to reconcile them.
+    await saveNewsUrl(vu.value ?? '')
+    await clearNewsUrlPending()
 
     // Credentials accepted; the board verifies them with a live join while its SoftAP stays up.
     // Poll until it reports the outcome (tolerating the brief AP drop during the channel hop).

@@ -1,4 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { createEsp32Client, humanError, Esp32Error, PAGE_COUNT, SLEEP_SECONDS_MAX, SLEEP_SECONDS_MIN } from './esp32'
 import { FB_SIZE, SCREEN_FORMAT } from './screen'
 
@@ -822,5 +824,42 @@ describe('humanError', () => {
 
   it('names the sleep bounds when the board refused an interval', () => {
     expect(humanError(new Esp32Error('sleep_seconds_invalid'))).toMatch(/60/)
+  })
+})
+
+// A sentence nobody asks for is not a sentence. `humanError` has always known that a timeout
+// means "the board is asleep, press a button on it", but the news-source editor in Settings did
+// not call it: it hand-rolled `news_url_invalid` and collapsed everything else — timeouts
+// included — into "Couldn't update. Please try again.", which is the wrong instruction for the
+// state a deep-sleeping board is in most of the time. The board card and the preview both got
+// this right; one screen did not, and nothing caught it, because the mapping lives inside a
+// component and this app has no component-testing machinery to reach it.
+//
+// So the rule is pinned structurally instead, the way the wizard's route table is: every screen
+// that reports a failed board call must route it through `humanError`. Reading the source is a
+// blunt instrument, but it is the one that fits through the hole.
+describe('every screen reports board failures through humanError', () => {
+  const SCREENS = [
+    'src/app/(tabs)/settings.tsx',
+    'src/app/(tabs)/board.tsx',
+    'src/app/preview.tsx',
+  ]
+
+  it.each(SCREENS)('%s imports humanError', (rel) => {
+    const src = readFileSync(join(__dirname, '../..', rel), 'utf8')
+    expect(src).toMatch(/\bhumanError\b/)
+  })
+
+  it.each(SCREENS)('%s does not hand-roll a sentence humanError already owns', (rel) => {
+    const src = readFileSync(join(__dirname, '../..', rel), 'utf8')
+    // The literal the editor used to return for `news_url_invalid` — identical to humanError's,
+    // which is exactly why the duplicate survived review. Re-adding it means a `catch` has stopped
+    // asking humanError and started guessing again.
+    const owned = humanError(new Esp32Error('news_url_invalid'))
+    const inCode = src
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('//'))
+      .join('\n')
+    expect(inCode).not.toContain(owned)
   })
 })

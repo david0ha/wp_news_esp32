@@ -11,6 +11,21 @@
 // The last two are not the same fact and must never be collapsed into one. "Finished" and "chose
 // not to" would become the same byte forever, with no way to reconstruct the difference.
 //
+// A fourth thing, in two keys, joined this file later and for a different reason:
+//
+//   - `claudepost.newsUrl`            The edition address the *phone* wants the board to poll.
+//   - `claudepost.newsUrlPending`     The board has not been told yet.
+//
+// The address used to live only on the board, so "change it" meant "POST it to the board right
+// now", and a board with deep sleep on is unreachable by design for all but a few seconds an hour.
+// Every save landed on a timeout and the setting could not be changed at all except by catching
+// the board awake. So the phone now owns the setting and the board subscribes to it: a save writes
+// here first, unconditionally, and `newsurlsync.ts` delivers it the next time any screen finds the
+// board answering. The pending mark is what makes delivery idempotent — set on save, cleared on the
+// first successful POST, and a strict `'1'` like the skip mark, for the same reason: a mark that
+// reads wrongly as "delivered" loses the address silently, while one that reads wrongly as
+// "pending" costs one redundant POST of the same URL, which the board treats as a no-op.
+//
 // **The key strings are load-bearing.** Every install already on TestFlight carries the first two
 // under exactly these names; renaming one is not a refactor, it is a silent re-onboarding of every
 // shipped phone — the app wakes up believing nobody ever set a board up. `store.test.ts` pins all
@@ -42,12 +57,17 @@ import { normalizeBaseUrl } from './discovery'
 const KEY_BASE_URL = 'claudepost.deviceBaseUrl'
 const KEY_ONBOARDED = 'claudepost.onboardingComplete'
 const KEY_SETUP_SKIPPED = 'claudepost.setupSkipped'
+const KEY_NEWS_URL = 'claudepost.newsUrl'
+const KEY_NEWS_URL_PENDING = 'claudepost.newsUrlPending'
 
 const SKIP_MARK = '1'
+const PENDING_MARK = '1'
 
 let onboardedCache: boolean | null = null
 let skippedCache: boolean | null = null
 let baseUrlCache: string | null | undefined // undefined = not yet read
+let newsUrlCache: string | null | undefined // undefined = not yet read
+let newsUrlPendingCache: boolean | null = null
 
 /**
  * How long to keep asking the disk, in milliseconds between attempts — four tries in under a
@@ -208,9 +228,120 @@ export async function clearSetupSkipped(): Promise<void> {
   }
 }
 
+/**
+ * The edition address this phone wants the board on, three-valued like `peekDeviceBaseUrl` and
+ * for the same reason: a saved address, `null` for "storage answered and holds none", `undefined`
+ * for "storage did not answer". `null` is not "demo" — the empty string is a real, saved value and
+ * means exactly that (the board's own built-in edition), because clearing the field and saving is
+ * a supported act and has to survive a relaunch like any other.
+ *
+ * The distinction matters to exactly one caller, the delivery in `newsurlsync.ts`, which has to
+ * decide what a pending mark with no address under it means. From `null` it means the mark is
+ * orphaned and should go; from `undefined` it means nothing yet, and clearing the mark on a disk
+ * hiccup would lose an address the user did save. Screens take `getNewsUrl` below, where the two
+ * fold together harmlessly: the editor's prefill falls back to the board's own copy.
+ */
+export async function peekNewsUrl(): Promise<string | null | undefined> {
+  if (newsUrlCache !== undefined) return newsUrlCache
+  let raw: string | null
+  try {
+    raw = await AsyncStorage.getItem(KEY_NEWS_URL)
+  } catch {
+    return undefined
+  }
+  newsUrlCache = decodeNewsUrl(raw)
+  return newsUrlCache
+}
+
+/** The two-valued read, for screens. A failed read answers `null` and caches nothing. */
+export async function getNewsUrl(): Promise<string | null> {
+  return (await peekNewsUrl()) ?? null
+}
+
+/**
+ * Drop the phone's copy of the address. Its one caller is the delivery, on finding a value under
+ * the key that this file did not write; there is no "forget the address" control, because an
+ * address is replaced by saving another and the demo edition is itself an address (`''`).
+ */
+export async function clearNewsUrl(): Promise<void> {
+  newsUrlCache = null
+  try {
+    await AsyncStorage.removeItem(KEY_NEWS_URL)
+  } catch {
+    // best-effort
+  }
+}
+
+// The address is stored JSON-encoded — `"https://…"` with the quotes — and the reason is the one
+// value that is not a URL. The empty string means "demo data" and is a real, deliverable setting,
+// but it is also the value most storage layers cannot tell from "nothing here": AsyncStorage's own
+// Jest mock answers `'' || null`, and a backend that did the same on a phone would turn a saved
+// "put the board on demo" into "never saved", which the sync then declines to deliver. Encoding
+// makes the empty address `""`, two characters that survive anything a string does.
+function encodeNewsUrl(url: string): string {
+  return JSON.stringify(url)
+}
+
+function decodeNewsUrl(raw: string | null): string | null {
+  if (raw === null) return null
+  try {
+    const value: unknown = JSON.parse(raw)
+    return typeof value === 'string' ? value : null
+  } catch {
+    // Not something this file wrote. Reading it as "nothing saved" asks for the address again,
+    // which is the cheap direction; reading it as an address would send garbage to the board.
+    return null
+  }
+}
+
+/**
+ * Record the address the user asked for and mark it undelivered, in that order and both before the
+ * caller can see the result. The cache is set before the write is awaited for the same reason
+ * `markSetupSkipped` does it: the caller's next act is to try the board, and a screen that reads
+ * the pending mark while the disk is still writing must see the save, not the state before it.
+ *
+ * The pending mark is set even when the caller is about to POST successfully a moment later and
+ * clear it again. Two writes is the price of never having a saved address with no mark beside it:
+ * that is the one state from which an undelivered address looks delivered forever.
+ */
+export async function saveNewsUrl(url: string): Promise<void> {
+  newsUrlCache = url
+  newsUrlPendingCache = true
+  try {
+    await AsyncStorage.setItem(KEY_NEWS_URL, encodeNewsUrl(url))
+    await AsyncStorage.setItem(KEY_NEWS_URL_PENDING, PENDING_MARK)
+  } catch {
+    // best-effort: the cost is a re-entry of one address
+  }
+}
+
+/** True only on the exact `'1'` mark. Missing, other, or a thrown read all read as delivered. */
+export async function isNewsUrlPending(): Promise<boolean> {
+  if (newsUrlPendingCache !== null) return newsUrlPendingCache
+  try {
+    newsUrlPendingCache = (await AsyncStorage.getItem(KEY_NEWS_URL_PENDING)) === PENDING_MARK
+  } catch {
+    // Not cached: a thrown read is not an answer.
+    return false
+  }
+  return newsUrlPendingCache
+}
+
+/** The board has the address. Called by the one place that knows — after a successful POST. */
+export async function clearNewsUrlPending(): Promise<void> {
+  newsUrlPendingCache = false
+  try {
+    await AsyncStorage.removeItem(KEY_NEWS_URL_PENDING)
+  } catch {
+    // best-effort: the cost is one redundant POST of an address the board already holds
+  }
+}
+
 /** Test hook: drop the in-memory caches so a fresh read hits the (mocked) store. */
 export function __resetStoreCacheForTests(): void {
   onboardedCache = null
   skippedCache = null
   baseUrlCache = undefined
+  newsUrlCache = undefined
+  newsUrlPendingCache = null
 }

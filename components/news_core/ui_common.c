@@ -150,6 +150,59 @@ void ui_series_draw_abs(lv_layer_t *L, int x0, int y0, int x1, int y1,
     }
 }
 
+/* --- sealing a keyed fill against what is drawn over it -------------------
+ *
+ * The keyline above is true of the pixels AT THE MOMENT THEY WERE LAID DOWN,
+ * and a bars-and-line graphic then draws its rate line across the bars: the
+ * line in ui_chg_colour()'s green or red, under a PAPER halo two pixels wider,
+ * because paper is the only thing that separates the line from a black bar.
+ * Where that halo crosses a KEYED bar it takes the keyline away and puts paper
+ * straight onto the 1.10:1 yellow. Broadcom's 3Q26 sheet failed the simulator
+ * with 211 yellow pixels open to the paper along the top-left corner of the
+ * net-income bar the falling margin line ran through, and the failure had
+ * nothing to do with the bar's size — the keyline was drawn correctly and then
+ * erased.
+ *
+ * So anything drawn across a keyed fill goes down on a SLEEVE first: the same
+ * shape, UI_SERIES_KEY_W wider on every side, in ink, CLIPPED TO THE FILL'S OWN
+ * RECTANGLE. The mark keeps its halo and its colour, the yellow keeps two
+ * pixels of black against both of them, and the sheet is unchanged everywhere
+ * the mark is not over yellow, which is what the clip is for: an unclipped
+ * sleeve would put a black casing around every rate line on the page.
+ *
+ * KEYED and not also OPEN, though ui_series_draw_abs() keylines both. OPEN's
+ * fill is paper, so a paper halo crossing it breaks the bar's outline and
+ * nothing else — no check and no reader is misled — and casing the line in
+ * black across a white bar would be far more conspicuous than the four pixels
+ * of missing outline it repaired. Yellow is the ink that cannot be left
+ * touching paper. */
+static void line_walk(lv_layer_t *L, int x1, int y1, int x2, int y2, int w,
+                      lv_color_t colour, const lv_area_t *clip);
+
+void ui_series_sleeve_line_abs(lv_layer_t *L, const lv_area_t *fill,
+                               int x1, int y1, int x2, int y2, int w)
+{
+    if (!L || !fill) return;
+    line_walk(L, x1, y1, x2, y2, w + 2 * UI_SERIES_KEY_W, UI_INK, fill);
+}
+
+void ui_series_sleeve_rect_abs(lv_layer_t *L, const lv_area_t *fill,
+                               int x1, int y1, int x2, int y2)
+{
+    if (!L || !fill) return;
+
+    x1 -= UI_SERIES_KEY_W;  y1 -= UI_SERIES_KEY_W;
+    x2 += UI_SERIES_KEY_W;  y2 += UI_SERIES_KEY_W;
+
+    if (x1 < fill->x1) x1 = fill->x1;
+    if (y1 < fill->y1) y1 = fill->y1;
+    if (x2 > fill->x2) x2 = fill->x2;
+    if (y2 > fill->y2) y2 = fill->y2;
+    if (x1 > x2 || y1 > y2) return;
+
+    ui_draw_rect_c_abs(L, x1, y1, x2, y2, true, 0, UI_INK);
+}
+
 /* The treatment travels in the object's user data rather than in a heap struct,
  * because it is one byte and lv_obj_set_user_data() takes a pointer-sized slot
  * that is otherwise wasted. No allocation means no LV_EVENT_DELETE handler to
@@ -360,8 +413,26 @@ static lv_color_t ink(bool white)
  * steps share an edge, so no diagonal can open a one-pixel hole the way a
  * square brush stamped per pixel does.
  */
-void ui_draw_line_c_abs(lv_layer_t *L, int x1, int y1, int x2, int y2, int w,
-                        lv_color_t colour)
+/* One span of the walk below, clipped to `clip` when there is one. Clipping the
+ * SPANS and not the endpoints is the whole point: a line clipped at its ends is
+ * still `w` px thick at the cut, so up to half its width lands outside the
+ * rectangle it was meant to stay inside. That would put black stubs sticking
+ * out of a bar. */
+static void line_span(lv_layer_t *L, int x1, int y1, int x2, int y2,
+                      lv_color_t colour, const lv_area_t *clip)
+{
+    if (clip) {
+        if (x1 < clip->x1) x1 = clip->x1;
+        if (y1 < clip->y1) y1 = clip->y1;
+        if (x2 > clip->x2) x2 = clip->x2;
+        if (y2 > clip->y2) y2 = clip->y2;
+        if (x1 > x2 || y1 > y2) return;
+    }
+    ui_draw_rect_c_abs(L, x1, y1, x2, y2, true, 0, colour);
+}
+
+static void line_walk(lv_layer_t *L, int x1, int y1, int x2, int y2, int w,
+                      lv_color_t colour, const lv_area_t *clip)
 {
     if (w < 1) w = 1;
 
@@ -387,13 +458,13 @@ void ui_draw_line_c_abs(lv_layer_t *L, int x1, int y1, int x2, int y2, int w,
         for (int x = x1; x <= x2; x++) {
             err -= ady;
             if (err < 0 && x < x2) {
-                ui_draw_rect_c_abs(L, run, y + t0, x, y + t1, true, 0, colour);
+                line_span(L, run, y + t0, x, y + t1, colour, clip);
                 err += adx;
                 y   += sy;
                 run  = x + 1;
             }
         }
-        ui_draw_rect_c_abs(L, run, y + t0, x2, y + t1, true, 0, colour);
+        line_span(L, run, y + t0, x2, y + t1, colour, clip);
     } else {
         if (y1 > y2) { t = x1; x1 = x2; x2 = t;  t = y1; y1 = y2; y2 = t; }
 
@@ -404,14 +475,20 @@ void ui_draw_line_c_abs(lv_layer_t *L, int x1, int y1, int x2, int y2, int w,
         for (int y = y1; y <= y2; y++) {
             err -= adx;
             if (err < 0 && y < y2) {
-                ui_draw_rect_c_abs(L, x + t0, run, x + t1, y, true, 0, colour);
+                line_span(L, x + t0, run, x + t1, y, colour, clip);
                 err += ady;
                 x   += sx;
                 run  = y + 1;
             }
         }
-        ui_draw_rect_c_abs(L, x + t0, run, x + t1, y2, true, 0, colour);
+        line_span(L, x + t0, run, x + t1, y2, colour, clip);
     }
+}
+
+void ui_draw_line_c_abs(lv_layer_t *L, int x1, int y1, int x2, int y2, int w,
+                        lv_color_t colour)
+{
+    line_walk(L, x1, y1, x2, y2, w, colour, NULL);
 }
 
 void ui_draw_line_abs(lv_layer_t *L, int x1, int y1, int x2, int y2, int w, bool white)
