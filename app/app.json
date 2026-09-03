@@ -3,7 +3,7 @@
     "name": "Claude Post",
     "slug": "claudepost-companion",
     "scheme": "claudepost",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "ios": {
