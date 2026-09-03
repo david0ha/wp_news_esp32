@@ -302,7 +302,7 @@ describe('decideNewsUrlSave', () => {
   const URL = 'https://desk.example/news.json'
 
   it('board took it: persist, delivered, green', () => {
-    expect(decideNewsUrlSave(URL, { ok: true })).toEqual({
+    expect(decideNewsUrlSave(URL, { ok: true }, null)).toEqual({
       persist: true,
       pending: false,
       tone: 'ok',
@@ -311,7 +311,7 @@ describe('decideNewsUrlSave', () => {
   })
 
   it('board took the empty address: says demo, not "fetching"', () => {
-    const d = decideNewsUrlSave('', { ok: true })
+    const d = decideNewsUrlSave('', { ok: true }, null)
     expect(d).toMatchObject({ persist: true, pending: false, tone: 'ok' })
     expect(d.message).toBe('Cleared — the board is back on demo data.')
   })
@@ -320,7 +320,7 @@ describe('decideNewsUrlSave', () => {
     'board refused with %s: nothing saved, red, in humanError’s words',
     (code) => {
       const e = new Esp32Error(code, undefined, 400)
-      expect(decideNewsUrlSave(URL, { error: e })).toEqual({
+      expect(decideNewsUrlSave(URL, { error: e }, null)).toEqual({
         persist: false,
         pending: false,
         tone: 'error',
@@ -330,7 +330,7 @@ describe('decideNewsUrlSave', () => {
   )
 
   it('board asleep (timeout): persist, pending, the help voice, and says asleep', () => {
-    const d = decideNewsUrlSave(URL, { error: new Esp32Error('timeout') })
+    const d = decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null)
     expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
     expect(d.message).toMatch(/asleep/)
     expect(d.message).toMatch(/^Saved/)
@@ -339,7 +339,7 @@ describe('decideNewsUrlSave', () => {
   it.each(['network_error', 'busy', 'http_error', 'read_error'] as const)(
     'board did not take it (%s): persist, pending, the help voice, and does not claim asleep',
     (code) => {
-      const d = decideNewsUrlSave(URL, { error: new Esp32Error(code) })
+      const d = decideNewsUrlSave(URL, { error: new Esp32Error(code) }, null)
       expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
       expect(d.message).not.toMatch(/asleep/)
       expect(d.message).toMatch(/^Saved/)
@@ -347,18 +347,49 @@ describe('decideNewsUrlSave', () => {
   )
 
   it('an error that is not the client’s is treated as the board not taking it', () => {
-    const d = decideNewsUrlSave(URL, { error: new TypeError('cannot read properties of undefined') })
+    const d = decideNewsUrlSave(URL, { error: new TypeError('cannot read properties of undefined') }, null)
     expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
     expect(d.message).not.toMatch(/asleep/)
   })
 
   it('no client: persist, pending, and its own sentence — not "asleep"', () => {
-    const d = decideNewsUrlSave(URL, { noClient: true })
+    const d = decideNewsUrlSave(URL, { noClient: true }, null)
     expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
     expect(d.message).toBe(
       'Saved on this phone. Not connected to a board right now — it will be sent when this app reaches one.',
     )
-    expect(d.message).not.toBe(decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }).message)
+    expect(d.message).not.toBe(decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null).message)
+  })
+
+  it('no board on this phone: names the reader that is using the address, not the hardware', () => {
+    // The News source editor is no longer gated on owning a board — the Today tab reads this same
+    // address — so the board-only sentence is now said to people who have never had one. It named
+    // hardware that does not exist and promised a delivery nobody was waiting for.
+    const d = decideNewsUrlSave(URL, { noClient: true }, false)
+    expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
+    expect(d.message).toBe(
+      'Saved. Today reads from this address. A board you set up later will get it too.',
+    )
+  })
+
+  it('no board and a cleared address: says the Today tab is on the demo', () => {
+    // The help text and the button both promise the demo; the confirmation said only that an
+    // absent board would be told, which is the one thing the reader cannot see.
+    const d = decideNewsUrlSave('', { noClient: true }, false)
+    expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
+    expect(d.message).toBe('Cleared — Today is on the demo edition.')
+  })
+
+  it('keeps the board owner’s sentences, and says nothing new while storage is silent', () => {
+    // `hasDevice === false`, never `!hasDevice`: `null` is "storage has not answered yet", and a
+    // sentence about a board this phone may well own must not be said on a guess.
+    const unknown = decideNewsUrlSave(URL, { noClient: true }, null)
+    const owner = decideNewsUrlSave(URL, { noClient: true }, true)
+    expect(owner.message).toBe(unknown.message)
+    expect(owner.message).toMatch(/board/)
+    expect(decideNewsUrlSave(URL, { ok: true }, false).message).toBe(
+      'Saved. The board is fetching it now.',
+    )
   })
 })
 
@@ -378,6 +409,20 @@ describe('the screens are wired to the rules', () => {
       expect(read(rel)).toMatch(/\bsyncPendingNewsUrl\(/)
     },
   )
+
+  it('settings tells the save rule whether this phone has a board', () => {
+    // The third argument is the whole of rows B1/B3: without it the editor says "Not yet on the
+    // board" to somebody who has never had one, and says it for ever, because nothing without a
+    // client ever calls syncPendingNewsUrl to clear the mark.
+    expect(read('src/app/(tabs)/settings.tsx')).toMatch(/decideNewsUrlSave\(next, outcome, hasDevice\)/)
+  })
+
+  it('settings offers the board-less phone the reader’s sentence, on `=== false` and not on falsiness', () => {
+    const src = read('src/app/(tabs)/settings.tsx')
+    expect(src).toMatch(/Today reads from this address\. A board you set up later will get it too\./)
+    expect(src).toMatch(/Not yet on the board — it will be sent the next time this app reaches it\./)
+    expect(src).toMatch(/hasBoard === false/)
+  })
 
   it('settings.tsx decides a save by the rule, and waits for the wire first', () => {
     const src = read('src/app/(tabs)/settings.tsx')

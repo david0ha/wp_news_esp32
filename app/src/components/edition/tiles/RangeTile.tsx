@@ -36,8 +36,15 @@ import { lineHeightOf } from '../metrics'
 /** The price at each end of the track: 11 px type, given a line height so the row is measurable. */
 const END_LINE = 14
 /** The track row is the taller of its text and the 6 px rail. */
-const TRACK_ROW = END_LINE
-const CAPTION_LINE = lineHeightOf(type.caption)
+export const RANGE_TRACK_ROW_H = END_LINE
+/**
+ * The caption under the track, read off the token it is drawn with.
+ *
+ * Exported so `metrics.test.ts` can hold `RANGE_TRACK_H`'s 44 to it: `tiles.ts` may not import
+ * the theme, so its 44 is a literal, and a retuned `type.caption` would leave the estimator
+ * sizing a box for the old ramp while this draws the new one.
+ */
+export const RANGE_CAPTION_LINE = lineHeightOf(type.caption)
 /** The label and the value inside one stat. They and the gap around them make RANGE_STAT_ROW_H. */
 const STAT_LABEL_LINE = 16
 const STAT_VALUE_LINE = 17
@@ -143,7 +150,7 @@ const styles = StyleSheet.create({
     paddingVertical: space.xs,
   },
   trackRow: {
-    height: TRACK_ROW,
+    height: RANGE_TRACK_ROW_H,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -171,7 +178,7 @@ const styles = StyleSheet.create({
   },
   caption: {
     ...type.caption,
-    lineHeight: CAPTION_LINE,
+    lineHeight: RANGE_CAPTION_LINE,
   },
   grid: {
     // Takes whatever the heading and the track box left, and clips DOWNWARD if a narrow phone

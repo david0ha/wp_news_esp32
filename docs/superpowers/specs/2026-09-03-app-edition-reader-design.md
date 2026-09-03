@@ -94,7 +94,7 @@ app/src/components/edition/
         BriefsTile.tsx PeersTile.tsx TableTile.tsx TapeTile.tsx
   detail/TileDetail.tsx  the full content of one tile, by kind
 app/src/app/(tabs)/edition.tsx     the Today tab
-app/src/app/edition/[tile].tsx     the detail route (root stack, deep-linkable)
+app/src/app/tile/[id].tsx          the detail route (root stack, deep-linkable; /tile/<id>, not under the tab prefix)
 ```
 
 `lib/screen.ts` keeps its public `decode(fbBytes)` for the board preview; its PNG encoder gains a
@@ -134,7 +134,7 @@ export interface EditionTable {
   title: string; note: string; render: string; columns: string[]; rows: EditionTableRow[]
 }
 export interface EditionChart {
-  kind: 'line' | 'candle' | 'bar' | 'sparkline'; label: string; span: string; note: string
+  kind: 'line' | 'candle' | 'bar'; label: string; span: string; note: string
   open: number[]; high: number[]; low: number[]; close: number[]
 }
 export interface EditionIndex {
@@ -159,11 +159,17 @@ export const EDITION_CAPS = { stories: 5, figures: 28, briefs: 8, peers: 6, tabl
 
 `parseEdition(json: unknown): Edition` is total: every field is optional on the wire and absent,
 `null` and wrong-typed all become the default (`''`, `null`, `[]`), exactly as `news_parse.c`
-does. A story without a `headline` is dropped; a figure without `label` and `value` is dropped; a
-peer without `symbol` is dropped. Stories are sorted ascending by `rank` (default 9), stable, and
+does. A story without a `headline` is dropped; a figure missing either `label` or `value` is
+dropped; a brief with no `text` is dropped; a peer without `symbol` is dropped. Stories are sorted ascending by `rank` (default 9), stable, and
 cut to five *after* sorting so a payload that appends its lead keeps it. `chart` outside
-`[0, charts.length)` becomes `null`. `wk52High`/`wk52Low` of `0` become `null`. A chart `kind`
-outside the four becomes `'line'`. Non-finite numbers become `null`. Unknown keys are ignored.
+`[0, charts.length)` becomes `null`. `wk52High`/`wk52Low` of `0` become `null`. A chart whose
+`kind` is absent, unknown or `"none"` (matched case-insensitively, as `news_chart_kind_from()`
+does) or whose `close` is empty is **not a chart**: it is dropped, and every story's `chart` index
+is re-resolved so a story naming a survivor keeps it and one naming a hole gets `null` — the same
+page the device prints from the same payload. Every series keeps its **last** 48 samples
+(`NEWS_BARS_MAX`). Tables cap at 10 rows and 6 columns, a blank row is dropped, and the numeric
+plane `n[]` is erased whole unless every row supplied a full one. Non-finite numbers become
+`null`. Unknown keys are ignored.
 
 `parseEdition` **never throws**; the caller decides whether an edition with no `subject.symbol`
 and no stories is worth showing (`isEmptyEdition(e)` is exported for that).
@@ -187,7 +193,8 @@ export function tileUrl(newsUrl: string, id: string): string
 
 The request is what the board sends: plain `GET`, `If-None-Match` when an ETag is held, 15 s
 timeout via `AbortController`, a `320 * 1024`-byte cap on the body (the device's own; a payload
-bigger than that is one the board would reject too), `304` → `not_modified`, non-2xx → `http`,
+bigger than that is one the board would reject too), `304` → `not_modified` only when an ETag was
+sent (an unsolicited 304 is `http`, as `news_service.c` rules), non-2xx → `http`,
 unparsable body → `bad_json`, thrown fetch → `transport`. A `200` whose body parses to an empty
 edition is `bad_json`. `tileUrl` is the contract's rule: the news URL's directory (everything up to
 and including the last `/`, query and fragment removed) plus `tiles/<id>.bin`.

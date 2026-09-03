@@ -1,4 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import {
   demoCache,
   INITIAL_EDITION_MACHINE,
@@ -37,6 +39,35 @@ const ok = (symbol: string, etag: string | null): EditionFetch => ({
 /** Feed a machine a list of events, in order. */
 const run = (start: EditionMachine, ...events: EditionEvent[]): EditionMachine =>
   events.reduce(nextEditionState, start)
+
+// The hook that wraps this reducer has no test runner in this app, so the shape of its effects is
+// pinned the way `newsurlsync.test.ts` pins the screens: by reading the source. Both facts below
+// are structural — a second driver or a late sequence bump has no symptom a unit test could see,
+// and both were real defects before this.
+describe('useEdition’s effect shape', () => {
+  // Comment lines stripped, the same way `newsurlsync.test.ts` reads a screen: the header below
+  // NAMES `bootedRef` to say what was removed and why, and a test that could not tell prose from
+  // code would be a test against writing the explanation down.
+  const source = readFileSync(join(__dirname, 'useEdition.ts'), 'utf8')
+    .split('\n')
+    .filter((l) => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('*'))
+    .join('\n')
+
+  it('has exactly one driver, and it is the focus callback', () => {
+    // `useFocusEffect` fires on mount as well as on every return to the tab, so a mount
+    // `useEffect` beside it is a second driver for the same event — and serialising the two by
+    // hand is what dropped every focus during the first fetch, `bootedRef` and all.
+    expect(source.match(/useFocusEffect\(/g)).toHaveLength(1)
+    expect(source).not.toMatch(/\buseEffect\(/)
+    expect(source).not.toMatch(/bootedRef/)
+  })
+
+  it('bumps the sequence at the moment it dispatches a new URL, before any await', () => {
+    // An in-flight fetch for the OLD address settles inside `adopt`'s disk read — fifteen seconds
+    // is a long window — and until the bump it still passed the guard in `runFetch`.
+    expect(source).toMatch(/seqRef\.current\+\+\s*\n\s*dispatch\(\{ type: 'url', url \}\)/)
+  })
+})
 
 describe('nextEditionState — the starting point', () => {
   it('begins loading, with no URL read yet', () => {
@@ -144,7 +175,7 @@ describe('nextEditionState — a fetch that succeeded', () => {
       INITIAL_EDITION_MACHINE,
       { type: 'url', url: URL },
       { type: 'cache', cached: cache() },
-      { type: 'failed', error: 'the network went away' },
+      { type: 'failed', url: URL, error: 'the network went away' },
       { type: 'refreshing' },
       { type: 'fetched', result: ok('SNDK', null), url: URL, fetchedAt: 6000 },
     )
@@ -207,12 +238,36 @@ describe('nextEditionState — a 304', () => {
 })
 
 describe('nextEditionState — a fetch that failed', () => {
+  it('drops a failure that names a URL the machine has moved past', () => {
+    // The old desk's 15-second timeout landing after Settings changed the address. With no URL
+    // guard on this event it flipped the NEW url's `loading` into an error card — and the `cache`
+    // event coming along behind it was then a no-op, because the status was no longer `loading`,
+    // so the reader sat on an error about a desk they had just stopped using until they tapped
+    // Retry. `fetched` has carried its URL from the start; `failed` had not.
+    const moved = run(
+      INITIAL_EDITION_MACHINE,
+      { type: 'url', url: URL },
+      { type: 'url', url: OTHER },
+    )
+    expect(
+      nextEditionState(moved, { type: 'failed', url: URL, error: 'the old desk timed out' }),
+    ).toBe(moved)
+
+    // And the new desk's own cache still lands on the screen behind it.
+    const m = run(
+      moved,
+      { type: 'failed', url: URL, error: 'the old desk timed out' },
+      { type: 'cache', cached: cache({ url: OTHER }) },
+    )
+    expect(m.state.status).toBe('ready')
+  })
+
   it('keeps the cached edition and raises a banner', () => {
     const m = run(
       INITIAL_EDITION_MACHINE,
       { type: 'url', url: URL },
       { type: 'cache', cached: cache() },
-      { type: 'failed', error: "Couldn't reach the edition server." },
+      { type: 'failed', url: URL, error: "Couldn't reach the edition server." },
     )
     if (m.state.status !== 'ready') throw new Error('unreachable')
     expect(m.state.cached.edition).toEqual(edition('SNDK'))
@@ -225,7 +280,7 @@ describe('nextEditionState — a fetch that failed', () => {
       INITIAL_EDITION_MACHINE,
       { type: 'url', url: URL },
       { type: 'cache', cached: null },
-      { type: 'failed', error: 'nope' },
+      { type: 'failed', url: URL, error: 'nope' },
     )
     expect(m.state).toEqual({ status: 'error', error: 'nope' })
   })
@@ -234,8 +289,8 @@ describe('nextEditionState — a fetch that failed', () => {
     const m = run(
       INITIAL_EDITION_MACHINE,
       { type: 'url', url: URL },
-      { type: 'failed', error: 'first' },
-      { type: 'failed', error: 'second' },
+      { type: 'failed', url: URL, error: 'first' },
+      { type: 'failed', url: URL, error: 'second' },
     )
     expect(m.state).toEqual({ status: 'error', error: 'second' })
   })
@@ -244,7 +299,7 @@ describe('nextEditionState — a fetch that failed', () => {
     const m = run(
       INITIAL_EDITION_MACHINE,
       { type: 'url', url: URL },
-      { type: 'failed', error: 'first' },
+      { type: 'failed', url: URL, error: 'first' },
       { type: 'fetched', result: ok('SNDK', null), url: URL, fetchedAt: 8000 },
     )
     expect(m.state.status).toBe('ready')
@@ -269,7 +324,7 @@ describe('nextEditionState — refreshing', () => {
       INITIAL_EDITION_MACHINE,
       { type: 'url', url: URL },
       { type: 'cache', cached: cache() },
-      { type: 'failed', error: 'gone' },
+      { type: 'failed', url: URL, error: 'gone' },
       { type: 'refreshing' },
     )
     expect(m.state.status === 'ready' && m.state.error).toBe('gone')
@@ -278,7 +333,7 @@ describe('nextEditionState — refreshing', () => {
   it('does nothing to a loading or an error screen', () => {
     const loading = nextEditionState(INITIAL_EDITION_MACHINE, { type: 'url', url: URL })
     expect(nextEditionState(loading, { type: 'refreshing' })).toBe(loading)
-    const failed = nextEditionState(loading, { type: 'failed', error: 'x' })
+    const failed = nextEditionState(loading, { type: 'failed', url: URL, error: 'x' })
     expect(nextEditionState(failed, { type: 'refreshing' })).toBe(failed)
   })
 })
@@ -312,7 +367,7 @@ describe('the spec’s error-handling table, the row that crosses two modules', 
     expect(thrown).toMatchObject({ code: 'bad_json' })
 
     // Half two: a failure with content on screen is a banner, not a blank sheet.
-    const m = nextEditionState(ready, { type: 'failed', error: humanEditionError(thrown) })
+    const m = nextEditionState(ready, { type: 'failed', url: URL, error: humanEditionError(thrown) })
     if (m.state.status !== 'ready') throw new Error('the cached edition was taken off screen')
     expect(m.state.cached.edition).toEqual(edition('SNDK'))
     expect(m.state.cached.fetchedAt).toBe(1000) // NOT confirmed: the freshness line keeps ageing

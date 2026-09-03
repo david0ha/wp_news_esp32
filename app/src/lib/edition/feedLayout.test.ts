@@ -1,9 +1,18 @@
 import { describe, it, expect } from '@jest/globals'
-import { columnWidth, photoBoxHeight, resolveChip, COLUMN_GAP } from './feedLayout'
+import { columnWidth, editionKey, photoBoxHeight, resolveChip, COLUMN_GAP } from './feedLayout'
+import { emptyEdition } from './parse'
 import { type Chip } from './tiles'
+import { type CachedEdition } from './store'
 import { type EditionPhoto } from './types'
 
 const GUTTER = 16
+
+const cached = (generatedAt: string, fetchedAt: number): CachedEdition => ({
+  url: 'http://desk.local:8123/news.json',
+  etag: null,
+  fetchedAt,
+  edition: { ...emptyEdition(), generatedAt },
+})
 
 function photo(w: number, h: number): EditionPhoto {
   return { id: 'p', w, h, caption: '', credit: '' }
@@ -71,5 +80,27 @@ describe('photoBoxHeight', () => {
 
   it('survives a zero width instead of dividing by it', () => {
     expect(photoBoxHeight(photo(0, 400), 300)).toBe(300)
+  })
+})
+
+describe('editionKey', () => {
+  it('is the edition’s own stamp when it has one', () => {
+    expect(editionKey(cached('2026-08-14T05:12:00Z', 1000))).toBe('2026-08-14T05:12:00Z')
+  })
+
+  it('falls back to the moment it was fetched, so an undated edition still has an identity', () => {
+    expect(editionKey(cached('', 1755000000000))).toBe('1755000000000')
+    // The demo's fetchedAt is 0 — a stamp of its own, and a constant one, which is right: the
+    // bundled edition never changes under the tiles keyed on it.
+    expect(editionKey(cached('', 0))).toBe('0')
+  })
+
+  it('changes when the edition does — which is the whole reason a photo tile is keyed on it', () => {
+    // Tile ids are the producer's and repeat across days: `photo:0` is `photo:0` every edition,
+    // and the lead band is 1140x320 every edition. Keyed by id alone, React reuses the mounted
+    // tile, its effect sees the same url/w/h, and today's caption sits over yesterday's picture.
+    expect(editionKey(cached('2026-08-14T05:12:00Z', 1000))).not.toBe(
+      editionKey(cached('2026-08-15T05:12:00Z', 1000)),
+    )
   })
 })

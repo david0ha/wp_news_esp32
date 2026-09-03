@@ -195,15 +195,16 @@ describe('parseEdition — totality', () => {
     expect(e.subject.prevClose).toBe(0)
   })
 
-  it('drops a story with no headline, a figure with no label and no value, a peer with no symbol', () => {
+  it('drops a story with no headline, a figure missing either half, a peer with no symbol', () => {
     const e = parseEdition({
       stories: [{ headline: 'kept' }, { deck: 'orphan deck' }, { headline: '' }],
       figures: [{ label: 'A', value: '1' }, { group: 'G' }, { value: '2' }],
       peers: [{ symbol: 'MU' }, { name: 'no symbol' }],
     })
     expect(e.stories.map((s) => s.headline)).toEqual(['kept'])
-    expect(e.figures.map((f) => f.label)).toEqual(['A', ''])
-    expect(e.figures[1].value).toBe('2')
+    // A value with no label is half a row under a standing head — `news_parse.c:489` drops it,
+    // and so does this. The version of this test that kept it enshrined the divergence.
+    expect(e.figures.map((f) => f.label)).toEqual(['A'])
     expect(e.peers.map((p) => p.symbol)).toEqual(['MU'])
   })
 
@@ -271,9 +272,75 @@ describe('parseEdition — totality', () => {
     expect(parseEdition({ stories: [{ headline: 'h', chart: 0 }] }).stories[0].chart).toBeNull()
   })
 
-  it('falls an unknown chart kind back to line', () => {
-    const e = parseEdition({ charts: [{ kind: 'violin', close: [1] }, { kind: 'candle', close: [1] }] })
-    expect(e.charts.map((c) => c.kind)).toEqual(['line', 'candle'])
+  it('reads a chart kind the way news_chart_kind_from does — three words, case-insensitively', () => {
+    // news_model.c:165-172. `Bar` is CHART_BAR on the glass; reading it as a line drew a
+    // different picture from the same payload on the two screens.
+    const e = parseEdition({
+      charts: [{ kind: 'Bar', close: [1] }, { kind: 'CANDLE', close: [1] }],
+    })
+    expect(e.charts.map((c) => c.kind)).toEqual(['bar', 'candle'])
+    expect(parseEdition({ charts: [{ kind: 'LiNe', close: [1] }] }).charts[0].kind).toBe('line')
+  })
+
+  it('drops a chart whose kind is absent, unknown or "none" — there is no fallback kind', () => {
+    // CHART_NONE is the model's single test for "is there a chart". A kind nobody chose is not a
+    // line chart; it is no chart, and the module reflows without it.
+    for (const kind of ['violin', 'none', 'NONE', '', undefined]) {
+      const e = parseEdition({ charts: [{ kind, close: [1, 2] }] })
+      expect(e.charts).toHaveLength(0)
+    }
+  })
+
+  it('drops a chart with a kind and no series — never an empty plot', () => {
+    // news_parse.c:305-307 — `if (ch->n == 0) memset(ch, 0, ...)`. A kind with nothing behind it
+    // would reserve a tile and draw an empty box, which is the one thing tiles.ts forbids.
+    expect(parseEdition({ charts: [{ kind: 'bar', label: 'REVENUE' }] }).charts).toHaveLength(0)
+    expect(parseEdition({ charts: [{ kind: 'line', close: [] }] }).charts).toHaveLength(0)
+    expect(parseEdition({ charts: [{ kind: 'line', close: ['x', null] }] }).charts).toHaveLength(0)
+  })
+
+  it('re-resolves a story’s chart index across a chart that did not survive', () => {
+    // The device keeps the empty slot so its indices cannot renumber (news_parse.c:319-337); the
+    // phone drops it and remaps, which reaches the same chart from the same index. What must
+    // never happen is a story pointing at the wrong picture — or at a blank one.
+    const e = parseEdition({
+      charts: [{ kind: 'bar', label: 'REVENUE' }, { kind: 'line', close: [1, 2] }],
+      stories: [
+        { headline: 'names the line', rank: 0, chart: 1 },
+        { headline: 'names the hole', rank: 1, chart: 0 },
+      ],
+    })
+    expect(e.charts).toHaveLength(1)
+    expect(e.charts[0].label).toBe('')
+    expect(e.stories[0].chart).toBe(0)
+    expect(e.charts[e.stories[0].chart ?? -1].close).toEqual([1, 2])
+    expect(e.stories[1].chart).toBeNull()
+  })
+
+  it('keeps the LAST NEWS_BARS_MAX samples of every series, as the board does', () => {
+    // news_parse.c:284-286 — `skip = total - n`, a month of candles, most recent kept. A phone
+    // plotting 60 where the board plots 48 colours a line by a different first point, and the
+    // bar layout floors at 2 px and clips the NEWEST bars off the end of the Svg.
+    const many = (n: number, f: (i: number) => number) => Array.from({ length: n }, (_, i) => f(i))
+    const e = parseEdition({
+      charts: [
+        {
+          kind: 'candle',
+          close: many(60, (i) => i),
+          open: many(60, (i) => i + 1000),
+          high: many(60, (i) => i + 2000),
+          low: many(60, (i) => i + 3000),
+        },
+      ],
+    })
+    const c = e.charts[0]
+    expect(c.close).toHaveLength(EDITION_CAPS.bars)
+    expect(c.close[0]).toBe(12) // 60 - 48
+    expect(c.close[EDITION_CAPS.bars - 1]).toBe(59)
+    // The four planes are cut at the same absolute indices, or the candles are all subtly wrong.
+    expect(c.open[0]).toBe(1012)
+    expect(c.high[0]).toBe(2012)
+    expect(c.low[0]).toBe(3012)
   })
 
   it('drops a chart point that has no close, and keeps the series parallel', () => {
@@ -321,6 +388,46 @@ describe('parseEdition — totality', () => {
     expect(p.peers.map((x) => x.isSubject)).toEqual([false, true])
   })
 
+  it('drops a figure that is missing either half of its row', () => {
+    // news_parse.c:489 — `if (!label[0] || !value[0]) continue`. Half a row under a standing head
+    // reads as a rendering fault, and a group of four that fits the board becomes five with a
+    // "+1 more" on the phone.
+    const e = parseEdition({
+      figures: [
+        { group: 'VALUATION', label: 'EV/EBITDA' },
+        { group: 'VALUATION', value: '22.4x' },
+        { group: 'VALUATION', label: 'P/E', value: '31.2x' },
+      ],
+    })
+    expect(e.figures.map((f) => f.label)).toEqual(['P/E'])
+  })
+
+  it('rounds a figure bar half away from zero, as sround does', () => {
+    // news_parse.c:540 — the bar goes through `sround`, not a truncation. 999.6 is 1000 on the
+    // glass; truncating it here put the same producer's bar a pixel short on the phone.
+    const e = parseEdition({
+      figures: [
+        { label: 'a', value: '1', bar: 999.6 },
+        { label: 'b', value: '2', bar: 0.5 },
+        { label: 'c', value: '3', bar: 0.4 },
+      ],
+    })
+    expect(e.figures.map((f) => f.bar)).toEqual([1000, 1, 0])
+  })
+
+  it('rounds emph before it asks whether it is zero', () => {
+    // news_parse.c:522-524 — `sround(value, 1) != 0`. 0.4 rounds to 0 and stays quiet; a hero
+    // the producer did not ask for is the loudest way to get a page wrong.
+    const e = parseEdition({
+      figures: [
+        { label: 'a', value: '1', emph: 0.4 },
+        { label: 'b', value: '2', emph: -0.4 },
+        { label: 'c', value: '3', emph: 0.5 },
+      ],
+    })
+    expect(e.figures.map((f) => f.emph)).toEqual([false, false, true])
+  })
+
   it('drops a brief with no text, and it does not count toward the cap', () => {
     // news_parse.c:562-563 — the text is the item; a date/kicker over nothing is furniture.
     const e = parseEdition({
@@ -330,11 +437,74 @@ describe('parseEdition — totality', () => {
     expect(e.briefs[0].text).toBe('kept')
   })
 
-  it('pads a statement’s numeric plane to the row’s cell count', () => {
+  it('pads a statement’s numeric plane to the COLUMN count, not the row’s cell count', () => {
+    // The plane is positional against the header, so a short row still owes a cell per column —
+    // and a long one has no seventh column to put a seventh number in.
     const e = parseEdition({
-      tables: [{ title: 'T', columns: ['A', 'B', 'C'], rows: [{ label: 'r', values: ['1', '2', '3'], n: [1] }] }],
+      tables: [{ title: 'T', columns: ['A', 'B', 'C'], rows: [{ label: 'r', values: ['1'], n: [1, 2, 3] }] }],
     })
-    expect(e.tables[0].rows[0].n).toEqual([1, null, null])
+    expect(e.tables[0].rows[0].n).toEqual([1, 2, 3])
+    expect(e.tables[0].rows[0].values).toEqual(['1'])
+  })
+
+  it('erases the whole numeric plane when any row failed to supply one', () => {
+    // news_parse.c:716-733 — `has_n = plane && row_count > 0`, and a half-filled plane is
+    // memset to zero. A stack is only a stack when every segment of every column arrived.
+    const e = parseEdition({
+      tables: [
+        {
+          columns: ['A', 'B'],
+          rows: [
+            { label: 'full', values: ['1', '2'], n: [1, 2] },
+            { label: 'short', values: ['3', '4'], n: [3] },
+          ],
+        },
+      ],
+    })
+    expect(e.tables[0].rows.map((r) => r.n)).toEqual([
+      [null, null],
+      [null, null],
+    ])
+  })
+
+  it('caps a statement at the board’s rows and columns', () => {
+    // news_parse.c:647/:670/:711 — NEWS_TABLE_ROWS=10, NEWS_TABLE_COLS=6. Eight quarters is a
+    // scroll and six is a page; the tile's "last two periods" must be the last two the board saw.
+    const many = (n: number, f: (i: number) => unknown) => Array.from({ length: n }, (_, i) => f(i))
+    const e = parseEdition({
+      tables: [
+        {
+          columns: many(8, (i) => `Q${i}`),
+          rows: many(14, (i) => ({ label: `r${i}`, values: many(8, (j) => `${i}.${j}`) })),
+        },
+      ],
+    })
+    const t = e.tables[0]
+    expect(t.columns).toHaveLength(EDITION_CAPS.tableCols)
+    expect(t.columns[EDITION_CAPS.tableCols - 1]).toBe('Q5')
+    expect(t.rows).toHaveLength(EDITION_CAPS.tableRows)
+    expect(t.rows[0].values).toEqual(['0.0', '0.1', '0.2', '0.3', '0.4', '0.5'])
+  })
+
+  it('drops a statement row that is a blank rule across the grid', () => {
+    // news_parse.c:671/:684 — an entry that is not an object, or one carrying neither a name nor
+    // a number, is the one thing a printed statement never has: an empty ruled line.
+    const e = parseEdition({
+      tables: [
+        {
+          columns: ['A'],
+          rows: [
+            'a stray string',
+            {},
+            { label: '', values: [], n: [] },
+            { label: '', values: ['1'] },
+            { label: 'kept', values: ['2'] },
+          ],
+        },
+      ],
+    })
+    expect(e.tables[0].rows.map((r) => r.label)).toEqual(['', 'kept'])
+    expect(e.tables[0].rows[0].values).toEqual(['1'])
   })
 
   it('applies every cap', () => {

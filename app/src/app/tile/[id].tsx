@@ -6,8 +6,9 @@ import { BackButton } from '../../components/BackButton'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masonry } from '../../components/edition/Masonry'
 import { TileDetail } from '../../components/edition/detail/TileDetail'
+import { getNewsUrl } from '../../lib/store'
 import { getCurrentEdition, readCachedEdition, type CachedEdition } from '../../lib/edition/store'
-import { COLUMN_GAP, columnWidth } from '../../lib/edition/feedLayout'
+import { COLUMN_GAP, columnWidth, editionKey } from '../../lib/edition/feedLayout'
 import { editionToTiles, findTile, type Tile } from '../../lib/edition/tiles'
 import { colors, fonts, layout, space, type } from '../../theme'
 
@@ -31,6 +32,18 @@ import { colors, fonts, layout, space, type } from '../../theme'
  * covered too), and `useEdition`'s own demo publish. The disk read below is therefore the cold
  * case and only the cold case: `claudepost://tile/story:0` into a process where the Today tab has
  * never mounted.
+ *
+ * AND THE COLD CASE CHECKS WHOSE EDITION IT READ. Nothing clears the cache when the address
+ * changes — it is overwritten by the next success and ignored by the reducer until then — so the
+ * entry on disk can belong to a desk this phone has stopped reading. `useEdition`'s reducer
+ * compares it against the stored URL before it puts anything on screen; the cold deep link is the
+ * one path that reaches the disk without going through that reducer, so it asks the same question
+ * here. A mismatch is treated as no cache at all: the tab loads the right edition, and the reader
+ * does not get a previous desk's lead story under a heading that says Today.
+ *
+ * `getCurrentEdition()` needs no such check. Everything that publishes it has already passed the
+ * reducer's guard, except the very `readCachedEdition()` below — which is why the check goes on
+ * the disk read rather than on the memory read.
  */
 
 /**
@@ -61,9 +74,12 @@ export default function TileDetailRoute() {
     if (held.status !== 'unknown') return
     let alive = true
     void (async () => {
-      const fromDisk = await readCachedEdition()
+      // Both reads at once: the cache is not filed under the URL on disk, so neither waits on
+      // the other, and this path is already the slowest way into the page.
+      const [fromDisk, url] = await Promise.all([readCachedEdition(), getNewsUrl()])
       if (!alive) return
-      setHeld(fromDisk === null ? { status: 'none' } : { status: 'have', cached: fromDisk })
+      const mine = fromDisk !== null && fromDisk.url === (url ?? '')
+      setHeld(mine ? { status: 'have', cached: fromDisk } : { status: 'none' })
     })()
     return () => {
       alive = false
@@ -77,6 +93,7 @@ export default function TileDetailRoute() {
   }, [held.status, router])
 
   const cached = held.status === 'have' ? held.cached : null
+  const key = cached === null ? '' : editionKey(cached)
   const feed = useMemo(() => (cached === null ? null : editionToTiles(cached.edition)), [cached])
   const tile = feed === null ? null : findTile(feed, id)
   const rest: Tile[] = feed === null ? [] : feed.tiles.filter((t) => t.id !== id)
@@ -126,7 +143,13 @@ export default function TileDetailRoute() {
     <Screen>
       {header}
       <ScrollView contentContainerStyle={styles.scroll}>
-        <TileDetail tile={tile} edition={cached.edition} newsUrl={cached.url} width={width} />
+        <TileDetail
+          tile={tile}
+          edition={cached.edition}
+          newsUrl={cached.url}
+          editionKey={key}
+          width={width}
+        />
         {rest.length > 0 ? (
           <View style={styles.more}>
             <Text style={type.headingSm}>More from this edition</Text>
@@ -134,6 +157,7 @@ export default function TileDetailRoute() {
               tiles={rest}
               colWidth={colWidth}
               newsUrl={cached.url}
+              editionKey={key}
               gutter={COLUMN_GAP}
               columns={2}
               onPress={openTile}

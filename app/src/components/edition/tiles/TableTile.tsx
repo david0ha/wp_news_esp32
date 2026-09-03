@@ -1,10 +1,14 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, space, tabular, type } from '../../../theme'
-import { type Tile } from '../../../lib/edition/tiles'
-
-/** How many of the trailing columns the tile shows. The detail page shows every one. */
-const COLS = 2
-const ROWS = 3
+import {
+  TABLE_COLS_SHOWN,
+  TABLE_GAP,
+  TABLE_NOTE_LINE,
+  TABLE_ROW_H,
+  TABLE_ROWS,
+  TABLE_TITLE_LINE,
+  type Tile,
+} from '../../../lib/edition/tiles'
 
 /**
  * A statement, cut down to what fits a column: the row labels and the LAST two periods.
@@ -17,6 +21,19 @@ const ROWS = 3
  *
  * Nothing here is coloured. A statement cell carries neither a direction nor a series, and the
  * hairline under the column heads is the only rule on the tile.
+ *
+ * THE VERTICAL SUM, as `RangeTile` keeps its own: this body is fixed furniture, so every block it
+ * draws is one of `tiles.ts`'s constants, IMPORTED, and the same terms `estimateTileHeight` floors
+ * this kind at. Both text rows carry EXPLICIT line heights, because a sum built on a font's
+ * intrinsic metrics is a sum nobody can check.
+ *
+ *   title       2 lines of 19                                       = 38
+ *   head row    4 + a 14 px head line + 3 + the hairline             = 22
+ *   rows        3 of 23                                             = 69
+ *   note        2 lines of 18                                       = 36
+ *   gaps        five 2 px gaps between six children                 = 10
+ *                                                                    ----
+ *                                                                     175 + 2*14 padding = 203
  */
 export function TableTile({
   tile,
@@ -26,7 +43,7 @@ export function TableTile({
   height: number
 }) {
   const { table } = tile
-  const from = Math.max(0, table.columns.length - COLS)
+  const from = Math.max(0, table.columns.length - TABLE_COLS_SHOWN)
   const columns = table.columns.slice(from)
   return (
     <View style={styles.root}>
@@ -43,7 +60,7 @@ export function TableTile({
           </Text>
         ))}
       </View>
-      {table.rows.slice(0, ROWS).map((r, i) => (
+      {table.rows.slice(0, TABLE_ROWS).map((r, i) => (
         <View key={`${r.label}:${i}`} style={styles.row}>
           <Text style={[type.caption, styles.labelCell]} numberOfLines={1}>
             {r.label}
@@ -67,16 +84,16 @@ export function TableTile({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    gap: 2,
+    gap: TABLE_GAP,
   },
   head: {
-    // The one heading a size down from `type.headingSm`, and the one tile exempt from
-    // `TILE_HEAD`: a table's height is aspect-derived (`round(colWidth * 5/4)`), not built from
-    // the heading constant, and a statement title runs two lines — at 18/24 those two lines
-    // would take 48 px of a 213 px tile before a single figure was drawn.
+    // A heading a size down from `type.headingSm`, and the one tile that does not draw a
+    // `TILE_HEAD` line: a statement title runs two lines, and at 18/24 those two would take 48 px
+    // of a 213 px tile before a single figure was drawn. It is not exempt from the arithmetic —
+    // `estimateTileHeight` reserves `TABLE_TITLE_LINE * TABLE_TITLE_LINES` for exactly this box.
     ...type.headingSm,
     fontSize: 15,
-    lineHeight: 19,
+    lineHeight: TABLE_TITLE_LINE,
   },
   headRow: {
     flexDirection: 'row',
@@ -89,6 +106,9 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
+    // 4 + 15 + 4 = TABLE_ROW_H. Given as a height rather than left to the cell's own metrics, so
+    // the estimator's row and the row this draws are the same number.
+    height: TABLE_ROW_H,
     paddingVertical: space.xs,
   },
   labelCell: {
@@ -98,6 +118,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: fonts.semibold,
     fontSize: 11,
+    lineHeight: 14,
     color: colors.textDim,
     textAlign: 'right',
   },
@@ -105,12 +126,14 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: fonts.regular,
     fontSize: 12,
+    lineHeight: 15,
     color: colors.text,
     textAlign: 'right',
   },
   note: {
     ...type.caption,
     fontSize: 11,
+    lineHeight: TABLE_NOTE_LINE,
     // Pushed to the foot of whatever the estimator left over, so the note sits on the bottom
     // edge rather than floating under a short table.
     marginTop: 'auto',

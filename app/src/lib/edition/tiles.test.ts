@@ -22,6 +22,14 @@ import {
   PEERS_SHOWN,
   RANGE_STAT_ROW_H,
   RANGE_TRACK_H,
+  TABLE_GAP,
+  TABLE_HEAD_ROW_H,
+  TABLE_NOTE_LINE,
+  TABLE_NOTE_LINES,
+  TABLE_ROW_H,
+  TABLE_ROWS,
+  TABLE_TITLE_LINE,
+  TABLE_TITLE_LINES,
   type Tile,
 } from './tiles'
 import { type Edition, type EditionFigure } from './types'
@@ -264,6 +272,76 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
       })),
     }
     expect(estimateTileHeight(many, W)).toBe(chrome + PEERS_ROW * PEERS_SHOWN)
+  })
+
+  it('floors the table tile at the height its own body draws', () => {
+    // THE SAME DEFECT the range tile had, in the one other kind whose body is fixed furniture:
+    // a title, a head row, three rows and a note, none of it elastic, inside a box sized only by
+    // `round(colWidth * 5/4)`. The fixture's statement needs 203 px; at the 158 a 360 dp Android
+    // phone produces the aspect gives 198, and the note (or the third row) was sliced by the
+    // tile's `overflow: 'hidden'`.
+    const body =
+      2 * TILE_PADDING +
+      TABLE_TITLE_LINE * TABLE_TITLE_LINES +
+      TABLE_HEAD_ROW_H +
+      TABLE_ROW_H * 3 +
+      TABLE_NOTE_LINE * TABLE_NOTE_LINES +
+      TABLE_GAP * 5 // head, head row, three rows, note: six children, five gaps
+    expect(body).toBe(203)
+    expect(estimateTileHeight(by('table:0'), 158)).toBe(203)
+    expect(estimateTileHeight(by('table:0'), 140)).toBe(203)
+    // Above the floor the aspect wins again, the way the header table says.
+    expect(estimateTileHeight(by('table:0'), W)).toBe(213)
+    expect(estimateTileHeight(by('table:0'), 200)).toBe(250)
+  })
+
+  it('sizes a table from the rows and the note it actually has', () => {
+    // Content-derived, like the row-led kinds, and observable at the 158 a 360 dp Android phone
+    // produces: the same three rows need 203 with a note under them and 165 without, so the one
+    // with the note takes the floor and the one without keeps the aspect's 198. A statement that
+    // files no small print does not reserve two lines for it.
+    const rows = [
+      { label: 'a', values: ['1'], n: [null] },
+      { label: 'b', values: ['2'], n: [null] },
+      { label: 'c', values: ['3'], n: [null] },
+    ]
+    const noNote: Tile = {
+      kind: 'table',
+      id: 'table:9',
+      table: { title: 'T', note: '', render: 'print', columns: ['A'], rows },
+    }
+    expect(estimateTileHeight(noNote, 158)).toBe(198)
+    expect(estimateTileHeight(by('table:0'), 158)).toBe(203)
+    // And a statement with a single row does not reserve the two it is not drawing.
+    const oneRow: Tile = {
+      kind: 'table',
+      id: 'table:8',
+      table: { title: 'T', note: '$ millions', render: 'print', columns: ['A'], rows: rows.slice(0, 1) },
+    }
+    expect(estimateTileHeight(oneRow, 100)).toBe(
+      2 * TILE_PADDING +
+        TABLE_TITLE_LINE * TABLE_TITLE_LINES +
+        TABLE_HEAD_ROW_H +
+        TABLE_ROW_H +
+        TABLE_NOTE_LINE * TABLE_NOTE_LINES +
+        TABLE_GAP * 3,
+    )
+  })
+
+  it('leaves a statement room for every row its body draws, at every column', () => {
+    // The property behind the numbers above, held across every width a phone can produce.
+    const t = by('table:0')
+    if (t.kind !== 'table') throw new Error('unreachable')
+    const shown = Math.min(t.table.rows.length, TABLE_ROWS)
+    for (let colWidth = 130; colWidth <= 430; colWidth++) {
+      const inner = estimateTileHeight(t, colWidth) - 2 * TILE_PADDING
+      expect(inner).toBeGreaterThanOrEqual(
+        TABLE_TITLE_LINE * TABLE_TITLE_LINES +
+          TABLE_HEAD_ROW_H +
+          TABLE_ROW_H * shown +
+          TABLE_NOTE_LINE * TABLE_NOTE_LINES,
+      )
+    }
   })
 
   it('floors the range tile at the height its own body draws', () => {

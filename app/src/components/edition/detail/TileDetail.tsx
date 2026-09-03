@@ -33,11 +33,18 @@ export function TileDetail({
   tile,
   edition,
   newsUrl,
+  editionKey,
   width,
 }: {
   tile: Tile
   edition: Edition
   newsUrl: string
+  /**
+   * Which edition this is, from `feedLayout.ts`'s `editionKey`. Only the photograph needs it, and
+   * it needs it for the same reason the masonry's tiles do: a photo id repeats across editions,
+   * so without it React hands a new edition's caption to the old edition's mounted picture.
+   */
+  editionKey: string
   /** The window's width. The media below is sized in pixels, not flexed, so it needs the number. */
   width: number
 }) {
@@ -55,7 +62,12 @@ export function TileDetail({
           {story.deck !== '' ? <Text style={styles.deck}>{story.deck}</Text> : null}
           {story.byline !== '' ? <Text style={type.caption}>{story.byline}</Text> : null}
           {story.photo !== null ? (
-            <DetailPhoto photo={story.photo} width={contentWidth} newsUrl={newsUrl} />
+            <DetailPhoto
+              key={`${editionKey}:${story.photo.id}`}
+              photo={story.photo}
+              width={contentWidth}
+              newsUrl={newsUrl}
+            />
           ) : null}
           {chart !== undefined ? <ChartBlock chart={chart} width={contentWidth} /> : null}
           {story.body !== '' ? <Text style={type.body}>{story.body}</Text> : null}
@@ -94,7 +106,12 @@ export function TileDetail({
     case 'photo':
       return (
         <View style={styles.root}>
-          <DetailPhoto photo={tile.photo} width={contentWidth} newsUrl={newsUrl} />
+          <DetailPhoto
+            key={`${editionKey}:${tile.photo.id}`}
+            photo={tile.photo}
+            width={contentWidth}
+            newsUrl={newsUrl}
+          />
         </View>
       )
 

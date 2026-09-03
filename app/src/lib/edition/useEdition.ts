@@ -3,12 +3,23 @@
 // worth arguing about lives there and has a test; the effects below are deliberately dull,
 // because there is no component test runner in this app to hold them to anything.
 //
+// ONE DRIVER, AND IT IS THE FOCUS CALLBACK. `useFocusEffect` fires on mount — the screen starts
+// focused — as well as on every later return to the tab, so a separate mount effect is a second
+// driver for the same event, and the two then have to be serialised by hand. The version this
+// replaces did that with a `bootedRef` the focus callback checked before doing anything, which
+// meant every focus DURING the first fetch was dropped rather than deferred: a URL saved in
+// Settings while the old address was still burning its fifteen-second timeout was picked up only
+// on the tab switch AFTER the one the user made, with nothing on screen to say why the save had
+// no effect. Now the focus callback is the whole loop — read the stored URL, adopt it when it
+// moved (or when this is the first run), otherwise ask `refresh()` for its silent, throttled
+// re-check — and a save is adopted on the very next focus, always.
+//
 // THERE IS NO INTERVAL. The edition changes about once a day and the desk answers a conditional
 // GET with a 304 for the rest of it, so a poll loop here would be a request every thirty seconds
 // to be told nothing for twenty-three hours. A focus refresh older than five minutes, plus
 // pull-to-refresh, is the whole cadence.
 
-import { useCallback, useEffect, useReducer, useRef } from 'react'
+import { useCallback, useReducer, useRef } from 'react'
 import { useFocusEffect } from 'expo-router'
 import { getNewsUrl } from '../store'
 import { editionClient, humanEditionError } from './client'
@@ -62,66 +73,61 @@ export function useEdition(): {
         if (previous === null || previous.generatedAt !== result.edition.generatedAt) {
           clearTilePngCache()
         }
-        await writeCachedEdition({ url, etag: result.etag, fetchedAt, edition: result.edition })
-      } else {
-        await touchCachedEdition(fetchedAt)
+        // STARTED, NOT AWAITED, BEFORE THE DISPATCH. `writeCachedEdition` sets the in-memory copy
+        // synchronously — before its own await — so the detail route sees the new edition either
+        // way, and the reducer's URL guard is what actually keeps a stale response off the screen.
+        // Awaiting the disk first held a fetched edition behind a spinner for the length of an
+        // AsyncStorage round trip, buying nothing.
+        const written = writeCachedEdition({
+          url,
+          etag: result.etag,
+          fetchedAt,
+          edition: result.edition,
+        })
+        dispatch({ type: 'fetched', result, url, fetchedAt })
+        await written
+        return
       }
+      // A 304 moves only the timestamp, and the entry it moves has to be read and rewritten
+      // first, so this one is awaited: there is no new content waiting behind it.
+      await touchCachedEdition(fetchedAt)
       if (seqRef.current !== seq) return
       dispatch({ type: 'fetched', result, url, fetchedAt })
     } catch (e) {
       if (seqRef.current !== seq) return
-      dispatch({ type: 'failed', error: humanEditionError(e) })
+      dispatch({ type: 'failed', url, error: humanEditionError(e) })
     }
   }, [])
 
-  /** After the URL is known: publish the demo, or react to whatever cache (if any) goes with it. */
-  const settle = useCallback(
-    async (url: string, cached: CachedEdition | null) => {
+  /**
+   * Take up a URL: the one read on the first focus, or one saved in Settings since the last.
+   *
+   * THE SEQUENCE IS BUMPED HERE, at the moment the `url` event is dispatched and before the first
+   * await. A fetch already in flight for the OLD address settles somewhere inside that await —
+   * fifteen seconds is a long window — and until the bump it still passed `runFetch`'s guard: on
+   * a failure it turned the new URL's `loading` into an error card, and on a success it wrote the
+   * old desk's edition to disk and to `current` while the screen said loading for the new one.
+   *
+   * `prefetched` is `undefined` when the cache has not been read yet and `null` when it was read
+   * and there was nothing there — the first focus reads it alongside the URL and passes it in,
+   * every later adoption reads it here.
+   */
+  const adopt = useCallback(
+    async (url: string, prefetched?: CachedEdition | null) => {
+      seqRef.current++
+      dispatch({ type: 'url', url })
       if (url === '') {
         // The detail route reads the current edition out of the store rather than off a prop, so
         // the demo has to be published there too or a tap opens nothing.
         setCurrentEdition(demoCache())
         return
       }
+      const cached = prefetched === undefined ? await readCachedEdition() : prefetched
       dispatch({ type: 'cache', cached })
       await runFetch(url, cached !== null && cached.url === url ? cached.etag : null)
     },
     [runFetch],
   )
-
-  /** Adopt a URL read after mount — a Settings change picked up on focus. */
-  const adopt = useCallback(
-    async (url: string) => {
-      dispatch({ type: 'url', url })
-      const cached = url === '' ? null : await readCachedEdition()
-      await settle(url, cached)
-    },
-    [settle],
-  )
-
-  // Set once the cold-start effect below has fully settled — not merely started — so the focus
-  // effect can tell "still booting" apart from "booted, and now looking at a real focus event".
-  // See that effect for why this exists.
-  const bootedRef = useRef(false)
-
-  useEffect(() => {
-    let alive = true
-    void (async () => {
-      // The stored URL and the disk cache are two independent reads — the cache is not filed
-      // under the URL on disk, so nothing here needs the URL to arrive before the other read can
-      // start. Doing them one after another would cost a second AsyncStorage round trip on every
-      // cold launch for nothing.
-      const [url, cached] = await Promise.all([getNewsUrl(), readCachedEdition()])
-      if (!alive) return
-      const u = url ?? ''
-      dispatch({ type: 'url', url: u })
-      await settle(u, u === '' ? null : cached)
-      bootedRef.current = true
-    })()
-    return () => {
-      alive = false
-    }
-  }, [settle])
 
   const refresh = useCallback(
     async (opts: { fresh?: boolean } = {}) => {
@@ -140,11 +146,11 @@ export function useEdition(): {
         // require `state.status === 'ready'` the way the silent branch below does.
         dispatch({ type: 'refreshing' })
       } else {
-        // A silent call — the focus-effect's quiet re-check — only ever applies to a screen that
-        // already has something on it, and only past the five-minute throttle; there is nothing
-        // to silently re-check from a loading or an error screen, and no spinner to raise. The
-        // throttle lives here, once, rather than as a second copy in the focus effect that could
-        // drift from this one.
+        // A silent call — the focus callback's quiet re-check — only ever applies to a screen
+        // that already has something on it, and only past the five-minute throttle; there is
+        // nothing to silently re-check from a loading or an error screen, and no spinner to
+        // raise. The throttle lives here, once, rather than as a second copy in the focus
+        // callback that could drift from this one.
         if (state.status !== 'ready') return
         if (Date.now() - state.cached.fetchedAt < FOCUS_REFRESH_AFTER_MS) return
       }
@@ -155,28 +161,35 @@ export function useEdition(): {
     [runFetch],
   )
 
-  // On return to the tab: pick up a URL changed in Settings, or otherwise defer to `refresh()`'s
-  // own silent, throttled re-check — the same rule a bare `refresh()` call gets from anywhere.
-  //
-  // `useFocusEffect` fires once on mount (the screen starts focused) in addition to every later
-  // return to the tab, and it fires from its own effect independently of the plain `useEffect`
-  // above — so on a cold mount both run at nearly the same instant. This one would then read
-  // `machineRef.current.url` while it is still `null` (the mount effect's first `dispatch` has
-  // not landed yet), see a mismatch against the real URL, and call `adopt()` — a second disk read
-  // and a second network request racing the mount effect's own. Skipping this callback until the
-  // mount effect has fully settled makes the cold start one path; every later focus (by which
-  // time `bootedRef.current` is long since true) runs exactly as before.
+  // The whole loop, on every focus including the mount. Either the stored address is not the one
+  // this hook is showing — a cold start, or a save made in Settings — and it is adopted, or it is
+  // and `refresh()` applies its own silent, throttled re-check, the same rule a bare `refresh()`
+  // call gets from anywhere.
   useFocusEffect(
     useCallback(() => {
-      if (!bootedRef.current) return
+      let alive = true
       void (async () => {
-        const url = (await getNewsUrl()) ?? ''
+        // THE FIRST RUN READS THE DISK CACHE ALONGSIDE THE URL. The cache is not filed under the
+        // URL on disk, so nothing here needs the URL to arrive before the other read can start,
+        // and doing them one after another would cost a second AsyncStorage round trip on every
+        // cold launch. Later focuses skip it: `adopt` reads the cache itself on the rare one that
+        // finds the address changed, and the common focus does not need it at all.
+        const cold = machineRef.current.url === null
+        const [stored, cached] = await Promise.all([
+          getNewsUrl(),
+          cold ? readCachedEdition() : Promise.resolve(null),
+        ])
+        if (!alive) return
+        const url = stored ?? ''
         if (url !== machineRef.current.url) {
-          await adopt(url)
+          await adopt(url, cold ? cached : undefined)
           return
         }
         await refresh()
       })()
+      return () => {
+        alive = false
+      }
     }, [adopt, refresh]),
   )
 

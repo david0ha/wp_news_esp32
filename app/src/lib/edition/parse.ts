@@ -37,8 +37,13 @@ export const STORY_RANK_MAX = 99
 // not exactly that type goes to the default. A numeric string is a field we misread, not a
 // number, so it does not get in.
 
+/** `cJSON_IsObject`: a JSON object, and not null and not an array. */
+function isObj(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+
 function obj(v: unknown): Record<string, unknown> {
-  return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  return isObj(v) ? v : {}
 }
 
 function arr(v: unknown): unknown[] {
@@ -63,13 +68,20 @@ function strictBool(v: unknown): boolean {
 }
 
 /**
- * The two-tier `emph` rule (`news_parse.c:522-524`): JSON `true` OR any non-zero number promotes
- * a figure to a hero. Deliberately not a general truthiness test — `false`, `0`, `''`, `null` and
+ * The two-tier `emph` rule (`news_parse.c:522-524`): JSON `true` OR a number that is non-zero
+ * ONCE ROUNDED. Deliberately not a general truthiness test — `false`, `0`, `''`, `null` and
  * anything non-numeric all leave the figure at the quiet default, but `2` and `0.5` promote it
  * exactly as `true` does, because a producer sends whichever spelling of "emphasize this" it read.
+ *
+ * The rounding is the half of this rule that is easy to drop, and it is the half that matters:
+ * the C is `sround(value, 1) != 0`, so `0.4` is zero and stays quiet. Emphasis is loud — a hero
+ * is set several times larger than the rail around it — and inventing one out of a producer's
+ * rounding error is the worse of the two failures.
  */
 function emphFlag(v: unknown): boolean {
-  return v === true || (typeof v === 'number' && Number.isFinite(v) && v !== 0)
+  if (v === true) return true
+  const n = num(v)
+  return n !== null && int(n, 0) !== 0
 }
 
 /**
@@ -140,7 +152,11 @@ function parsePhoto(v: unknown): EditionPhoto | null {
   return { id, w, h, caption: str(o.caption), credit: str(o.credit) }
 }
 
-function parseStory(v: unknown, chartCount: number): EditionStory | null {
+/**
+ * `chartSlot` maps the index the PRODUCER wrote — its position in the `charts` array as sent —
+ * onto the index that survived parsing, or `null` for a chart that did not survive.
+ */
+function parseStory(v: unknown, chartSlot: ReadonlyArray<number | null>): EditionStory | null {
   const o = obj(v)
   const headline = str(o.headline)
   // A story is its headline. A deck with nothing over it is a fragment, and a tile built from
@@ -156,7 +172,7 @@ function parseStory(v: unknown, chartCount: number): EditionStory | null {
     body: str(o.body),
     // An index into charts[] or nothing. A story that reflows without its chart is an ordinary
     // page; one that draws chart 3 of 2 is a caption over the wrong picture.
-    chart: chart >= 0 && chart < chartCount ? chart : null,
+    chart: chart >= 0 && chart < chartSlot.length ? chartSlot[chart] : null,
     photo: parsePhoto(o.photo),
   }
 }
@@ -165,8 +181,11 @@ function parseFigure(v: unknown): EditionFigure | null {
   const o = obj(v)
   const label = str(o.label)
   const value = str(o.value)
-  // A figure with neither half says nothing; one with either half still reads.
-  if (label === '' && value === '') return null
+  // BOTH halves, `news_parse.c:489`. A rail line is a label and a value; either one missing
+  // leaves half a row under a standing head, which reads as a rendering fault rather than as a
+  // figure the producer did not have — and it makes a group of four that fits the board into a
+  // group of five with a "+1 more" under it here.
+  if (label === '' || value === '') return null
   const bar = num(o.bar)
   return {
     group: str(o.group),
@@ -174,8 +193,10 @@ function parseFigure(v: unknown): EditionFigure | null {
     value,
     changePct: num(o.change_pct),
     emph: emphFlag(o.emph),
+    // Through `int()` and not a truncation: `news_parse.c:540` is `sround`, so a producer's
+    // 999.6 is 1000 on the glass and must be 1000 here.
     // 0 is the far left of the range and a real position; absent is null and draws no track.
-    bar: bar === null ? null : clamp(Math.trunc(bar), 0, 1000),
+    bar: bar === null ? null : clamp(int(bar, 0), 0, 1000),
   }
 }
 
@@ -205,37 +226,100 @@ function parsePeer(v: unknown): EditionPeer | null {
 
 function parseTable(v: unknown): EditionTable {
   const o = obj(v)
-  const columns = arr(o.columns).map(str)
+  // Six columns and ten rows, `news_model.h`'s NEWS_TABLE_COLS / NEWS_TABLE_ROWS. Eight quarters
+  // is a scroll and six is a page: a phone printing quarters seven and eight would be showing
+  // periods that never reach the glass, under a tile whose whole promise is "the last two".
+  // A head that is not a string still SPENDS its column (`.map(str)` gives it a blank head),
+  // because a row's cells are positional against this header and dropping the third head would
+  // slide the fourth quarter's numbers under the third quarter's date.
+  const columns = arr(o.columns).slice(0, EDITION_CAPS.tableCols).map(str)
   const rows: EditionTableRow[] = []
+
+  // A table with no columns has nothing to scale a bar against, so the plane starts out
+  // incomplete and only the rows can keep it that way (`news_parse.c:686`).
+  let plane = columns.length > 0
+
   for (const r of arr(o.rows)) {
-    const ro = obj(r)
-    const values = arr(ro.values).map(str)
-    const nRaw = arr(ro.n)
-    // The numeric plane is positional against `values`, so it is padded and cut to the same
-    // length rather than filtered: an `n[]` one element short would put every number under the
-    // wrong quarter.
-    const n: (number | null)[] = values.map((_, i) => num(nRaw[i]))
-    rows.push({ label: str(ro.label), values, n })
+    if (rows.length >= EDITION_CAPS.tableRows) break
+    // Not an object: a stray string in `rows` is not a row (`news_parse.c:671`).
+    if (!isObj(r)) continue
+    const label = str(r.label)
+    const valuesRaw = arr(r.values)
+    const nRaw = arr(r.n)
+    // An entry with neither a name nor a number in it is a blank line ruled across the table,
+    // which is the one thing a printed statement never has (`news_parse.c:684`). Everything else
+    // is kept: a row of figures under no label is a producer bug that is visible, and a visible
+    // bug is a fixable one. `n` counts as a number for this test.
+    if (label === '' && valuesRaw.length === 0 && nRaw.length === 0) continue
+
+    // The numeric plane is positional against the COLUMNS, not against this row's own cells: a
+    // short row still owes a cell per column, and a long one has no seventh column to put a
+    // seventh number in.
+    const n: (number | null)[] = columns.map((_, i) => num(nRaw[i]))
+    // Every row that survives has to carry its own FULL plane, because a stack is only a stack
+    // when every segment of every column arrived and a line is only a line when it has a point
+    // over every bar. One row short and the whole table prints instead.
+    if (n.some((x) => x === null)) plane = false
+
+    rows.push({ label, values: valuesRaw.slice(0, EDITION_CAPS.tableCols).map(str), n })
   }
+
+  // A table with rows but no complete plane is a printed table, and the plane it half-received is
+  // erased rather than left lying in the model (`news_parse.c:726-733`). A half-filled plane is
+  // the state a later reader is most likely to trust by accident.
+  if (!plane || rows.length === 0) {
+    for (const r of rows) r.n = r.n.map(() => null)
+  }
+
   return { title: str(o.title), note: str(o.note), render: str(o.render), columns, rows }
 }
 
-function parseChart(v: unknown): EditionChart {
+/**
+ * The kind, exactly as `news_chart_kind_from()` reads it (`news_model.c:165-172`): three words,
+ * case-insensitively, and `null` — the device's CHART_NONE — for everything else.
+ *
+ * There is no fallback kind. An unknown word, `"none"` and an absent `kind` are all "no chart",
+ * not "a line chart": the producer that typed `Bar` meant bars, and the one that typed nothing
+ * meant nothing. Guessing `line` drew a picture nobody asked for on the phone and no picture at
+ * all on the glass, out of one payload.
+ */
+function chartKind(v: unknown): EditionChartKind | null {
+  switch (str(v).toLowerCase()) {
+    case 'line':
+      return 'line'
+    case 'candle':
+      return 'candle'
+    case 'bar':
+      return 'bar'
+    default:
+      return null
+  }
+}
+
+/** `null` is the device's zeroed CHART_NONE slot: a chart that cannot be drawn. */
+function parseChart(v: unknown): EditionChart | null {
   const o = obj(v)
-  const kindRaw = str(o.kind)
-  const kind: EditionChartKind =
-    kindRaw === 'candle' || kindRaw === 'bar' || kindRaw === 'sparkline' ? kindRaw : 'line'
+  const kind = chartKind(o.kind)
+  if (kind === null) return null
 
   const closeRaw = arr(o.close)
   const openRaw = arr(o.open)
   const highRaw = arr(o.high)
   const lowRaw = arr(o.low)
 
+  // The LAST `EDITION_CAPS.bars` samples, `news_parse.c:284-286`'s `skip = total - n`: a month of
+  // candles, most recent kept. The cut is by ABSOLUTE index across all four planes, so the phone
+  // and the board plot the same window — a line coloured from a first point the board never saw
+  // can disagree with the sheet about the direction of the same series, and a bar layout floors
+  // its bars at 2 px and clips the newest ones off the end of the plot instead of compressing.
+  const total = closeRaw.length
+  const skip = Math.max(0, total - EDITION_CAPS.bars)
+
   const close: number[] = []
   const open: number[] = []
   const high: number[] = []
   const low: number[] = []
-  for (let i = 0; i < closeRaw.length; i++) {
+  for (let i = skip; i < total; i++) {
     const c = num(closeRaw[i])
     // `close` sets the length and is the only array a chart has to send. A point with no close
     // is not a point.
@@ -248,6 +332,10 @@ function parseChart(v: unknown): EditionChart {
     high.push(num(highRaw[i]) ?? c)
     low.push(num(lowRaw[i]) ?? c)
   }
+
+  // A kind with no bars would reserve its slot and draw an empty box (`news_parse.c:305-307`).
+  // The page reflows without it instead, and "is there a chart" stays one question.
+  if (close.length === 0) return null
 
   return { kind, label: str(o.label), span: str(o.span), note: str(o.note), open, high, low, close }
 }
@@ -311,17 +399,34 @@ export function parseEdition(json: unknown): Edition {
   const root = obj(json)
 
   // Charts are parsed BEFORE the stories, because a story names one by index and the index has
-  // to be checked against what actually arrived.
-  const charts = arr(root.charts)
-    .slice(0, EDITION_CAPS.charts)
-    .map(parseChart)
+  // to be resolved against what actually arrived.
+  //
+  // A chart that cannot be drawn is DROPPED here and its index remapped, where the device keeps
+  // the empty slot and trims only the trailing ones (`news_parse.c:319-337`). The two reach the
+  // same page from the same payload — a story naming a surviving chart still gets that chart, and
+  // one naming a hole gets none, which is what CHART_NONE draws — but the phone's `charts[]` then
+  // holds only drawable charts, so no tile and no detail can be built around an empty plot. The
+  // slot the producer numbered is preserved in `chartSlot`, and it is the only thing a story's
+  // index is ever read through; renumbering without it would hang the price series under a head
+  // that says REVENUE, which is the one failure the device's comment is about.
+  const chartSlot: (number | null)[] = []
+  const charts: EditionChart[] = []
+  for (const raw of arr(root.charts).slice(0, EDITION_CAPS.charts)) {
+    const chart = parseChart(raw)
+    if (chart === null) {
+      chartSlot.push(null)
+    } else {
+      chartSlot.push(charts.length)
+      charts.push(chart)
+    }
+  }
 
   // Stories: parse everything, sort ascending by rank, THEN cut. The array's order is the
   // producer's, not a ranking, so truncating first would throw away a lead that was appended.
   // Array.prototype.sort is stable (ES2019), which is what keeps equal ranks in wire order.
   const stories: EditionStory[] = []
   for (const e of arr(root.stories)) {
-    const s = parseStory(e, charts.length)
+    const s = parseStory(e, chartSlot)
     if (s !== null) stories.push(s)
   }
   stories.sort((a, b) => a.rank - b.rank)

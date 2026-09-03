@@ -106,7 +106,13 @@ export interface EditionTable {
   rows: EditionTableRow[]
 }
 
-export type EditionChartKind = 'line' | 'candle' | 'bar' | 'sparkline'
+/**
+ * The three kinds `news_chart_kind_from()` knows (`news_model.c:165-172`), and no fourth.
+ *
+ * There is no `'none'` member because the device's CHART_NONE is not a chart that draws nothing
+ * — it is the absence of a chart, and `parseEdition` drops it. A kind here always draws.
+ */
+export type EditionChartKind = 'line' | 'candle' | 'bar'
 
 export interface EditionChart {
   kind: EditionChartKind
@@ -170,6 +176,12 @@ export const EDITION_CAPS = {
   tables: 2,
   charts: 2,
   indices: 5,
+  /** `NEWS_BARS_MAX` — a month of daily candles. The LAST this many samples of a series survive. */
+  bars: 48,
+  /** `NEWS_TABLE_ROWS`. */
+  tableRows: 10,
+  /** `NEWS_TABLE_COLS` — eight quarters is a scroll, six is a page. */
+  tableCols: 6,
 } as const
 
 /** The default rank a story gets when the wire carries none (`news_parse.c`). */

@@ -1,4 +1,4 @@
-// The three measurements the edition's two surfaces have to agree about.
+// The measurements and the identity the edition's two surfaces have to agree about.
 //
 // There are two screens drawing the SAME masonry — the Today tab and the tile detail's "More
 // from this edition" — and every tile's height is derived from the column width
@@ -13,6 +13,7 @@
 
 import { type EditionPhoto } from './types'
 import { type Chip } from './tiles'
+import { type CachedEdition } from './store'
 
 /**
  * The space between the two columns, from the spec's token table. Distinct from the outer
@@ -76,4 +77,24 @@ const PHOTO_MAX_ASPECT = 3 / 2
 export function photoBoxHeight(photo: EditionPhoto, width: number): number {
   const aspect = photo.w > 0 ? photo.h / photo.w : 1
   return Math.max(1, Math.round(width * Math.min(PHOTO_MAX_ASPECT, aspect)))
+}
+
+/**
+ * WHICH EDITION IS ON SCREEN — the string every mounted tile is keyed by, beside its own id.
+ *
+ * Tile ids are the producer's and repeat across days: `photo:0` is `photo:0` every edition, the
+ * lead band is `1140x320` every edition, and the desk serves `/tiles/<id>.bin` out of the current
+ * edition only, so an id naming a different picture tomorrow is allowed rather than exceptional.
+ * Keyed by the id alone, React reuses the mounted `PhotoTile` when the edition changes under it;
+ * its effect keys on `[url, w, h]`, every one of which is unchanged, so it never re-fetches and
+ * today's headline sits over yesterday's photograph until the tab unmounts. Keying on this as
+ * well makes the swap a remount, which is the only thing that reliably re-asks.
+ *
+ * `generatedAt` is the desk's own stamp and is what `news_hash()` fingerprints on the board, so
+ * it is the same notion of "a different edition" the glass uses. An edition that carries none
+ * falls back to the moment it was fetched, which is a fresh number on every 200 — a remount too
+ * often is a re-decode, and a remount too rarely is the wrong picture.
+ */
+export function editionKey(cached: CachedEdition): string {
+  return cached.edition.generatedAt !== '' ? cached.edition.generatedAt : String(cached.fetchedAt)
 }

@@ -10,7 +10,10 @@ import { type Edition } from '../../lib/edition/types'
  *
  * The company name is the headline of the whole tab, because every edition is about exactly one
  * listed company. Tapping the symbol pushes the Markets detail for it, which is the one place in
- * this app where the edition and the watchlist meet.
+ * this app where the edition and the watchlist meet — and it is a press ONLY when there is a
+ * symbol to push. `isEmptyEdition` lets an edition through on its stories alone and `parseSubject`
+ * invents no fallback, so a producer that omits the symbol yields a pressable blank that navigates
+ * to `/market/`, a path no route matches in an app with no `+not-found`.
  *
  * The failure banner takes `warn`, never direction red. Red on this screen means a price fell;
  * spending it on "the server did not answer" would put a market signal on a network problem.
@@ -41,15 +44,23 @@ export function Masthead({
         {s.name !== '' ? s.name : s.symbol}
       </Text>
 
-      <Pressable
-        accessibilityRole="button"
-        onPress={onPressSymbol}
-        hitSlop={6}
-        style={styles.symbolRow}
-      >
-        <Text style={styles.symbol}>{s.symbol}</Text>
-        {s.exchange !== '' ? <Text style={type.caption}>{s.exchange}</Text> : null}
-      </Pressable>
+      {s.symbol !== '' ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={onPressSymbol}
+          hitSlop={6}
+          style={styles.symbolRow}
+        >
+          <Text style={styles.symbol}>{s.symbol}</Text>
+          {s.exchange !== '' ? <Text style={type.caption}>{s.exchange}</Text> : null}
+        </Pressable>
+      ) : s.exchange !== '' ? (
+        // No symbol: the exchange still reads, as plain text. A row that looks like a button and
+        // goes nowhere is worse than no row.
+        <View style={styles.symbolRow}>
+          <Text style={type.caption}>{s.exchange}</Text>
+        </View>
+      ) : null}
 
       <View style={styles.priceRow}>
         <Text style={[styles.price, tabular]} numberOfLines={1}>

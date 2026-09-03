@@ -53,7 +53,7 @@ export type EditionEvent =
   | { type: 'url'; url: string }
   | { type: 'cache'; cached: CachedEdition | null }
   | { type: 'fetched'; result: EditionFetch; url: string; fetchedAt: number }
-  | { type: 'failed'; error: string }
+  | { type: 'failed'; url: string; error: string }
   | { type: 'refreshing' }
 
 export const INITIAL_EDITION_MACHINE: EditionMachine = { url: null, state: { status: 'loading' } }
@@ -137,6 +137,12 @@ export function nextEditionState(prev: EditionMachine, event: EditionEvent): Edi
     }
 
     case 'failed': {
+      // The URL moved while this was in flight — the same guard `fetched` carries, and for a
+      // sharper reason. A failure has no content behind it to be checked later: an old desk's
+      // 15-second timeout landing after Settings changed the address would put an error card up
+      // about a desk the reader has just left, AND swallow the new URL's `cache` event behind it,
+      // because that one only ever fills a `loading` screen.
+      if (event.url !== prev.url) return prev
       // Content beats an error card: a stale front page is still the company's day, and the
       // banner says the refresh failed. Only a first load with nothing behind it takes the screen.
       if (prev.state.status === 'ready') {

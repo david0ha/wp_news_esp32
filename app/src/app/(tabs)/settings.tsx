@@ -282,6 +282,7 @@ export default function Settings() {
               key={source?.url ?? ''}
               initial={pendingSync ? (localUrl ?? '') : (source?.url ?? localUrl ?? '')}
               pending={pendingSync}
+              hasBoard={hasDevice}
               onSave={async (next) => {
                 setSyncRejected(null)
                 // What the attempt means — persist or not, pending or not, which voice — is
@@ -301,7 +302,7 @@ export default function Settings() {
                     outcome = { error: e }
                   }
                 }
-                const decision = decideNewsUrlSave(next, outcome)
+                const decision = decideNewsUrlSave(next, outcome, hasDevice)
                 if (decision.persist) {
                   await saveNewsUrl(next)
                   if (!decision.pending) await clearNewsUrlPending()
@@ -424,14 +425,24 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * dirty, because the address in it is not saved anywhere. `pending` is the standing version of
  * `info` — an address on this phone the board has not been told about — and is said in the same
  * voice for the same reason.
+ *
+ * WHAT THAT STANDING SENTENCE SAYS DEPENDS ON WHETHER THERE IS A BOARD. The mark is set on every
+ * save this phone makes without one, and nothing without a client ever clears it, so on a phone
+ * that has never had a board "Not yet on the board" is permanent, names hardware that does not
+ * exist, and appears under an address the Today tab is already reading perfectly well. With
+ * `hasBoard === false` it names that reader instead. `=== false` and never `!hasBoard`: `null` is
+ * storage still answering, and it keeps the board owner's wording.
  */
 function NewsUrlEditor({
   initial,
   pending,
+  hasBoard,
   onSave,
 }: {
   initial: string
   pending: boolean
+  /** Tri-state, from `useDevice`. `null` is "storage has not answered", never "no board". */
+  hasBoard: boolean | null
   onSave: (value: string) => Promise<NewsUrlSaveDecision>
 }) {
   const [draft, setDraft] = useState(initial)
@@ -475,7 +486,9 @@ function NewsUrlEditor({
       {outcome ? <Text style={toneStyle[outcome.tone]}>{outcome.message}</Text> : null}
       {pending && !outcome && !dirty ? (
         <Text style={styles.help}>
-          Not yet on the board — it will be sent the next time this app reaches it.
+          {hasBoard === false
+            ? 'Today reads from this address. A board you set up later will get it too.'
+            : 'Not yet on the board — it will be sent the next time this app reaches it.'}
         </Text>
       ) : null}
       <Button

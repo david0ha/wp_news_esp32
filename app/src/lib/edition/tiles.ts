@@ -47,20 +47,21 @@
 //   figures         2P + 24 + 28 * min(n, 4) + (n > 4 ? 20 : 0)
 //   briefs          2P + 24 + 56 * min(n, 3) + (n > 3 ? 20 : 0)
 //   peers           2P + 24 + 28 * min(n, 6)
-//   table           round(colWidth * 5 / 4)
+//   table           max(round(colWidth * 5 / 4), 2P + title + heads + rows + note + gaps)
 //   tape            2P + 24 + 32 * min(n, 5)
 //
 // where P = `TILE_PADDING`, 24 is `TILE_HEAD` (the heading line, equal to `type.headingSm`'s line
 // height), 20 is `TILE_MORE` (the "+N more" line), and the per-row constants are `FIGURES_ROW`,
 // `BRIEFS_ROW`, `PEERS_ROW` and `TAPE_ROW` with their `*_SHOWN` row counts beside them.
 //
-// THE RANGE IS THE ONE KIND WITH A FLOOR, because it is the one kind whose body is fixed
-// furniture rather than elastic content: a track box and a 2x2 grid of the day's four numbers,
-// all of it a constant height. A flat `colWidth` fit exactly at 170 and nowhere below it — at
-// the 158 a 360 dp Android phone produces, the grid was handed 62 px for the 74 its two rows
-// draw and the second row was sliced by the tile's `overflow: 'hidden'`. So the height is
-// content-derived, the way the row-built kinds already are, and `colWidth` only wins once it is
-// the larger of the two.
+// THE RANGE AND THE TABLE ARE THE TWO KINDS WITH A FLOOR, because they are the two whose bodies
+// are fixed furniture rather than elastic content: a track box and a 2x2 grid of the day's four
+// numbers, and a title over a head row over three statement rows over a note. A flat aspect fit
+// each of them at 170 and nowhere below it — at the 158 a 360 dp Android phone produces, the
+// range's grid was handed 62 px for the 74 its two rows draw and the table's 198 for the 203 its
+// six children draw, and in both cases the last block was sliced by the tile's
+// `overflow: 'hidden'`. So both heights are content-derived, the way the row-built kinds already
+// are, and the aspect only wins once it is the larger of the two.
 //
 // EVERY ONE OF THOSE IS EXPORTED, and the tile bodies in `components/edition/tiles/` import them
 // rather than declaring their own. That is deliberate: this arithmetic and the rows a body draws
@@ -279,6 +280,29 @@ export const RANGE_STAT_ROW_H = 37
 /** The two rows the grid draws — Open/Prev close, then High/Low. */
 export const RANGE_STAT_ROWS = 2
 
+// The statement tile's blocks, on the same terms. `TableTile` imports every one of them, so the
+// sum in `estimateTileHeight` is the box the body draws in and not an aspect that happens to fit
+// the fixture. Its heading is a size down from `type.headingSm` — a statement title runs two
+// lines, and at 18/24 those two would take 48 px before a figure was drawn.
+/** One line of the title, `type.headingSm` at 15/19. */
+export const TABLE_TITLE_LINE = 19
+/** The title's `numberOfLines`, and so the lines the estimator has to reserve. */
+export const TABLE_TITLE_LINES = 2
+/** The column-head row: 4 above an 14 px head line, 3 below, and its hairline rule as a whole px. */
+export const TABLE_HEAD_ROW_H = 22
+/** One body row: 4 above a 15 px cell line and 4 below. */
+export const TABLE_ROW_H = 23
+/** How many body rows the tile shows. The detail page shows every one. */
+export const TABLE_ROWS = 3
+/** How many of the TRAILING columns the tile shows — the newest periods, never the oldest. */
+export const TABLE_COLS_SHOWN = 2
+/** One line of the note, `type.caption` at 11/18. */
+export const TABLE_NOTE_LINE = 18
+/** The note's `numberOfLines`. A two-line note is what overshot the aspect-derived box. */
+export const TABLE_NOTE_LINES = 2
+/** The gap the tile's root puts between each of its children. */
+export const TABLE_GAP = 2
+
 export function estimateTileHeight(t: Tile, colWidth: number): number {
   const chrome = 2 * TILE_PADDING + TILE_HEAD
   switch (t.kind) {
@@ -316,8 +340,22 @@ export function estimateTileHeight(t: Tile, colWidth: number): number {
     }
     case 'peers':
       return chrome + PEERS_ROW * Math.min(t.peers.length, PEERS_SHOWN)
-    case 'table':
-      return Math.round((colWidth * 5) / 4)
+    case 'table': {
+      // Never below what the body draws — see the header comment. The children are the title, the
+      // head row, one row per statement row it shows, and the note when there is one; the gaps
+      // are one fewer than that.
+      const rows = Math.min(t.table.rows.length, TABLE_ROWS)
+      const note = t.table.note !== '' ? TABLE_NOTE_LINE * TABLE_NOTE_LINES : 0
+      const children = 2 + rows + (t.table.note !== '' ? 1 : 0)
+      const body =
+        2 * TILE_PADDING +
+        TABLE_TITLE_LINE * TABLE_TITLE_LINES +
+        TABLE_HEAD_ROW_H +
+        TABLE_ROW_H * rows +
+        note +
+        TABLE_GAP * Math.max(0, children - 1)
+      return Math.max(Math.round((colWidth * 5) / 4), body)
+    }
     case 'tape':
       return chrome + TAPE_ROW * Math.min(t.indices.length, TAPE_SHOWN)
   }

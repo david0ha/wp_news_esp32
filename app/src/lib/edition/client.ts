@@ -13,6 +13,7 @@
 // and `bad_json` is somebody else's problem that fixes itself in a minute.
 
 import { isEmptyEdition, parseEdition } from './parse'
+import { tileByteLength } from './photo'
 import { type Edition } from './types'
 
 /** The device's own body cap (`news_service.c`). A payload over it is one the board rejects. */
@@ -144,13 +145,25 @@ export function createEditionClient(opts: EditionClientOptions = {}): EditionCli
     if (url.trim() === '') throw new EditionError('no_url', 'no edition URL configured')
 
     const headers: Record<string, string> = { Accept: 'application/json' }
-    if (etag !== null && etag !== '') headers['If-None-Match'] = etag
+    // Whether this request asks the conditional question at all. An empty tag is no tag: it is
+    // what a cache written before the desk sent an ETag carries, and sending `If-None-Match: ''`
+    // would ask a question with no subject.
+    const conditional = etag !== null && etag !== ''
+    if (conditional) headers['If-None-Match'] = etag
 
     const res = await get(url, headers)
 
     // 304 before the ok check: `res.ok` is false for a 304, and reading it as an HTTP failure
     // would turn the most common answer a healthy desk gives into an error banner.
-    if (res.status === 304) return { status: 'not_modified' }
+    //
+    // BUT ONLY AS AN ANSWER TO A QUESTION WE ASKED — `news_service.c:51`, the same rule the board
+    // applies for the same reason. A 304 to an unconditional GET is a proxy or a captive portal
+    // answering a question nobody put, and it confirms nothing: there is no cached edition behind
+    // it to confirm. Honouring one strands a cold start on `loading` for ever, because the
+    // reducer's `fetched` branch returns `prev` off a non-ready state and the loading screen
+    // carries neither a Retry nor a pull-to-refresh. So it falls through to the range check
+    // below, which 304 already fails, exactly as a 302 one integer away does.
+    if (res.status === 304 && conditional) return { status: 'not_modified' }
     if (!res.ok) throw new EditionError('http', `edition server answered ${res.status}`, res.status)
 
     const bytes = await bodyBytes(res, EDITION_MAX_BYTES)
@@ -177,7 +190,9 @@ export function createEditionClient(opts: EditionClientOptions = {}): EditionCli
     if (url.trim() === '') throw new EditionError('no_url', 'no tile URL')
     const res = await get(url, {})
     if (!res.ok) throw new EditionError('http', `tile server answered ${res.status}`, res.status)
-    const want = (w * h) / 2
+    // `tileByteLength` and not a second `(w * h) / 2`: the length this refuses and the length
+    // `decodeTile` unpacks are the same fact, and two spellings of it can drift.
+    const want = tileByteLength(w, h)
     // A tile has no header and no length of its own, so the geometry from the payload is the
     // only thing that can check it. A short body drawn as a whole picture is an image the reader
     // cannot tell from the real one.

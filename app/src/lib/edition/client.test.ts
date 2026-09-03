@@ -101,9 +101,26 @@ describe('editionClient.fetch — the happy path', () => {
 })
 
 describe('editionClient.fetch — the failures', () => {
-  it('reads a 304 as not_modified', async () => {
+  it('reads a 304 as not_modified when it asked the conditional question', async () => {
     const { client: c } = client([{ status: 304 }])
     expect(await c.fetch(URL, 'W/"abc"')).toEqual({ status: 'not_modified' })
+  })
+
+  it('refuses a 304 that answers a request carrying no If-None-Match', async () => {
+    // news_service.c:51 — a 304 is confirmation only of a question this client asked. A proxy or
+    // a captive portal answering 304 to an unconditional GET has confirmed nothing, and honouring
+    // it leaves a cold start with no cache on `loading` for ever: the reducer's `fetched` branch
+    // returns `prev` off a non-ready state, and the loading screen offers no Retry.
+    const { client: c } = client([{ status: 304 }])
+    await expect(c.fetch(URL, null)).rejects.toMatchObject({ code: 'http', status: 304 })
+  })
+
+  it('treats an empty ETag as no ETag on the way out AND on the way back', async () => {
+    // The request already refuses to send `If-None-Match: ''`; the answer has to be read by the
+    // same rule, or the one case the header is omitted is the one case an unsolicited 304 passes.
+    const { client: c, calls } = client([{ status: 304 }])
+    await expect(c.fetch(URL, '')).rejects.toMatchObject({ code: 'http', status: 304 })
+    expect(header(calls[0].init, 'If-None-Match')).toBeUndefined()
   })
 
   it('refuses an empty URL without touching the network', async () => {

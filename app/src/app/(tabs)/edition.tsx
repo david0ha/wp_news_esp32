@@ -9,7 +9,13 @@ import { Masonry } from '../../components/edition/Masonry'
 import { PhotoTile } from '../../components/edition/tiles/PhotoTile'
 import { useEdition } from '../../lib/edition/useEdition'
 import { freshnessLabel } from '../../lib/edition/freshness'
-import { COLUMN_GAP, columnWidth, photoBoxHeight, resolveChip } from '../../lib/edition/feedLayout'
+import {
+  COLUMN_GAP,
+  columnWidth,
+  editionKey,
+  photoBoxHeight,
+  resolveChip,
+} from '../../lib/edition/feedLayout'
 import {
   availableChips,
   editionToTiles,
@@ -86,6 +92,9 @@ export default function EditionScreen() {
   }
 
   const band = feed?.band ?? null
+  // Which edition this page is drawing. Every mounted tile carries it, so a new edition is a
+  // remount rather than a reuse — see `editionKey`.
+  const key = editionKey(state.cached)
 
   return (
     <Screen edges={['top']}>
@@ -105,9 +114,14 @@ export default function EditionScreen() {
           freshness={freshnessLabel(state.cached.fetchedAt, Date.now())}
           error={state.error}
           onRetry={onRefresh}
-          onPressSymbol={() =>
-            router.push(`/market/${encodeURIComponent(state.cached.edition.subject.symbol)}`)
-          }
+          onPressSymbol={() => {
+            // Guarded here as well as in the masthead, which only offers the press when there is
+            // a symbol: `/market/` with nothing after it matches no route and this app has no
+            // `+not-found`, so the push would be a dead screen rather than a no-op.
+            const symbol = state.cached.edition.subject.symbol
+            if (symbol === '') return
+            router.push(`/market/${encodeURIComponent(symbol)}`)
+          }}
         />
 
         {/* The band: the lead photograph, too wide for a column, run across the page instead. It
@@ -117,6 +131,10 @@ export default function EditionScreen() {
           <View style={styles.band}>
             <View style={styles.bandFrame}>
               <PhotoTile
+                // Keyed by the edition, like every tile in the masonry: the lead band is 1140x320
+                // under the same id every edition, so without this the reused mount keeps
+                // yesterday's photograph under today's headline.
+                key={`${key}:band`}
                 tile={{ kind: 'photo', id: 'band', photo: band }}
                 width={contentWidth}
                 height={photoBoxHeight(band, contentWidth)}
@@ -133,6 +151,7 @@ export default function EditionScreen() {
             tiles={tiles}
             colWidth={colWidth}
             newsUrl={state.cached.url}
+            editionKey={key}
             gutter={COLUMN_GAP}
             columns={2}
             onPress={openTile}

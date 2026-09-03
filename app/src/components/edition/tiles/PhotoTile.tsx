@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Image, StyleSheet, Text, View } from 'react-native'
+import { Image, InteractionManager, StyleSheet, Text, View } from 'react-native'
 import { colors, radius, type } from '../../../theme'
 import { TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
 import { editionClient, tileUrl } from '../../../lib/edition/client'
@@ -17,6 +17,12 @@ import { decodeTile, getCachedTilePng, putCachedTilePng } from '../../../lib/edi
  * started, so a missing picture must not move the page — the caption goes on a plain ground and
  * the column beside it does not shift. That is also what the demo edition looks like, whose tiles
  * live in `sim/tiles/` and are on no server the phone can reach.
+ *
+ * THIS COMPONENT DOES NOT NOTICE A NEW EDITION BY ITSELF, and it is not supposed to. Its effect
+ * keys on the tile URL and the geometry, and both of those repeat across days: the ids are the
+ * producer's and the lead band is 1140x320 every edition. Every mount site therefore keys it on
+ * the edition too (`feedLayout.ts`'s `editionKey`), so a new edition remounts it rather than
+ * handing the old instance a new caption over the old picture.
  */
 export function PhotoTile({
   tile,
@@ -35,12 +41,10 @@ export function PhotoTile({
   // rather than flashing the placeholder while a decode it already did runs again.
   const [png, setPng] = useState<string | null>(() => (url === '' ? null : getCachedTilePng(url)))
 
-  // The URL and NOT the decoded picture is what this effect keys on. Tile ids repeat across
-  // editions (`photo:0` is `photo:0` every day), so React reuses this instance for tomorrow's
-  // photograph — and an effect that skipped whenever it already held a picture would keep
-  // showing yesterday's forever. Re-reading the cache first is what makes that cheap: the
-  // edition change already emptied it (`clearTilePngCache`), so a miss here is a real refetch
-  // and a hit is a tile scrolled back into view, which paints without a placeholder flash.
+  // The URL and NOT the decoded picture is what this effect keys on. Re-reading the session cache
+  // first is what makes a remount cheap: an edition change empties it (`clearTilePngCache`), so a
+  // miss here is a real refetch and a hit is a tile scrolled back into view, which paints without
+  // a placeholder flash.
   useEffect(() => {
     const cached = url === '' ? null : getCachedTilePng(url)
     setPng(cached)
@@ -49,9 +53,25 @@ export function PhotoTile({
     void (async () => {
       try {
         const bytes = await editionClient.fetchTile(url, photo.w, photo.h)
+        if (!alive) return
+        // THE DECODE WAITS FOR THE HANDS TO STOP. Unpacking the nibbles, deflating and base64ing
+        // a tile is a few milliseconds of pure JS with no yield in it, and the tiles of one
+        // edition resolve within a moment of each other — so run at the instant each fetch lands,
+        // they stack into one long block on the thread that is drawing the masonry or following
+        // the reader's finger. Deferred, the picture arrives a beat later and the scroll does not
+        // stutter, which is the right trade for something the layout has already reserved a box
+        // for.
+        await new Promise<void>((resolve) => {
+          InteractionManager.runAfterInteractions(() => resolve())
+        })
+        if (!alive) return
         const decoded = decodeTile(bytes, photo.w, photo.h)
+        // `alive` BEFORE the cache write, not after. The cache is cleared when the edition
+        // changes; a fetch still in flight across that moment would otherwise refill it under the
+        // new edition, with the old edition's picture, under an id the new one also uses.
+        if (!alive) return
         putCachedTilePng(url, decoded.pngBase64)
-        if (alive) setPng(decoded.pngBase64)
+        setPng(decoded.pngBase64)
       } catch {
         // No banner and no retry. A picture is the one thing on this page whose absence explains
         // itself, and an error card where a photograph should be is louder than the photograph.
