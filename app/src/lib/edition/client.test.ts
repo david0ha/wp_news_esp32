@@ -209,6 +209,20 @@ describe('tileUrl', () => {
     expect(tileUrl('', 'a')).toBe('')
     expect(tileUrl('news.json', 'a')).toBe('')
   })
+
+  // A bare authority — no path at all — has slashes of its own: the scheme's `//`. Naively
+  // cutting at the LAST slash finds one of those and drops the host, producing
+  // `http://tiles/x.bin`. The directory of a URL with no path is the authority itself.
+  it('resolves against a bare authority with no path (the scheme-slash trap)', () => {
+    expect(tileUrl('http://host.local:8123', 'x')).toBe('http://host.local:8123/tiles/x.bin')
+    expect(tileUrl('https://claudepost.example', 'x')).toBe(
+      'https://claudepost.example/tiles/x.bin',
+    )
+  })
+
+  it('drops the query and the fragment on a bare authority too', () => {
+    expect(tileUrl('http://host?a=1#f', 'x')).toBe('http://host/tiles/x.bin')
+  })
 })
 
 describe('editionClient.fetchTile', () => {

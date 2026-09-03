@@ -91,6 +91,15 @@ export function tileUrl(newsUrl: string, id: string): string {
   const cut = path.lastIndexOf('/')
   // A bare `news.json` with no slash at all, or an empty string: nothing to resolve against.
   if (cut < 0) return ''
+  // THE TRAP: a URL with no path at all — a bare authority like `http://host.local:8123` — still
+  // has slashes, the scheme's own `//`. `lastIndexOf('/')` finds the second one of those, and
+  // cutting there drops the host entirely: `http://tiles/id.bin`. Detect that case by checking
+  // whether the cut point falls inside the scheme separator itself (index of '://' , +2 for its
+  // two slashes) rather than in an actual path segment, and resolve directly after the authority.
+  const schemeEnd = path.indexOf('://')
+  if (schemeEnd >= 0 && cut === schemeEnd + 2) {
+    return `${path}/tiles/${encodeURIComponent(id)}.bin`
+  }
   return `${path.slice(0, cut + 1)}tiles/${encodeURIComponent(id)}.bin`
 }
 
