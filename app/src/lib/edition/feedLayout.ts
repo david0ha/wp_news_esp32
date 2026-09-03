@@ -53,23 +53,27 @@ export function resolveChip(chips: Chip[], selected: Chip): Chip {
   return chips.includes(selected) ? selected : 'all'
 }
 
-/** A detail-page photograph is allowed to be this much taller than it is wide, and no more. */
+/** A photograph is allowed to be this much taller than it is wide, and no more. */
 const PHOTO_MAX_ASPECT = 3 / 2
-/** ...and this much wider. A lead photo runs to 3.56:1 and is meant to. */
-const PHOTO_MIN_ASPECT = 1 / 3
 
 /**
  * The box for a photograph shown at a given width — the band above the grid, and the picture on
  * the detail page.
  *
- * The photo's own aspect, clamped at both ends. `PhotoTile` covers its box, so the clamp crops
- * rather than distorts: without it a 1:10 portrait would be a ten-screen tower nothing could
- * scroll past, and a 12:1 strip would be a 30 px smear with a caption under it. The band's own
- * rule (`editionToTiles`) only admits photos wider than 2:1, so in practice this clamp bites on
- * the tall end and on a `w` of 0, which would otherwise be a division by zero.
+ * The photo's own aspect, clamped at the TALL end only. `PhotoTile` covers its box, so a clamp
+ * crops rather than distorts, and that is worth paying at the tall end: without it a 1:10 portrait
+ * would be a ten-screen tower nothing could scroll past.
+ *
+ * THERE IS NO CLAMP AT THE WIDE END, and there must not be. The producer cuts the lead photograph
+ * at 1140 x 320 — 3.5625:1 — so a floor of, say, 3:1 would take about 8% off each side of the one
+ * picture that ships every single edition, silently, because the box would be taller than the
+ * photograph and `cover` would eat the difference. A wide picture is meant to be wide: that is
+ * exactly why `editionToTiles` promotes it out of the column and across the page.
+ *
+ * `w` of 0 falls back to a square, which is the case that actually needs a guard — it would
+ * otherwise be a division by zero.
  */
 export function photoBoxHeight(photo: EditionPhoto, width: number): number {
   const aspect = photo.w > 0 ? photo.h / photo.w : 1
-  const clamped = Math.min(PHOTO_MAX_ASPECT, Math.max(PHOTO_MIN_ASPECT, aspect))
-  return Math.max(1, Math.round(width * clamped))
+  return Math.max(1, Math.round(width * Math.min(PHOTO_MAX_ASPECT, aspect)))
 }

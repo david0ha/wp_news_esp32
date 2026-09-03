@@ -10,7 +10,13 @@ import { PhotoTile } from '../../components/edition/tiles/PhotoTile'
 import { useEdition } from '../../lib/edition/useEdition'
 import { freshnessLabel } from '../../lib/edition/freshness'
 import { COLUMN_GAP, columnWidth, photoBoxHeight, resolveChip } from '../../lib/edition/feedLayout'
-import { availableChips, editionToTiles, filterTiles, type Chip } from '../../lib/edition/tiles'
+import {
+  availableChips,
+  editionToTiles,
+  filterTiles,
+  type Chip,
+  type Tile,
+} from '../../lib/edition/tiles'
 import { colors, layout, radius, space } from '../../theme'
 
 /**
@@ -56,8 +62,10 @@ export default function EditionScreen() {
 
   const openTile = useCallback(
     // The id is the producer's own (`story:0`, `figures:1`) and travels in a path segment, so it
-    // is encoded here and decoded by the router on the other side.
-    (id: string) => router.push(`/tile/${encodeURIComponent(id)}`),
+    // is encoded here and decoded by the router on the other side. Takes the whole tile, so this
+    // is `Masonry`'s `onPress` verbatim — an inline arrow that unwrapped it would allocate a new
+    // callback every render and spend the memo it was written for.
+    (t: Tile) => router.push(`/tile/${encodeURIComponent(t.id)}`),
     [router],
   )
 
@@ -127,7 +135,7 @@ export default function EditionScreen() {
             newsUrl={state.cached.url}
             gutter={COLUMN_GAP}
             columns={2}
-            onPress={(t) => openTile(t.id)}
+            onPress={openTile}
           />
         </View>
       </ScrollView>

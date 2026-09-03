@@ -11,6 +11,11 @@ import { colors, fonts } from '../../theme'
  * phone, board or no board — a phone with no URL still gets the demo edition. The entry gate
  * (`entryRouteFor`) is unchanged and still lands on Board or Markets; Today is one tap away
  * from both, which is the right cost for a surface nobody has been told about yet.
+ *
+ * Registering first also moves where Android's hardware back key goes from inside this group,
+ * because React Navigation's default `backBehavior` is `firstRoute`: it lands on Today now,
+ * where it used to land on Board. That is the right landing for the same reason Today leads —
+ * it is the tab that has content on every phone — so the default is left alone.
  */
 export default function TabsLayout() {
   return (

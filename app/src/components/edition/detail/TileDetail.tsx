@@ -19,8 +19,10 @@ import { colors, fonts, layout, radius, space, tabular, type } from '../../../th
  * rather than growing into a page title: the tile's headline is what was tapped, and a different
  * face at a different size reads as a different story.
  *
- * Nothing here is clamped with `numberOfLines` and nothing has a fixed height. This page is not
- * the masonry: there is no estimator to agree with, so the content sets the length.
+ * No text is clamped with `numberOfLines` and no block has a fixed height. This page is not the
+ * masonry: there is no estimator to agree with, so the content sets the length. The statement's
+ * grid is the one thing here measured in pixels, and only across — its columns are fixed widths
+ * so the periods line up under their headings, and it scrolls sideways rather than shrinking.
  *
  * Colour follows the same two rules as everywhere else. A percentage change takes the text pair
  * through `toneTextColor`, a drawn line takes the graphics pair through `toneGraphicsColor`, and
@@ -69,7 +71,7 @@ export function TileDetail({
       return (
         <View style={styles.root}>
           <Text style={type.heading}>Range</Text>
-          <View style={styles.list}>
+          <View>
             <Row label="Previous close" value={formatPrice(s.prevClose)} />
             <Row label="Open" value={formatPrice(s.open)} />
             <Row label="Day high" value={formatPrice(s.high)} />
@@ -101,7 +103,7 @@ export function TileDetail({
         <View style={styles.root}>
           <Text style={type.heading}>{tile.group !== '' ? tile.group : 'Figures'}</Text>
           {/* Every figure in the group, where the tile showed four and counted the rest. */}
-          <View style={styles.list}>
+          <View>
             {tile.figures.map((f, i) => (
               <Row
                 key={`${f.label}:${i}`}
@@ -139,7 +141,7 @@ export function TileDetail({
       return (
         <View style={styles.root}>
           <Text style={type.heading}>Peers</Text>
-          <View style={styles.list}>
+          <View>
             {tile.peers.map((p) => (
               <View key={p.symbol} style={styles.peer}>
                 <View style={styles.peerName}>
@@ -188,9 +190,13 @@ export function TileDetail({
                 </View>
                 {table.rows.map((r, i) => (
                   <View key={`${r.label}:${i}`} style={styles.gridRow}>
-                    <Text style={[type.caption, styles.gridLabel]} numberOfLines={1}>
-                      {r.label}
-                    </Text>
+                    {/* The label WRAPS rather than ellipsizing. The contract caps it at 24
+                        characters, which at 13 px sits right on the edge of the 132 px column,
+                        so a clamp would cut the longest row names on the one page whose whole
+                        job is showing the statement entire. Each row is its own flex row, so a
+                        label that takes two lines takes its row with it and the periods stay
+                        aligned with their headings. */}
+                    <Text style={[type.caption, styles.gridLabel]}>{r.label}</Text>
                     {table.columns.map((c, j) => (
                       <Text key={`${c}:${j}`} style={[styles.gridCell, tabular]}>
                         {r.values[j] ?? ''}
@@ -209,7 +215,7 @@ export function TileDetail({
       return (
         <View style={styles.root}>
           <Text style={type.heading}>The tape</Text>
-          <View style={styles.list}>
+          <View>
             {tile.indices.map((ix) => (
               <View key={ix.symbol} style={styles.peer}>
                 <View style={styles.peerName}>
@@ -346,12 +352,10 @@ const styles = StyleSheet.create({
     ...type.body,
     color: colors.textDim,
   },
-  // A run of rows is one object, so it sits inside its own wrapper rather than as siblings of
+  // A run of rows is one object, so it sits in a bare wrapper `View` rather than as siblings of
   // the heading: `root`'s 12 px gap belongs BETWEEN objects, and applied between rows it would
-  // push every hairline 12 px away from the line it separates.
-  list: {
-    marginTop: -space.xs,
-  },
+  // push every hairline 12 px away from the line it separates. The wrapper needs no style of its
+  // own — each row below carries its own padding and its own rule.
   row: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -386,8 +390,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     overflow: 'hidden',
   },
+  // The one list wrapper that does carry a style: a brief is two stacked lines, so its rows need
+  // air between them where a label/value row gets enough from its own padding.
   briefList: {
-    marginTop: -space.xs,
     gap: space.md,
   },
   brief: {
@@ -450,7 +455,10 @@ const styles = StyleSheet.create({
   },
   gridRow: {
     flexDirection: 'row',
-    paddingVertical: 6,
+    // Top-aligned so a row label that wraps to two lines keeps its figures on the first one,
+    // level with every other row's.
+    alignItems: 'flex-start',
+    paddingVertical: space.xs,
   },
   gridLabel: {
     width: 132,

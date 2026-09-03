@@ -57,8 +57,16 @@ describe('photoBoxHeight', () => {
     expect(photoBoxHeight(photo(100, 1000), 300)).toBe(450)
   })
 
-  it('clamps a smear so a strip keeps a readable band', () => {
-    expect(photoBoxHeight(photo(1200, 60), 300)).toBe(100)
+  it('gives the producer’s own lead cut its own aspect, uncropped', () => {
+    // 1140 x 320 is the cut `tools/edition/PROMPT.md` specifies for the lead photograph, and it
+    // is the band on every edition. A floor on the aspect would make the box taller than the
+    // picture and `cover` would take the difference off both sides.
+    // 358 * 320 / 1140 = 100.49 -> 100.
+    expect(photoBoxHeight(photo(1140, 320), 358)).toBe(100)
+  })
+
+  it('does not clamp a wide strip at all — width is the point of a band', () => {
+    expect(photoBoxHeight(photo(1200, 60), 300)).toBe(15)
   })
 
   it('survives a zero width instead of dividing by it', () => {

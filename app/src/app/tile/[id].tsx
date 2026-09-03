@@ -25,9 +25,12 @@ import { colors, fonts, layout, space, type } from '../../theme'
  * segment is the tile's id, which is the producer's (`story:0`, `figures:1`) and arrives
  * URL-encoded.
  *
- * The edition comes from the in-memory copy the Today tab published, with the disk as the
- * fallback for the one case that misses — a cold `claudepost://tile/story:0` into a process that
- * has never rendered the tab.
+ * The edition comes from the in-memory copy `lib/edition/store.ts` publishes, which is filled by
+ * all three of the ways one arrives — a fetch that wrote the cache, a `readCachedEdition()` that
+ * read it (which `useEdition` runs on every mount, so an offline session reading its cache is
+ * covered too), and `useEdition`'s own demo publish. The disk read below is therefore the cold
+ * case and only the cold case: `claudepost://tile/story:0` into a process where the Today tab has
+ * never mounted.
  */
 
 /**
