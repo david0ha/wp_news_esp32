@@ -53,9 +53,23 @@ function num(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-/** `news_parse.c` accepts both spellings of `emph` because producers have filed both. */
-function bool(v: unknown): boolean {
-  return v === true || v === 1
+/**
+ * Strict boolean: true ONLY for JSON `true`. Mirrors `jbool()` (`news_parse.c:82-85`), which is
+ * `cJSON_IsTrue(v)` and nothing else — a number, even `1`, stays false. Used for `is_subject`,
+ * where a stray numeric `1` from a producer must not silently mark a second peer as the subject.
+ */
+function strictBool(v: unknown): boolean {
+  return v === true
+}
+
+/**
+ * The two-tier `emph` rule (`news_parse.c:522-524`): JSON `true` OR any non-zero number promotes
+ * a figure to a hero. Deliberately not a general truthiness test — `false`, `0`, `''`, `null` and
+ * anything non-numeric all leave the figure at the quiet default, but `2` and `0.5` promote it
+ * exactly as `true` does, because a producer sends whichever spelling of "emphasize this" it read.
+ */
+function emphFlag(v: unknown): boolean {
+  return v === true || (typeof v === 'number' && Number.isFinite(v) && v !== 0)
 }
 
 function int(v: unknown, fallback: number): number {
@@ -149,15 +163,19 @@ function parseFigure(v: unknown): EditionFigure | null {
     label,
     value,
     changePct: num(o.change_pct),
-    emph: bool(o.emph),
+    emph: emphFlag(o.emph),
     // 0 is the far left of the range and a real position; absent is null and draws no track.
     bar: bar === null ? null : clamp(Math.trunc(bar), 0, 1000),
   }
 }
 
-function parseBrief(v: unknown): EditionBrief {
+function parseBrief(v: unknown): EditionBrief | null {
   const o = obj(v)
-  return { date: str(o.date), kicker: str(o.kicker), text: str(o.text) }
+  const text = str(o.text)
+  // The text is the item (`news_parse.c:562-563`). A date and a kicker over nothing is
+  // furniture with no news under it, so it is dropped like a headline-less story.
+  if (text === '') return null
+  return { date: str(o.date), kicker: str(o.kicker), text }
 }
 
 function parsePeer(v: unknown): EditionPeer | null {
@@ -171,7 +189,7 @@ function parsePeer(v: unknown): EditionPeer | null {
     cap: str(o.cap),
     last: num(o.last),
     changePct: num(o.change_pct),
-    isSubject: bool(o.is_subject),
+    isSubject: strictBool(o.is_subject),
   }
 }
 
@@ -307,7 +325,7 @@ export function parseEdition(json: unknown): Edition {
     subject: parseSubject(root.subject),
     stories: stories.slice(0, EDITION_CAPS.stories),
     figures: collect(root.figures, EDITION_CAPS.figures, parseFigure),
-    briefs: collect(root.briefs, EDITION_CAPS.briefs, (e) => parseBrief(e)),
+    briefs: collect(root.briefs, EDITION_CAPS.briefs, parseBrief),
     peers: collect(root.peers, EDITION_CAPS.peers, parsePeer),
     tables: arr(root.tables).slice(0, EDITION_CAPS.tables).map(parseTable),
     charts,

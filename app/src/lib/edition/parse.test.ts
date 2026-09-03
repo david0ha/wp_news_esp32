@@ -274,6 +274,39 @@ describe('parseEdition — totality', () => {
     expect(e.figures.map((f) => f.bar)).toEqual([1000, 0, null, 0])
   })
 
+  it('treats emph as two-tier — true or any non-zero number — but is_subject only as strict true', () => {
+    // news_parse.c:522-524 — `emph` promotes on JSON true OR a non-zero number.
+    const e = parseEdition({
+      figures: [
+        { label: 'a', value: '1', emph: 2 },
+        { label: 'b', value: '2', emph: 0.5 },
+        { label: 'c', value: '3', emph: 0 },
+        { label: 'd', value: '4', emph: 1 },
+        { label: 'e', value: '5', emph: true },
+        { label: 'f', value: '6' },
+      ],
+    })
+    expect(e.figures.map((f) => f.emph)).toEqual([true, true, false, true, true, false])
+
+    // news_parse.c:83-85 (`jbool`) — is_subject is `cJSON_IsTrue` only; a numeric 1 is NOT true.
+    const p = parseEdition({
+      peers: [
+        { symbol: 'A', is_subject: 1 },
+        { symbol: 'B', is_subject: true },
+      ],
+    })
+    expect(p.peers.map((x) => x.isSubject)).toEqual([false, true])
+  })
+
+  it('drops a brief with no text, and it does not count toward the cap', () => {
+    // news_parse.c:562-563 — the text is the item; a date/kicker over nothing is furniture.
+    const e = parseEdition({
+      briefs: [{ date: 'MON', kicker: 'K', text: '' }, { text: 'kept' }],
+    })
+    expect(e.briefs).toHaveLength(1)
+    expect(e.briefs[0].text).toBe('kept')
+  })
+
   it('pads a statement’s numeric plane to the row’s cell count', () => {
     const e = parseEdition({
       tables: [{ title: 'T', columns: ['A', 'B', 'C'], rows: [{ label: 'r', values: ['1', '2', '3'], n: [1] }] }],
