@@ -11,14 +11,15 @@ import {
   View,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
 import { BackButton } from '../../components/BackButton'
 import { Button } from '../../components/Button'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
-import { ONBOARDING_ROUTES } from '../../onboarding/flow'
+import { parseOnboardingFlow, wizardStepHref } from '../../onboarding/flow'
 import { esp32, Esp32Error } from '../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
+import { clearNewsUrlPending, saveNewsUrl } from '../../lib/store'
 import { colors, fonts, layout, radius } from '../../theme'
 
 // Map a provisioning failure to a short, user-facing reason.
@@ -45,6 +46,12 @@ function failureMessage(e: unknown): string {
 
 export default function Password() {
   const router = useRouter()
+  // Read only to be handed onward — this screen hand-rolls its chrome and offers no flow-dependent
+  // control (see the plan's "explicitly out of scope": no SKIP here, Back already reaches wifi-list,
+  // which has one). It still carries the flow into complete, because the rule is every forward move
+  // between steps rather than every step that reads one; see wizardStepHref in
+  // src/onboarding/flow.ts for why the narrower rule is the one that broke.
+  const flow = parseOnboardingFlow(useLocalSearchParams<{ flow?: string }>().flow)
   const { selectedNetwork, setSelectedNetwork, selectedSecured, password, setPassword, newsUrl, setDeviceInfo } =
     useOnboarding()
   // "Other…" leaves selectedNetwork null; the user types the SSID here.
@@ -91,6 +98,13 @@ export default function Password() {
       return
     }
 
+    // The board accepted the address along with the credentials, so the phone's own copy is
+    // brought level with it: saved, and marked delivered in the same breath. Without this the two
+    // would disagree from the first minute — the board on the wizard's address, the phone on
+    // whatever Settings last saved, with nothing pending to reconcile them.
+    await saveNewsUrl(vu.value ?? '')
+    await clearNewsUrlPending()
+
     // Credentials accepted; the board verifies them with a live join while its SoftAP stays up.
     // Poll until it reports the outcome (tolerating the brief AP drop during the channel hop).
     const result = await esp32.waitForConnected()
@@ -102,7 +116,7 @@ export default function Password() {
         .getInfo()
         .then(setDeviceInfo)
         .catch((e) => console.warn('[onboarding] device info refresh failed', e))
-      router.replace(ONBOARDING_ROUTES.complete)
+      router.replace(wizardStepHref('complete', flow))
     } else if (result.outcome === 'failed') {
       setError(
         result.reason === 'auth_failed'
@@ -115,7 +129,7 @@ export default function Password() {
       // (e.g. bad password) is instead reported reliably as 'failed' above (the board restores its
       // own channel first). So a timeout almost always means success — proceed to completion,
       // which has the user rejoin home Wi-Fi and re-confirms the board over the LAN (mDNS / IP).
-      router.replace(ONBOARDING_ROUTES.complete)
+      router.replace(wizardStepHref('complete', flow))
     }
   }
 

@@ -345,11 +345,22 @@ class Desk:
             return False
 
         self.store.set_meta("last_wake", key)
+        # Deadline it to the *next* wake instant, not None. Without this, a
+        # wake nobody claims sits `pending` forever -- a desk left unstaffed
+        # for ten days once queued seventeen of these, and a worker that
+        # finally started up would have spent its first ~11 hours filing
+        # editions for companies ten days stale. `Store.reap()` already
+        # expires anything past its `deadline_at` (see its docstring: "lead
+        # on last night's earnings is worse than useless on Thursday"); this
+        # is what gives it something to expire. `next_wake` returning `None`
+        # (a schedule with no further wake) is fine -- the store treats no
+        # deadline as no deadline, same as today.
         self.enqueue(
             "file_edition",
             "Scheduled wake. File today's edition — pick the company, research it, "
             "and write both pages.",
-            priority=5, source="schedule")
+            priority=5, source="schedule",
+            deadline_at=sched.next_wake(self.schedule, last))
         LOG.info("wake at %d: enqueued a filing", int(last))
         return True
 

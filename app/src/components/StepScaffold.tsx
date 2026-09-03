@@ -6,13 +6,14 @@ import { BackButton } from './BackButton'
 import { colors, fonts, layout } from '../theme'
 
 /**
- * Shared chrome for every onboarding step: an optional back-circle + SKIP bar, the progress bar,
- * a content slot, and the bottom CTA.
+ * Shared chrome for every onboarding step: an optional back-circle + skip bar, the progress bar,
+ * a content slot, and the bottom CTA. The skip control's word is the caller's — see `skipLabel`.
  */
 export function StepScaffold({
   progress,
   onBack,
   onSkip,
+  skipLabel = 'SKIP',
   ctaLabel,
   onNext,
   canProceed = true,
@@ -24,6 +25,14 @@ export function StepScaffold({
   progress: number
   onBack?: () => void
   onSkip?: () => void
+  /**
+   * What the top-right control is called. It exists because one wizard now spells two different
+   * actions in the same slot, and giving them the same word would be the trap: news.tsx's SKIP
+   * clears the field and advances one step — the user stays in setup — while turn-on and wifi-list
+   * hand back a control that leaves setup entirely. "SET UP LATER" says the second thing; SKIP
+   * stays the default so the step that already meant it reads unchanged.
+   */
+  skipLabel?: string
   ctaLabel: string
   onNext: () => void
   canProceed?: boolean
@@ -38,8 +47,8 @@ export function StepScaffold({
       <View style={styles.topBar}>
         {onBack ? <BackButton onPress={onBack} /> : <View style={styles.backSpacer} />}
         {onSkip ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Skip" onPress={onSkip} style={styles.skipHit}>
-            <Text style={styles.skip}>SKIP</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={skipLabel} onPress={onSkip} style={styles.skipHit}>
+            <Text style={styles.skip}>{skipLabel}</Text>
           </Pressable>
         ) : null}
       </View>

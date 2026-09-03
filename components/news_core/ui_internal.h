@@ -636,6 +636,29 @@ lv_obj_t *ui_series_swatch(lv_obj_t *par, int x, int y, ui_series_t s);
 void ui_series_draw_abs(lv_layer_t *L, int x1, int y1, int x2, int y2,
                         ui_series_t s);
 
+/* SEALING A KEYED FILL AGAINST A MARK DRAWN ACROSS IT, which is the other half
+ * of "yellow is legal only inside a black keyline" and the half that is easy to
+ * lose. The keyline above is a fact about the pixels when they were laid down;
+ * a graphic that draws a rate line over its bars afterwards — in colour, under
+ * a paper halo, because paper is the only thing that separates that line from a
+ * black bar — erases the keyline where it crosses and leaves paper against the
+ * yellow. That is a real sheet and not a hypothetical: see ui_common.c.
+ *
+ * Lay the sleeve down BEFORE the mark and its halo, once per keyed fill the
+ * mark can reach: the same shape, UI_SERIES_KEY_W wider on every side, in ink,
+ * clipped to `fill` so nothing changes anywhere the mark is not over yellow.
+ * `w` is the width of the WIDEST pass the caller will draw — the halo, not the
+ * line inside it — and `fill` is the keyed rectangle in the same absolute
+ * coordinates, x2/y2 inclusive, as ui_series_draw_abs() was given.
+ *
+ * The line form clips its SPANS rather than its endpoints, so a sleeve cannot
+ * poke half its width out of the bar it belongs to. The rect form is for the
+ * marks a plot puts on its line: the nodes, and the direction arrow. */
+void ui_series_sleeve_line_abs(lv_layer_t *L, const lv_area_t *fill,
+                               int x1, int y1, int x2, int y2, int w);
+void ui_series_sleeve_rect_abs(lv_layer_t *L, const lv_area_t *fill,
+                               int x1, int y1, int x2, int y2);
+
 /* A polyline's ink for series `s`, for the immediate-mode chart draw, which
  * strokes rather than fills and so cannot use ui_series_fill(). KEYED and OPEN
  * have no stroke form — yellow cannot be a line on paper and paper cannot be a

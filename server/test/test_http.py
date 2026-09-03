@@ -1364,6 +1364,36 @@ class TickTest(DeskTestCase):
         filings = [c for c in doc["commands"] if c["kind"] == "file_edition"]
         self.assertEqual(len(filings), 2)
 
+    def test_a_wake_deadlines_at_the_following_wake(self):
+        wake = at(2026, 8, 19, 12, 40)
+        self.clock.set(wake + 5)
+        self.desk.tick()
+
+        _, doc = self.api("GET", "/api/commands")
+        filings = [c for c in doc["commands"] if c["kind"] == "file_edition"]
+        self.assertEqual(len(filings), 1, doc["commands"])
+        self.assertEqual(filings[0]["deadline_at"], S.next_wake(self.desk.schedule, wake))
+
+    def test_an_unclaimed_wake_expires_at_the_next_one_rather_than_lingering(self):
+        # The regression this guards: ten days with no worker running once
+        # left seventeen of these `pending` forever, and a worker that finally
+        # started up would have spent its first ~11 hours filing editions for
+        # companies ten days stale.
+        wake = at(2026, 8, 19, 12, 40)
+        self.clock.set(wake + 5)
+        self.desk.tick()
+        cid = self.command_id_of_kind("file_edition")
+
+        self.clock.set(at(2026, 8, 19, 22, 0) + 5)     # past the deadline
+        self.assertEqual(self.desk.store.reap(), 1)
+
+        self.assertEqual(self.command(cid)["status"], "expired")
+        self.assertIsNone(self.desk.store.claim_command("w"))
+
+    def command_id_of_kind(self, kind: str) -> str:
+        _, doc = self.api("GET", "/api/commands")
+        return next(c["id"] for c in doc["commands"] if c["kind"] == kind)
+
     def test_the_queue_is_reaped_on_the_housekeeping_pass_not_every_tick(self):
         # A lease runs half an hour and a deadline is hours away; a write
         # transaction every five seconds to ask whether either has passed is a

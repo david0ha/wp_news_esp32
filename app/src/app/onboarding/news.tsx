@@ -1,9 +1,9 @@
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { StepScaffold } from '../../components/StepScaffold'
 import { IconBadge } from '../../components/IconBadge'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
-import { ONBOARDING_ROUTES, canProceed, progressFor } from '../../onboarding/flow'
+import { canProceed, parseOnboardingFlow, progressFor, wizardStepHref } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
 import { colors, fonts, radius } from '../../theme'
 
@@ -17,12 +17,17 @@ import { colors, fonts, radius } from '../../theme'
 // otherwise arrive on the far side of a ~45s join.
 export default function News() {
   const router = useRouter()
+  // Read only to be handed onward. This step's chrome does not depend on why the wizard opened —
+  // its SKIP clears the field and advances, and Back always has wifi-list behind it — but the flow
+  // param is route-local, so a step that drops it silently ends the chain for every step after it.
+  // Every forward move between steps carries it; see wizardStepHref in src/onboarding/flow.ts.
+  const flow = parseOnboardingFlow(useLocalSearchParams<{ flow?: string }>().flow)
   const { newsUrl, setNewsUrl } = useOnboarding()
 
   const result = validateNewsUrl(newsUrl)
   const showError = !result.ok && newsUrl.trim().length > 0
 
-  const next = () => router.push(ONBOARDING_ROUTES.password)
+  const next = () => router.push(wizardStepHref('password', flow))
   const skip = () => {
     setNewsUrl('')
     next()

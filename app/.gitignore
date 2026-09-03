@@ -1,5 +1,8 @@
-# Dependencies
-node_modules/
+# Dependencies. No trailing slash on purpose: a git worktree shares no install with the main
+# checkout, so the usual fix is a symlink here pointing at the one that is already there — and
+# `node_modules/` matches a directory but not a symlink, which left it showing up as an untracked
+# file one `git add -A` away from committing an absolute path off somebody's disk.
+node_modules
 
 # Expo
 .expo/

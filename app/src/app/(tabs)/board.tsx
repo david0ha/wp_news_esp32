@@ -8,6 +8,7 @@ import { Button } from '../../components/Button'
 import { InfoRow } from '../../components/InfoRow'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { ScreenMessage } from '../../components/ScreenMessage'
+import { NoBoardYet } from '../../components/NoBoardYet'
 import { useDevice } from '../../lib/device'
 import {
   Esp32Error,
@@ -18,6 +19,7 @@ import {
 } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice } from '../../lib/discovery'
 import { getDeviceBaseUrl } from '../../lib/store'
+import { syncPendingNewsUrl } from '../../lib/newsurlsync'
 import {
   PAGE_LABELS,
   changeTone,
@@ -62,7 +64,7 @@ const SLEEP_PRESETS: ReadonlyArray<{ label: string; seconds: number }> = [
 
 export default function Board() {
   const router = useRouter()
-  const { client, baseUrl, setBaseUrl } = useDevice()
+  const { client, baseUrl, hasDevice, setBaseUrl } = useDevice()
 
   const [state, setState] = useState<DeviceState | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -84,6 +86,29 @@ export default function Board() {
         setState(s)
         setPendingPage((p) => (p === null || p === s.page ? null : p))
         setError(null)
+        // The board just answered, which is the one moment it is known to be awake — so this is
+        // where an address saved from Settings while it slept gets delivered. Usually there is
+        // nothing pending and this is one cached read. When it does send, the Source card below
+        // is showing the old URL, so read the state once more rather than wait five seconds to
+        // show the user the thing that just happened. That re-read is best-effort on its own: the
+        // snapshot above is already good, and a board that answered twice and not a third time
+        // must not turn a delivered address into an error line.
+        //
+        // A `rejected` here is deliberately not surfaced. The sync has already cleared the mark
+        // so this poll stops retrying it, and this tab has no editor to say it beside; what the
+        // user sees is the Source card below still naming the board's own address rather than
+        // the one they saved, and Settings — the screen that owns the field — says why in red
+        // the next time its own focus load makes the same delivery... which it cannot, the mark
+        // being clear. So a refusal seen only from here shows up as the address not changing.
+        // Rare by construction: `newsurl.ts` mirrors the board's validator, so the board refusing
+        // an address that passed it means the two have diverged.
+        if ((await syncPendingNewsUrl(client)).status === 'sent') {
+          try {
+            setState(await client.getState())
+          } catch {
+            // the next poll shows it
+          }
+        }
       } catch (e) {
         // Keep the last good snapshot on a transient poll failure; only surface an error when we
         // have nothing to show yet.
@@ -97,8 +122,19 @@ export default function Board() {
 
   // Poll while the screen is focused. useFocusEffect pauses polling when the user navigates away
   // and resumes on return, so we never poll a backgrounded screen.
+  //
+  // With no client there is no address to poll, and the interval must not be installed at all —
+  // this guard is not tidiness, it is the difference between an idle app and one that quietly
+  // costs a boardless user battery. `load()` already returns early on a null client, so without
+  // the guard the timer would still be armed and would still fire every five seconds forever, and
+  // once `resolveBaseUrl` stopped inventing `http://claudepost.local` for a phone with nothing
+  // saved it would have been a five-second interval of eight-second-timeout requests against a
+  // hostname nobody answers to — overlapping, unbounded, and invisible in the UI, so nothing would
+  // ever have pointed at it. Returning is safe rather than permanent because the effect re-runs
+  // when a board is attached: `client` changes, `load` is rebuilt, and polling starts then.
   useFocusEffect(
     useCallback(() => {
+      if (!client) return
       focused.current = true
       load()
       const id = setInterval(() => {
@@ -108,7 +144,7 @@ export default function Board() {
         focused.current = false
         clearInterval(id)
       }
-    }, [load]),
+    }, [client, load]),
   )
 
   const onPullRefresh = useCallback(async () => {
@@ -149,7 +185,24 @@ export default function Board() {
     [client, busy, load],
   )
 
-  if (!client) {
+  // Three branches, and their ORDER is load-bearing. This app has no component-testing library, so
+  // nothing here can be pinned by a test — reordering these would ship silently and be noticed only
+  // as "the app flashes something odd on launch". The argument therefore lives at the site.
+  //
+  // First `hasDevice === null`: storage has not answered yet. That is the state of the very first
+  // frame on every cold launch, including for the user who has owned a board for months. Collapsing
+  // it into "no board" — which is what any `if (!hasDevice)` written first would do — makes that
+  // user watch "No board yet" flash past every single time they open the app. Unknown is not false;
+  // it is a reason to say nothing yet, which is what "Connecting…" says.
+  //
+  // Then `!hasDevice || !client`: storage has answered and there is no board. This is the ordinary
+  // resting state of a phone whose owner tapped SET UP LATER, not a failure, so it gets the empty
+  // state and not an error. `client` rides along because the two are the same fact seen from either
+  // end — no saved URL means no client — and because narrowing it here is what lets the dashboard
+  // below call `client.setPage()` without a non-null assertion. The header still renders, with a
+  // null address: it is the app's title bar, and dropping it would make the tab look like a
+  // different screen rather than this one with nothing in it.
+  if (hasDevice === null) {
     return (
       <Screen edges={['top']}>
         <ScreenMessage loading message="Connecting…" />
@@ -157,6 +210,30 @@ export default function Board() {
     )
   }
 
+  if (!hasDevice || !client) {
+    return (
+      <Screen edges={['top']}>
+        <Header baseUrl={null} />
+        <NoBoardYet />
+      </Screen>
+    )
+  }
+
+  // Last: a board is configured but we have not got a snapshot out of it yet. Two invariants meet
+  // here and both are already honoured by `load({ silent })` above — this comment exists so the
+  // next person does not "simplify" them away.
+  //
+  // A failure is never grounds for taking away what is already drawn. Once `state` is set it stays
+  // set: a poll that fails leaves the last good snapshot on screen and, when it was silent, does
+  // not even set `error`. A board that has gone to sleep is the normal case, not an outage, and
+  // blanking a working dashboard every time one of these five-second polls times out would make a
+  // healthy board look broken twelve times a minute.
+  //
+  // And "you have no board" may only ever be said from `hasDevice === false` — from storage, which
+  // knows — never from an error. That is why this branch shows a spinner and a retry rather than
+  // NoBoardYet, however hopeless the errors get: an unreachable board is still a board, and telling
+  // its owner they do not own one, with buttons offering to set one up, is the one wrong sentence
+  // this screen can say.
   if (!state) {
     return (
       <Screen edges={['top']}>

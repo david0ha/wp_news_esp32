@@ -15,16 +15,24 @@ import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { InfoRow } from '../../components/InfoRow'
 import { useDevice } from '../../lib/device'
-import { Esp32Error, type DeviceInfo, type DeviceState } from '../../lib/esp32'
+import { humanError, type DeviceInfo, type DeviceState } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
-import { clearDeviceBaseUrl, getDeviceBaseUrl, resetOnboarding } from '../../lib/store'
+import { clearNewsUrlPending, getDeviceBaseUrl, getNewsUrl, isNewsUrlPending, saveNewsUrl } from '../../lib/store'
+import {
+  decideNewsUrlSave,
+  settleNewsUrlSync,
+  syncPendingNewsUrl,
+  type NewsUrlSaveDecision,
+  type NewsUrlSaveOutcome,
+} from '../../lib/newsurlsync'
+import { wizardEntryHref } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
 import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
 import { colors, fonts, layout, radius, space, type } from '../../theme'
 
 export default function Settings() {
   const router = useRouter()
-  const { client, baseUrl, setBaseUrl } = useDevice()
+  const { client, baseUrl, hasDevice, setBaseUrl, forgetBoard } = useDevice()
 
   const [info, setInfo] = useState<DeviceInfo | null>(null)
   const [infoError, setInfoError] = useState(false)
@@ -37,16 +45,79 @@ export default function Settings() {
   // can be prefilled with it and the user can see what they are changing.
   const [source, setSource] = useState<DeviceState['source'] | null>(null)
 
+  // The phone's own copy of the address, and whether the board has been told. The board is asleep
+  // most of the time by design, so the phone's copy is the setting and the board's is a mirror
+  // that catches up; while it has not, the editor shows this copy rather than the board's, and
+  // says so underneath.
+  const [localUrl, setLocalUrl] = useState<string | null>(null)
+  const [pendingSync, setPendingSync] = useState(false)
+  // Set when a delivery made from this screen's own focus load was refused by the board — the
+  // address the phone holds is one the board will not take, and nothing else on screen would say
+  // so. Cleared by the next save, which is the only act that can change the address.
+  const [syncRejected, setSyncRejected] = useState<string | null>(null)
+
+  const loadLocal = useCallback(async () => {
+    const [url, pending] = await Promise.all([getNewsUrl(), isNewsUrlPending()])
+    setLocalUrl(url)
+    setPendingSync(pending)
+  }, [])
+
   // Reconnect ("find board") UI state.
   const [reconnecting, setReconnecting] = useState(false)
   const [reconnectMsg, setReconnectMsg] = useState<string | null>(null)
 
+  // Set only when the removal itself failed, so the one thing the user cannot see — that the key
+  // survived on disk and the board will be back next launch — gets said out loud.
+  const [forgetFailed, setForgetFailed] = useState(false)
+
+  const forget = useCallback(async () => {
+    setForgetFailed(!(await forgetBoard()))
+  }, [forgetBoard])
+
   // Pre-fill the host field with the current base URL (sans scheme, for friendlier editing).
+  //
+  // The effect has to be *total* over `baseUrl`, including the null arm, because it is the only
+  // thing that reflects a **cleared** board back into this field. "Forget this board" empties
+  // storage and the provider, and every other part of this screen notices at once — the Board card
+  // drops to "No board set up on this phone.", News source disappears, the Forget button itself
+  // goes. The old `if (baseUrl)` guard left exactly one survivor: the Connection input, still
+  // showing 192.168.0.42 a few rows above a Save button that would hand it straight back to
+  // `setBaseUrl`. A stale prefill next to a Save button is not a cosmetic leftover, it is an offer
+  // to undo a deliberate act, and the undo is one Return key away with no confirmation between.
+  //
+  // `hostError` goes in both arms, because it only ever describes the text that was in the field
+  // and the effect has just replaced that text: an "isn't a valid IP address" line under a freshly
+  // filled-in address (from Find board, say) is an accusation aimed at characters nobody can see
+  // any more. `saved` is cleared only on the null arm, and the asymmetry is deliberate rather than
+  // an oversight — `applyHost` sets it *after* awaiting `setBaseUrl`, so this effect runs on the
+  // resulting `baseUrl` change immediately afterwards, and clearing it unconditionally would delete
+  // the "Saved." confirmation of the save that had just succeeded, but only when the address
+  // actually changed. Losing a board is the transition that has to reset the section; saving is the
+  // one that has to be allowed to say so.
+  //
+  // The null arm has to clear *everything else this screen learned from that board*, for the same
+  // reason and by the same argument. This is a persistent tab: it mounts once and is never
+  // unmounted, so its local state outlives the board it describes. The old `reonboard()` navigated
+  // away, which is why none of this was reachable before. `reconnectMsg` is the visible one — "Found
+  // your board at 192.168.0.42." sitting two rows under "No board set up on this phone.", naming
+  // the hardware the user has just disowned — but `info` and `source` are the same fact and feed
+  // rows above it. Anything derived from a board must go when the board does.
   useEffect(() => {
-    if (baseUrl) setHost(baseUrl.replace(/^https?:\/\//, ''))
+    setHostError(null)
+    if (baseUrl) {
+      setHost(baseUrl.replace(/^https?:\/\//, ''))
+      return
+    }
+    setHost('')
+    setSaved(false)
+    setReconnectMsg(null)
+    setInfo(null)
+    setInfoError(false)
+    setSource(null)
   }, [baseUrl])
 
   const loadInfo = useCallback(async () => {
+    loadLocal()
     if (!client) return
     setInfoError(false)
     try {
@@ -59,8 +130,27 @@ export default function Settings() {
       setSource((await client.getState()).source)
     } catch {
       // leave the last-known value; the section just shows "unknown" until a state read succeeds
+      return
     }
-  }, [client])
+    // The board answered, so it is awake: deliver an address it was not awake for when it was
+    // saved. On `sent` the rows above still describe the old address, so read once more and drop
+    // the pending note — both best-effort, since the delivery itself is already done. On
+    // `rejected` the mark is already cleared (the sync does that, so no poll retries a doomed
+    // address); what is left to do is say so, in red, because from here on the editor will show
+    // the board's address and the one the user saved would otherwise just vanish.
+    const delivered = await syncPendingNewsUrl(client)
+    if (delivered.status === 'sent') {
+      loadLocal()
+      try {
+        setSource((await client.getState()).source)
+      } catch {
+        // the next focus shows it
+      }
+    } else if (delivered.status === 'rejected') {
+      setSyncRejected(humanError(delivered.error))
+      loadLocal()
+    }
+  }, [client, loadLocal])
 
   // As a persistent tab this screen mounts once, so a mount-only effect would show the first
   // visit's snapshot forever. Re-fetch on every focus (as the Board tab does) so the board card,
@@ -106,13 +196,6 @@ export default function Settings() {
     }
   }
 
-  const reonboard = async () => {
-    // Drop the saved board + onboarding flag, then restart the wizard.
-    await clearDeviceBaseUrl()
-    await resetOnboarding()
-    router.replace('/onboarding/turn-on')
-  }
-
   return (
     <Screen edges={['top']}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -124,7 +207,23 @@ export default function Settings() {
           {/* Board identity */}
           <Section title="Board">
             <Card style={styles.infoCard}>
-              {infoError ? (
+              {/*
+                `hasDevice === false`, never `!hasDevice`. The third value is `null` — storage has
+                not answered yet — and collapsing it into false here would say "No board set up on
+                this phone." to every board owner for the frame before AsyncStorage replies. That
+                is the one sentence on this screen that must never be said on a guess, so unknown
+                keeps today's em-dash shell: the rows a board would fill, empty, which is exactly
+                what this card has always looked like while `loadInfo` was still in flight.
+
+                The branch also sits *above* `infoError`, which is ordering rather than accident.
+                "Couldn't reach the board" is a claim about a board; said to somebody who owns none
+                it accuses hardware that does not exist. And the flag outlives its board — forget
+                one that was already unreachable and `infoError` is still true — so the no-board
+                line has to win rather than merely be reachable.
+              */}
+              {hasDevice === false ? (
+                <Text style={styles.noBoard}>No board set up on this phone.</Text>
+              ) : infoError ? (
                 <Pressable onPress={loadInfo} accessibilityRole="button" style={styles.infoRetry}>
                   <Text style={styles.infoRetryText}>Couldn’t reach the board. Tap to retry.</Text>
                 </Pressable>
@@ -139,51 +238,89 @@ export default function Settings() {
             </Card>
           </Section>
 
-          {/* The news snapshot URL — the one setting that decides what the board shows. */}
-          <Section title="News source">
-            <Text style={styles.help}>
-              The address the board fetches its snapshot from. Clear it and save to put the board
-              back on its built-in demo data.
-            </Text>
-            {source ? (
-              <Card style={styles.infoCard}>
-                <InfoRow label="Last poll" value={fetchResultLabel(source.lastResult)} />
-                <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
-                <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
-              </Card>
-            ) : null}
-            {source && source.lastResult !== 'ok' ? (
-              <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
-            ) : null}
-            <NewsUrlEditor
-              // Remount when the board reports a different URL, so the field picks up the new
-              // value instead of holding a draft the board has already moved past.
-              key={source?.url ?? ''}
-              initial={source?.url ?? ''}
-              onSave={async (next) => {
-                if (!client) return 'Not connected to the board.'
-                try {
-                  await client.setNewsUrl(next)
-                } catch (e) {
-                  if (e instanceof Esp32Error && e.code === 'news_url_invalid') {
-                    return 'The board wouldn’t accept that address.'
-                  }
-                  return 'Couldn’t update. Please try again.'
-                }
-                // Re-read so the rows above reflect the change. The board polls the new URL
-                // immediately, but the result lands a moment later — the next poll of this screen
-                // (or a pull-to-refresh on the dashboard) will show it.
-                try {
-                  setSource((await client.getState()).source)
-                } catch {
-                  // the write succeeded; the value refreshes on the next load
-                }
-                return null
-              }}
-            />
-          </Section>
+          {/*
+            The news snapshot URL — the one setting that decides what the board shows. It is the
+            phone's setting now, with the board as a subscriber that catches up when it is awake
+            (`store.ts`, `newsurlsync.ts`); but it still describes *a board*, so with none there
+            is nothing for the field to be about, and the section goes rather than being disabled —
+            and again on `=== false`, so an unknown draws the section it has always drawn.
 
-          {/* Manual host / IP override */}
+            What the editor shows is whichever copy is the truth right now. The board echoes its
+            URL back, and whenever nothing is pending that is the address in force. While a save is
+            waiting for the board, the phone's copy is what the user asked for and the board's is
+            what they asked to change, so the phone's wins and the note underneath says why.
+          */}
+          {hasDevice === false ? null : (
+            <Section title="News source">
+              <Text style={styles.help}>
+                The address the board fetches its snapshot from. Clear it and save to put the board
+                back on its built-in demo data.
+              </Text>
+              {source ? (
+                <Card style={styles.infoCard}>
+                  <InfoRow label="Last poll" value={fetchResultLabel(source.lastResult)} />
+                  <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
+                  <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
+                </Card>
+              ) : null}
+              {source && source.lastResult !== 'ok' ? (
+                <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
+              ) : null}
+              <NewsUrlEditor
+                // Remount when the board reports a different URL, so the field picks up the new
+                // value instead of holding a draft the board has already moved past. The board's
+                // URL and only that: a save the board slept through changes the phone's copy and
+                // the pending mark but not this key, so the editor keeps the sentence it has just
+                // shown for that save instead of being rebuilt underneath it.
+                key={source?.url ?? ''}
+                initial={pendingSync ? (localUrl ?? '') : (source?.url ?? localUrl ?? '')}
+                pending={pendingSync}
+                onSave={async (next) => {
+                  setSyncRejected(null)
+                  // What the attempt means — persist or not, pending or not, which voice — is
+                  // `decideNewsUrlSave`'s, tested as a rule. This site only makes the attempt and
+                  // does what the decision says. The one thing it does before the attempt is wait
+                  // for any delivery already on the wire: a POST of an older address racing this
+                  // one would land in whichever order the board took them.
+                  let outcome: NewsUrlSaveOutcome
+                  if (!client) {
+                    outcome = { noClient: true }
+                  } else {
+                    await settleNewsUrlSync()
+                    try {
+                      await client.setNewsUrl(next)
+                      outcome = { ok: true }
+                    } catch (e) {
+                      outcome = { error: e }
+                    }
+                  }
+                  const decision = decideNewsUrlSave(next, outcome)
+                  if (decision.persist) {
+                    await saveNewsUrl(next)
+                    if (!decision.pending) await clearNewsUrlPending()
+                    loadLocal()
+                  }
+                  if (client && 'ok' in outcome) {
+                    // Re-read so the rows above reflect the change. The board polls the new URL
+                    // immediately, but the result lands a moment later — the next poll of this
+                    // screen (or a pull-to-refresh on the dashboard) will show it.
+                    try {
+                      setSource((await client.getState()).source)
+                    } catch {
+                      // the write succeeded; the value refreshes on the next load
+                    }
+                  }
+                  return decision
+                }}
+              />
+              {syncRejected ? <Text style={styles.error}>{syncRejected}</Text> : null}
+            </Section>
+          )}
+
+          {/* Manual host / IP override. Deliberately not hidden without a board: typing a host by
+              hand — or tapping "Find board" — is a legitimate way for somebody who skipped setup to
+              attach a board that was already provisioned elsewhere, instead of being sent through a
+              SoftAP wizard for hardware that is already sitting on this Wi-Fi. */}
           <Section title="Connection">
             <Text style={styles.help}>
               The app finds your board at {DEFAULT_HOST}. If that doesn’t work on your network,
@@ -217,9 +354,43 @@ export default function Settings() {
             <Button label="Find board" variant="secondary" loading={reconnecting} onPress={reconnect} />
           </Section>
 
-          {/* Re-run onboarding */}
+          {/* Re-enter the wizard, or disown the board on file */}
           <Section title="Setup">
-            <Button label="Set up a different board" variant="ghost" onPress={reonboard} />
+            {/*
+              A `push`, and nothing cleared on the way in. `reonboard()` did the opposite: it
+              dropped the saved URL and the onboarding flag *before* the wizard opened, so a user
+              who backed out halfway paid for a setup they never finished with the working board
+              they walked in with. Abandoning a re-entry is now free — the write still happens where
+              it always did, in complete.tsx, once there is a new board to write. `wizardEntryHref`
+              is what carries `flow: 'setup'`, and that param is what gives the wizard a Back
+              instead of a SET UP LATER, which would be a strange offer to somebody who opened
+              setup on purpose.
+
+              Truthiness is right for these two, unlike the card above, and for the opposite
+              reason: the only irreversible control on this screen is "Forget this board", so
+              gating it on truthiness means it appears once storage has confirmed there is a board
+              to forget, and an unknown is offered the harmless half of the pair.
+            */}
+            <Button
+              label={hasDevice ? 'Set up a different board' : 'Set up my board'}
+              variant={hasDevice ? 'ghost' : 'primary'}
+              onPress={() => router.push(wizardEntryHref('setup'))}
+            />
+            {hasDevice ? (
+              <Button label="Forget this board" variant="ghost" onPress={forget} />
+            ) : null}
+            {/*
+              Shown only when the removal itself failed. The rest of the screen has already agreed
+              the board is gone — that part is honest, this session is done with it — but the key is
+              still on disk and the next cold launch will read it back. Saying nothing here would
+              make that look like the app undoing a deliberate act on its own.
+            */}
+            {forgetFailed ? (
+              <Text style={styles.help}>
+                Forgotten for now, but it couldn’t be removed from this phone’s storage — it may
+                come back the next time you open the app.
+              </Text>
+            ) : null}
           </Section>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -237,23 +408,29 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /**
- * The snapshot-URL field. Prefilled with what the board reports, validated locally against the
+ * The snapshot-URL field. Prefilled with the address in force, validated locally against the
  * firmware's own rule before any request goes out, and explicit about the empty case: clearing the
  * field and saving is a real, supported action (back to the demo snapshot), not a mistake.
  *
- * `onSave` returns null on success or a sentence to show on failure.
+ * `onSave` answers with a `NewsUrlSaveDecision`, and this component only draws it: `ok` is green;
+ * `info` is the help voice, because the phone has done what was asked and the sentence is
+ * information rather than a verdict; `error` is red, and is the only one that leaves the field
+ * dirty, because the address in it is not saved anywhere. `pending` is the standing version of
+ * `info` — an address on this phone the board has not been told about — and is said in the same
+ * voice for the same reason.
  */
 function NewsUrlEditor({
   initial,
+  pending,
   onSave,
 }: {
   initial: string
-  onSave: (value: string) => Promise<string | null>
+  pending: boolean
+  onSave: (value: string) => Promise<NewsUrlSaveDecision>
 }) {
   const [draft, setDraft] = useState(initial)
   const [saving, setSaving] = useState(false)
-  const [done, setDone] = useState(false)
-  const [failure, setFailure] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<NewsUrlSaveDecision | null>(null)
 
   const result = validateNewsUrl(draft)
   const localError = !result.ok ? newsUrlErrorMessage(result) : null
@@ -262,13 +439,13 @@ function NewsUrlEditor({
   const save = async () => {
     if (!result.ok) return
     setSaving(true)
-    setDone(false)
-    setFailure(null)
-    const err = await onSave(result.value ?? '')
+    setOutcome(null)
+    const decision = await onSave(result.value ?? '')
     setSaving(false)
-    if (err) setFailure(err)
-    else setDone(true)
+    setOutcome(decision)
   }
+
+  const toneStyle = { ok: styles.saved, info: styles.help, error: styles.error } as const
 
   return (
     <View style={styles.field}>
@@ -277,8 +454,7 @@ function NewsUrlEditor({
           value={draft}
           onChangeText={(t) => {
             setDraft(t)
-            setDone(false)
-            setFailure(null)
+            setOutcome(null)
           }}
           placeholder="http://mymac.local:8123/news.json"
           placeholderTextColor={colors.textFaint}
@@ -290,10 +466,10 @@ function NewsUrlEditor({
         />
       </View>
       {localError ? <Text style={styles.error}>{localError}</Text> : null}
-      {failure ? <Text style={styles.error}>{failure}</Text> : null}
-      {done ? (
-        <Text style={styles.saved}>
-          {draft.trim() ? 'Saved. The board is fetching it now.' : 'Cleared — the board is back on demo data.'}
+      {outcome ? <Text style={toneStyle[outcome.tone]}>{outcome.message}</Text> : null}
+      {pending && !outcome && !dirty ? (
+        <Text style={styles.help}>
+          Not yet on the board — it will be sent the next time this app reaches it.
         </Text>
       ) : null}
       <Button
@@ -343,6 +519,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.accent,
     textAlign: 'center',
+  },
+  // The no-board line speaks in `help`'s voice — this screen's explanatory type — but sits inside
+  // a zero-padded Card, so it borrows `infoRetry`'s padding to land where the rows would have.
+  noBoard: {
+    padding: 16,
+    fontSize: 13,
+    color: colors.textFaint,
+    lineHeight: 18,
   },
   help: {
     fontSize: 13,
