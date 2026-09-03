@@ -2,8 +2,8 @@ import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, type } from '../../../theme'
 import {
   TILE_HEAD,
-  TILE_ROW_BRIEFS,
-  TILE_SHOWN_BRIEFS,
+  BRIEFS_ROW,
+  BRIEFS_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
 
@@ -25,11 +25,11 @@ export function BriefsTile({
   width: number
   height: number
 }) {
-  const rest = tile.briefs.length - TILE_SHOWN_BRIEFS
+  const rest = tile.briefs.length - BRIEFS_SHOWN
   return (
     <View style={styles.root}>
       <Text style={styles.head}>Briefs</Text>
-      {tile.briefs.slice(0, TILE_SHOWN_BRIEFS).map((b, i) => (
+      {tile.briefs.slice(0, BRIEFS_SHOWN).map((b, i) => (
         <View key={`${b.date}:${i}`} style={styles.row}>
           <View style={styles.meta}>
             {b.date !== '' ? <Text style={type.caption}>{b.date}</Text> : null}
@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
     height: TILE_HEAD,
   },
   row: {
-    height: TILE_ROW_BRIEFS,
+    height: BRIEFS_ROW,
     justifyContent: 'center',
   },
   meta: {

@@ -3,8 +3,8 @@ import { Sparkline } from '../../Sparkline'
 import { colors, fonts, space, tabular, type } from '../../../theme'
 import {
   TILE_HEAD,
-  TILE_ROW_TAPE,
-  TILE_SHOWN_TAPE,
+  TAPE_ROW,
+  TAPE_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
 import { changeArrow, changeTone, formatPct } from '../../../lib/edition/format'
@@ -28,7 +28,7 @@ export function TapeTile({
   return (
     <View style={styles.root}>
       <Text style={styles.head}>The tape</Text>
-      {tile.indices.slice(0, TILE_SHOWN_TAPE).map((ix) => {
+      {tile.indices.slice(0, TAPE_SHOWN).map((ix) => {
         const tone = changeTone(ix.changePct)
         const arrow = changeArrow(ix.changePct)
         return (
@@ -55,7 +55,7 @@ const styles = StyleSheet.create({
     height: TILE_HEAD,
   },
   row: {
-    height: TILE_ROW_TAPE,
+    height: TAPE_ROW,
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,

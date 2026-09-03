@@ -51,7 +51,8 @@
 //   tape            2P + 24 + 32 * min(n, 5)
 //
 // where P = `TILE_PADDING`, 24 is `TILE_HEAD` (the heading line, equal to `type.headingSm`'s line
-// height), 20 is `TILE_MORE` (the "+N more" line) and the per-row constants are `TILE_ROW_*`.
+// height), 20 is `TILE_MORE` (the "+N more" line), and the per-row constants are `FIGURES_ROW`,
+// `BRIEFS_ROW`, `PEERS_ROW` and `TAPE_ROW` with their `*_SHOWN` row counts beside them.
 //
 // EVERY ONE OF THOSE IS EXPORTED, and the tile bodies in `components/edition/tiles/` import them
 // rather than declaring their own. That is deliberate: this arithmetic and the rows a body draws
@@ -251,14 +252,14 @@ export const TILE_MORE = 20
 // The row heights and the row counts, per kind. Both halves belong here: a body that draws five
 // rows of 28 in a box sized for four is the same silent clipping as a body that draws four rows
 // of 30. The tile bodies import these; see the header comment.
-export const TILE_ROW_FIGURES = 28
-export const TILE_SHOWN_FIGURES = 4
-export const TILE_ROW_BRIEFS = 56
-export const TILE_SHOWN_BRIEFS = 3
-export const TILE_ROW_PEERS = 28
-export const TILE_SHOWN_PEERS = 6
-export const TILE_ROW_TAPE = 32
-export const TILE_SHOWN_TAPE = 5
+export const FIGURES_ROW = 28
+export const FIGURES_SHOWN = 4
+export const BRIEFS_ROW = 56
+export const BRIEFS_SHOWN = 3
+export const PEERS_ROW = 28
+export const PEERS_SHOWN = 6
+export const TAPE_ROW = 32
+export const TAPE_SHOWN = 5
 
 export function estimateTileHeight(t: Tile, colWidth: number): number {
   const chrome = 2 * TILE_PADDING + TILE_HEAD
@@ -281,24 +282,24 @@ export function estimateTileHeight(t: Tile, colWidth: number): number {
       const n = t.figures.length
       return (
         chrome +
-        TILE_ROW_FIGURES * Math.min(n, TILE_SHOWN_FIGURES) +
-        (n > TILE_SHOWN_FIGURES ? TILE_MORE : 0)
+        FIGURES_ROW * Math.min(n, FIGURES_SHOWN) +
+        (n > FIGURES_SHOWN ? TILE_MORE : 0)
       )
     }
     case 'briefs': {
       const n = t.briefs.length
       return (
         chrome +
-        TILE_ROW_BRIEFS * Math.min(n, TILE_SHOWN_BRIEFS) +
-        (n > TILE_SHOWN_BRIEFS ? TILE_MORE : 0)
+        BRIEFS_ROW * Math.min(n, BRIEFS_SHOWN) +
+        (n > BRIEFS_SHOWN ? TILE_MORE : 0)
       )
     }
     case 'peers':
-      return chrome + TILE_ROW_PEERS * Math.min(t.peers.length, TILE_SHOWN_PEERS)
+      return chrome + PEERS_ROW * Math.min(t.peers.length, PEERS_SHOWN)
     case 'table':
       return Math.round((colWidth * 5) / 4)
     case 'tape':
-      return chrome + TILE_ROW_TAPE * Math.min(t.indices.length, TILE_SHOWN_TAPE)
+      return chrome + TAPE_ROW * Math.min(t.indices.length, TAPE_SHOWN)
   }
 }
 

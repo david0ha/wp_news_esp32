@@ -14,12 +14,12 @@ import {
   TILE_HEAD,
   TILE_MORE,
   TILE_PADDING,
-  TILE_ROW_BRIEFS,
-  TILE_ROW_FIGURES,
-  TILE_ROW_PEERS,
-  TILE_ROW_TAPE,
-  TILE_SHOWN_BRIEFS,
-  TILE_SHOWN_PEERS,
+  BRIEFS_ROW,
+  FIGURES_ROW,
+  PEERS_ROW,
+  TAPE_ROW,
+  BRIEFS_SHOWN,
+  PEERS_SHOWN,
   type Tile,
 } from './tiles'
 import { type Edition, type EditionFigure } from './types'
@@ -236,11 +236,11 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
     // header comment used to police by hand: a body cannot draw a row height the estimator does
     // not know about, because there is only one number.
     const chrome = 2 * TILE_PADDING + TILE_HEAD
-    expect(estimateTileHeight(by('peers:0'), W)).toBe(chrome + TILE_ROW_PEERS * 5)
-    expect(estimateTileHeight(by('tape:0'), W)).toBe(chrome + TILE_ROW_TAPE * 5)
-    expect(estimateTileHeight(by('figures:0'), W)).toBe(chrome + TILE_ROW_FIGURES * 4)
+    expect(estimateTileHeight(by('peers:0'), W)).toBe(chrome + PEERS_ROW * 5)
+    expect(estimateTileHeight(by('tape:0'), W)).toBe(chrome + TAPE_ROW * 5)
+    expect(estimateTileHeight(by('figures:0'), W)).toBe(chrome + FIGURES_ROW * 4)
     expect(estimateTileHeight(by('briefs:0'), W)).toBe(
-      chrome + TILE_ROW_BRIEFS * TILE_SHOWN_BRIEFS + TILE_MORE,
+      chrome + BRIEFS_ROW * BRIEFS_SHOWN + TILE_MORE,
     )
   })
 
@@ -251,7 +251,7 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
     const many: Tile = {
       kind: 'peers',
       id: 'peers:9',
-      peers: new Array(TILE_SHOWN_PEERS + 3).fill(null).map((_, i) => ({
+      peers: new Array(PEERS_SHOWN + 3).fill(null).map((_, i) => ({
         symbol: `S${i}`,
         name: '',
         per: '',
@@ -261,7 +261,7 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
         isSubject: false,
       })),
     }
-    expect(estimateTileHeight(many, W)).toBe(chrome + TILE_ROW_PEERS * TILE_SHOWN_PEERS)
+    expect(estimateTileHeight(many, W)).toBe(chrome + PEERS_ROW * PEERS_SHOWN)
   })
 
   it('clamps a photo’s aspect at both ends, so no tile is a smear or a tower', () => {

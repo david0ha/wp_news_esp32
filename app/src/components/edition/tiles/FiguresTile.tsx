@@ -2,8 +2,8 @@ import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, space, tabular, type } from '../../../theme'
 import {
   TILE_HEAD,
-  TILE_ROW_FIGURES,
-  TILE_SHOWN_FIGURES,
+  FIGURES_ROW,
+  FIGURES_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
 import { changeArrow, changeTone, formatPct } from '../../../lib/edition/format'
@@ -27,13 +27,13 @@ export function FiguresTile({
   width: number
   height: number
 }) {
-  const rest = tile.figures.length - TILE_SHOWN_FIGURES
+  const rest = tile.figures.length - FIGURES_SHOWN
   return (
     <View style={styles.root}>
       <Text style={styles.head} numberOfLines={1}>
         {tile.group !== '' ? tile.group : 'Figures'}
       </Text>
-      {tile.figures.slice(0, TILE_SHOWN_FIGURES).map((f, i) => {
+      {tile.figures.slice(0, FIGURES_SHOWN).map((f, i) => {
         const tone = changeTone(f.changePct)
         const arrow = changeArrow(f.changePct)
         return (
@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
     height: TILE_HEAD,
   },
   row: {
-    height: TILE_ROW_FIGURES,
+    height: FIGURES_ROW,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

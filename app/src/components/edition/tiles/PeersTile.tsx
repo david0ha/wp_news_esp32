@@ -2,8 +2,8 @@ import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, space, tabular, type } from '../../../theme'
 import {
   TILE_HEAD,
-  TILE_ROW_PEERS,
-  TILE_SHOWN_PEERS,
+  PEERS_ROW,
+  PEERS_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
 import { changeArrow, changeTone, formatPct, formatPrice } from '../../../lib/edition/format'
@@ -27,7 +27,7 @@ export function PeersTile({
   return (
     <View style={styles.root}>
       <Text style={styles.head}>Peers</Text>
-      {tile.peers.slice(0, TILE_SHOWN_PEERS).map((p) => {
+      {tile.peers.slice(0, PEERS_SHOWN).map((p) => {
         const tone = changeTone(p.changePct)
         const arrow = changeArrow(p.changePct)
         return (
@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
     height: TILE_HEAD,
   },
   row: {
-    height: TILE_ROW_PEERS,
+    height: PEERS_ROW,
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
