@@ -39,9 +39,9 @@ import {
   type CachedEdition,
 } from './store'
 
-// Task 9 (and anyone else building a screen on this hook) reads the state shape from here rather
-// than reaching into ./editionState directly, so this re-export is the one that matters; the
-// reducer, the event union and the rest of the machine stay ./editionState's own surface.
+// A screen built on this hook reads the state shape from here rather than reaching into
+// ./editionState directly, so this re-export is the one that matters; the reducer, the event
+// union and the rest of the machine stay ./editionState's own surface.
 export type { EditionState }
 
 export function useEdition(): {

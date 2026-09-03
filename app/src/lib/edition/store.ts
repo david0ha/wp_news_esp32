@@ -86,6 +86,12 @@ export async function readCachedEdition(): Promise<CachedEdition | null> {
     return null
   }
   const entry = sanitize(parsed)
+  // Published to `current` WITHOUT ASKING WHOSE DESK IT IS. This file does not know the phone's
+  // news URL, and taking a dependency on `lib/store.ts` to find out is more coupling than the
+  // question is worth — so both readers ask it themselves instead. `useEdition`'s reducer drops
+  // a cache entry whose `url` is not the stored one, and the detail route's cold deep link
+  // compares the two before it renders. A foreign entry is therefore reachable through
+  // `getCurrentEdition()` and is put on screen by neither.
   if (entry !== null) current = entry
   return entry
 }

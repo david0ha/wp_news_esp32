@@ -8,6 +8,13 @@
 //
 // `flat` is deliberately grey in both duties. Zero is not a small rise.
 //
+// DIRECTION IS THE ONLY THING COLOUR MEANS ON THE EDITION'S TWO SCREENS. The firmware's rule
+// allows a second meaning — series identity, `ui_series_t` — but that only arises inside a
+// graphic carrying more than one series, and the phone draws none: a line chart is one series, a
+// bar chart is one series in `colors.navy`, a range mark is ink. So there is no identity mapping
+// here to pick the wrong entry from, and anything on these pages that is not a percentage change
+// or a plotted series is ink. Adding a second series to a graphic is what would need one.
+//
 // This lives under `components/` and not `lib/` because a colour is a theme fact, and
 // `lib/edition` holds no colours by design. Two hand-written copies of the mapping would be two
 // places for a chart stroke and its label to end up different greens. The text pair now has a

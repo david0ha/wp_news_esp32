@@ -89,7 +89,11 @@ import {
   type EditionTable,
 } from './types'
 
-/** The tile's inner padding. Shared with `components/edition/EditionTile.tsx`'s StyleSheet. */
+/**
+ * The tile's inner padding. `EditionTile`'s StyleSheet applies it, and every body that does its
+ * own vertical arithmetic subtracts it (`story.ts`, `ChartTile`) — so it is one number here, not
+ * a 14 repeated in five StyleSheets.
+ */
 export const TILE_PADDING = 14
 
 export type Chip = 'all' | 'stories' | 'numbers' | 'accounts' | 'photos'

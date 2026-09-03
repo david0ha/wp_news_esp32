@@ -21,10 +21,12 @@ import { colors, fonts, layout, radius, space, tabular, type } from '../../../th
  * rather than growing into a page title: the tile's headline is what was tapped, and a different
  * face at a different size reads as a different story.
  *
- * No text is clamped with `numberOfLines` and no block has a fixed height. This page is not the
- * masonry: there is no estimator to agree with, so the content sets the length. The statement's
- * grid is the one thing here measured in pixels, and only across — its columns are fixed widths
- * so the periods line up under their headings, and it scrolls sideways rather than shrinking.
+ * NO TEXT IS CLAMPED WITH `numberOfLines`. This page is not the masonry: there is no estimator to
+ * agree with, so the copy sets its own length and every text block grows to fit it. What is
+ * measured here is only what cannot flex — a photograph and a chart are given a pixel box off the
+ * window width, because neither has intrinsic content to be sized by, and the statement's columns
+ * are fixed widths so the periods line up under their headings, which is why that grid scrolls
+ * sideways rather than shrinking.
  *
  * Colour follows the same two rules as everywhere else. A percentage change takes the text pair,
  * inside the shared `Change`; a drawn line takes the graphics pair through `toneGraphicsColor`;

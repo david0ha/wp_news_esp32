@@ -42,8 +42,13 @@ export const EditionTile = memo(function EditionTile({
   height: number
   onPress: (t: Tile) => void
 }) {
-  // RN core Animated on the native driver — the spec forbids reanimated, and a transform-only
-  // scale is exactly what the native driver does well.
+  // A SCALE, AND NOT A HIGHLIGHT. A tile carries no border and no shadow, so the usual press
+  // feedback — darkening the surface — is a white card going faintly grey on a lavender canvas:
+  // nearly invisible, and read as a rendering glitch on the occasions it is seen. 0.97 over
+  // 150 ms is small enough not to be an animation and large enough to say the tap landed.
+  //
+  // RN core `Animated` on the native driver: the spec forbids reanimated, and a transform-only
+  // scale is exactly what the native driver does without waking the JS thread.
   const scale = useRef(new Animated.Value(1)).current
   const to = (toValue: number) =>
     Animated.timing(scale, { toValue, duration: 150, useNativeDriver: true }).start()
@@ -61,7 +66,8 @@ export const EditionTile = memo(function EditionTile({
           styles.tile,
           // A photograph fills its tile edge to edge, so this kind gets no padding at all. The
           // alternative — the body cancelling the padding with a negative margin — only works
-          // inside this component, and Task 9 mounts `PhotoTile` standalone for the band.
+          // inside this component, and `PhotoTile` is also mounted outside it: the Today tab's
+          // full-width band and the detail page's picture both build one without this switch.
           tile.kind === 'photo' ? null : styles.padded,
           { width, height, transform: [{ scale }] },
         ]}
@@ -73,9 +79,14 @@ export const EditionTile = memo(function EditionTile({
 })
 
 /**
- * A body that measures anything is handed the tile's OUTER box, not the padded content box, and
- * subtracts `TILE_PADDING` itself where it needs a pixel figure (`ChartTile`'s plot). One rule
- * for the three that measure beats a second set of dimensions that would be right for two of them
+ * Three kinds do their own arithmetic and are handed the dimensions they use — `StoryTile` the
+ * height alone, because it divides it between the kicker, headline, deck and body and never asks
+ * how wide the column is; `ChartTile` and `PhotoTile` both, because each sizes a box in two
+ * directions.
+ *
+ * WHAT THEY GET IS THE TILE'S OUTER BOX, not the padded content box, and each subtracts
+ * `TILE_PADDING` itself where it needs a pixel figure (`storyLines`, `ChartTile`'s plot). One
+ * rule for the three beats a pre-padded second set of numbers that would be right for two of them
  * and wrong for the photograph, which has no padding to subtract.
  *
  * The other six take the tile alone. Their bodies are rows and headings whose heights are

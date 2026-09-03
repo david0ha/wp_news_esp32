@@ -67,7 +67,7 @@ export const MISSING_RGB: readonly [number, number, number] = [255, 0, 255]
  *
  * The six real ones are `wp_palette_ink[]` from components/news_core/wp_palette.c, at the wire
  * codes `wp_palette_code[]` gives them — the measured "as paper" table, which the simulator uses
- * for exactly this purpose (sim/main_sim.c:248). Those values are eyeballed from Spectra 6 product
+ * for exactly this purpose (sim/main_sim.c:247). Those values are eyeballed from Spectra 6 product
  * photography rather than colorimetered; wp_palette.c carries the note about the second, measured
  * table in tools/make_tile.py that disagrees with it. If a panel is ever measured properly, that
  * comment names both places to correct, and this is the third.

@@ -13,39 +13,37 @@ import { COLUMN_GAP, columnWidth, editionKey } from '../../lib/edition/feedLayou
 import { editionToTiles, findTile, type Tile } from '../../lib/edition/tiles'
 import { colors, fonts, layout, space, type } from '../../theme'
 
-/**
- * One tile, opened — and the rest of the edition continuing underneath it.
- *
- * That continuation is Pinterest's closeup, and it is the whole reason this is a page rather than
- * a modal: a reader who taps a figure has not stopped browsing, and a dead end here would send
- * them back to the top of the feed to find their place again.
- *
- * THE ROUTE IS `tile/[id]`, NOT `edition/[tile]`. It is a root-stack route so it pushes over the
- * tab bar and is deep-linkable, which is exactly the split `(tabs)/markets.tsx` and
- * `market/[symbol].tsx` already use — and naming it after the tab it opens from would put a root
- * route and a tab under the same `/edition` prefix, a shape this app has no precedent for. The
- * segment is the tile's id, which is the producer's (`story:0`, `figures:1`) and arrives
- * URL-encoded.
- *
- * The edition comes from the in-memory copy `lib/edition/store.ts` publishes, which is filled by
- * all three of the ways one arrives — a fetch that wrote the cache, a `readCachedEdition()` that
- * read it (which `useEdition` runs on every mount, so an offline session reading its cache is
- * covered too), and `useEdition`'s own demo publish. The disk read below is therefore the cold
- * case and only the cold case: `claudepost://tile/story:0` into a process where the Today tab has
- * never mounted.
- *
- * AND THE COLD CASE CHECKS WHOSE EDITION IT READ. Nothing clears the cache when the address
- * changes — it is overwritten by the next success and ignored by the reducer until then — so the
- * entry on disk can belong to a desk this phone has stopped reading. `useEdition`'s reducer
- * compares it against the stored URL before it puts anything on screen; the cold deep link is the
- * one path that reaches the disk without going through that reducer, so it asks the same question
- * here. A mismatch is treated as no cache at all: the tab loads the right edition, and the reader
- * does not get a previous desk's lead story under a heading that says Today.
- *
- * `getCurrentEdition()` needs no such check. Everything that publishes it has already passed the
- * reducer's guard, except the very `readCachedEdition()` below — which is why the check goes on
- * the disk read rather than on the memory read.
- */
+// One tile, opened — and the rest of the edition continuing underneath it.
+//
+// That continuation is Pinterest's closeup, and it is the whole reason this is a page rather than
+// a modal: a reader who taps a figure has not stopped browsing, and a dead end here would send
+// them back to the top of the feed to find their place again.
+//
+// THE ROUTE IS `tile/[id]`, NOT `edition/[tile]`. It is a root-stack route so it pushes over the
+// tab bar and is deep-linkable, which is exactly the split `(tabs)/markets.tsx` and
+// `market/[symbol].tsx` already use — and naming it after the tab it opens from would put a root
+// route and a tab under the same `/edition` prefix, a shape this app has no precedent for. The
+// segment is the tile's id, which is the producer's (`story:0`, `figures:1`) and arrives
+// URL-encoded.
+//
+// The edition comes from the in-memory copy `lib/edition/store.ts` publishes, which is filled by
+// all three of the ways one arrives — a fetch that wrote the cache, a `readCachedEdition()` that
+// read it (which `useEdition` runs on every mount, so an offline session reading its cache is
+// covered too), and `useEdition`'s own demo publish. The disk read below is therefore the cold
+// case and only the cold case: `claudepost://tile/story:0` into a process where the Today tab has
+// never mounted.
+//
+// AND THE COLD CASE CHECKS WHOSE EDITION IT READ. Nothing clears the cache when the address
+// changes — it is overwritten by the next success and ignored by the reducer until then — so the
+// entry on disk can belong to a desk this phone has stopped reading. `useEdition`'s reducer
+// compares it against the stored URL before it puts anything on screen; the cold deep link is the
+// one path that reaches the disk without going through that reducer, so it asks the same question
+// here. A mismatch is treated as no cache at all: the tab loads the right edition, and the reader
+// does not get a previous desk's lead story under a heading that says Today.
+//
+// `getCurrentEdition()` needs no such check. Everything that publishes it has already passed the
+// reducer's guard, except the very `readCachedEdition()` below — which is why the check goes on
+// the disk read rather than on the memory read.
 
 /**
  * Whether this page has an edition to be inside.

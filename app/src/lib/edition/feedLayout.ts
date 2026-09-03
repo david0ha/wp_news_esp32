@@ -73,6 +73,10 @@ const PHOTO_MAX_ASPECT = 3 / 2
  *
  * `w` of 0 falls back to a square, which is the case that actually needs a guard — it would
  * otherwise be a division by zero.
+ *
+ * `estimateTileHeight`'s `photo` case deliberately clamps BOTH ends instead. The two are not a
+ * drift: a picture inside a 170 px column has a neighbour to stay level with and a page to not
+ * push off the screen, and one run across the full width has neither.
  */
 export function photoBoxHeight(photo: EditionPhoto, width: number): number {
   const aspect = photo.w > 0 ? photo.h / photo.w : 1
@@ -90,10 +94,14 @@ export function photoBoxHeight(photo: EditionPhoto, width: number): number {
  * today's headline sits over yesterday's photograph until the tab unmounts. Keying on this as
  * well makes the swap a remount, which is the only thing that reliably re-asks.
  *
- * `generatedAt` is the desk's own stamp and is what `news_hash()` fingerprints on the board, so
- * it is the same notion of "a different edition" the glass uses. An edition that carries none
- * falls back to the moment it was fetched, which is a fresh number on every 200 — a remount too
- * often is a re-decode, and a remount too rarely is the wrong picture.
+ * `generatedAt` is the desk's own stamp and is what `news_hash()` fingerprints on the board
+ * (`news_model.c:319`), so it is the same notion of "a different edition" the glass uses.
+ *
+ * An edition carrying no stamp falls back to `fetchedAt`, which moves on every 200 AND on every
+ * 304 — so a stampless payload remounts its pictures whenever the server so much as confirms it.
+ * That is the trade taken deliberately, in the direction that fails safely: a remount too often
+ * costs one re-fetch and one decode of a picture the layout has already reserved a box for, and a
+ * remount too rarely puts yesterday's photograph under today's caption.
  */
 export function editionKey(cached: CachedEdition): string {
   return cached.edition.generatedAt !== '' ? cached.edition.generatedAt : String(cached.fetchedAt)

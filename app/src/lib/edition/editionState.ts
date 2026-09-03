@@ -99,6 +99,13 @@ export function nextEditionState(prev: EditionMachine, event: EditionEvent): Edi
     case 'cache': {
       // Only ever fills an empty screen. A cache that lands after a fetch already did would put
       // older content over newer.
+      //
+      // AND ONLY THIS DESK'S ENTRY. Nothing erases the cache when the address changes in
+      // Settings — it is simply overwritten by the next success — so what is on disk can belong
+      // to a desk this phone has stopped reading, and showing it would put another company's
+      // edition under a heading that says Today. The `url` comparison below is the only thing
+      // that stops it, and the tile detail's cold deep link, which reaches the disk without
+      // passing through this reducer, repeats the same check by hand.
       if (prev.state.status !== 'loading') return prev
       if (event.cached === null || prev.url === null || event.cached.url !== prev.url) return prev
       return {

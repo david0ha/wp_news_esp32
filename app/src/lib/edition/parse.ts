@@ -59,7 +59,7 @@ function num(v: unknown): number | null {
 }
 
 /**
- * Strict boolean: true ONLY for JSON `true`. Mirrors `jbool()` (`news_parse.c:82-85`), which is
+ * Strict boolean: true ONLY for JSON `true`. Mirrors `jbool()` (`news_parse.c:92-96`), which is
  * `cJSON_IsTrue(v)` and nothing else — a number, even `1`, stays false. Used for `is_subject`,
  * where a stray numeric `1` from a producer must not silently mark a second peer as the subject.
  */
@@ -85,7 +85,7 @@ function emphFlag(v: unknown): boolean {
 }
 
 /**
- * A JSON number as an int, ROUNDED HALF AWAY FROM ZERO — `news_parse.c`'s `sround()` (:57-70),
+ * A JSON number as an int, ROUNDED HALF AWAY FROM ZERO — `news_parse.c`'s `sround()` (:57-63),
  * which every `jint`/`jrange` field on the board goes through.
  *
  * Not `Math.trunc`, and not `Math.round` either: `Math.round(-2.5)` is -2 where the C gives -3.
@@ -236,7 +236,7 @@ function parseTable(v: unknown): EditionTable {
   const rows: EditionTableRow[] = []
 
   // A table with no columns has nothing to scale a bar against, so the plane starts out
-  // incomplete and only the rows can keep it that way (`news_parse.c:686`).
+  // incomplete and only the rows can keep it that way (`news_parse.c:664-666`).
   let plane = columns.length > 0
 
   for (const r of arr(o.rows)) {
@@ -265,7 +265,7 @@ function parseTable(v: unknown): EditionTable {
   }
 
   // A table with rows but no complete plane is a printed table, and the plane it half-received is
-  // erased rather than left lying in the model (`news_parse.c:726-733`). A half-filled plane is
+  // erased rather than left lying in the model (`news_parse.c:727-730`). A half-filled plane is
   // the state a later reader is most likely to trust by accident.
   if (!plane || rows.length === 0) {
     for (const r of rows) r.n = r.n.map(() => null)
@@ -307,7 +307,7 @@ function parseChart(v: unknown): EditionChart | null {
   const highRaw = arr(o.high)
   const lowRaw = arr(o.low)
 
-  // The LAST `EDITION_CAPS.bars` samples, `news_parse.c:284-286`'s `skip = total - n`: a month of
+  // The LAST `EDITION_CAPS.bars` samples, `news_parse.c:286-288`'s `skip = total - n`: a month of
   // candles, most recent kept. The cut is by ABSOLUTE index across all four planes, so the phone
   // and the board plot the same window — a line coloured from a first point the board never saw
   // can disagree with the sheet about the direction of the same series, and a bar layout floors
@@ -402,7 +402,7 @@ export function parseEdition(json: unknown): Edition {
   // to be resolved against what actually arrived.
   //
   // A chart that cannot be drawn is DROPPED here and its index remapped, where the device keeps
-  // the empty slot and trims only the trailing ones (`news_parse.c:319-337`). The two reach the
+  // the empty slot and trims only the trailing ones (`news_parse.c:319-338`). The two reach the
   // same page from the same payload — a story naming a surviving chart still gets that chart, and
   // one naming a hole gets none, which is what CHART_NONE draws — but the phone's `charts[]` then
   // holds only drawable charts, so no tile and no detail can be built around an empty plot. The

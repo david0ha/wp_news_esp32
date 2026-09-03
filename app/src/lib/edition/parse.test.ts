@@ -182,7 +182,7 @@ describe('parseEdition — totality', () => {
   })
 
   it('maps a non-finite number to null', () => {
-    // JSON cannot carry NaN, but a cache re-parse can (Task 5 re-parses whatever it read).
+    // JSON cannot carry NaN, but a cache re-parse can (`store.ts` re-parses whatever it read).
     const e = parseEdition({ subject: { last: NaN, changePct: Infinity, open: -Infinity } })
     expect([e.subject.last, e.subject.changePct, e.subject.open]).toEqual([null, null, null])
   })
@@ -219,7 +219,7 @@ describe('parseEdition — totality', () => {
   })
 
   it('rounds a fractional number to an int the way news_parse.c’s jint does', () => {
-    // news_parse.c:65-70 — every JSON number that becomes an int goes through `sround()`, which
+    // news_parse.c:57-63 — every JSON number that becomes an int goes through `sround()`, which
     // is round-half-away-from-zero. Truncating here reads one payload two ways: a producer that
     // files a 101.6 px tile gives the board an even 102 (blittable, printed) and the phone an odd
     // 101 (rejected, no picture), and neither side has a symptom that says so.
@@ -300,7 +300,7 @@ describe('parseEdition — totality', () => {
   })
 
   it('re-resolves a story’s chart index across a chart that did not survive', () => {
-    // The device keeps the empty slot so its indices cannot renumber (news_parse.c:319-337); the
+    // The device keeps the empty slot so its indices cannot renumber (news_parse.c:319-338); the
     // phone drops it and remaps, which reaches the same chart from the same index. What must
     // never happen is a story pointing at the wrong picture — or at a blank one.
     const e = parseEdition({
@@ -318,7 +318,7 @@ describe('parseEdition — totality', () => {
   })
 
   it('keeps the LAST NEWS_BARS_MAX samples of every series, as the board does', () => {
-    // news_parse.c:284-286 — `skip = total - n`, a month of candles, most recent kept. A phone
+    // news_parse.c:286-288 — `skip = total - n`, a month of candles, most recent kept. A phone
     // plotting 60 where the board plots 48 colours a line by a different first point, and the
     // bar layout floors at 2 px and clips the NEWEST bars off the end of the Svg.
     const many = (n: number, f: (i: number) => number) => Array.from({ length: n }, (_, i) => f(i))
@@ -378,7 +378,7 @@ describe('parseEdition — totality', () => {
     })
     expect(e.figures.map((f) => f.emph)).toEqual([true, true, false, true, true, false])
 
-    // news_parse.c:83-85 (`jbool`) — is_subject is `cJSON_IsTrue` only; a numeric 1 is NOT true.
+    // news_parse.c:92-96 (`jbool`) — is_subject is `cJSON_IsTrue` only; a numeric 1 is NOT true.
     const p = parseEdition({
       peers: [
         { symbol: 'A', is_subject: 1 },
@@ -448,7 +448,7 @@ describe('parseEdition — totality', () => {
   })
 
   it('erases the whole numeric plane when any row failed to supply one', () => {
-    // news_parse.c:716-733 — `has_n = plane && row_count > 0`, and a half-filled plane is
+    // news_parse.c:720-730 — `has_n = plane && row_count > 0`, and a half-filled plane is
     // memset to zero. A stack is only a stack when every segment of every column arrived.
     const e = parseEdition({
       tables: [

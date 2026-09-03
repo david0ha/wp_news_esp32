@@ -8,9 +8,9 @@ import { fonts, tabular } from '../../theme'
  *
  * ONE COMPONENT FOR EVERY CHANGE ON THE EDITION'S TWO SCREENS — the tape, the peers, a figure,
  * the masthead's own, and every row of the detail page. There were five hand-written copies of
- * these four lines, and they had already drifted: two clamped to one line and one did not, three
- * reserved a width and two did not, and each spelled the arrow-plus-space by hand. Direction is
- * the one thing this app is allowed to say in colour, so it says it in one place.
+ * these four lines, and they had already drifted: four clamped to one line and the detail page's
+ * did not, three reserved a width and two did not, and each spelled the arrow-plus-space by hand.
+ * Direction is the one thing this app is allowed to say in colour, so it says it in one place.
  *
  * The magnitude is unsigned on purpose. The arrow and the colour already carry the direction, and
  * `▼ -0.74%` says it twice with two different marks. Zero and absence get no arrow and the dim

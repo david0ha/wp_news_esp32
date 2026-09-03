@@ -38,6 +38,9 @@ export function tileByteLength(w: number, h: number): number {
  */
 export function decodeTile(bytes: Uint8Array, w: number, h: number): DecodedTile {
   const want = tileByteLength(w, h)
+  // Only for a geometry that could be a tile. A zero, negative or odd width falls straight
+  // through to `unpackNibbles`, whose message names the geometry — the useful half — where this
+  // one would report a byte count derived from the nonsense it was handed.
   if (w > 0 && h > 0 && w % 2 === 0 && bytes.length !== want) {
     throw new Error(`photo: expected ${want} bytes for ${w}x${h}, got ${bytes.length}`)
   }

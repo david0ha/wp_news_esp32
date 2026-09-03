@@ -63,6 +63,10 @@ export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) 
           <Text style={[type.caption, styles.labelCell]} numberOfLines={1}>
             {r.label}
           </Text>
+          {/* `from + j`, never `j`. `columns` was sliced down to the last two periods, but a
+              row's `values` stay positional against the FULL column list the parser built — so
+              indexing by the sliced position would print the OLDEST two figures under the newest
+              two headings, which is a wrong number that looks like a right one. */}
           {columns.map((c, j) => (
             <Text key={`${c}:${j}`} style={[styles.cell, tabular]} numberOfLines={1}>
               {r.values[from + j] ?? ''}

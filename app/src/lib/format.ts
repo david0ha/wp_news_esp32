@@ -201,7 +201,6 @@ export function sleepSourceLabel(source: SleepSource): string {
   }
 }
 
-
 /**
  * `news.generatedAt` — the producer's own timestamp — as a line a reader can compare with the
  * dateline printed on the sheet.

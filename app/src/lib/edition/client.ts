@@ -196,6 +196,10 @@ export function createEditionClient(opts: EditionClientOptions = {}): EditionCli
     // A tile has no header and no length of its own, so the geometry from the payload is the
     // only thing that can check it. A short body drawn as a whole picture is an image the reader
     // cannot tell from the real one.
+    //
+    // The cap floors at one byte because a degenerate geometry makes `want` zero, and a cap of
+    // zero refuses every body as `too_large` — including the one whose length would otherwise
+    // have produced the exact, useful message below.
     const bytes = await bodyBytes(res, Math.max(want, 1))
     if (bytes.length !== want) {
       throw new EditionError(

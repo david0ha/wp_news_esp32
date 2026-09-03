@@ -109,12 +109,12 @@ export function PhotoTile({
 const styles = StyleSheet.create({
   root: {
     // The size comes in as props and is set explicitly, NOT taken from a parent with `flex: 1`.
-    // Task 9 mounts this outside the masonry — the full-width band above the grid, and the
-    // detail page — where there is no sized parent to fill and a flex child would collapse to
-    // nothing. `EditionTile` drops its padding for this kind so the picture bleeds to the
-    // rounded edge either way: a photograph inset by 14 px inside a white card is a stamp, not
-    // a picture, and cancelling the padding with a negative margin would push the standalone
-    // mount 14 px outside whatever contains it.
+    // Two callers mount this outside the masonry — the Today tab's full-width band above the
+    // grid, and the detail page's picture — where there is no sized parent to fill and a flex
+    // child would collapse to nothing. `EditionTile` drops its padding for this kind so the
+    // picture bleeds to the rounded edge either way: a photograph inset by 14 px inside a white
+    // card is a stamp, not a picture, and cancelling the padding with a negative margin would
+    // push the standalone mount 14 px outside whatever contains it.
     justifyContent: 'flex-end',
     overflow: 'hidden',
   },
