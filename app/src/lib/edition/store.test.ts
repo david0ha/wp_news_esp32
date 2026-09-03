@@ -70,6 +70,28 @@ describe('the on-disk edition cache', () => {
     expect(got?.etag).toBeNull()
   })
 
+  it('reads an entry a newer app wrote with fields this one does not know', async () => {
+    // Forward compatibility in the direction that actually happens: a build that added a field,
+    // then a downgrade or a rollback. `sanitize` rebuilds the entry from the four fields it
+    // knows, so an unknown one is dropped rather than carried onto the screen — and, more to the
+    // point, its presence does not make the whole entry unreadable and wipe the cache.
+    await AsyncStorage.setItem(
+      EDITION_CACHE_KEY,
+      JSON.stringify({
+        ...entry(),
+        schema: 2,
+        photos: { sndk_fab: 'base64...' },
+        fetchedAtIso: '2026-09-03T00:00:00Z',
+      }),
+    )
+    const got = await readCachedEdition()
+    expect(got?.url).toBe(URL)
+    expect(got?.etag).toBe('W/"abc"')
+    expect(got?.fetchedAt).toBe(1_700_000_000_000)
+    expect(got?.edition.subject.symbol).toBe('SNDK')
+    expect(Object.keys(got ?? {}).sort()).toEqual(['edition', 'etag', 'fetchedAt', 'url'])
+  })
+
   it('reads a corrupt value as nothing cached', async () => {
     for (const junk of ['not json at all', '[]', 'null', '{"url":42}', '{"url":"u"}']) {
       await AsyncStorage.setItem(EDITION_CACHE_KEY, junk)

@@ -66,6 +66,18 @@ describe('editionClient.fetch — the happy path', () => {
     expect(r.edition.stories).toHaveLength(4)
   })
 
+  it('reads the ETag whatever case the server spelled the header in', async () => {
+    // `Headers.get` is case-insensitive by the fetch spec, and this client asks for `etag`. The
+    // regression this catches is reaching for `res.headers['ETag']` — an index rather than the
+    // accessor — which answers undefined for two of these three and silently stops sending
+    // If-None-Match, turning every poll back into a full 20 KB download.
+    for (const name of ['etag', 'ETag', 'ETAG']) {
+      const { client: c } = client([{ text: fixtureText(), headers: { [name]: 'W/\"z\"' } }])
+      const r = await c.fetch(URL, null)
+      expect(r.status === 'ok' && r.etag).toBe('W/\"z\"')
+    }
+  })
+
   it('reports a missing ETag as null rather than as an empty string', async () => {
     const { client: c } = client([{ text: fixtureText() }])
     const r = await c.fetch(URL, null)
@@ -131,6 +143,16 @@ describe('editionClient.fetch — the failures', () => {
     const { client: c } = client([
       { text: '{}', headers: { 'Content-Length': String(EDITION_MAX_BYTES + 1) } },
     ])
+    await expect(c.fetch(URL, null)).rejects.toMatchObject({ code: 'too_large' })
+  })
+
+  it('caps on the bytes that actually arrived, not on what Content-Length claimed', async () => {
+    // The header is advisory — a chunked response carries none at all — so it can only ever be
+    // an early refusal, never the decision. Deleting the byteLength check after the read would
+    // let a 400 KB body through behind a `Content-Length: 12` and hand the parser a payload the
+    // board itself would have refused.
+    const big = 'x'.repeat(EDITION_MAX_BYTES + 1)
+    const { client: c } = client([{ text: big, headers: { 'Content-Length': '12' } }])
     await expect(c.fetch(URL, null)).rejects.toMatchObject({ code: 'too_large' })
   })
 
@@ -238,6 +260,19 @@ describe('editionClient.fetchTile', () => {
     const { client: c } = client([{ bytes: new Uint8Array(1) }])
     await expect(c.fetchTile('http://d/tiles/a.bin', 4, 2)).rejects.toMatchObject({
       code: 'bad_json',
+    })
+  })
+
+  it('rejects a tile body one byte too long as firmly as one too short', async () => {
+    // A tile has no header of its own, so `w*h/2` is the whole contract: a body that is not
+    // exactly that is not this picture. Over-length is refused as `too_large` because the cap
+    // handed to the body reader IS the exact size — there is no separate ceiling for a tile.
+    const want = (4 * 2) / 2
+    const { client: c } = client([{ bytes: new Uint8Array(want + 1) }])
+    await expect(c.fetchTile('http://d/tiles/a.bin', 4, 2)).rejects.toBeInstanceOf(EditionError)
+    const { client: d } = client([{ bytes: new Uint8Array(want + 1) }])
+    await expect(d.fetchTile('http://d/tiles/a.bin', 4, 2)).rejects.toMatchObject({
+      code: 'too_large',
     })
   })
 

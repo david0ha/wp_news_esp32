@@ -217,6 +217,29 @@ describe('parseEdition — totality', () => {
     expect(byHeadline.neg).toBe(0)
   })
 
+  it('rounds a fractional number to an int the way news_parse.c’s jint does', () => {
+    // news_parse.c:65-70 — every JSON number that becomes an int goes through `sround()`, which
+    // is round-half-away-from-zero. Truncating here reads one payload two ways: a producer that
+    // files a 101.6 px tile gives the board an even 102 (blittable, printed) and the phone an odd
+    // 101 (rejected, no picture), and neither side has a symptom that says so.
+    const e = parseEdition({
+      charts: [{ kind: 'line', close: [1] }, { kind: 'line', close: [2] }],
+      stories: [
+        { headline: 'up', rank: 2.6 },
+        { headline: 'down', rank: 2.4 },
+        { headline: 'chart', rank: 1, chart: 0.6 },
+        { headline: 'photo', rank: 0, photo: { id: 'p', w: 101.6, h: 100.4 } },
+      ],
+    })
+    const by = Object.fromEntries(e.stories.map((s) => [s.headline, s]))
+    expect(by.up.rank).toBe(3)
+    expect(by.down.rank).toBe(2)
+    // 0.6 rounds to chart 1, which the two-chart payload has. Truncating would name chart 0.
+    expect(by.chart.chart).toBe(1)
+    // 101.6 rounds to 102: even, so it is blittable and the photo survives.
+    expect(by.photo.photo).toEqual({ id: 'p', w: 102, h: 100, caption: '', credit: '' })
+  })
+
   it('sorts by rank stably and cuts to five AFTER sorting', () => {
     // A producer that appends its lead must keep it. Six stories in, the rank-8 straggler goes.
     const e = parseEdition({

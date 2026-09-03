@@ -72,9 +72,19 @@ function emphFlag(v: unknown): boolean {
   return v === true || (typeof v === 'number' && Number.isFinite(v) && v !== 0)
 }
 
+/**
+ * A JSON number as an int, ROUNDED HALF AWAY FROM ZERO — `news_parse.c`'s `sround()` (:57-70),
+ * which every `jint`/`jrange` field on the board goes through.
+ *
+ * Not `Math.trunc`, and not `Math.round` either: `Math.round(-2.5)` is -2 where the C gives -3.
+ * The difference is only ever half a unit, which is exactly why it has to be copied rather than
+ * approximated — a producer's 101.6 px tile is an even, blittable 102 on the glass and an odd,
+ * rejected 101 here, and one payload read two ways has no symptom on either side.
+ */
 function int(v: unknown, fallback: number): number {
   const n = num(v)
-  return n === null ? fallback : Math.trunc(n)
+  if (n === null) return fallback
+  return n >= 0 ? Math.floor(n + 0.5) : Math.ceil(n - 0.5)
 }
 
 function clamp(n: number, lo: number, hi: number): number {

@@ -70,6 +70,40 @@ describe('storyLines', () => {
     }
   })
 
+  it('lets nothing but the headline overflow, at every width a phone produces', () => {
+    // The denser cousin of the sweep above: every integer column from 138 (a 320 dp iPhone SE at
+    // this gutter) to 174 (a 393 dp Pixel), and both story kinds. The claim is not merely "it
+    // fits" — it is that the ONE part allowed out of the box is the headline, and only when the
+    // box is too short for even a single line of it. A deck or a body that overflowed would be
+    // sliced horizontally by the tile's `overflow: 'hidden'`, with no ellipsis to admit it.
+    for (let colWidth = 138; colWidth <= 174; colWidth++) {
+      for (const lead of [true, false]) {
+        for (const hasKicker of [true, false]) {
+          for (const hasDeck of [true, false]) {
+            const fit = { lead, hasKicker, hasDeck }
+            const h = estimateTileHeight(storyTile(lead), colWidth)
+            const content = h - 2 * TILE_PADDING
+            const lines = storyLines(h, fit)
+            const headlineLine = lead ? HEADLINE_LEAD_LINE : HEADLINE_SM_LINE
+            // What the headline costs, charged back ONLY when a single line genuinely did not
+            // fit — that is the one overflow `storyLines` is allowed, and this subtracts exactly
+            // it. Deducted unconditionally the assertion would be vacuous; not deducted at all it
+            // would fail on the very short boxes the minimum exists for. Every case is asserted.
+            const before = lines.kicker > 0 ? KICKER_LINE + STORY_GAP : 0
+            const forced = lines.headline === 1 && content - before < headlineLine
+            const excused = forced ? headlineLine + (lines.kicker > 0 ? STORY_GAP : 0) : 0
+            expect(drawnHeight(fit, lines) - excused).toBeLessThanOrEqual(content)
+            // And when it was forced, nothing else was drawn to be sliced beside it.
+            if (forced) {
+              expect(lines.deck).toBe(0)
+              expect(lines.body).toBe(0)
+            }
+          }
+        }
+      }
+    }
+  })
+
   it('sheds the deck before the headline when a narrow column runs out', () => {
     // At 140 the lead's full furniture wants 168 px of a 159 px box. The headline is the tile's
     // photograph and keeps its four lines; the deck gives up its second.

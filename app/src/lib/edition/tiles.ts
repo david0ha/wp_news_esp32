@@ -41,7 +41,7 @@
 //   -------------   -----------------------------------------------------------
 //   story (lead)    round(colWidth * 4 / 3)
 //   story (other)   colWidth
-//   range           colWidth
+//   range           max(colWidth, 2P + TILE_HEAD + RANGE_TRACK_H + 2 * RANGE_STAT_ROW_H)
 //   chart           round(colWidth * 3 / 4)
 //   photo           round(colWidth * clamp(h / w, 2/3, 3/2))
 //   figures         2P + 24 + 28 * min(n, 4) + (n > 4 ? 20 : 0)
@@ -53,6 +53,14 @@
 // where P = `TILE_PADDING`, 24 is `TILE_HEAD` (the heading line, equal to `type.headingSm`'s line
 // height), 20 is `TILE_MORE` (the "+N more" line), and the per-row constants are `FIGURES_ROW`,
 // `BRIEFS_ROW`, `PEERS_ROW` and `TAPE_ROW` with their `*_SHOWN` row counts beside them.
+//
+// THE RANGE IS THE ONE KIND WITH A FLOOR, because it is the one kind whose body is fixed
+// furniture rather than elastic content: a track box and a 2x2 grid of the day's four numbers,
+// all of it a constant height. A flat `colWidth` fit exactly at 170 and nowhere below it — at
+// the 158 a 360 dp Android phone produces, the grid was handed 62 px for the 74 its two rows
+// draw and the second row was sliced by the tile's `overflow: 'hidden'`. So the height is
+// content-derived, the way the row-built kinds already are, and `colWidth` only wins once it is
+// the larger of the two.
 //
 // EVERY ONE OF THOSE IS EXPORTED, and the tile bodies in `components/edition/tiles/` import them
 // rather than declaring their own. That is deliberate: this arithmetic and the rows a body draws
@@ -261,6 +269,16 @@ export const PEERS_SHOWN = 6
 export const TAPE_ROW = 32
 export const TAPE_SHOWN = 5
 
+// The range tile's two fixed blocks. `RangeTile` imports both — its track box is given this
+// exact height and its stat cells this exact row — so the sum below is true by construction
+// rather than by a comment that has to be re-checked by hand.
+/** The track box: 4 pad + a 14 px track row + a 4 px gap + an 18 px caption + 4 pad. */
+export const RANGE_TRACK_H = 44
+/** One row of the stat grid: a 16 px label over a 17 px value, in a 37 px cell. */
+export const RANGE_STAT_ROW_H = 37
+/** The two rows the grid draws — Open/Prev close, then High/Low. */
+export const RANGE_STAT_ROWS = 2
+
 export function estimateTileHeight(t: Tile, colWidth: number): number {
   const chrome = 2 * TILE_PADDING + TILE_HEAD
   switch (t.kind) {
@@ -269,7 +287,9 @@ export function estimateTileHeight(t: Tile, colWidth: number): number {
       // this design's photograph, and four legs of body under it is what makes it read as a lead.
       return t.lead ? Math.round((colWidth * 4) / 3) : colWidth
     case 'range':
-      return colWidth
+      // Never below what the body draws — see the header comment. A square at every width a
+      // phone this side of a tablet produces, and a floor below that.
+      return Math.max(colWidth, chrome + RANGE_TRACK_H + RANGE_STAT_ROWS * RANGE_STAT_ROW_H)
     case 'chart':
       return Math.round((colWidth * 3) / 4)
     case 'photo': {

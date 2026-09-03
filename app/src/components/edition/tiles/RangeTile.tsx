@@ -1,25 +1,36 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, radius, space, tabular, type } from '../../../theme'
-import { TILE_HEAD, type Tile } from '../../../lib/edition/tiles'
+import {
+  RANGE_STAT_ROW_H,
+  RANGE_TRACK_H,
+  TILE_HEAD,
+  type Tile,
+} from '../../../lib/edition/tiles'
 import { DASH, formatPrice } from '../../../lib/edition/format'
 import { lineHeightOf } from '../metrics'
 
 // ---------------------------------------------------------------------------------------------
-// THE VERTICAL SUM. This tile's height is `colWidth` — it is not built from row constants the way
-// figures and peers are, so nothing makes it fit by construction and the arithmetic has to be
-// written down. At a 170 px column the content box is 170 − 2*14 = 142:
+// THE VERTICAL SUM. This tile's body is fixed furniture — a track box and four numbers, none of
+// it elastic — so unlike a story it cannot adapt to whatever box it is handed, and the box has
+// to be big enough. The two blocks are therefore `tiles.ts`'s constants, IMPORTED, and the same
+// two terms `estimateTileHeight` floors this kind at:
 //
-//   heading                                                    24   (TILE_HEAD)
-//   track box   4 pad + 14 track row + 4 gap + 18 caption + 4 pad = 44
-//   stat grid   2 wrapped rows of 37                            = 74
-//                                                              ----
-//                                                                142   exactly
+//   heading                                                       24   (TILE_HEAD)
+//   track box   4 pad + 14 track row + 4 gap + 18 caption + 4 pad = 44   (RANGE_TRACK_H)
+//   stat grid   2 wrapped rows of 37                             = 74   (2 * RANGE_STAT_ROW_H)
+//                                                               ----
+//                                                                 142   + 2*14 padding = 170
 //
-// Every term is a constant below, and the two text rows inside a stat carry EXPLICIT line heights
-// so the sum is not at the mercy of a font's intrinsic metrics. The previous version left both
-// implicit, needed about 86 px for the grid where 75 were free, and — because the grid packed its
-// wrapped rows with `alignContent: 'flex-end'` — spilled the overflow past the TOP edge, landing
-// Open and Prev close on top of the "52 weeks" caption.
+// So the tile fits at 170 and at every width above it, and below it the estimator returns the
+// 170 floor rather than the column — which is the bug this pair of imports closes. A 360 dp
+// Android phone gives a 158 px column, the grid was handed 62 px for the 74 it draws, and the
+// second row (High and Low) was sliced by the tile's `overflow: 'hidden'`.
+//
+// The two text rows inside a stat carry EXPLICIT line heights so the sum is not at the mercy of
+// a font's intrinsic metrics. An earlier version left both implicit, needed about 86 px for the
+// grid where 75 were free, and — because the grid packed its wrapped rows with
+// `alignContent: 'flex-end'` — spilled the overflow past the TOP edge, landing Open and Prev
+// close on top of the "52 weeks" caption.
 // ---------------------------------------------------------------------------------------------
 
 /** The price at each end of the track: 11 px type, given a line height so the row is measurable. */
@@ -27,10 +38,9 @@ const END_LINE = 14
 /** The track row is the taller of its text and the 6 px rail. */
 const TRACK_ROW = END_LINE
 const CAPTION_LINE = lineHeightOf(type.caption)
-/** The label and the value inside one stat, and the row they add up to. */
+/** The label and the value inside one stat. They and the gap around them make RANGE_STAT_ROW_H. */
 const STAT_LABEL_LINE = 16
 const STAT_VALUE_LINE = 17
-const STAT_ROW = 37
 
 /**
  * Where today's price sits in the year's range, with the day's four numbers under it.
@@ -127,6 +137,8 @@ const styles = StyleSheet.create({
     height: TILE_HEAD,
   },
   trackBox: {
+    // The estimator's own term, not a number that happens to match one: 4 + 14 + 4 + 18 + 4.
+    height: RANGE_TRACK_H,
     gap: space.xs,
     paddingVertical: space.xs,
   },
@@ -173,7 +185,7 @@ const styles = StyleSheet.create({
   },
   stat: {
     width: '50%',
-    height: STAT_ROW,
+    height: RANGE_STAT_ROW_H,
     justifyContent: 'center',
   },
   statLabel: {

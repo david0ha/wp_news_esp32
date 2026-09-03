@@ -20,6 +20,8 @@ import {
   TAPE_ROW,
   BRIEFS_SHOWN,
   PEERS_SHOWN,
+  RANGE_STAT_ROW_H,
+  RANGE_TRACK_H,
   type Tile,
 } from './tiles'
 import { type Edition, type EditionFigure } from './types'
@@ -264,6 +266,31 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
     expect(estimateTileHeight(many, W)).toBe(chrome + PEERS_ROW * PEERS_SHOWN)
   })
 
+  it('floors the range tile at the height its own body draws', () => {
+    // THE DEFECT this replaces: the height was `colWidth` flat, and the body is not elastic. Its
+    // stat grid gets `colWidth - 2*TILE_PADDING - TILE_HEAD - RANGE_TRACK_H` = colWidth - 96, and
+    // it draws two 37 px rows. At 158 — a 360 dp Android phone at this gutter — that is 62 px for
+    // 74, so the second row (High and Low) was sliced by the tile's `overflow: 'hidden'`.
+    // 2*14 + 24 + 44 + 2*37 = 170, which is why a 170 px column happened to fit exactly.
+    expect(estimateTileHeight(by('range:0'), 158)).toBe(170)
+    expect(estimateTileHeight(by('range:0'), 138)).toBe(170)
+    // Above the floor it is still the square the table names — the range is a wide tile by
+    // design, and pinning it to 170 on a big phone would leave a gap under the stats.
+    expect(estimateTileHeight(by('range:0'), 170)).toBe(170)
+    expect(estimateTileHeight(by('range:0'), 200)).toBe(200)
+  })
+
+  it('leaves the range tile room for its track and BOTH stat rows at every column', () => {
+    // The property behind the number above, held across every width a phone can produce: the
+    // range tile is the one kind whose body is fixed furniture rather than elastic content, so
+    // "the box is at least what the body draws" is an invariant and not a coincidence.
+    for (let colWidth = 130; colWidth <= 430; colWidth++) {
+      const grid =
+        estimateTileHeight(by('range:0'), colWidth) - 2 * TILE_PADDING - TILE_HEAD - RANGE_TRACK_H
+      expect(grid).toBeGreaterThanOrEqual(2 * RANGE_STAT_ROW_H)
+    }
+  })
+
   it('clamps a photo’s aspect at both ends, so no tile is a smear or a tower', () => {
     const wide: Tile = { kind: 'photo', id: 'photo:9', photo: { id: 'w', w: 1000, h: 100, caption: '', credit: '' } }
     const tall: Tile = { kind: 'photo', id: 'photo:8', photo: { id: 't', w: 100, h: 1000, caption: '', credit: '' } }
@@ -337,6 +364,23 @@ describe('splitColumns', () => {
     expect(splitColumns([], W, 2)).toEqual([[], []])
     expect(splitColumns([], W)).toHaveLength(2) // two by default
     expect(splitColumns([figuresTile('a', 1)], W, 3)).toHaveLength(3)
+  })
+})
+
+describe('ids', () => {
+  it('gives the same ids to a second parse of the same payload', () => {
+    // The detail route names a tile by id, and coming back from it re-parses and re-composes.
+    // An id derived from anything but the tile's index among its kind — an insertion counter, a
+    // hash of the content, a random — would land the back navigation on a different tile, or on
+    // the "isn't in today's edition" message.
+    const raw = JSON.parse(readFileSync(FIXTURE, 'utf8'))
+    const first = editionToTiles(parseEdition(raw))
+    const second = editionToTiles(parseEdition(JSON.parse(JSON.stringify(raw))))
+    expect(second.tiles.map((t) => t.id)).toEqual(first.tiles.map((t) => t.id))
+    // And each id still names the same kind of thing on the second pass.
+    for (const t of first.tiles) {
+      expect(findTile(second, t.id)?.kind).toBe(t.kind)
+    }
   })
 })
 

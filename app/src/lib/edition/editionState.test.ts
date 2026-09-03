@@ -8,7 +8,12 @@ import {
 } from './editionState'
 import { parseEdition } from './parse'
 import { type CachedEdition } from './store'
-import { type EditionFetch } from './client'
+import {
+  createEditionClient,
+  EditionError,
+  humanEditionError,
+  type EditionFetch,
+} from './client'
 
 const URL = 'http://desk.local:8123/news.json'
 const OTHER = 'http://other.desk/news.json'
@@ -275,6 +280,45 @@ describe('nextEditionState — refreshing', () => {
     expect(nextEditionState(loading, { type: 'refreshing' })).toBe(loading)
     const failed = nextEditionState(loading, { type: 'failed', error: 'x' })
     expect(nextEditionState(failed, { type: 'refreshing' })).toBe(failed)
+  })
+})
+
+describe('the spec’s error-handling table, the row that crosses two modules', () => {
+  it('keeps the cached edition up when the desk serves a payload that parses empty', async () => {
+    // "edition parses but is empty -> treated as bad_json -> the previous cache stays up". Every
+    // other row of the table is a reducer transition and is asserted above; this one is only true
+    // if the CLIENT calls it a failure and the REDUCER calls a failure a banner, so it is worth
+    // driving both with the real code and an injected fetch rather than asserting either half.
+    const served = JSON.stringify({ dateline: 'FRIDAY, AUGUST 14, 2026', stories: [] })
+    const fetchFn = (async () =>
+      ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        arrayBuffer: async () => new TextEncoder().encode(served).buffer,
+      }) as unknown as Response) as unknown as typeof fetch
+
+    const ready = run(
+      INITIAL_EDITION_MACHINE,
+      { type: 'url', url: URL },
+      { type: 'cache', cached: cache() },
+    )
+
+    // Half one: the client refuses it rather than calling it a successful fetch.
+    const thrown = await createEditionClient({ fetchFn })
+      .fetch(URL, 'W/"one"')
+      .then(() => null, (e: unknown) => e)
+    expect(thrown).toBeInstanceOf(EditionError)
+    expect(thrown).toMatchObject({ code: 'bad_json' })
+
+    // Half two: a failure with content on screen is a banner, not a blank sheet.
+    const m = nextEditionState(ready, { type: 'failed', error: humanEditionError(thrown) })
+    if (m.state.status !== 'ready') throw new Error('the cached edition was taken off screen')
+    expect(m.state.cached.edition).toEqual(edition('SNDK'))
+    expect(m.state.cached.fetchedAt).toBe(1000) // NOT confirmed: the freshness line keeps ageing
+    expect(m.state.error).toBe(
+      "The edition didn't parse. The desk may be mid-publish; pull to refresh in a minute.",
+    )
   })
 })
 
