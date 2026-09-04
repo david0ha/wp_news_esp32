@@ -59,8 +59,17 @@ echo "filing into $EDITION_DIR  (log: $LOG)"
 # -- and the run exits with "Input must be provided", having first warned about
 # every word of the contract that contained an asterisk. Nothing in that names
 # the cause.
-printf '%s\n\nThe repository is at %s. The edition directory is %s.\n' \
-    "$(cat "$REPO/tools/edition/PROMPT.md")" "$REPO" "$EDITION_DIR" |
+#
+# EDITION_LANG is the language the paper is written in, and the section that asks
+# for it comes from agent/prompt.py rather than from a here-doc in this file: the
+# containerised worker sends the same words, taken from the desk's setting, and
+# two copies of an instruction is one copy that drifts. It prints nothing for
+# "en", which is why there is no branch here -- an English run's prompt is byte
+# for byte the one this script has always sent.
+printf '%s%s\n\nThe repository is at %s. The edition directory is %s.\n' \
+    "$(cat "$REPO/tools/edition/PROMPT.md")" \
+    "$(python3 "$REPO/agent/prompt.py" --language-section "${EDITION_LANG:-en}")" \
+    "$REPO" "$EDITION_DIR" |
 EDITION_DIR="$EDITION_DIR" \
 claude --print \
     --add-dir "$EDITION_DIR" \

@@ -66,7 +66,14 @@ way to research it.
 ./agent/standalone/file-edition.sh --serve      # file now, then serve until interrupted
 ./agent/standalone/file-edition.sh --serve-only # serve what is already there
 EDITION_DIR=/tmp/try ./agent/standalone/file-edition.sh
+EDITION_LANG=ko ./agent/standalone/file-edition.sh   # write the paper in Korean
 ```
+
+`EDITION_LANG` is the language the edition is written in — a BCP-47 primary
+subtag, `en` unless you say otherwise, `ko` for Korean. It adds one section to
+the prompt, and the page carries it back as its top-level `lang` so the board
+and the phone print the fixed strings to match. The desk path sets the same
+thing with `PUT /api/settings` rather than an environment variable.
 
 Do this once before installing anything. It runs `claude --print`, so it exits when it is done and
 the whole transcript lands in `$EDITION_DIR/log/`, which is where a filing that produced nothing

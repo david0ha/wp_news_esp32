@@ -302,6 +302,28 @@ class DeskClient:
         status, doc = self._json("GET", "/api/directives")
         return (doc or {}).get("directives", []) if status == 200 else []
 
+    def settings(self) -> dict:
+        """The desk's operator settings, or ``{"lang": "en"}`` when it will not say.
+
+        Today that document holds one field, ``lang`` -- the language the
+        edition is written in, which :func:`prompt.build_prompt` turns into a
+        section of the prompt. It is returned whole rather than as that one
+        field because it is the document a later release adds a setting to,
+        and a client that unpacked it here would have to be changed to carry
+        the next one.
+
+        :meth:`directives`'s stance exactly: an enrichment, not a
+        precondition. A desk that is down, one too old to know the route, and
+        one that answers with an envelope carrying no ``settings`` all file an
+        English page rather than no page -- which is the right failure, because
+        the alternative is a worker that stops filing over a setting the
+        operator has probably never changed.
+        """
+        status, doc = self._json("GET", "/api/settings")
+        if status != 200:
+            return {"lang": "en"}
+        return (doc or {}).get("settings") or {"lang": "en"}
+
 
 def read_token(secrets: str) -> str:
     """The producer token, from the mounted secrets directory.

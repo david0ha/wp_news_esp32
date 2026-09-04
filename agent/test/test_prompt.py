@@ -177,6 +177,54 @@ class BuildPromptTest(unittest.TestCase):
         self.assertIn("NVDA today", text)
 
 
+class LanguageSectionTest(unittest.TestCase):
+    """The one section the operator cannot push off the top.
+
+    An edition written in Korean is still assembled from an English contract,
+    so the instruction that says which language to write in has to sit where
+    the length budgets are still above it and the operator's own notes are
+    still below it. That is the whole property, and the third test is the
+    reason it is a function rather than a table: a tag nobody has named yet
+    is still asked for by name instead of quietly filing English.
+    """
+
+    def test_english_leaves_the_prompt_byte_identical(self):
+        # The default has to cost nothing. Every existing assertion in this
+        # file is about a prompt built without a language, and they all still
+        # describe the prompt an English desk sends.
+        before = prompt.build_prompt("CONTRACT", [], [], "go")
+        self.assertEqual(prompt.build_prompt("CONTRACT", [], [], "go", lang="en"), before)
+        self.assertEqual(prompt.language_section("en"), "")
+
+    def test_korean_is_named_after_the_contract_and_before_the_operator(self):
+        text = prompt.build_prompt("CONTRACT", [("standing.md", "house style")], [], "go",
+                                   lang="ko")
+        sec = prompt.language_section("ko")
+        self.assertIn("Korean", sec)
+        self.assertIn('"lang": "ko"', sec)
+        self.assertIn("KS X 1001", sec)
+        self.assertLess(text.index("CONTRACT"), text.index(sec))
+        self.assertLess(text.index(sec), text.index("house style"))
+
+    def test_an_unknown_tag_is_still_asked_for_by_name(self):
+        # No table of languages can be complete, and a tag this module has
+        # never heard of is a language the model has: ask for it by its tag
+        # rather than silently falling back to English.
+        self.assertIn('"lang": "fr"', prompt.language_section("fr"))
+
+    def test_nothing_at_all_is_english(self):
+        # loop.py reads the tag out of a dict the desk filled in, so None and
+        # "" are both shapes that reach here on the way to the default.
+        self.assertEqual(prompt.language_section(""), "")
+        self.assertEqual(prompt.language_section(None), "")
+
+    def test_only_korean_carries_the_korean_rules(self):
+        # The mechanism is not Korean-specific; the syllable set and the won
+        # sign are. A French edition draws with the faces the board has.
+        self.assertNotIn("KS X 1001", prompt.language_section("fr"))
+        self.assertIn("French", prompt.language_section("fr"))
+
+
 class SheetPromptTest(unittest.TestCase):
     """The two prompts that follow a proof."""
 

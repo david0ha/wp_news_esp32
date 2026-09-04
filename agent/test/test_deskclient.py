@@ -242,6 +242,24 @@ class RequestTest(unittest.TestCase):
         desk, _ = client((500, b"boom"))
         self.assertEqual(desk.directives(), [])
 
+    def test_settings_come_back_as_the_desk_set_them(self):
+        desk, opener = client((200, json.dumps(
+            {"ok": True, "source": "file", "settings": {"lang": "ko"}}).encode()))
+        self.assertEqual(desk.settings(), {"lang": "ko"})
+        self.assertEqual(opener.requests[0].full_url, "http://desk:8080/api/settings")
+
+    def test_a_desk_that_will_not_say_means_english(self):
+        # The same stance as directives(): the language is an enrichment, not a
+        # precondition. A desk too old to know the route, one that answered with
+        # an envelope carrying no settings, and one that is simply down all file
+        # an English page rather than no page.
+        for answer in ((404, b'{"ok":false,"error":"not_found"}'),
+                       (500, b"boom"),
+                       (200, b'{"ok":true}'),
+                       (200, b"")):
+            desk, _ = client(answer)
+            self.assertEqual(desk.settings(), {"lang": "en"}, answer)
+
 
 class ErrorTest(unittest.TestCase):
     """What a failure says, and what it must never say."""
