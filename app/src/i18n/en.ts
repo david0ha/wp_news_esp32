@@ -223,10 +223,10 @@ export const en = {
     refresh: 'Refresh',
   },
 
-  // The twelve short month names, in one place — `lib/months.ts` reads them and three formatters
-  // read it. They are a catalogue entry rather than a constant because a month is copy: Korean
-  // numbers its months rather than abbreviating their names, so this is a translation and not a
-  // spelling.
+  // The twelve short month names, in one place — three formatters read them: `lib/format.ts`,
+  // `lib/market/format.ts` and `lib/edition/freshness.ts`. They are a catalogue entry rather than
+  // a constant because a month is copy: Korean numbers its months rather than abbreviating their
+  // names, so this is a translation and not a spelling.
   months: {
     short: [
       'Jan',

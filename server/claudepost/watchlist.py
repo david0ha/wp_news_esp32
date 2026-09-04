@@ -58,7 +58,7 @@ import re
 from typing import NoReturn
 
 from .errors import BadRequest
-from .fsutil import atomic_write
+from .fsutil import atomic_write, json_bytes
 
 LOG = logging.getLogger("claudepost.watchlist")
 
@@ -134,9 +134,11 @@ def _serialised(doc: dict) -> bytes:
 
     Indented and newline-terminated for :func:`save`'s reason: every byte of
     this file exists to be read by someone debugging why the app shows what it
-    shows.
+    shows. That spelling is :func:`~claudepost.fsutil.json_bytes` and not four
+    options typed here, because it is the same one every operator-editable
+    document under the data root is written with.
     """
-    return (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    return json_bytes(doc)
 
 
 # --------------------------------------------------------------------------

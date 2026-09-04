@@ -445,10 +445,16 @@ static void print_measures(void)
            S_RUNNING_HEAD, (int)sz.x, UI_COL(4));
 }
 
-/* Every string the BOARD supplies, as opposed to every string the payload does.
+/* Every WORD the board supplies, as opposed to every string the payload does.
  * Hoisted out of check_fixed_strings() because two checks read it: that one
  * asks whether the faces can draw them, and check_fixed_labels_fit() asks
- * whether the page has room for them. */
+ * whether the page has room for them.
+ *
+ * Only things a label is actually SET FROM belong here, which is why the
+ * characters that exist to be covered live in REPERTOIRE[] below. The second
+ * check identifies a label by matching its text against this table, so a
+ * coverage-only string in it would become a candidate board word — and "the
+ * digits" is not a word any slot has to hold. */
 static const char *const FIXED[] = {
     S_RUNNING_HEAD, S_BRAND,
     S_BADGE_DEMO, S_BADGE_STALE, S_BADGE_OFFLINE, S_NO_DATA, S_WAITING,
@@ -479,11 +485,17 @@ static const char *const FIXED[] = {
     S_SETUP_ABOUT_H, S_SETUP_ABOUT, S_SETUP_AFTER_H, S_SETUP_AFTER,
     S_SETUP_TROUBLE_H, S_SETUP_TROUBLE,
     S_SETUP_SOURCE_H, S_SETUP_SOURCE,
-    /* Characters that exist only inside a runtime-composed string — the
-     * separators the tape and the briefs put between two fields, the digits
-     * and the decimal point of every figure ui_money() and ui_pct()
-     * produce. This is the check that catches the whole class of bug where a
-     * label renders but the space in "%s %s" comes out as a box. */
+};
+
+/* Characters that exist only inside a runtime-composed string — the separators
+ * the tape and the briefs put between two fields, the digits and the decimal
+ * point of every figure ui_money() and ui_pct() produce. This is the check that
+ * catches the whole class of bug where a label renders but the space in
+ * "%s %s" comes out as a box.
+ *
+ * A repertoire and not a word: no label is ever set from one of these, so only
+ * the coverage loop reads this table. */
+static const char *const REPERTOIRE[] = {
     S_COMPOSED_CHARS,
     S_DATA_PUNCT,
     "0123456789",
@@ -494,6 +506,9 @@ static void check_fixed_strings(void)
 {
     for (size_t i = 0; i < sizeof FIXED / sizeof *FIXED; i++) {
         cover_all("fixed string", FIXED[i]);
+    }
+    for (size_t i = 0; i < sizeof REPERTOIRE / sizeof *REPERTOIRE; i++) {
+        cover_all("fixed string", REPERTOIRE[i]);
     }
 
     /* The caps spellings the no-payload dateline is composed from, which is the

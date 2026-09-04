@@ -1,9 +1,8 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { fill, useStrings } from '../../../i18n'
+import { useStrings } from '../../../i18n'
 import { colors, fonts, tabular } from '../../../theme'
 import {
   TILE_HEAD,
-  TILE_MORE,
   FIGURES_LABEL_LINE,
   FIGURES_ROW,
   FIGURES_ROW_GAP,
@@ -15,6 +14,7 @@ import {
 } from '../../../lib/edition/tiles'
 import { Change } from '../Change'
 import { useEditionFace, useEditionType } from '../typeRamp'
+import { MoreLine } from './MoreLine'
 
 /**
  * One group of figures — VALUATION, PER SHARE, THE STREET — as stacked label/value rows.
@@ -86,11 +86,7 @@ export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }>
           </View>
         </View>
       ))}
-      {rest > 0 ? (
-        <Text style={[face(fonts.semibold), styles.more]}>
-          {fill(t.today.andMore, { n: String(rest) })}
-        </Text>
-      ) : null}
+      <MoreLine n={rest} />
     </View>
   )
 }
@@ -129,11 +125,5 @@ const styles = StyleSheet.create({
     fontSize: FIGURES_VALUE_EMPH_SIZE,
     lineHeight: FIGURES_VALUE_LINE,
     color: colors.text,
-  },
-  more: {
-    fontSize: 12,
-    // The estimator adds exactly this for the "+N more" line; it is not a look choice.
-    lineHeight: TILE_MORE,
-    color: colors.accent,
   },
 })

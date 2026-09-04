@@ -195,7 +195,11 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
 
   // A refusal, turned into the error the screen will draw. The envelope is best-effort: a proxy or
   // a tunnel in front of the desk answers HTML, and a 502 with no `error` field is still a 502.
-  async function refusal(res: Response, label: string): Promise<DeskError> {
+  //
+  // The route names itself in the message rather than arriving as an argument. There is one route
+  // here, so a parameter would be a knob with a single setting that a reader has to check both
+  // call sites to rule out; the second route can add it back, and will say what it is for.
+  async function refusal(res: Response): Promise<DeskError> {
     let code: string | undefined
     let detail: string | undefined
     try {
@@ -206,32 +210,32 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // Not the desk's envelope. The status is what is left to say.
     }
     const kind: DeskErrorCode = res.status === 401 || res.status === 403 ? 'unauthorized' : 'http'
-    return new DeskError(kind, `${label} responded ${res.status}`, res.status, code, detail)
+    return new DeskError(kind, `settings responded ${res.status}`, res.status, code, detail)
   }
 
   // Every 2xx on this route answers the same document, so one reader serves both calls.
-  async function settingsOf(res: Response, label: string): Promise<DeskSettings> {
-    if (!res.ok) throw await refusal(res, label)
+  async function settingsOf(res: Response): Promise<DeskSettings> {
+    if (!res.ok) throw await refusal(res)
     let lang: unknown
     try {
       const body = JSON.parse(await res.text()) as { settings?: { lang?: unknown } }
       lang = body?.settings?.lang
     } catch {
-      throw new DeskError('bad_json', `${label} did not answer JSON`, res.status)
+      throw new DeskError('bad_json', 'settings did not answer JSON', res.status)
     }
     // A 200 with no `settings.lang` in it is a desk not speaking this contract — an older build,
     // or a captive portal answering 200 for everything. Falling back to `en` here would put a
     // confident English in front of an operator whose desk never said so, and the selector would
     // then offer to "change" it to the value it already claims.
     if (typeof lang !== 'string' || lang === '') {
-      throw new DeskError('bad_json', `${label} answered without a language`, res.status)
+      throw new DeskError('bad_json', 'settings answered without a language', res.status)
     }
     return { lang }
   }
 
   return {
     async getSettings(): Promise<DeskSettings> {
-      return settingsOf(await send('/api/settings', { method: 'GET' }), 'settings')
+      return settingsOf(await send('/api/settings', { method: 'GET' }))
     },
 
     async putSettings(settings: DeskSettings): Promise<DeskSettings> {
@@ -247,7 +251,7 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // The answer is what is IN FORCE, which is not always what was asked for — the desk
       // normalises, and a later release may refuse a value while keeping the old one. The caller
       // draws this, never its own argument.
-      return settingsOf(res, 'settings')
+      return settingsOf(res)
     },
   }
 }

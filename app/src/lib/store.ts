@@ -73,7 +73,7 @@
 // is "ask again", and being asked again is the whole cost.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { normalizeBaseUrl } from './discovery'
+import { DOTTED_NUMERIC_RE, normalizeBaseUrl, SCHEME_RE } from './discovery'
 // From `../i18n/language` and not from `../i18n`, which is the barrel every screen uses: the
 // provider in `../i18n/index.tsx` imports the two functions at the bottom of this file, so reaching
 // for the barrel here would close a runtime import cycle. `language.ts` is a leaf that imports
@@ -460,7 +460,7 @@ export async function getDeskBaseUrl(): Promise<string | null> {
  */
 export function deskScheme(input: string): string {
   const raw = input.trim()
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) return raw
+  if (SCHEME_RE.test(raw)) return raw
   // The authority only — the path, query, port and any trailing dot are none of this decision's
   // business, and `normalizeBaseUrl` re-parses the whole thing straight afterwards.
   const authority = raw.split(/[/?#]/)[0]
@@ -470,7 +470,7 @@ export function deskScheme(input: string): string {
     host.startsWith('[') ||
     host === 'localhost' ||
     host.endsWith('.local') ||
-    /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
+    DOTTED_NUMERIC_RE.test(host)
   return local ? raw : `https://${raw}`
 }
 

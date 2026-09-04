@@ -1357,9 +1357,18 @@ def _measure(text):
     so 「반도체」 is ten of measure and not eight; a parenthetical that named three
     syllables against a measure of ten would leave the two numbers irreconcilable, which
     is the same failure in a different place.
+
+    One walk, and on an English edition none at all. Every full-em character is above
+    U+3000, so an all-ASCII string has none of them and its measure is its length --
+    which is every field of every English payload, and this function sees about eight
+    thousand characters of one (the story bodies dominate; a lead is up to 4,000).
+    Where the walk does happen, the count of doubled characters is the only thing
+    `hangul.weight()` would tell us that `len()` does not: weight(s) == len(s) + n.
     """
+    if text.isascii():
+        return len(text), f"{len(text)} characters"
     n = sum(1 for c in text if hangul.is_full_em(c))
-    w = hangul.weight(text)
+    w = len(text) + n
     return w, (f"{w} characters of measure ({n} Korean characters count double)"
                if n else f"{w} characters")
 

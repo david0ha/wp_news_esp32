@@ -15,9 +15,16 @@ export type ResolvedLanguage = 'en' | 'ko'
 /** Every value `AppLanguage` admits, in the order the Settings selector offers them. */
 export const APP_LANGUAGES: readonly AppLanguage[] = ['system', 'en', 'ko']
 
-/** Whether an arbitrary value — a string read back off disk, say — is a language this build knows. */
+/**
+ * Whether an arbitrary value — a string read back off disk, say — is a language this build knows.
+ *
+ * Read off `APP_LANGUAGES` rather than re-listing it three lines below the array itself. Adding a
+ * language already means editing the union type and `TABLES`, and both of those the type checker
+ * insists on; a third list here is the one that fails silently instead, by rejecting a value it
+ * has never heard of and quietly falling the phone back to `system`.
+ */
 export function isAppLanguage(value: unknown): value is AppLanguage {
-  return value === 'system' || value === 'en' || value === 'ko'
+  return typeof value === 'string' && (APP_LANGUAGES as readonly string[]).includes(value)
 }
 
 /**

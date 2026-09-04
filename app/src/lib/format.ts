@@ -7,7 +7,6 @@
 // the bundle loaded — English, always, since the provider has not run yet — and no test that
 // exercised one function would ever see it. `format.test.ts`'s Korean block is what holds this.
 
-import { months } from './months'
 import { fill, strings } from '../i18n'
 import { SLEEP_SECONDS_DEFAULT, type NewsFetchResult, type PollSource, type SleepSource } from './esp32'
 
@@ -238,7 +237,7 @@ export function sleepSourceLabel(source: SleepSource): string {
 export function formatGeneratedAt(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso)
   if (!m) return iso
-  const month = months()[Number(m[2]) - 1]
+  const month = strings().months.short[Number(m[2]) - 1]
   if (!month) return iso
   const stamp = fill(strings().format.generatedAt, {
     day: String(Number(m[3])),

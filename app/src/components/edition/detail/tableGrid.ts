@@ -15,6 +15,7 @@
 
 import { type } from '../../../theme'
 import { fontSizeOf } from '../metrics'
+import { isCjkScript } from '../typeRamp'
 
 /**
  * The average advance of a `type.caption` character, as a fraction of the font size.
@@ -40,11 +41,15 @@ export const DETAIL_LABEL_EM_HANGUL = 1.0
  *
  * Keyed off the edition's language and not the app's: the labels being measured are the
  * producer's, and they are in the language the edition was written in whatever the phone is set
- * to. Anything that is not Korean is Latin here — Inter's own average is the right guess for a
+ * to. Anything outside a CJK script is Latin here — Inter's own average is the right guess for a
  * language nobody has filed an edition in yet.
+ *
+ * The list of CJK scripts is `typeRamp.tsx`'s and not a `=== 'ko'` of this file's own: the same
+ * fact decides which face the page is set in and how wide a character of it is, so the two have
+ * to move together.
  */
 export function labelEm(lang: string): number {
-  return lang === 'ko' ? DETAIL_LABEL_EM_HANGUL : DETAIL_LABEL_EM
+  return isCjkScript(lang) ? DETAIL_LABEL_EM_HANGUL : DETAIL_LABEL_EM
 }
 
 /** Below this a label column reads as an indent rather than a column. */

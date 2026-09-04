@@ -657,7 +657,6 @@ function DeskSection() {
   }
 
   const view = deskLanguageView({ address, token, lang, busy, loaded })
-  const toneStyle = { ok: styles.saved, info: styles.help, error: styles.error } as const
   const note =
     view.note === 'needs_setup'
       ? s.settings.desk.needsSetup
@@ -688,7 +687,7 @@ function DeskSection() {
             onSubmitEditing={applyAddress}
           />
         </View>
-        {addressMsg ? <Text style={toneStyle[addressMsg.tone]}>{addressMsg.message}</Text> : null}
+        {addressMsg ? <Text style={TONE[addressMsg.tone]}>{addressMsg.message}</Text> : null}
         <Button
           label={s.settings.desk.saveAddress}
           variant="secondary"
@@ -721,7 +720,7 @@ function DeskSection() {
             onSubmitEditing={applyToken}
           />
         </View>
-        {tokenMsg ? <Text style={toneStyle[tokenMsg.tone]}>{tokenMsg.message}</Text> : null}
+        {tokenMsg ? <Text style={TONE[tokenMsg.tone]}>{tokenMsg.message}</Text> : null}
         {token && !tokenMsg ? <Text style={styles.help}>{s.settings.desk.tokenHeld}</Text> : null}
         <Button
           label={s.settings.desk.saveToken}
@@ -743,7 +742,7 @@ function DeskSection() {
         onChange={(i) => void chooseLanguage(EDITION_LANGUAGES[i])}
       />
       {note ? <Text style={styles.help}>{note}</Text> : null}
-      {langMsg ? <Text style={toneStyle[langMsg.tone]}>{langMsg.message}</Text> : null}
+      {langMsg ? <Text style={TONE[langMsg.tone]}>{langMsg.message}</Text> : null}
     </Section>
   )
 }
@@ -797,8 +796,6 @@ function NewsUrlEditor({
     setOutcome(decision)
   }
 
-  const toneStyle = { ok: styles.saved, info: styles.help, error: styles.error } as const
-
   return (
     <View style={styles.field}>
       <View style={styles.hostRow}>
@@ -821,7 +818,7 @@ function NewsUrlEditor({
         />
       </View>
       {localError ? <Text style={styles.error}>{localError}</Text> : null}
-      {outcome ? <Text style={toneStyle[outcome.tone]}>{outcome.message}</Text> : null}
+      {outcome ? <Text style={TONE[outcome.tone]}>{outcome.message}</Text> : null}
       {pending && !outcome && !dirty ? (
         <Text style={styles.help}>
           {hasBoard === false ? s.settings.news.pendingNoBoard : s.settings.news.pendingWithBoard}
@@ -922,3 +919,9 @@ const styles = StyleSheet.create({
     color: colors.up,
   },
 })
+
+// The three tones a settings row can report in, as the style each draws in. One table for the
+// file: the desk section and the news-URL editor both report the same three outcomes, and two
+// copies would mean adding a fourth tone twice with nothing to make the second edit happen.
+// Below `styles` because it reads them, and read at render time either way.
+const TONE = { ok: styles.saved, info: styles.help, error: styles.error } as const

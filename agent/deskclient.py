@@ -57,6 +57,19 @@ DESK_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 #: -- this constant only saves a 413 round trip for a dossier that ran long.
 MAX_NOTES_BYTES = 262144
 
+#: What :meth:`DeskClient.settings` answers when the desk will not say. One
+#: constant and not a literal at each of the three exits, because all three run
+#: only when something is already wrong: the day this document grows a second
+#: field, a stale copy on one of them is a fallback that silently disagrees
+#: with the other two and nothing exercises the path that would show it. The
+#: desk's own default is ``settings.DEFAULT`` in ``server/claudepost``; this is
+#: the worker's end of the same wire, duplicated for
+#: :data:`MAX_NOTES_BYTES`'s reason.
+#:
+#: Handed out by copy, never by reference -- the answer goes into a prompt
+#: builder that is free to do what it likes with the dict it was given.
+SETTINGS_FALLBACK = {"lang": "en"}
+
 
 class DeskClient:
     """The control plane, over HTTP, with a bearer token.
@@ -340,18 +353,18 @@ class DeskClient:
         except OSError as e:
             LOG.warning("desk settings unreadable (%s) -- filing in English",
                         type(e).__name__)
-            return {"lang": "en"}
+            return dict(SETTINGS_FALLBACK)
 
         if status != 200:
             LOG.warning("desk settings unreadable (HTTP %s) -- filing in English",
                         status)
-            return {"lang": "en"}
+            return dict(SETTINGS_FALLBACK)
 
         settings = doc.get("settings") if isinstance(doc, dict) else None
         if not isinstance(settings, dict) or not settings:
             LOG.warning("desk answered 200 with no settings document "
                         "-- filing in English")
-            return {"lang": "en"}
+            return dict(SETTINGS_FALLBACK)
         return settings
 
 

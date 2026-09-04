@@ -30,7 +30,7 @@ import logging
 import os
 
 from .errors import BadRequest
-from .fsutil import atomic_write
+from .fsutil import atomic_write, json_bytes
 from .schedule import DEFAULT_SCHEDULE, Schedule, parse_schedule, schedule_to_dict
 
 LOG = logging.getLogger("claudepost.schedulefile")
@@ -82,11 +82,13 @@ def save(path: str, s: Schedule) -> None:
     Indented and newline-terminated rather than compact, because every byte of
     this file exists to be read -- by whoever is working out why the paper
     arrives at the hour it does -- and a diff should show the line that
-    changed. The atomic write is the shared one, so a reader arriving mid-write
-    sees the previous schedule rather than half of this one.
+    changed. That spelling is :func:`~claudepost.fsutil.json_bytes`, shared
+    with the other operator-editable documents so a human diffing two of them
+    is never shown a whole file reformatted. The atomic write is the shared one
+    too, so a reader arriving mid-write sees the previous schedule rather than
+    half of this one.
     """
-    text = json.dumps(schedule_to_dict(s), indent=2, ensure_ascii=False) + "\n"
-    atomic_write(path, text.encode("utf-8"))
+    atomic_write(path, json_bytes(schedule_to_dict(s)))
 
 
 def _complain(path: str, why: str) -> None:

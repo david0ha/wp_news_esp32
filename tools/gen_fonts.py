@@ -186,22 +186,30 @@ FACES = [
 # PRIMARY font, so a fallback at a different size would draw off the line and no
 # layout arithmetic anywhere would know.
 #
-# (name, family, size px, variable-font location, what it must cover,
-#  the Latin face it stands behind)
+# Two of FACES's five columns say the same thing in every Korean row and are
+# therefore not in the table: Noto CJK KR ships as static instances, so there is
+# no variable-font location to pick, and all six cover "hangul". Stating them
+# once in the construction below is what keeps the table readable as data --
+# six rows of four facts that actually vary.
+#
+# (name, family, size px, the Latin face it stands behind)
 KO_FACES = [
-    ("ui_font_ko_display_56", "notoserifkr_b", 56, None, "hangul", "ui_font_display_56"),
-    ("ui_font_ko_display_36", "notoserifkr_b", 36, None, "hangul", "ui_font_display_36"),
-    ("ui_font_ko_deck_24",    "notoserifkr_r", 24, None, "hangul", "ui_font_deck_24"),
-    ("ui_font_ko_body_20",    "notoserifkr_r", 20, None, "hangul", "ui_font_body_20"),
-    ("ui_font_ko_body_16",    "notoserifkr_r", 16, None, "hangul", "ui_font_body_16"),
-    ("ui_font_ko_label_14",   "notosanskr_m",  14, None, "hangul", "ui_font_label_14"),
+    ("ui_font_ko_display_56", "notoserifkr_b", 56, "ui_font_display_56"),
+    ("ui_font_ko_display_36", "notoserifkr_b", 36, "ui_font_display_36"),
+    ("ui_font_ko_deck_24",    "notoserifkr_r", 24, "ui_font_deck_24"),
+    ("ui_font_ko_body_20",    "notoserifkr_r", 20, "ui_font_body_20"),
+    ("ui_font_ko_body_16",    "notoserifkr_r", 16, "ui_font_body_16"),
+    ("ui_font_ko_label_14",   "notosanskr_m",  14, "ui_font_label_14"),
 ]
 
 # Latin face -> the Korean face its `.fallback` points at.
-FALLBACK = {latin: ko for ko, _fam, _px, _loc, _kind, latin in KO_FACES}
+FALLBACK = {latin: ko for ko, _fam, _px, latin in KO_FACES}
 
-# Everything --only can name, and everything --download fetches by default.
-ALL_FACES = FACES + [f[:5] for f in KO_FACES]
+# Everything --only can name, and everything --download fetches by default. The
+# Korean rows are BUILT into FACES's shape rather than sliced down to it: a
+# positional slice was right only while the two tables' first five columns
+# happened to line up, and nothing said they had to.
+ALL_FACES = FACES + [(ko, fam, px, None, "hangul") for ko, fam, px, _ in KO_FACES]
 
 
 # --- glyph sets ------------------------------------------------------------

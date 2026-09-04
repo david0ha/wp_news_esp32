@@ -44,7 +44,7 @@ import os
 import re
 
 from .errors import BadRequest
-from .fsutil import atomic_write
+from .fsutil import atomic_write, json_bytes, read_bytes
 
 LOG = logging.getLogger("claudepost.settings")
 
@@ -117,14 +117,13 @@ def load(path: str) -> tuple[dict, str]:
 
     Never raises.
     """
-    try:
-        with open(path, "rb") as f:
-            raw = f.read()
-    except OSError:
+    raw = read_bytes(path)
+    if raw is None:
         # Missing is the ordinary case -- a desk that has never been told
         # otherwise -- so it is not worth a line in the log. Unreadable is not
         # ordinary, but it is the same answer, and `app.py` logs the source at
-        # start-up either way.
+        # start-up either way. `read_bytes` is the serving path's read for
+        # exactly that reason: both ways of failing are one answer here.
         return dict(DEFAULT), "default"
 
     try:
@@ -148,14 +147,15 @@ def save(path: str, doc: dict) -> None:
     :func:`parse_settings` first, in the same order
     :func:`~claudepost.watchlist.save` expects.
 
-    Indented and newline-terminated rather than compact, for
-    :func:`~claudepost.schedulefile.save`'s reason: every byte of this file
-    exists to be read, by whoever is working out why the paper came out in
-    the language it did. The atomic write is the shared one, so a reader
-    arriving mid-write sees the previous setting rather than half of this one.
+    Indented and newline-terminated rather than compact, and through the
+    shared :func:`~claudepost.fsutil.json_bytes` rather than spelled here:
+    every byte of this file exists to be read, by whoever is working out why
+    the paper came out in the language it did, and it is the fourth operator
+    document that has to look like the other three. The atomic write is the
+    shared one too, so a reader arriving mid-write sees the previous setting
+    rather than half of this one.
     """
-    text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
-    atomic_write(path, text.encode("utf-8"))
+    atomic_write(path, json_bytes(doc))
 
 
 def _lang(value: object) -> str:

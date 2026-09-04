@@ -1,14 +1,14 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { fill, useStrings } from '../../../i18n'
-import { colors, fonts } from '../../../theme'
+import { useStrings } from '../../../i18n'
+import { colors } from '../../../theme'
 import {
   TILE_HEAD,
-  TILE_MORE,
   BRIEFS_ROW,
   BRIEFS_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
-import { useEditionFace, useEditionType } from '../typeRamp'
+import { useEditionType } from '../typeRamp'
+import { MoreLine } from './MoreLine'
 
 /**
  * Up to three briefs, then a count of the rest.
@@ -24,7 +24,6 @@ import { useEditionFace, useEditionType } from '../typeRamp'
 export function BriefsTile({ tile }: { tile: Extract<Tile, { kind: 'briefs' }> }) {
   const t = useStrings()
   const ty = useEditionType()
-  const face = useEditionFace()
   const rest = tile.briefs.length - BRIEFS_SHOWN
   return (
     <View style={styles.root}>
@@ -48,11 +47,7 @@ export function BriefsTile({ tile }: { tile: Extract<Tile, { kind: 'briefs' }> }
           </Text>
         </View>
       ))}
-      {rest > 0 ? (
-        <Text style={[face(fonts.semibold), styles.more]}>
-          {fill(t.today.andMore, { n: String(rest) })}
-        </Text>
-      ) : null}
+      <MoreLine n={rest} />
     </View>
   )
 }
@@ -73,11 +68,5 @@ const styles = StyleSheet.create({
   },
   text: {
     color: colors.text,
-  },
-  more: {
-    fontSize: 12,
-    // The estimator adds exactly this for the "+N more" line; it is not a look choice.
-    lineHeight: TILE_MORE,
-    color: colors.accent,
   },
 })

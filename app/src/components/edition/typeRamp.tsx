@@ -31,14 +31,29 @@ import { fonts, type } from '../../theme'
 export type EditionTypeRamp = typeof type
 
 /**
- * The languages the shipped face cannot draw, so their ramp goes to the system one.
+ * The languages written in a CJK script.
  *
  * A set and not a `=== 'ko'`, because the answer is a property of the SCRIPT rather than of
  * Korean: Japanese and Chinese would join it the day an edition arrives in one, and nothing else
  * in this file would change. Everything absent from it is Latin as far as Inter is concerned,
  * including the languages nobody has filed an edition in yet.
  */
-const NO_LATIN_FACE = new Set(['ko'])
+const CJK_SCRIPTS = new Set(['ko'])
+
+/**
+ * Is an edition in `lang` written in one of them?
+ *
+ * EXPORTED, and read by `detail/tableGrid.ts` as well as by this file, because the two things a
+ * CJK script decides are decided from the same list. Here it means Inter cannot draw the copy, so
+ * the ramp drops the family; there it means a character is a full em rather than Inter's 0.62, so
+ * a row label is estimated at nearly twice the width. Adding `ja` has to move both, and a
+ * `=== 'ko'` at either site is the way one of them silently stays behind — the symptom being a
+ * Japanese statement label given the 72 pt floor and then ellipsized, invisible until somebody
+ * opens that page.
+ */
+export function isCjkScript(lang: string): boolean {
+  return CJK_SCRIPTS.has(lang)
+}
 
 /**
  * Each Inter cut the theme names, as the numeric weight that asks the system face for the same
@@ -54,10 +69,6 @@ export const SYSTEM_FACE_WEIGHTS: Record<string, TextStyle['fontWeight']> = {
   [fonts.semibold]: '600',
   [fonts.bold]: '700',
   [fonts.extrabold]: '800',
-}
-
-function needsSystemFace(lang: string): boolean {
-  return NO_LATIN_FACE.has(lang)
 }
 
 /**
@@ -79,14 +90,14 @@ function systemFaceToken(style: TextStyle): TextStyle {
 // every one of them a new style on every render — which is also why `rampFor` hands a Latin
 // edition `type` ITSELF rather than a copy of it.
 //
-// Memoised on whether the system face is needed rather than on the language string, because that
-// is the only thing about the language this file reads. A map keyed by `lang` would grow an entry
-// per tag a payload invents, to hold the same two answers.
+// Memoised on whether the script is CJK rather than on the language string, because that is the
+// only thing about the language this file reads. A map keyed by `lang` would grow an entry per
+// tag a payload invents, to hold the same two answers.
 let systemRamp: EditionTypeRamp | null = null
 
 /** The ramp an edition in `lang` is drawn with. `type` itself for anything Inter can set. */
 export function rampFor(lang: string): EditionTypeRamp {
-  if (!needsSystemFace(lang)) return type
+  if (!isCjkScript(lang)) return type
   if (systemRamp === null) {
     systemRamp = Object.fromEntries(
       Object.entries(type).map(([token, style]) => [token, systemFaceToken(style)]),
@@ -130,7 +141,7 @@ const SYSTEM_FACE = buildFace(true)
 
 /** How to ask for one of the theme's faces in `lang`. */
 export function faceFor(lang: string): EditionFace {
-  return needsSystemFace(lang) ? SYSTEM_FACE : LATIN_FACE
+  return isCjkScript(lang) ? SYSTEM_FACE : LATIN_FACE
 }
 
 // The language rather than the ramp, so the two hooks below cannot drift apart: they are the same

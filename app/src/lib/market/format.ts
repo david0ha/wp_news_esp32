@@ -5,7 +5,6 @@
 // No currency symbol inside formatPrice/formatDelta: screens prefix via
 // currencySymbol(quote.currency) — never a literal '$'.
 
-import { months } from '../months'
 import { fill, strings } from '../../i18n'
 
 /** Exported because `lib/edition/format.ts` re-exports these formatters and their dash. */
@@ -105,7 +104,7 @@ export function formatDateShort(epochSec: number, nowMs?: number): string {
   if (!Number.isFinite(epochSec)) return DASH
   const d = new Date(epochSec * 1000)
   const parts = {
-    month: months()[d.getUTCMonth()],
+    month: strings().months.short[d.getUTCMonth()],
     day: String(d.getUTCDate()),
     year: String(d.getUTCFullYear()),
   }

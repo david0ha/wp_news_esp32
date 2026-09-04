@@ -684,14 +684,25 @@ static int story_head(const ui_mod_t *m, const news_t *v, int w, int wt,
     /* The headline, broken the way a copy desk breaks one rather than the way a
      * text engine fills one: ui_fit_balance() tries every legal split and keeps
      * the one whose longest line is shortest, so a two-line head arrives as two
-     * even lines instead of a full line and a stub. */
+     * even lines instead of a full line and a stub.
+     *
+     * BALANCED ONLY WHEN SETTING, and the measure below is unaffected by that.
+     * ui_fit_balance() derives its line count from the UNBALANCED string at
+     * this same `w`, rejects every split that leaves a line wider than `w`, and
+     * inserts exactly that many breaks minus one — so a balanced head sets in
+     * the same number of lines as the raw one, by construction, and when it
+     * declines it leaves `dst` holding the source verbatim. The two spellings
+     * therefore measure the same, which is what lets the measure pass skip the
+     * work: the compositor asks for a module's height eight to twenty times per
+     * render, and three of the four story_head() calls per story pass NULL. */
     const lv_font_t *hf = ui_head_font(wt);
     const int hlh = ui_head_lh(wt);
     const int hmax = wt == 0 ? 4 : 5;
 
-    ui_fit_balance(hf, w, hmax, ui_fit_script(v->lang), st->headline,
-                   s_head, sizeof s_head);
-    int hl = md_lines(hf, w, s_head);
+    if (g)
+        ui_fit_balance(hf, w, hmax, ui_fit_script(v->lang), st->headline,
+                       s_head, sizeof s_head);
+    int hl = md_lines(hf, w, g ? s_head : st->headline);
     if (hl > hmax) hl = hmax;
     if (hl < 1)    hl = 1;
 
@@ -1848,27 +1859,6 @@ static const int PEER_MIN_W[UI_PEER_FIELDS] = { 74, 100, 68, 80, 84, 84 };
 static const int PEER_DROP[UI_PEER_FIELDS]  = { PF_NAME, PF_PE, PF_CAP,
                                                 PF_LAST, PF_CHG, PF_SYM };
 
-/* The six field heads in the edition's language, indexed by field.
- *
- * A function filling a local rather than the static array of macros this used
- * to be: the heads follow the payload now, so they cannot be decided at compile
- * time, and a static that a renderer rewrote once per edition would be one
- * table shared by both pages' instances of this module. Six pointer copies per
- * draw is not a cost worth a cache.
- *
- * The table is an argument and not a lookup of its own, because the caller has
- * already resolved it from `v->lang` for the kicker above the heads: two
- * lookups in one draw could not disagree, but one is the honest count. */
-static void peer_heads(const char *head[UI_PEER_FIELDS], const ui_lang_t *L)
-{
-    head[PF_SYM]  = L->col_symbol;
-    head[PF_NAME] = L->col_name;
-    head[PF_PE]   = L->col_pe;
-    head[PF_CAP]  = L->col_cap;
-    head[PF_LAST] = L->col_last;
-    head[PF_CHG]  = L->col_chg;
-}
-
 /* Which fields a module of `w` keeps, and where each of them sits. Returns the
  * number kept; `x` and `cw` are indexed by field. */
 static int peer_fields(int w, bool keep[UI_PEER_FIELDS],
@@ -1981,8 +1971,17 @@ static void peers_run(const ui_mod_t *m, const news_t *v, int w,
     md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, L->peers);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
-    const char *head[UI_PEER_FIELDS];
-    peer_heads(head, L);
+    /* The six field heads in the edition's language, indexed by field. A local
+     * and not a static array of macros: the heads follow the payload now, so
+     * they cannot be decided at compile time, and a static that a renderer
+     * rewrote once per edition would be one table shared by both pages'
+     * instances of this module. It reads out of `L`, which the kicker above has
+     * already resolved from `v->lang` — two lookups in one draw could not
+     * disagree, but one is the honest count. */
+    const char *const head[UI_PEER_FIELDS] = {
+        [PF_SYM] = L->col_symbol, [PF_NAME] = L->col_name, [PF_PE]  = L->col_pe,
+        [PF_CAP] = L->col_cap,    [PF_LAST] = L->col_last, [PF_CHG] = L->col_chg,
+    };
 
     const int hy = UI_MOD_KICKER_H + MD_RULE_DY + UI_RULE_HAIR + 6;
     for (int i = 0; i < UI_PEER_FIELDS; i++) {

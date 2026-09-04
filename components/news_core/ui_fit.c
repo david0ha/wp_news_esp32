@@ -289,7 +289,10 @@ static bool break_ok(const char *s, size_t a, size_t b)
  *
  * The scan stops at the first glyph that overruns, so it costs one measurement
  * per glyph the LINE holds rather than per glyph the token has: a 4,000-byte
- * token costs what a twenty-character one costs.
+ * token costs the same number of MEASUREMENTS as a twenty-character one. Not
+ * the same work — each measurement is of the prefix accepted so far, so a line
+ * of k glyphs walks k(k+1)/2 advances — but the token's length past the measure
+ * is free either way, which is the property this branch needs.
  *
  * Never returns 0. A single glyph wider than the whole measure is set anyway,
  * because the alternative is a line with nothing on it and a caller that never
@@ -791,8 +794,8 @@ int ui_fit_balance(const lv_font_t *font, int w, int max_lines,
      * outright above. */
     const int32_t pen = (int32_t)w / 6;
 
-    for (int i = 0; i < nb; i++) {
-        if (lines == 2) {
+    if (lines == 2) {
+        for (int i = 0; i < nb; i++) {
             const int32_t a = seg_w(font, dst, 0, brk[i]);
             const int32_t b = seg_w(font, dst, aft[i], len);
             if (a > w || b > w) continue;
@@ -802,24 +805,45 @@ int ui_fit_balance(const lv_font_t *font, int w, int max_lines,
                 found = true; best_score = s;
                 best[0] = brk[i]; best_aft[0] = aft[i];
             }
-            continue;
+        }
+    } else {
+        /* The halves of the three-line score that depend on `j` alone: the last
+         * line's width, and whether the second break lands on a stop word.
+         * Inside the pair loop they were evaluated once per (i, j) — 2,016 times
+         * over 64 distinct values at the Korean cap, and seg_w() is a
+         * lv_text_get_size() over the whole tail, every Hangul glyph of which
+         * misses the Latin face's cmap before it reaches the fallback. So they
+         * are tabulated first, at 64 evaluations each.
+         *
+         * 264 bytes of UiTask's 8 KB, on top of the 256 brk/aft already spend,
+         * and the tables live in this branch rather than the function's scope
+         * because a two-line head has no pairs to amortise them over. One
+         * machine word is the stop table: nb <= FIT_BREAKS_MAX, which is 64. */
+        int32_t tail[FIT_BREAKS_MAX];
+        uint64_t stop = 0;
+
+        for (int j = 0; j < nb; j++) {
+            tail[j] = seg_w(font, dst, aft[j], len);
+            if (stop_word_before(dst, brk[j])) stop |= 1ull << j;
         }
 
-        const int32_t a = seg_w(font, dst, 0, brk[i]);
-        if (a > w) continue;
-        const bool ai = stop_word_before(dst, brk[i]);
-        for (int j = i + 1; j < nb; j++) {
-            const int32_t b = seg_w(font, dst, aft[i], brk[j]);
-            const int32_t c = seg_w(font, dst, aft[j], len);
-            if (b > w || c > w) continue;
-            int32_t s = a > b ? a : b;
-            if (c > s) s = c;
-            if (ai)                             s += pen;
-            if (stop_word_before(dst, brk[j]))  s += pen;
-            if (!found || s < best_score) {
-                found = true; best_score = s;
-                best[0] = brk[i]; best_aft[0] = aft[i];
-                best[1] = brk[j]; best_aft[1] = aft[j];
+        for (int i = 0; i < nb; i++) {
+            const int32_t a = seg_w(font, dst, 0, brk[i]);
+            if (a > w) continue;
+            const bool ai = (stop >> i) & 1u;
+            for (int j = i + 1; j < nb; j++) {
+                const int32_t b = seg_w(font, dst, aft[i], brk[j]);
+                const int32_t c = tail[j];
+                if (b > w || c > w) continue;
+                int32_t s = a > b ? a : b;
+                if (c > s) s = c;
+                if (ai)               s += pen;
+                if ((stop >> j) & 1u) s += pen;
+                if (!found || s < best_score) {
+                    found = true; best_score = s;
+                    best[0] = brk[i]; best_aft[0] = aft[i];
+                    best[1] = brk[j]; best_aft[1] = aft[j];
+                }
             }
         }
     }

@@ -9,7 +9,6 @@
 // time it changed. That is the question the line answers: "is what I am reading still what the
 // desk is serving?"
 
-import { months } from '../months'
 import { fill, strings } from '../../i18n'
 
 const MINUTE = 60_000
@@ -41,5 +40,8 @@ export function freshnessLabel(fetchedAt: number, now: number): string | null {
   if (age < DAY) return fill(t.hours, { n: String(Math.floor(age / HOUR)) })
   if (age < 2 * DAY) return t.yesterday
   const d = new Date(fetchedAt)
-  return fill(t.date, { day: String(d.getDate()), month: months()[d.getMonth()] })
+  return fill(t.date, {
+    day: String(d.getDate()),
+    month: strings().months.short[d.getMonth()],
+  })
 }
