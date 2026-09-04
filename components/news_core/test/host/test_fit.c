@@ -591,9 +591,10 @@ static size_t fit_ko(int w, int h, int line_space, const char *src, char *dst, s
 
         /* Each line measured on its own, unwrapped. A line wider than `w` is
          * the one failure this path could hide: LVGL would wrap it again under
-         * the break we put in and the column would run over the rule below.
-         * The single unit a measure cannot hold is the documented exception,
-         * and it is at most a syllable and a mark. */
+         * the break we put in, the rendered line count would exceed the one
+         * ui_fit_text() kept, and the column would run over the rule below.
+         * The ONLY exception is a single glyph wider than the whole measure,
+         * which no cut can help — and on this sheet is a 170 px character. */
         size_t a = 0;
         for (size_t i = 0; i <= len; i++) {
             if (dst[i] != '\n' && dst[i] != '\0') continue;
@@ -601,7 +602,7 @@ static size_t fit_ko(int w, int h, int line_space, const char *src, char *dst, s
             dst[i] = '\0';
             lv_text_get_size(&sz, dst + a, &FACE, 0, 0, 1 << 20, LV_TEXT_FLAG_NONE);
             dst[i] = save;
-            CHECK(sz.x <= w || i - a <= 4);
+            CHECK(sz.x <= w || glyph_len(dst + a) == i - a);
             a = i + 1;
         }
     }
@@ -718,6 +719,79 @@ static void t_hangul_continuation(void)
     CHECK(np > 3);                          /* and this body really did need columns */
 }
 
+/* --- a token too wide for the measure ------------------------------------- *
+ *
+ * A unit is whatever the tokeniser made of it, and a run of non-Hangul
+ * characters can be much wider than a leg: a long Latin word, a URL, a
+ * timestamp like 2026-08-15T09:00:00Z, which is twenty-four ASCII characters
+ * against a 170 px leg that holds about twenty. Emitting one of those as a line
+ * would be the one bug this whole path exists to prevent — LVGL hard-breaks it
+ * under the '\n' we put in, the rendered line count exceeds the count
+ * ui_fit_text() kept, and the copy runs past `h` over the rule below, because
+ * ui_lab_wrap() sets a fixed height and does not clip.
+ *
+ * The Latin path has no such hole: it measures at max_width = w, so LVGL's hard
+ * break happens INSIDE the measurement and the prefix it accepts always sets
+ * inside `h`. The Hangul path measures each line unwrapped, so it has to do the
+ * hard break itself — at the last glyph boundary that fits, which is what
+ * LV_TEXT_FLAG_BREAK_ALL means. */
+static void t_hangul_over_wide_unit_is_hard_broken(void)
+{
+    char dst[128];
+
+    /* Six columns, two lines of room. Line one is the two syllables; the
+     * twenty-four-character run cannot share it and cannot hold a line of its
+     * own either, so six characters of it are set and the rest is left for the
+     * next leg. Before the split existed this returned the whole run on line
+     * two, which LVGL then set as four lines inside a box that holds two. */
+    const char *latin = "가나 abcdefghijklmnopqrstuvwx 다라";
+    size_t used = fit_ko(60, 40, 0, latin, dst, sizeof dst);
+    CHECK_STR(dst, "가나\nabcdef");
+    CHECK_INT(used, strlen("가나 abcdef"));
+
+    /* And the next leg continues from inside the run rather than stalling. */
+    used = fit_ko(60, 40, 0, latin + used, dst, sizeof dst);
+    CHECK_STR(dst, "ghijkl\nmnopqr");
+    CHECK_INT(used, strlen("ghijklmnopqr"));
+
+    /* The reviewer's other probe, and the shape a payload actually carries. */
+    used = fit_ko(60, 40, 0, "가나 2026-08-15T09:00:00Z 다라", dst, sizeof dst);
+    CHECK_STR(dst, "가나\n2026-0");
+    CHECK_INT(used, strlen("가나 2026-0"));
+
+    /* A machine break inside a token still obeys the punctuation rule: six
+     * characters would leave the full stop at the head of the next line, so
+     * the split backs up one glyph. */
+    used = fit_ko(60, 40, 0, "가나 abcdef.ghijklm 다라", dst, sizeof dst);
+    CHECK_STR(dst, "가나\nabcde");
+    CHECK_INT(used, strlen("가나 abcde"));
+
+    /* The property behind all four, over every width and every height a leg on
+     * this sheet can have: whatever the copy, the block sets inside the box.
+     * fit_ko() asserts it, so this only has to reach the cases. */
+    static const char *const HARD[] = {
+        "가나 abcdefghijklmnopqrstuvwx 다라",
+        "가나다 2026-08-15T09:00:00Z 라마바 https://example.com/a/b/c 사아",
+        "supercalifragilisticexpialidocious",
+        "가 1,234,567,890.12345 나",
+    };
+    for (size_t k = 0; k < sizeof HARD / sizeof *HARD; k++) {
+        for (int w = 20; w <= 200; w += 10) {
+            for (int lines = 1; lines <= 6; lines++) {
+                char buf[256];
+                size_t off = 0, guard = 0;
+                while (HARD[k][off] && guard++ < 64) {
+                    size_t u = fit_ko(w, lines * (LH + LS) - LS, LS,
+                                      HARD[k] + off, buf, sizeof buf);
+                    CHECK(u > 0);
+                    off += u;
+                }
+                CHECK_INT(off, strlen(HARD[k]));
+            }
+        }
+    }
+}
+
 /* --- a number is one unit ------------------------------------------------- *
  *
  * The first Korean sheets came back with "3.53%" set as "3." and "53%" across a
@@ -728,14 +802,18 @@ static void t_hangul_continuation(void)
  * function of where the line happens to end. */
 static void t_numbers_never_split(void)
 {
-    const char *src = "가나다라마 3.53% 바사아자차 1,631.47 카타파";
+    const char *src = "가나다라마 3.53% 바사아자차 1,631.47 guidance 카타파";
     char dst[128];
 
+    /* From eighty, which is eight columns — the width of the longest unit
+     * here. A unit wider than the measure is a different case and
+     * t_hangul_over_wide_unit_is_hard_broken() owns it. */
     for (int w = 80; w <= 200; w += 10) {
         size_t used = fit_ko(w, LH * 12, 0, src, dst, sizeof dst);
         CHECK_INT(used, strlen(src));
         CHECK(strstr(dst, "3.53%") != NULL);
         CHECK(strstr(dst, "1,631.47") != NULL);
+        CHECK(strstr(dst, "guidance") != NULL);    /* a Latin word is one unit too */
     }
 
     /* And in a head, where the candidate list is the thing that has to leave
@@ -779,7 +857,7 @@ static void t_script_from_lang(void)
 {
     CHECK_INT(ui_fit_script("ko"), UI_FIT_HANGUL);
     CHECK_INT(ui_fit_script("en"), UI_FIT_LATIN);
-    CHECK_INT(ui_fit_script("kor"), UI_FIT_LATIN);      /* the tag is normalised to two */
+    CHECK_INT(ui_fit_script("kor"), UI_FIT_LATIN);      /* only "ko" is Korean here */
     CHECK_INT(ui_fit_script(""), UI_FIT_LATIN);
     CHECK_INT(ui_fit_script(NULL), UI_FIT_LATIN);
 }
@@ -802,6 +880,7 @@ int main(void)
     t_no_break_before_closing_or_after_opening_punctuation();
     t_hangul_cut_lands_on_a_boundary_and_continues_from_it();
     t_hangul_continuation();
+    t_hangul_over_wide_unit_is_hard_broken();
     t_numbers_never_split();
     t_hangul_heads_balance_on_syllables();
     TH_REPORT("fit");
