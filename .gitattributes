@@ -1,0 +1,8 @@
+# The faces are lv_font_conv output — about ten megabytes of hex across thirteen
+# files, and the six Korean ones are most of it. Marked generated so a review
+# collapses them, and -diff so a regeneration does not put a megabyte of changed
+# bitmap into a pull request nobody can read past.
+#
+# The one line in these files anybody edits on purpose is `.fallback`, and it is
+# written by `tools/gen_fonts.py --link-fallbacks` rather than by hand.
+components/news_core/fonts/*.c linguist-generated=true -diff

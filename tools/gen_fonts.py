@@ -8,6 +8,8 @@ Usage
     /tmp/fontenv/bin/python tools/gen_fonts.py --download
 
     tools/gen_fonts.py --dry-run          # report the glyph sets and stop
+    tools/gen_fonts.py --link-fallbacks   # re-point the Latin faces at the
+                                          # Korean ones, without regenerating
 
 Needs node/npx (it shells out to lv_font_conv) and fontTools (Google ships
 these families as variable fonts; see below). The generated .c files are
@@ -44,8 +46,33 @@ ragged stipple along contours that 1 bpp keeps smooth.
 wp_quantize() maps both to themselves under any dither offset — so text takes
 the quantizer's identity path and cannot pick up a colour fringe.
 
-The saving is incidental but large: all seven faces together cost less than one
-of the two 완성형 Korean faces this board replaced.
+The saving is incidental but large, and it is what makes the Korean faces
+affordable: the seven Latin faces together cost less than a tenth of the six
+Korean ones behind them.
+
+
+Why there is a Korean face behind every Latin one
+-------------------------------------------------
+An edition carries a `lang`, and for "ko" the copy is Hangul while the tickers,
+the figures and half the company names in it stay Latin. LVGL resolves
+`lv_font_t.fallback` recursively and per character, so pointing each Latin text
+face at a Korean face of the same pixel size gets Hangul drawn with NO change at
+any call site, and leaves "$", "Nvidia" and every digit in Playfair and Source
+Serif rather than in the CJK family's own Latin.
+
+That pointer lives in a `const lv_font_t` in flash and cannot be patched at
+runtime, so it is generated INTO the .c: `run_conv()` writes it as each Latin
+face is produced, and `--link-fallbacks` re-applies it over the committed files
+without regenerating ten megabytes to change six lines. The pass is idempotent.
+
+The Korean faces carry no ASCII and no Latin-1. The primary face owns those, and
+duplicating them would be both wasted flash and a way for a "1" to come out in
+the wrong family. What they carry is in tools/hangul.py, shared with the
+validator so the desk cannot file a syllable the board cannot draw.
+
+The masthead face is deliberately not in this arrangement. It is a blackletter
+nameplate, no Korean blackletter exists, and the paper's name is its brand
+rather than copy.
 """
 
 import argparse
@@ -56,6 +83,9 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hangul  # noqa: E402  — the Hangul set, shared with the desk's validator
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE = os.path.join(ROOT, "components", "news_core")
@@ -91,6 +121,44 @@ FAMILIES = {
                    GF + "librefranklin/OFL.txt"),
 }
 
+# The Korean half, also SIL Open Font License 1.1. These are STATIC OTFs — the
+# variable Noto CJK is a 20 MB multi-language file and the SubsetOTF/KR builds
+# are the same outlines already cut down to Korean — so no instancing is needed
+# and their `location` is None.
+#
+# Serif behind the serif faces and sans behind the label face, matched to what
+# stands in front: Noto Serif KR Bold under Playfair at 800/700, Regular under
+# Source Serif, and Noto Sans KR Medium under Libre Franklin at 600. A CJK
+# family's "Medium" is about a Latin family's semibold, which is what the label
+# face is set at.
+NOTO_CJK = "https://github.com/notofonts/noto-cjk/raw/main/"
+FAMILIES.update({
+    "notoserifkr_r": (NOTO_CJK + "Serif/SubsetOTF/KR/NotoSerifKR-Regular.otf",
+                      NOTO_CJK + "Serif/LICENSE"),
+    "notoserifkr_b": (NOTO_CJK + "Serif/SubsetOTF/KR/NotoSerifKR-Bold.otf",
+                      NOTO_CJK + "Serif/LICENSE"),
+    "notosanskr_m":  (NOTO_CJK + "Sans/SubsetOTF/KR/NotoSansKR-Medium.otf",
+                      NOTO_CJK + "Sans/LICENSE"),
+})
+
+
+def ofl_name(ofl_url):
+    """What a licence URL is committed as, under fonts/.
+
+    One file per *family directory* rather than per face: Source Serif's upright
+    and italic are two files under one licence, and keying this on the family
+    name would commit that text twice.
+
+    Noto CJK is the exception the rule could not express. Its licence sits at
+    Serif/LICENSE and Sans/LICENSE — two paths, one text, and a parent directory
+    called "main" — so the directory rule would produce OFL-Serif.txt and
+    OFL-Sans.txt and say nothing about whose fonts they cover. It is keyed by
+    hand instead, and lands once as OFL-noto-cjk.txt.
+    """
+    if ofl_url.startswith(NOTO_CJK):
+        return "OFL-noto-cjk.txt"
+    return "OFL-%s.txt" % ofl_url.rsplit("/", 2)[-2]
+
 
 def opsz_for(px):
     """Source Serif 4's optical-size axis, in points, for a pixel size here.
@@ -112,6 +180,28 @@ FACES = [
     ("ui_font_body_16",      "ss4",         16, {"wght": 400, "opsz": opsz_for(16)}, "text"),
     ("ui_font_label_14",     "franklin",    14, {"wght": 600},                     "text"),
 ]
+
+# The Korean faces, one per text face, at the same pixel size so their ink sits
+# on the primary face's baseline — LVGL takes line height and baseline from the
+# PRIMARY font, so a fallback at a different size would draw off the line and no
+# layout arithmetic anywhere would know.
+#
+# (name, family, size px, variable-font location, what it must cover,
+#  the Latin face it stands behind)
+KO_FACES = [
+    ("ui_font_ko_display_56", "notoserifkr_b", 56, None, "hangul", "ui_font_display_56"),
+    ("ui_font_ko_display_36", "notoserifkr_b", 36, None, "hangul", "ui_font_display_36"),
+    ("ui_font_ko_deck_24",    "notoserifkr_r", 24, None, "hangul", "ui_font_deck_24"),
+    ("ui_font_ko_body_20",    "notoserifkr_r", 20, None, "hangul", "ui_font_body_20"),
+    ("ui_font_ko_body_16",    "notoserifkr_r", 16, None, "hangul", "ui_font_body_16"),
+    ("ui_font_ko_label_14",   "notosanskr_m",  14, None, "hangul", "ui_font_label_14"),
+]
+
+# Latin face -> the Korean face its `.fallback` points at.
+FALLBACK = {latin: ko for ko, _fam, _px, _loc, _kind, latin in KO_FACES}
+
+# Everything --only can name, and everything --download fetches by default.
+ALL_FACES = FACES + [f[:5] for f in KO_FACES]
 
 
 # --- glyph sets ------------------------------------------------------------
@@ -169,10 +259,23 @@ def symbol_sets():
     masthead |= set(" .,'-&")
     masthead |= literal_chars(src, only="S_MASTHEAD")
 
-    for s in (text, masthead):
+    # Korean: what tools/hangul.py says the desk may file — KS X 1001's 2,350
+    # 완성형 syllables, the compatibility jamo and the CJK punctuation — plus
+    # every non-Latin character ui_strings.h uses, so a Korean fixed string
+    # added to that header is covered without anyone remembering to widen this.
+    #
+    # No ASCII and no Latin-1, deliberately. The primary face owns those and
+    # LVGL never reaches the fallback for a character the primary can draw, so
+    # copying them here would be a megabyte of flash that can never be read —
+    # and a way for a digit inside a Korean headline to come out in the wrong
+    # family the day someone swaps the chain around.
+    hangul_set = set(hangul.DRAWABLE_KO)
+    hangul_set |= {c for c in literal_chars(src) if ord(c) >= 0x3000}
+
+    for s in (text, masthead, hangul_set):
         s.discard("\n")
         s.discard("\t")
-    return {"text": text, "masthead": masthead}
+    return {"text": text, "masthead": masthead, "hangul": hangul_set}
 
 
 # --- conversion ------------------------------------------------------------
@@ -234,7 +337,12 @@ def lining_figures(font):
 
 
 def instance(src_ttf, location, out_ttf):
-    """Pin a variable font to one point on its axes, with lining figures."""
+    """Pin a variable font to one point on its axes, with lining figures.
+
+    A `location` of None is a static font — the Korean OTFs — and it passes
+    through, re-saved so that every face downstream of here is one file in one
+    place whatever it came from.
+    """
     from fontTools import ttLib
     from fontTools.varLib import instancer
 
@@ -309,25 +417,104 @@ def normalize_header(path, ttf, provenance):
         f.write(src)
 
 
+# The comment banner lv_font_conv puts above the public lv_font_t. The extern
+# for the Korean face goes in front of it: the pointer below has to see a
+# declaration, and this is the one place in the file that is neither bitmap data
+# nor inside a version #if.
+PUBLIC_FONT_BANNER = ("/*-----------------\n"
+                      " *  PUBLIC FONT\n"
+                      " *----------------*/")
+
+
+def link_fallback(path, ko_name):
+    """Point a Latin face's `.fallback` at its Korean twin. Idempotent.
+
+    The struct is `const` and lives in flash, so this pointer cannot be set at
+    runtime; it is written into the generated source instead. Both edits are
+    checked rather than assumed, because lv_font_conv's output is the authority
+    on its own shape and a silent no-op here is a page of tofu on the glass.
+    """
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+
+    where = os.path.relpath(path, ROOT)
+    decl = f"extern const lv_font_t {ko_name};\n\n"
+    if decl not in src:
+        if PUBLIC_FONT_BANNER not in src:
+            sys.exit(f"{where}: lv_font_conv's PUBLIC FONT banner is not in "
+                     f"this file, so its shape has changed. Re-read the "
+                     f"generated output and fix link_fallback().")
+        src = src.replace(PUBLIC_FONT_BANNER, decl + PUBLIC_FONT_BANNER, 1)
+
+    src, n = re.subn(r"\.fallback = (?:NULL|&\w+),", f".fallback = &{ko_name},", src)
+    if n != 1:
+        sys.exit(f"{where}: expected exactly one .fallback line, found {n}. "
+                 f"Re-read the generated output and fix link_fallback().")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+
+
+def assert_bitmap_fits(path):
+    """LV_FONT_FMT_TXT_LARGE is 0: bitmap_index is a 20-bit field.
+
+    Six faces of 2,350 Hangul syllables put this within reach for the first
+    time — a 56 px syllable is around 380 bytes and 2,350 of them are most of a
+    megabyte — and overflowing it does not fail the build. It wraps, and the
+    glyphs past the wrap draw whatever bytes are at the aliased offset.
+    """
+    with open(path, encoding="utf-8") as f:
+        top = max(int(m) for m in re.findall(r"\.bitmap_index = (\d+)", f.read()))
+    if top >= (1 << 20):
+        sys.exit(f"{os.path.relpath(path, ROOT)}: bitmap_index {top} needs "
+                 f"LV_FONT_FMT_TXT_LARGE=1 in sim/lv_conf.h and "
+                 f"CONFIG_LV_FONT_FMT_TXT_LARGE=y in sdkconfig.defaults")
+    return top
+
+
+def link_fallbacks_pass():
+    """Re-apply every fallback pointer over the committed files.
+
+    Regenerating a face costs minutes and rewrites a megabyte of C to change one
+    line, so the pointer has its own pass. It is what to run after a Korean face
+    is renamed or a Latin face is regenerated on its own.
+    """
+    for latin, ko in sorted(FALLBACK.items()):
+        latin_c = os.path.join(FONTDIR, latin + ".c")
+        ko_c = os.path.join(FONTDIR, ko + ".c")
+        for p in (latin_c, ko_c):
+            if not os.path.exists(p):
+                sys.exit(f"missing {os.path.relpath(p, ROOT)} — generate the "
+                         f"faces before linking them")
+        link_fallback(latin_c, ko)
+        print(f"  {latin}.fallback -> &{ko}"
+              f"   (bitmap_index tops out at {assert_bitmap_fits(ko_c)})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--download", action="store_true",
-                    help="fetch the four families into a temp dir")
+                    help="fetch the families this run needs into a temp dir")
     ap.add_argument("--font-dir",
                     help="use already-downloaded originals from this directory "
-                         "instead (files named as on Google Fonts)")
+                         "instead (files named as upstream)")
     ap.add_argument("--dry-run", action="store_true",
                     help="report the glyph sets and the face table, then stop")
+    ap.add_argument("--link-fallbacks", action="store_true",
+                    help="re-point each committed Latin face at its Korean "
+                         "twin and stop. Idempotent, and the only cheap way to "
+                         "change that pointer — regenerating rewrites a "
+                         "megabyte of C to move one line.")
     ap.add_argument("--only",
                     help="regenerate only these faces (comma-separated). The "
                          "upstream families move under us, so a change that "
-                         "concerns two faces should not rewrite seven.")
+                         "concerns two faces should not rewrite thirteen.")
     args = ap.parse_args()
 
-    faces = FACES
+    faces = ALL_FACES
     if args.only:
         want = {n.strip() for n in args.only.split(",")}
-        faces = [f for f in FACES if f[0] in want]
+        faces = [f for f in ALL_FACES if f[0] in want]
         unknown = want - {f[0] for f in faces}
         if unknown:
             sys.exit("no such face: " + ", ".join(sorted(unknown)))
@@ -339,11 +526,23 @@ def main():
             extra = sorted(c for c in chars if ord(c) > 0x7E)
             print(f"{kind}: {len(chars)} glyphs "
                   f"({len(chars) - len(extra)} ASCII + {len(extra)} beyond)")
-            print("   ", "".join(extra) or "(none)")
+            # The Hangul set is 2,400 characters and printing it is a wall of
+            # text nobody reads; the range is what a reader is checking for.
+            if len(extra) > 200:
+                shown = f"U+{ord(extra[0]):04X}..U+{ord(extra[-1]):04X}"
+            else:
+                shown = "".join(extra) or "(none)"
+            print("   ", shown)
         print()
-        for name, fam, size, loc, kind in FACES:
-            print(f"  {name:22s} {fam:11s} {size:4d}px  bpp1  "
-                  f"{str(loc or 'static'):28s} {kind} ({len(sets[kind])} glyphs)")
+        for name, fam, size, loc, kind in ALL_FACES:
+            behind = FALLBACK.get(name)
+            print(f"  {name:22s} {fam:14s} {size:4d}px  bpp1  "
+                  f"{str(loc or 'static'):28s} {kind} ({len(sets[kind])} glyphs)"
+                  + (f"  -> fallback &{behind}" if behind else ""))
+        return
+
+    if args.link_fallbacks:
+        link_fallbacks_pass()
         return
 
     if not args.download and not args.font_dir:
@@ -374,18 +573,18 @@ def main():
             originals[fam] = os.path.join(tmp, base)
             print(f"downloading {base}")
             urllib.request.urlretrieve(font_url, originals[fam])
-            # One OFL per *family directory*, not per face: Source Serif's
-            # upright and italic are two files under one licence, and keying
-            # this on the family name would commit that text twice.
-            ofl = os.path.join(FONTDIR,
-                               "OFL-%s.txt" % ofl_url.rsplit("/", 2)[-2])
+            ofl = os.path.join(FONTDIR, ofl_name(ofl_url))
             if not os.path.exists(ofl):
                 urllib.request.urlretrieve(ofl_url, ofl)
 
     total = 0
     for name, fam, size, loc, kind in faces:
+        # Keep the source's own extension: the Korean originals are CFF OTFs and
+        # calling one .ttf would be a lie in the one place that has to stay
+        # readable when a face is being reproduced by hand.
+        ext = os.path.splitext(originals[fam])[1] or ".ttf"
         static = instance(originals[fam], loc,
-                          os.path.join(tmp, f"{name}.ttf"))
+                          os.path.join(tmp, name + ext))
         # What goes into the generated file's provenance comment in place of
         # the mkdtemp path: the family as published plus the axis point it was
         # pinned to, which together are what actually reproduce this face.
@@ -399,8 +598,15 @@ def main():
         print(f"  {name}: {len(have)} glyphs @ {size}px "
               f"{loc or ''} ...", flush=True)
         path = run_conv(static, name, size, have, provenance)
+        top = assert_bitmap_fits(path)
+        # A Latin face carries the pointer to its Korean twin, so regenerating
+        # one must not quietly drop it back to NULL.
+        if name in FALLBACK:
+            link_fallback(path, FALLBACK[name])
         total += os.path.getsize(path)
-        print(f"    -> {os.path.getsize(path) // 1024} KiB of C source")
+        print(f"    -> {os.path.getsize(path) // 1024} KiB of C source, "
+              f"bitmap_index tops out at {top}"
+              + (f", fallback -> &{FALLBACK[name]}" if name in FALLBACK else ""))
 
     print(f"generated {len(faces)} faces, {total // 1024} KiB of C source")
 

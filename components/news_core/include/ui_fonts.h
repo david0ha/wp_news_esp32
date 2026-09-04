@@ -1,5 +1,6 @@
 /*
- * ui_fonts.h — the seven faces this board sets a newspaper in.
+ * ui_fonts.h — the seven Latin faces this board sets a newspaper in, and the
+ * six Korean ones standing behind them.
  *
  * All four families are SIL Open Font License 1.1 (fonts/OFL-*.txt), so the
  * generated bitmaps ship with this repo. They were chosen against the paper
@@ -48,6 +49,30 @@
  * letters S_MASTHEAD happens to use, so changing the paper's name does not
  * silently blank the largest text on the screen.
  *
+ * ## Korean is a fallback, not a second set of faces
+ *
+ * An edition carries a `lang`, and a Korean one is Hangul copy with Latin
+ * tickers, figures and half its company names still in it. LVGL resolves
+ * lv_font_t.fallback recursively and PER CHARACTER inside
+ * lv_font_get_glyph_dsc(), so each Latin text face points at a Korean face of
+ * the same pixel size and Hangul is drawn with no change at any call site — not
+ * in the compositor, not in the copyfitter, not in the simulator's coverage
+ * check. "$", "Nvidia" and every digit keep the Latin face they had.
+ *
+ * The layout arithmetic is untouched because LVGL takes line height and
+ * baseline from the PRIMARY face; the Korean faces are generated at the same px
+ * so their ink sits on that same baseline.
+ *
+ * The Korean faces carry no ASCII and no Latin-1 — the primary face owns those
+ * and the fallback is never reached for them — so what they hold is the 2,350
+ * KS X 1001 syllables, the compatibility jamo and the CJK punctuation, from
+ * tools/hangul.py. The desk's validator reads the same file, so it cannot file
+ * a syllable the board cannot draw.
+ *
+ * The masthead face is deliberately outside this arrangement: a blackletter
+ * nameplate is the paper's brand rather than copy, no Korean blackletter
+ * exists, and the masthead stays "The Claude Post" in every language.
+ *
  * ## Do not hand-edit
  *
  *     python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools
@@ -57,6 +82,12 @@
  * variable fonts, and lv_font_conv would silently take the default instance —
  * Playfair Regular where the table asks for Playfair Bold. The generated .c
  * files are committed, so a normal build needs neither node nor Python.
+ *
+ * The `.fallback` pointer is generated INTO the Latin faces' .c files — the
+ * struct is const and lives in flash, so it cannot be set at runtime. To change
+ * it without regenerating a megabyte of C to move six lines:
+ *
+ *     tools/gen_fonts.py --link-fallbacks
  */
 #pragma once
 
@@ -87,6 +118,18 @@ extern const lv_font_t ui_font_body_16;
 /* Bylines, datelines, kickers, section rules, photo captions, the folio line
  * and the ticker — everything set in small sans caps. */
 extern const lv_font_t ui_font_label_14;
+
+/* The Korean faces are never named by a call site; they are reached through the
+ * Latin face's `fallback`. They are declared here so that the build lists them
+ * on purpose rather than by accident, and so a reader looking for where Hangul
+ * comes from finds it beside the faces it stands behind. Noto Serif KR under
+ * the serifs, Noto Sans KR under the label face, each at its partner's px. */
+extern const lv_font_t ui_font_ko_display_56;   /* behind ui_font_display_56 */
+extern const lv_font_t ui_font_ko_display_36;   /* behind ui_font_display_36 */
+extern const lv_font_t ui_font_ko_deck_24;      /* behind ui_font_deck_24    */
+extern const lv_font_t ui_font_ko_body_20;      /* behind ui_font_body_20    */
+extern const lv_font_t ui_font_ko_body_16;      /* behind ui_font_body_16    */
+extern const lv_font_t ui_font_ko_label_14;     /* behind ui_font_label_14   */
 
 #ifdef __cplusplus
 }

@@ -71,6 +71,15 @@ add_executable(sim
     ${CORE}/fonts/ui_font_body_20.c
     ${CORE}/fonts/ui_font_body_16.c
     ${CORE}/fonts/ui_font_label_14.c
+    # The Korean faces. No call site names one; each is reached through the
+    # matching Latin face's `.fallback`, which is why they must be listed here
+    # even though nothing in the tree references them by name.
+    ${CORE}/fonts/ui_font_ko_display_56.c
+    ${CORE}/fonts/ui_font_ko_display_36.c
+    ${CORE}/fonts/ui_font_ko_deck_24.c
+    ${CORE}/fonts/ui_font_ko_body_20.c
+    ${CORE}/fonts/ui_font_ko_body_16.c
+    ${CORE}/fonts/ui_font_ko_label_14.c
     ${CJSON}/cJSON.c)
 
 # ${CORE} (not just ${CORE}/include) is on the path so the simulator can include
