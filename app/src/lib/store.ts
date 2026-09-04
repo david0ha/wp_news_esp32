@@ -26,6 +26,15 @@
 // reads wrongly as "delivered" loses the address silently, while one that reads wrongly as
 // "pending" costs one redundant POST of the same URL, which the board treats as a no-op.
 //
+// And a fifth, which is about the phone alone and reaches no hardware at all:
+//
+//   - `claudepost.language`          Which language this app's own screens are drawn in.
+//
+// It is the *app's* language and not the edition's. An edition arrives carrying the language it
+// was written in and is drawn in that language on any phone; this key decides the chrome around it.
+// Storing one where the other was meant would make a Korean reader's English edition unreadable,
+// or redraw the app every time the desk changed what it files.
+//
 // **The key strings are load-bearing.** Every install already on TestFlight carries the first two
 // under exactly these names; renaming one is not a refactor, it is a silent re-onboarding of every
 // shipped phone — the app wakes up believing nobody ever set a board up. `store.test.ts` pins all
@@ -50,6 +59,11 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { normalizeBaseUrl } from './discovery'
+// From `../i18n/language` and not from `../i18n`, which is the barrel every screen uses: the
+// provider in `../i18n/index.tsx` imports the two functions at the bottom of this file, so reaching
+// for the barrel here would close a runtime import cycle. `language.ts` is a leaf that imports
+// nothing, which is what it was split out to be.
+import { isAppLanguage, type AppLanguage } from '../i18n/language'
 
 // Namespaced under this board's own name. A phone that once ran the fortune board's app keeps its
 // `tickerboard.*` entries untouched — those point at a different device on the same LAN, and
@@ -59,6 +73,7 @@ const KEY_ONBOARDED = 'claudepost.onboardingComplete'
 const KEY_SETUP_SKIPPED = 'claudepost.setupSkipped'
 const KEY_NEWS_URL = 'claudepost.newsUrl'
 const KEY_NEWS_URL_PENDING = 'claudepost.newsUrlPending'
+const KEY_LANGUAGE = 'claudepost.language'
 
 const SKIP_MARK = '1'
 const PENDING_MARK = '1'
@@ -68,6 +83,7 @@ let skippedCache: boolean | null = null
 let baseUrlCache: string | null | undefined // undefined = not yet read
 let newsUrlCache: string | null | undefined // undefined = not yet read
 let newsUrlPendingCache: boolean | null = null
+let languageCache: AppLanguage | null = null
 
 /**
  * How long to keep asking the disk, in milliseconds between attempts — four tries in under a
@@ -337,6 +353,47 @@ export async function clearNewsUrlPending(): Promise<void> {
   }
 }
 
+/**
+ * Which language the app's own chrome is drawn in — `system`, `en` or `ko`. See `src/i18n/`.
+ *
+ * `system` is the default and also every failure's answer: an unset key, a value this build does
+ * not recognise (an older or newer install's spelling), and a read that threw all resolve to "ask
+ * the phone", which is the same guess a fresh install makes and is right for most people. The
+ * strict-value rule is the one the two marks above follow, for the same reason — a value read
+ * loosely is a setting that changes itself.
+ *
+ * A failed read is not cached, so the next caller retries the disk rather than inheriting a guess
+ * for the session. There is no three-valued `peek` beside it: nothing here draws a screen from the
+ * *absence* of a language, and one frame of English on a phone whose disk stumbled costs a redraw.
+ */
+export async function getLanguage(): Promise<AppLanguage> {
+  if (languageCache !== null) return languageCache
+  let raw: string | null
+  try {
+    raw = await AsyncStorage.getItem(KEY_LANGUAGE)
+  } catch {
+    // Cache stays null — a thrown read is not an answer.
+    return 'system'
+  }
+  languageCache = isAppLanguage(raw) ? raw : 'system'
+  return languageCache
+}
+
+/**
+ * Record the language choice. The cache is set before the write is awaited, as `markSetupSkipped`
+ * does and for the same reason: the caller's next act is to re-render the app in the new language,
+ * and a screen that reads this while the disk is still writing must see the choice, not the one
+ * before it.
+ */
+export async function saveLanguage(choice: AppLanguage): Promise<void> {
+  languageCache = choice
+  try {
+    await AsyncStorage.setItem(KEY_LANGUAGE, choice)
+  } catch {
+    // best-effort: the cost is one re-tap of a setting on the next launch
+  }
+}
+
 /** Test hook: drop the in-memory caches so a fresh read hits the (mocked) store. */
 export function __resetStoreCacheForTests(): void {
   onboardedCache = null
@@ -344,4 +401,5 @@ export function __resetStoreCacheForTests(): void {
   baseUrlCache = undefined
   newsUrlCache = undefined
   newsUrlPendingCache = null
+  languageCache = null
 }

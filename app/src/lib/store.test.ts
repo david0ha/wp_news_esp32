@@ -7,6 +7,7 @@ import {
   clearNewsUrlPending,
   clearSetupSkipped,
   getDeviceBaseUrl,
+  getLanguage,
   getNewsUrl,
   isNewsUrlPending,
   isOnboardingComplete,
@@ -15,6 +16,7 @@ import {
   markSetupSkipped,
   peekDeviceBaseUrl,
   peekNewsUrl,
+  saveLanguage,
   saveNewsUrl,
   setDeviceBaseUrl,
 } from './store'
@@ -340,6 +342,48 @@ describe('persisted key strings', () => {
   it('writes the skip mark under claudepost.setupSkipped', async () => {
     await markSetupSkipped()
     expect(await AsyncStorage.getItem('claudepost.setupSkipped')).toBe('1')
+  })
+
+  it('writes the language choice under claudepost.language', async () => {
+    await saveLanguage('ko')
+    expect(await AsyncStorage.getItem('claudepost.language')).toBe('ko')
+  })
+})
+
+describe('app language', () => {
+  it('defaults to system with nothing stored', async () => {
+    expect(await getLanguage()).toBe('system')
+  })
+
+  it('round-trips a choice', async () => {
+    await saveLanguage('ko')
+    __resetStoreCacheForTests()
+    expect(await getLanguage()).toBe('ko')
+  })
+
+  it('reads back through the cache before the disk has been asked again', async () => {
+    // The setter fills the cache before its write is awaited, because the caller's next act is to
+    // redraw the app in the new language.
+    await saveLanguage('en')
+    expect(await getLanguage()).toBe('en')
+  })
+
+  // A value this build does not recognise is a setting from another version of the app, or
+  // something that was never written here at all. Reading it loosely would let an unknown string
+  // decide the language — or, worse, become one by being handed straight to the resolver. Falling
+  // to `system` asks the phone, which is what a fresh install does and is right for most people.
+  it.each(['korean', 'KO', '', 'ko-KR', 'fr'])('treats %p as system', async (stored) => {
+    await AsyncStorage.setItem('claudepost.language', stored)
+    expect(await getLanguage()).toBe('system')
+  })
+
+  it('retries after a rejecting read', async () => {
+    await saveLanguage('ko')
+    __resetStoreCacheForTests()
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk is having a moment'))
+
+    expect(await getLanguage()).toBe('system')
+    expect(await getLanguage()).toBe('ko')
   })
 })
 

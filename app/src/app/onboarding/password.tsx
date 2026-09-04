@@ -20,32 +20,40 @@ import { parseOnboardingFlow, wizardStepHref } from '../../onboarding/flow'
 import { esp32, Esp32Error } from '../../lib/esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
 import { clearNewsUrlPending, saveNewsUrl } from '../../lib/store'
+import { fill, strings, useStrings } from '../../i18n'
 import { colors, fonts, layout, radius } from '../../theme'
 
 // Map a provisioning failure to a short, user-facing reason.
+//
+// It reads the catalogue through `strings()` rather than a hook because it is a plain function
+// outside the component, and it reads it *inside* the call rather than capturing a table at module
+// scope: the language can change between this module being imported and this function being run,
+// and a captured table would go on answering in the language the app started in.
 function failureMessage(e: unknown): string {
+  const errors = strings().onboarding.password.errors
   if (e instanceof Esp32Error) {
     switch (e.code) {
       case 'network_error':
-        return 'Lost connection to the board. Make sure you’re still on its setup Wi-Fi.'
+        return errors.network
       case 'pass_too_long':
-        return 'That password is too long (max 64 characters).'
+        return errors.passTooLong
       case 'ssid_empty':
       case 'ssid_too_long':
-        return 'Please check the Wi-Fi name and try again.'
+        return errors.ssid
       case 'news_url_invalid':
-        return 'The board rejected the snapshot URL. Go back and check it.'
+        return errors.newsUrl
       case 'too_large':
-        return 'That was too much for the board to accept. Shorten the snapshot URL and try again.'
+        return errors.tooLarge
       default:
-        return 'Something went wrong sending your settings. Please try again.'
+        return errors.provision
     }
   }
-  return 'Something went wrong. Please try again.'
+  return errors.unknown
 }
 
 export default function Password() {
   const router = useRouter()
+  const s = useStrings()
   // Read only to be handed onward — this screen hand-rolls its chrome and offers no flow-dependent
   // control (see the plan's "explicitly out of scope": no SKIP here, Back already reaches wifi-list,
   // which has one). It still carries the flow into complete, because the rule is every forward move
@@ -120,8 +128,8 @@ export default function Password() {
     } else if (result.outcome === 'failed') {
       setError(
         result.reason === 'auth_failed'
-          ? 'That password didn’t work. Please check it and try again.'
-          : 'The board couldn’t join that network. Please try again.',
+          ? s.onboarding.password.errors.authFailed
+          : s.onboarding.password.errors.joinFailed,
       )
     } else {
       // 'timeout': on a single-radio board a SUCCESSFUL join hops the SoftAP onto the home AP's
@@ -141,19 +149,19 @@ export default function Password() {
       >
         <View style={styles.titleRow}>
           <BackButton onPress={() => router.back()} />
-          <Text style={styles.title}>Connect Wi-Fi</Text>
+          <Text style={styles.title}>{s.onboarding.password.title}</Text>
           <View style={styles.backSpacer} />
         </View>
 
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           {isManualSsid ? (
             <View style={styles.field}>
-              <Text style={styles.label}>Network name (SSID)</Text>
+              <Text style={styles.label}>{s.onboarding.password.ssidLabel}</Text>
               <View style={styles.inputRow}>
                 <TextInput
                   value={manualSsid}
                   onChangeText={setManualSsid}
-                  placeholder="My Home Wi-Fi"
+                  placeholder={s.onboarding.password.ssidPlaceholder}
                   placeholderTextColor={colors.textFaint}
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -163,16 +171,22 @@ export default function Password() {
               </View>
             </View>
           ) : (
-            <Text style={styles.kicker}>Enter the password for {selectedNetwork}</Text>
+            <Text style={styles.kicker}>
+              {fill(s.onboarding.password.kicker, { ssid: selectedNetwork })}
+            </Text>
           )}
 
           <View style={styles.field}>
-            <Text style={styles.label}>Password</Text>
+            <Text style={styles.label}>{s.onboarding.password.passwordLabel}</Text>
             <View style={styles.inputRow}>
               <TextInput
                 value={password}
                 onChangeText={setPassword}
-                placeholder={selectedSecured === false ? '(open network — none needed)' : 'password'}
+                placeholder={
+                  selectedSecured === false
+                    ? s.onboarding.password.openNetwork
+                    : s.onboarding.password.passwordPlaceholder
+                }
                 placeholderTextColor={colors.textFaint}
                 secureTextEntry={!reveal}
                 autoCapitalize="none"
@@ -180,7 +194,11 @@ export default function Password() {
                 editable={!pending}
                 style={styles.input}
               />
-              <Pressable accessibilityLabel="Toggle password visibility" onPress={() => setReveal((r) => !r)} hitSlop={8}>
+              <Pressable
+                accessibilityLabel={s.onboarding.password.toggleReveal}
+                onPress={() => setReveal((r) => !r)}
+                hitSlop={8}
+              >
                 <Ionicons name={reveal ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.textDim} />
               </Pressable>
             </View>
@@ -190,13 +208,14 @@ export default function Password() {
               the last chance to go back and change it. */}
           <Text style={styles.hint}>
             {newsUrl.trim()
-              ? `Once connected, the board will fetch ${newsUrl.trim()}.`
-              : 'No snapshot URL set — the board will show its built-in demo data. You can add an address later from Settings.'}
+              ? fill(s.onboarding.password.fetchHint, { url: newsUrl.trim() })
+              : s.onboarding.password.noUrlHint}
           </Text>
 
           {pending ? (
             <Text style={styles.status}>
-              <ActivityIndicator color={colors.accent} /> Connecting to {ssid}… this can take up to a minute.
+              <ActivityIndicator color={colors.accent} />{' '}
+              {fill(s.onboarding.password.connecting, { ssid: ssid ?? '' })}
             </Text>
           ) : error ? (
             <Text style={styles.error}>{error}</Text>
@@ -204,7 +223,7 @@ export default function Password() {
         </ScrollView>
 
         <View style={styles.ctaWrap}>
-          <Button label="JOIN" onPress={join} disabled={!enabled} loading={pending} />
+          <Button label={s.onboarding.password.join} onPress={join} disabled={!enabled} loading={pending} />
         </View>
       </KeyboardAvoidingView>
     </Screen>

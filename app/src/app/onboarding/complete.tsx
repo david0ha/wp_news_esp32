@@ -8,10 +8,12 @@ import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { useDevice } from '../../lib/device'
 import { markOnboardingComplete } from '../../lib/store'
 import { DEFAULT_BASE_URL } from '../../lib/discovery'
+import { fill, useStrings } from '../../i18n'
 import { colors, fonts, layout } from '../../theme'
 
 export default function Complete() {
   const router = useRouter()
+  const s = useStrings()
   const { deviceInfo, selectedNetwork, reset } = useOnboarding()
   const { setBaseUrl } = useDevice()
   const [busy, setBusy] = useState(false)
@@ -89,19 +91,20 @@ export default function Complete() {
     <Screen aurora style={styles.screen}>
       <View style={styles.center}>
         <IconBadge name="checkmark-circle" size={56} />
-        <Text style={styles.title}>Setup complete</Text>
+        <Text style={styles.title}>{s.onboarding.complete.title}</Text>
         <Text style={styles.subtitle}>
           {selectedNetwork
-            ? `Your board is connected to ‘${selectedNetwork}’.`
-            : 'Your board is connected.'}
+            ? fill(s.onboarding.complete.connectedTo, { ssid: selectedNetwork })
+            : s.onboarding.complete.connected}
         </Text>
-        <Text style={styles.guidance}>
-          Reconnect your phone to that same Wi-Fi network, then tap Open the Board to control your
-          board over the local network.
-        </Text>
+        <Text style={styles.guidance}>{s.onboarding.complete.guidance}</Text>
       </View>
 
-      <Button label={busy ? 'OPENING…' : 'OPEN THE BOARD'} onPress={getStarted} loading={busy} />
+      <Button
+        label={busy ? s.onboarding.complete.ctaBusy : s.onboarding.complete.cta}
+        onPress={getStarted}
+        loading={busy}
+      />
     </Screen>
   )
 }

@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
+import { en } from '../i18n/en'
 import { Esp32Error, humanError } from './esp32'
 import {
   decideNewsUrlSave,
@@ -418,10 +419,19 @@ describe('the screens are wired to the rules', () => {
   })
 
   it('settings offers the board-less phone the reader’s sentence, on `=== false` and not on falsiness', () => {
-    const src = read('src/app/(tabs)/settings.tsx')
-    expect(src).toMatch(/Today reads from this address\. A board you set up later will get it too\./)
-    expect(src).toMatch(/Not yet on the board — it will be sent the next time this app reaches it\./)
-    expect(src).toMatch(/hasBoard === false/)
+    // Both sentences moved into the string catalogue when the app learned a second language, so
+    // this now pins the two halves separately: the *wording* against `en.ts`, and the *branch* —
+    // including which key each arm reaches for — against the screen. Either half alone would pass
+    // a screen that reads perfectly and says the wrong thing to the wrong phone.
+    expect(en.settings.news.pendingNoBoard).toMatch(
+      /Today reads from this address\. A board you set up later will get it too\./,
+    )
+    expect(en.settings.news.pendingWithBoard).toMatch(
+      /Not yet on the board — it will be sent the next time this app reaches it\./,
+    )
+    expect(read('src/app/(tabs)/settings.tsx')).toMatch(
+      /hasBoard === false \? s\.settings\.news\.pendingNoBoard : s\.settings\.news\.pendingWithBoard/,
+    )
   })
 
   it('settings.tsx decides a save by the rule, and waits for the wire first', () => {

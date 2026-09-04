@@ -21,11 +21,13 @@ import { useDevice } from '../lib/device'
 import { DEFAULT_HOST, discoverDevice } from '../lib/discovery'
 import { isSetupSkipped } from '../lib/store'
 import { wizardEntryHref } from '../onboarding/flow'
+import { useStrings } from '../i18n'
 import { colors, layout, space, type } from '../theme'
 
 export function NoBoardYet() {
   const router = useRouter()
   const { setBaseUrl } = useDevice()
+  const s = useStrings()
 
   // Null until storage answers, and the reason this is not simply `false` to start is the same one
   // that makes `hasDevice` tri-state: rendering the "you set this aside" sentence and then taking
@@ -63,7 +65,7 @@ export function NoBoardYet() {
       // message at all: the provider flips `hasDevice`, the screen above swaps to the real board,
       // and a toast about it would be announcing something the user is already looking at.
       if (found !== null && (await setBaseUrl(found))) return
-      setProbeMessage('Couldn’t find a board on this Wi-Fi.')
+      setProbeMessage(s.noBoard.notFound)
     } finally {
       setProbing(false)
     }
@@ -72,20 +74,15 @@ export function NoBoardYet() {
   return (
     <View style={styles.empty}>
       <IconBadge name="hardware-chip" />
-      <Text style={styles.emptyTitle}>No board yet</Text>
-      <Text style={styles.emptyBody}>
-        Claude Post prints one company a day on a 13.3-inch e-paper sheet. Your watchlist, charts
-        and ticker search all work without one.
-      </Text>
+      <Text style={styles.emptyTitle}>{s.noBoard.title}</Text>
+      <Text style={styles.emptyBody}>{s.noBoard.body}</Text>
       {/* Its own Text rather than another sentence inside the paragraph above: appended, it would
           re-wrap the whole paragraph the moment storage answers, and the visible effect of that is
           the body silently jumping a line under the reader's eyes. */}
-      {skipped === true ? (
-        <Text style={styles.emptyBody}>You set this aside earlier — it’s still here when you want it.</Text>
-      ) : null}
-      <Button label="Set up my board" onPress={() => router.push(wizardEntryHref('setup'))} />
+      {skipped === true ? <Text style={styles.emptyBody}>{s.noBoard.setAside}</Text> : null}
+      <Button label={s.actions.setUpMyBoard} onPress={() => router.push(wizardEntryHref('setup'))} />
       <Button
-        label="I already have one on this network"
+        label={s.noBoard.alreadyHaveOne}
         variant="ghost"
         loading={probing}
         onPress={() => void findBoard()}

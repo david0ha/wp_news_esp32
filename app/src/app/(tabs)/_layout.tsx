@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+import { useStrings } from '../../i18n'
 import { colors, fonts } from '../../theme'
 
 /**
@@ -18,6 +19,7 @@ import { colors, fonts } from '../../theme'
  * it is the tab that has content on every phone — so the default is left alone.
  */
 export default function TabsLayout() {
+  const s = useStrings()
   return (
     <Tabs
       screenOptions={{
@@ -31,7 +33,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="edition"
         options={{
-          title: 'Today',
+          title: s.tabs.today,
           tabBarIcon: ({ focused, color, size }) => (
             <Ionicons name={focused ? 'today' : 'today-outline'} size={size} color={color} />
           ),
@@ -40,7 +42,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="board"
         options={{
-          title: 'Board',
+          title: s.tabs.board,
           tabBarIcon: ({ focused, color, size }) => (
             <Ionicons name={focused ? 'newspaper' : 'newspaper-outline'} size={size} color={color} />
           ),
@@ -49,7 +51,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="markets"
         options={{
-          title: 'Markets',
+          title: s.tabs.markets,
           tabBarIcon: ({ color, size }) => (
             // trending-up has no separate filled variant; the tint alone marks focus.
             <Ionicons name="trending-up" size={size} color={color} />
@@ -59,7 +61,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="settings"
         options={{
-          title: 'Settings',
+          title: s.tabs.settings,
           tabBarIcon: ({ focused, color, size }) => (
             <Ionicons name={focused ? 'settings' : 'settings-outline'} size={size} color={color} />
           ),
