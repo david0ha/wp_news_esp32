@@ -35,6 +35,21 @@
 // Storing one where the other was meant would make a Korean reader's English edition unreadable,
 // or redraw the app every time the desk changed what it files.
 //
+// And a sixth, which reaches past the LAN:
+//
+//   - `claudepost.deskBaseUrl`       The desk's own control address, e.g. `https://…`.
+//
+// It is NOT `claudepost.newsUrl`. That one is a whole URL to one document on the desk's open
+// device plane (`/news.json`, no credential), read by the Today tab and polled by the board; this
+// one is the base of the desk's authenticated control plane, where the phone reads and sets what
+// language the paper is written in (`desk.ts`). A phone can perfectly well have one and not the
+// other, which is why they are two keys: the reader works with no token at all, and somebody who
+// only reads the paper never has to hold one.
+//
+// The credential that goes with this address is deliberately NOT here. AsyncStorage is a plain
+// file in the app's container; the operator token lives in the keychain, in `deskToken.ts`, and
+// this file must never learn it.
+//
 // **The key strings are load-bearing.** Every install already on TestFlight carries the first two
 // under exactly these names; renaming one is not a refactor, it is a silent re-onboarding of every
 // shipped phone — the app wakes up believing nobody ever set a board up. `store.test.ts` pins all
@@ -74,6 +89,7 @@ const KEY_SETUP_SKIPPED = 'claudepost.setupSkipped'
 const KEY_NEWS_URL = 'claudepost.newsUrl'
 const KEY_NEWS_URL_PENDING = 'claudepost.newsUrlPending'
 const KEY_LANGUAGE = 'claudepost.language'
+const KEY_DESK_BASE_URL = 'claudepost.deskBaseUrl'
 
 const SKIP_MARK = '1'
 const PENDING_MARK = '1'
@@ -84,6 +100,7 @@ let baseUrlCache: string | null | undefined // undefined = not yet read
 let newsUrlCache: string | null | undefined // undefined = not yet read
 let newsUrlPendingCache: boolean | null = null
 let languageCache: AppLanguage | null = null
+let deskBaseUrlCache: string | null | undefined // undefined = not yet read
 
 /**
  * How long to keep asking the disk, in milliseconds between attempts — four tries in under a
@@ -394,6 +411,46 @@ export async function saveLanguage(choice: AppLanguage): Promise<void> {
   }
 }
 
+/**
+ * The desk's control address — where `desk.ts` sends its authenticated calls. `null` for "nothing
+ * saved", and for a read that threw; a failed read is not cached, so the next caller asks again.
+ *
+ * There is no three-valued `peek` beside it, unlike the board's address. Nothing decides a fact
+ * about the user from the absence of a desk: the Desk section draws its fields empty and disables
+ * one selector, which is the same thing it does for the majority of phones, who have no desk at all.
+ */
+export async function getDeskBaseUrl(): Promise<string | null> {
+  if (deskBaseUrlCache !== undefined) return deskBaseUrlCache
+  try {
+    deskBaseUrlCache = await AsyncStorage.getItem(KEY_DESK_BASE_URL)
+  } catch {
+    // Cache stays undefined — a thrown read is not an answer.
+    return null
+  }
+  return deskBaseUrlCache
+}
+
+/**
+ * Persist a desk address, normalized. Invalid input is ignored (returns false).
+ *
+ * `normalizeBaseUrl` strips the path and any trailing slash and keeps the scheme that was typed,
+ * which is what this needs: a desk on the public internet must be `https://` for iOS's ATS to
+ * allow it at all, while a desk running on the operator's own Mac is plain `http://` on the LAN.
+ * Defaulting either way would be wrong for the other, so the scheme stays the operator's to type
+ * and the placeholder shows the shape.
+ */
+export async function saveDeskBaseUrl(url: string): Promise<boolean> {
+  const norm = normalizeBaseUrl(url)
+  if (!norm.ok || !norm.value) return false
+  deskBaseUrlCache = norm.value
+  try {
+    await AsyncStorage.setItem(KEY_DESK_BASE_URL, norm.value)
+  } catch {
+    // best-effort: the cost is re-entering one address
+  }
+  return true
+}
+
 /** Test hook: drop the in-memory caches so a fresh read hits the (mocked) store. */
 export function __resetStoreCacheForTests(): void {
   onboardedCache = null
@@ -402,4 +459,5 @@ export function __resetStoreCacheForTests(): void {
   newsUrlCache = undefined
   newsUrlPendingCache = null
   languageCache = null
+  deskBaseUrlCache = undefined
 }

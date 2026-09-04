@@ -18,7 +18,22 @@ import { SegmentedControl } from '../../components/SegmentedControl'
 import { useDevice } from '../../lib/device'
 import { humanError, type DeviceInfo, type DeviceState } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
-import { clearNewsUrlPending, getDeviceBaseUrl, getNewsUrl, isNewsUrlPending, saveNewsUrl } from '../../lib/store'
+import {
+  clearNewsUrlPending,
+  getDeskBaseUrl,
+  getDeviceBaseUrl,
+  getNewsUrl,
+  isNewsUrlPending,
+  saveDeskBaseUrl,
+  saveNewsUrl,
+} from '../../lib/store'
+import {
+  createDeskClient,
+  deskLanguageView,
+  EDITION_LANGUAGES,
+  humanDeskError,
+} from '../../lib/desk'
+import { clearDeskToken, getDeskToken, saveDeskToken } from '../../lib/deskToken'
 import {
   decideNewsUrlSave,
   settleNewsUrlSync,
@@ -412,17 +427,29 @@ export default function Settings() {
           </Section>
 
           {/*
-            The app's own language, and nothing else's. It sits last because it is the only section
-            on this screen that changes nothing about the board — a phone with no hardware still
-            has a language, and somebody who came here to fix a connection should not meet a
-            language picker first. The help line under it says what this does NOT cover, because
-            "App language" beside an edition written in Korean is otherwise a fair thing to
-            misread: the edition's language travels with the edition, and the desk sets it.
+            The app's own language, and nothing else's. It sits below everything about the board
+            because it changes nothing about one — a phone with no hardware still has a language,
+            and somebody who came here to fix a connection should not meet a language picker first.
+            The help line under it says what this does NOT cover, because "App language" beside an
+            edition written in Korean is otherwise a fair thing to misread: the edition's language
+            travels with the edition, and the desk sets it.
+
+            The Desk section below is the other half of that sentence, and the two are adjacent on
+            purpose: "App language" and "Edition language" are only telling apart if a reader can
+            see both at once.
           */}
           <Section title={s.settings.sections.language}>
             <Text style={styles.help}>{s.settings.language.help}</Text>
             <LanguagePicker />
           </Section>
+
+          {/*
+            The desk. Last, because it is the only section on this screen that reaches past the LAN
+            and the only one most owners never touch: a phone that just reads the paper needs an
+            edition URL and no credential at all. What is here is what an OWNER can do that nobody
+            else can — say what language their newspaper is written in.
+          */}
+          <DeskSection />
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
@@ -469,6 +496,230 @@ function LanguagePicker() {
       selectedIndex={APP_LANGUAGES.indexOf(choice)}
       onChange={(i) => void set(APP_LANGUAGES[i])}
     />
+  )
+}
+
+/** A sentence and the voice it is said in — the three this screen already draws. */
+type Toned = { tone: 'ok' | 'info' | 'error'; message: string }
+
+/**
+ * The desk: its address, an operator token, and the language the NEWSPAPER is written in.
+ *
+ * This is the app's first authenticated call to anything (`lib/desk.ts`). Everything else the app
+ * does with a desk goes through the open device plane — `/news.json` and its tiles, no credential —
+ * so the token here is not "the app's login". It is the operator's own, pasted in by the person who
+ * runs the desk, and it buys exactly one thing today: `PUT /api/settings`.
+ *
+ * THE TOKEN IS NEVER DRAWN BACK. It goes to the keychain (`deskToken.ts`), the field is emptied on
+ * save, and the section then says only that one is held. A screen that refilled the field with the
+ * secret would put it in every screenshot and every shoulder's view for the sake of confirming
+ * something the sentence already confirms. Replacing it means typing a new one; there is a Forget
+ * for the phone that is being handed on.
+ *
+ * The address is not a secret and is prefilled, like every other address on this screen.
+ */
+function DeskSection() {
+  const s = useStrings()
+  // What is SAVED, both of them. The drafts beside them are what is being typed.
+  const [address, setAddress] = useState<string | null>(null)
+  const [addressDraft, setAddressDraft] = useState('')
+  const [addressMsg, setAddressMsg] = useState<Toned | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  const [tokenDraft, setTokenDraft] = useState('')
+  const [tokenMsg, setTokenMsg] = useState<Toned | null>(null)
+  // What the desk says it is set to — `null` until it has answered, and again if it stops
+  // answering. Never a guessed default: see `desk.ts`'s `settingsOf`.
+  const [lang, setLang] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [langMsg, setLangMsg] = useState<Toned | null>(null)
+
+  // Read both once, on mount rather than on focus. Neither changes behind this screen's back —
+  // this is the only place in the app that writes either — so re-reading on every focus would be
+  // two storage reads to learn what the component already holds, and would fight the drafts.
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const [saved, held] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+      if (!active) return
+      setAddress(saved)
+      setAddressDraft(saved ?? '')
+      setToken(held)
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // Ask the desk what it is set to, whenever there is an address and a token to ask with. Both
+  // arms matter: losing either (a forgotten token) has to clear the language too, or the selector
+  // would go on showing a live answer next to a control that can no longer change it.
+  useEffect(() => {
+    if (!address || !token) {
+      setLang(null)
+      return
+    }
+    let active = true
+    setBusy(true)
+    setLangMsg(null)
+    void (async () => {
+      try {
+        const settings = await createDeskClient({ baseUrl: address, token }).getSettings()
+        if (active) setLang(settings.lang)
+      } catch (e) {
+        if (!active) return
+        setLang(null)
+        setLangMsg({ tone: 'error', message: humanDeskError(e) })
+      } finally {
+        if (active) setBusy(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [address, token])
+
+  const applyAddress = async () => {
+    setAddressMsg(null)
+    if (!(await saveDeskBaseUrl(addressDraft))) {
+      setAddressMsg({ tone: 'error', message: s.settings.desk.addressInvalid })
+      return
+    }
+    // Read back rather than trusting the draft: the store normalizes (it drops a trailing slash
+    // and any path), and the field should show what will actually be called.
+    const saved = await getDeskBaseUrl()
+    setAddress(saved)
+    setAddressDraft(saved ?? '')
+    setAddressMsg({ tone: 'ok', message: s.settings.desk.addressSaved })
+  }
+
+  const applyToken = async () => {
+    setTokenMsg(null)
+    const typed = tokenDraft.trim()
+    if (!(await saveDeskToken(typed))) {
+      setTokenMsg({ tone: 'error', message: s.settings.desk.tokenNotSaved })
+      return
+    }
+    setToken(typed)
+    setTokenDraft('')
+    setTokenMsg({ tone: 'ok', message: s.settings.desk.tokenSaved })
+  }
+
+  const forgetToken = async () => {
+    await clearDeskToken()
+    setToken(null)
+    setTokenDraft('')
+    setTokenMsg(null)
+    setLangMsg(null)
+  }
+
+  // Write the language, then draw WHAT THE DESK PUT IN FORCE rather than what was asked for. A
+  // failure leaves the selector where it was, which is the truth: the desk did not change.
+  const chooseLanguage = async (next: string) => {
+    if (!address || !token || next === lang) return
+    setBusy(true)
+    setLangMsg(null)
+    try {
+      const settings = await createDeskClient({ baseUrl: address, token }).putSettings({
+        lang: next,
+      })
+      setLang(settings.lang)
+      setLangMsg({ tone: 'ok', message: s.settings.desk.languageSaved })
+    } catch (e) {
+      setLangMsg({ tone: 'error', message: humanDeskError(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const view = deskLanguageView({ address, token, lang, busy })
+  const toneStyle = { ok: styles.saved, info: styles.help, error: styles.error } as const
+  const note =
+    view.note === 'needs_setup'
+      ? s.settings.desk.needsSetup
+      : view.note === 'unsupported'
+        ? fill(s.settings.desk.unsupported, { lang: lang ?? '' })
+        : null
+
+  return (
+    <Section title={s.settings.sections.desk}>
+      <Text style={styles.help}>{s.settings.desk.help}</Text>
+
+      <View style={styles.field}>
+        <View style={styles.hostRow}>
+          <TextInput
+            value={addressDraft}
+            onChangeText={(t) => {
+              setAddressDraft(t)
+              setAddressMsg(null)
+            }}
+            // The shape of an address, not a sentence: the same characters in every language, so
+            // it is a literal here rather than a catalogue entry that can be mistranslated.
+            placeholder="https://…"
+            placeholderTextColor={colors.textFaint}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            style={styles.hostInput}
+            onSubmitEditing={applyAddress}
+          />
+        </View>
+        {addressMsg ? <Text style={toneStyle[addressMsg.tone]}>{addressMsg.message}</Text> : null}
+        <Button
+          label={s.settings.desk.saveAddress}
+          variant="secondary"
+          disabled={!addressDraft.trim() || addressDraft.trim() === (address ?? '')}
+          onPress={applyAddress}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <View style={styles.hostRow}>
+          <TextInput
+            value={tokenDraft}
+            onChangeText={(t) => {
+              setTokenDraft(t)
+              setTokenMsg(null)
+            }}
+            placeholder={s.settings.desk.tokenPlaceholder}
+            placeholderTextColor={colors.textFaint}
+            // A credential: masked, and deliberately invisible to the platform's password
+            // manager. `textContentType="none"` with autofill off is what keeps iOS from
+            // treating this as a login field — there is no account here to save a password
+            // against, and its offer to do so would file the desk's token under a domain the
+            // app never authenticates to.
+            secureTextEntry
+            textContentType="none"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.hostInput}
+            onSubmitEditing={applyToken}
+          />
+        </View>
+        {tokenMsg ? <Text style={toneStyle[tokenMsg.tone]}>{tokenMsg.message}</Text> : null}
+        {token && !tokenMsg ? <Text style={styles.help}>{s.settings.desk.tokenHeld}</Text> : null}
+        <Button
+          label={s.settings.desk.saveToken}
+          variant="secondary"
+          disabled={!tokenDraft.trim()}
+          onPress={applyToken}
+        />
+        {token ? (
+          <Button label={s.settings.desk.forgetToken} variant="ghost" onPress={forgetToken} />
+        ) : null}
+      </View>
+
+      <Text style={styles.deskLabel}>{s.settings.desk.editionLanguage}</Text>
+      <Text style={styles.help}>{s.settings.desk.editionHelp}</Text>
+      <SegmentedControl
+        segments={[s.settings.language.english, s.settings.language.korean]}
+        selectedIndex={view.selectedIndex}
+        disabled={view.disabled}
+        onChange={(i) => void chooseLanguage(EDITION_LANGUAGES[i])}
+      />
+      {note ? <Text style={styles.help}>{note}</Text> : null}
+      {langMsg ? <Text style={toneStyle[langMsg.tone]}>{langMsg.message}</Text> : null}
+    </Section>
   )
 }
 
@@ -611,6 +862,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textFaint,
     lineHeight: 18,
+  },
+  // A label for a control inside a section, one step down from `sectionTitle`. The Desk section is
+  // the only one with two subjects under one heading — the desk itself, and what it writes in — so
+  // it is the only one that needs one.
+  deskLabel: {
+    fontFamily: fonts.semibold,
+    fontSize: 14,
+    color: colors.text,
   },
   field: {
     gap: 8,

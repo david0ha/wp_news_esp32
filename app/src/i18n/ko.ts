@@ -40,6 +40,7 @@ export const ko: Strings = {
       connection: '연결',
       setup: '초기 설정',
       language: '앱 언어',
+      desk: '데스크',
     },
     board: {
       none: '이 휴대폰에 설정된 보드가 없습니다.',
@@ -93,6 +94,24 @@ export const ko: Strings = {
       system: '시스템',
       english: 'English',
       korean: '한국어',
+    },
+    desk: {
+      help: '신문을 만드는 데스크입니다. 데스크 주소와 본인의 operator 토큰을 입력하면, 이 휴대폰에서 신문을 어떤 언어로 쓸지 정할 수 있습니다.',
+      saveAddress: '데스크 주소 저장',
+      addressSaved: '저장했습니다.',
+      addressInvalid: '데스크 주소 형식이 아닙니다. 데스크가 이 Wi-Fi에 있지 않다면 https:// 로 시작해야 합니다.',
+      tokenPlaceholder: 'operator 토큰',
+      saveToken: '토큰 저장',
+      tokenSaved: '이 휴대폰의 키체인에 저장했습니다. 다시 표시되지 않으며, 바꾸려면 새 토큰을 저장하세요.',
+      tokenHeld: '이 휴대폰에 토큰이 저장되어 있습니다.',
+      tokenNotSaved: '이 휴대폰의 키체인이 토큰을 저장하지 못했습니다. 잠금을 해제한 뒤 다시 시도하세요.',
+      forgetToken: '토큰 지우기',
+      editionLanguage: '에디션 언어',
+      editionHelp:
+        '신문 자체를 쓰는 언어입니다. 헤드라인, 본문, 사진 설명, 도표의 항목 이름이 모두 이 언어로 작성됩니다. 위의 앱 언어는 이 앱 화면에만 적용됩니다.',
+      needsSetup: '이 설정을 바꾸려면 데스크 주소와 operator 토큰을 입력하세요.',
+      unsupported: '데스크가 이 앱에서 제공하지 않는 언어({lang})로 설정되어 있습니다. 위에서 하나를 고르면 그 언어로 바뀝니다.',
+      languageSaved: '데스크가 다음 에디션부터 이 언어로 작성합니다.',
     },
   },
 
@@ -287,6 +306,16 @@ export const ko: Strings = {
       badJson:
         '에디션을 해석하지 못했습니다. 데스크가 발행 중일 수 있으니 잠시 뒤 당겨서 새로고침하세요.',
       unknown: '에디션을 읽는 중 문제가 발생했습니다.',
+    },
+    desk: {
+      unauthorized:
+        '데스크가 이 토큰을 받아들이지 않았습니다. 신문 언어를 바꾸려면 operator 토큰이 필요합니다. producer 토큰으로는 설정을 읽을 수만 있습니다.',
+      transport: '데스크에 연결하지 못했습니다. 주소와 네트워크 연결을 확인하세요.',
+      http: '데스크가 오류로 응답했습니다.',
+      httpStatus: '데스크가 {status} 오류로 응답했습니다.',
+      refused: '데스크가 받아들이지 않았습니다: {detail}',
+      badJson: '그 주소는 응답했지만 데스크의 응답이 아닙니다. 주소를 확인한 뒤 다시 시도하세요.',
+      unknown: '데스크와 통신하는 중 문제가 발생했습니다.',
     },
     market: {
       transport: 'Yahoo Finance에 연결하지 못했습니다. 네트워크 연결을 확인하세요.',

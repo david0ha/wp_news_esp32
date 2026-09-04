@@ -45,6 +45,7 @@ export const en = {
       connection: 'Connection',
       setup: 'Setup',
       language: 'App language',
+      desk: 'Desk',
     },
     board: {
       none: 'No board set up on this phone.',
@@ -99,9 +100,30 @@ export const en = {
       help: 'The language this app’s own screens are written in. An edition is written in whatever language the desk files it in.',
       system: 'System',
       // Endonyms: a language picker names every language in its own language, so these two are the
-      // same in every catalogue. They are the whole of the test's exemption list.
+      // same in every catalogue. They are the whole of the test's exemption list. The edition's
+      // language selector below reads the same two, for the same reason.
       english: 'English',
       korean: '한국어',
+    },
+    // The desk — the only section on this screen that talks to something that is not the board.
+    // Its own block so that a copy fix to the sections above cannot collide with it.
+    desk: {
+      help: 'The desk that writes your paper. Give it its address and an operator token of your own, and this phone can set what the newspaper is written in.',
+      saveAddress: 'Save desk address',
+      addressSaved: 'Saved.',
+      addressInvalid: 'That doesn’t look like a desk address. It should start with https:// unless the desk is on this Wi-Fi.',
+      tokenPlaceholder: 'Operator token',
+      saveToken: 'Save token',
+      tokenSaved: 'Saved to this phone’s keychain. It is never shown again — save a new one to replace it.',
+      tokenHeld: 'A token is saved on this phone.',
+      tokenNotSaved: 'This phone’s keychain wouldn’t store the token. Unlock the phone and try again.',
+      forgetToken: 'Forget token',
+      editionLanguage: 'Edition language',
+      editionHelp:
+        'The language the newspaper itself is written in — headlines, copy, captions and the figures’ labels. The app language above changes only this app’s own screens.',
+      needsSetup: 'Add the desk’s address and an operator token to change this.',
+      unsupported: 'The desk is set to a language this app doesn’t offer ({lang}). Choosing one above replaces it.',
+      languageSaved: 'The desk will write the next edition in this language.',
     },
   },
 
@@ -344,6 +366,19 @@ export const en = {
       badJson:
         'The edition didn’t parse. The desk may be mid-publish; pull to refresh in a minute.',
       unknown: 'Something went wrong reading the edition.',
+    },
+    // `desk.ts` — the desk's control plane, the one place the app sends a credential. `refused`
+    // quotes the desk's own `detail`, which is the only thing that says what was wrong with a
+    // setting it would not take.
+    desk: {
+      unauthorized:
+        'The desk didn’t accept that token. Changing the edition’s language needs an operator token — a producer one can read the setting but not change it.',
+      transport: 'Couldn’t reach the desk. Check the address and your connection.',
+      http: 'The desk answered with an error.',
+      httpStatus: 'The desk answered {status}.',
+      refused: 'The desk wouldn’t take that: {detail}',
+      badJson: 'That address answered, but not like a desk. Check it and try again.',
+      unknown: 'Something went wrong talking to the desk.',
     },
     // `market/types.ts` — Yahoo Finance. `crumb` is deliberately gentle: from EU IPs the cookie
     // bootstrap failing is a normal outcome and most of the tab keeps working.

@@ -6,6 +6,7 @@ import {
   clearNewsUrl,
   clearNewsUrlPending,
   clearSetupSkipped,
+  getDeskBaseUrl,
   getDeviceBaseUrl,
   getLanguage,
   getNewsUrl,
@@ -16,6 +17,7 @@ import {
   markSetupSkipped,
   peekDeviceBaseUrl,
   peekNewsUrl,
+  saveDeskBaseUrl,
   saveLanguage,
   saveNewsUrl,
   setDeviceBaseUrl,
@@ -347,6 +349,52 @@ describe('persisted key strings', () => {
   it('writes the language choice under claudepost.language', async () => {
     await saveLanguage('ko')
     expect(await AsyncStorage.getItem('claudepost.language')).toBe('ko')
+  })
+
+  it('writes the desk address under claudepost.deskBaseUrl, and no token beside it', async () => {
+    await saveDeskBaseUrl('https://desk.example.dev')
+    expect(await AsyncStorage.getItem('claudepost.deskBaseUrl')).toBe('https://desk.example.dev')
+    // The credential that goes with this address lives in the keychain (`deskToken.ts`). Nothing
+    // in AsyncStorage may hold it, and this file is where somebody would put it by reflex.
+    const keys = await AsyncStorage.getAllKeys()
+    expect(keys.filter((k) => /token|secret|password/i.test(k))).toEqual([])
+  })
+})
+
+describe('the desk address', () => {
+  it('is null when nothing is stored', async () => {
+    expect(await getDeskBaseUrl()).toBeNull()
+  })
+
+  it('normalizes before persisting and reads it back', async () => {
+    expect(await saveDeskBaseUrl('https://desk.example.dev/')).toBe(true)
+    __resetStoreCacheForTests()
+    expect(await getDeskBaseUrl()).toBe('https://desk.example.dev')
+  })
+
+  it('keeps the scheme that was typed, because a desk is not always on the LAN', async () => {
+    // The board's address defaults to `http://` and belongs to a machine on this Wi-Fi. A desk
+    // usually does not: on iOS, ATS refuses plain http to anything off the local network, so an
+    // https the operator typed has to survive being saved.
+    expect(await saveDeskBaseUrl('https://desk.example.dev')).toBe(true)
+    __resetStoreCacheForTests()
+    expect(await getDeskBaseUrl()).toBe('https://desk.example.dev')
+  })
+
+  it('rejects an address it cannot use and stores nothing', async () => {
+    expect(await saveDeskBaseUrl('not a url')).toBe(false)
+    expect(await saveDeskBaseUrl('')).toBe(false)
+    __resetStoreCacheForTests()
+    expect(await getDeskBaseUrl()).toBeNull()
+  })
+
+  it('retries after a rejecting read', async () => {
+    await saveDeskBaseUrl('https://desk.example.dev')
+    __resetStoreCacheForTests()
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk is having a moment'))
+
+    expect(await getDeskBaseUrl()).toBeNull()
+    expect(await getDeskBaseUrl()).toBe('https://desk.example.dev')
   })
 })
 
