@@ -64,10 +64,10 @@ import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# tools/ is where hangul.py lives. Running this file as a script already puts that
-# directory on sys.path, but the desk's gate invokes it by absolute path with a working
-# directory of its own, and a validator that only imports correctly when it is started
-# from the right place fails on the desk and nowhere else.
+# hangul.py sits beside this file, and every ordinary invocation already finds it: a script
+# run by path gets its own directory at sys.path[0], which is how the desk's gate runs this
+# one. The line below is for the invocation that does not — `python -m tools.mock_news_server`,
+# where sys.path[0] is the repository root instead and the bare import would fail.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hangul  # noqa: E402  (needs the sys.path line above)
@@ -1395,8 +1395,12 @@ def _length_check(where, text, cap, budget, soft):
             warning = (f"{where}: {measured} against PROMPT.md's {budget} — it fits the "
                        f"{cap}-byte field, but {soft}")
         else:
+            # "of measure" on the overshoot as well as on the count. A headline one syllable
+            # too long is two over, and a bare "2 over" invites the producer to delete two
+            # characters and file it again still over budget.
             return (f"{where}: {measured} against a budget of {budget}, "
-                    f"{n_chars - budget} over — the panel ellipsizes it mid-sentence"), None
+                    f"{n_chars - budget} of measure over — the panel ellipsizes it "
+                    f"mid-sentence"), None
 
     if n_bytes > cap - 1:
         # Only claim the budget was met when it actually was. A margin does not stop the payload,
@@ -1788,7 +1792,11 @@ def validate_payload(d, tiles_dir):
         # leaves out; being told the fonts carry "ASCII, Latin-1 and S_DATA_PUNCT only" would
         # read as "stop writing Korean", when the fix is to respell one word.
         if lang == "ko":
-            for c in [c for c in bad if hangul.is_syllable(c)]:
+            # One message per DISTINCT syllable, in the order it first appears. A word the
+            # producer used four times down a story is one thing to respell, and four
+            # identical lines about it add nothing to the report while burying whatever else
+            # the field got wrong. dict.fromkeys() is what keeps that order.
+            for c in dict.fromkeys(c for c in bad if hangul.is_syllable(c)):
                 problems.append(f"{where}: {c!r} (U+{ord(c):04X}) is a Hangul syllable outside "
                                 f"KS X 1001 — the faces carry the 2,350 완성형 syllables only; "
                                 f"respell it")

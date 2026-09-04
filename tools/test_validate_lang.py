@@ -28,6 +28,7 @@ loaded, mutated in memory and validated.
 
 import json
 import os
+import subprocess
 import sys
 import unittest
 
@@ -96,6 +97,21 @@ class Lang(unittest.TestCase):
         # And not ALSO as a generic undrawable character: one character, one message.
         self.assertEqual([p for p in problems if "undrawable" in p], [])
 
+    def test_a_repeated_out_of_set_syllable_is_named_once(self):
+        """A word the producer used four times down a story is one thing to respell."""
+        d = self.payload(lang="ko")
+        d["stories"][0]["headline"] = "뷁뷁뷁뷁"
+        problems, _ = M.validate_payload(d, TILES)
+        self.assertEqual(len([p for p in problems if "KS X 1001" in p]), 1, problems)
+
+    def test_distinct_out_of_set_syllables_are_each_named_in_order(self):
+        d = self.payload(lang="ko")
+        d["stories"][0]["headline"] = "뷁뷀뷁"
+        named = [p for p in M.validate_payload(d, TILES)[0] if "KS X 1001" in p]
+        self.assertEqual(len(named), 2, named)
+        self.assertIn("U+BDC1", named[0])
+        self.assertIn("U+BDC0", named[1])
+
     def test_the_jamo_and_the_cjk_punctuation_are_drawable_in_korean(self):
         """The other two thirds of DRAWABLE_KO, which no Korean sentence needs and
         a headline quoting a title or naming a consonant does."""
@@ -119,6 +135,15 @@ class Lang(unittest.TestCase):
         problems, _ = M.validate_payload(d, TILES)
         said = [p for p in problems if "headline" in p]
         self.assertTrue(said and "37 Hangul syllables" in said[0], problems)
+
+    def test_the_overshoot_is_stated_in_the_same_unit_as_the_count(self):
+        """One syllable too many is two of measure over. A bare "2 over" invites the
+        producer to delete two characters and file it again still over budget."""
+        d = self.payload(lang="ko")
+        d["stories"][0]["headline"] = "가" * 37
+        said = [p for p in M.validate_payload(d, TILES)[0] if "headline" in p]
+        self.assertTrue(said, "no headline problem at all")
+        self.assertIn("2 of measure over", said[0])
 
     def test_a_latin_field_still_reports_a_plain_character_count(self):
         """No parenthetical where there are no syllables to explain."""
@@ -150,6 +175,23 @@ class Lang(unittest.TestCase):
         problems, warnings = M.validate_payload(d, TILES)
         self.assertEqual(problems, [])
         self.assertEqual(warnings, [])
+
+
+class Invocation(unittest.TestCase):
+    """The `sys.path` line at the top of mock_news_server.py, held to what it claims.
+
+    Every other way of starting the validator finds `hangul` on its own: a script run by
+    path gets its own directory at `sys.path[0]`, and an importer had to put `tools/` on
+    the path to import the module at all. `python -m` is the one that does not, and a
+    comment saying so is worth exactly as much as the check under it.
+    """
+
+    def test_python_dash_m_finds_hangul(self):
+        run = subprocess.run(
+            [sys.executable, "-m", "tools.mock_news_server",
+             "--validate", FIXTURE_KO, "--tiles", TILES],
+            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
 
 
 if __name__ == "__main__":
