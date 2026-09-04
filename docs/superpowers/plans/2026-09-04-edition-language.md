@@ -36,12 +36,16 @@ sh server/test/run.sh
 sh agent/test/run.sh
 (cd app && npm test && npm run typecheck)
 cmake -S components/news_core/test/host -B "$SCRATCH/host" && cmake --build "$SCRATCH/host"
+# twelve binaries: the ten this plan started with, plus test_format (how a figure
+# is spelled) and test_lang (which language the fixed words are in)
 for t in test_news_parse test_news_mock test_news_service test_api_json test_palette \
-         test_epd6_transpose test_fit test_chart_scale test_compose test_power_policy; do
+         test_epd6_transpose test_fit test_chart_scale test_compose test_power_policy \
+         test_format test_lang; do
   "$SCRATCH/host/$t" || exit 1; done
 sh components/provisioning/test/run.sh
 python3 tools/mock_news_server.py --check
 python3 tools/test_mock_etag.py
+python3 tools/test_validate_lang.py
 cd sim && ./sim.sh && cd ..
 idf.py build            # final task only
 ```

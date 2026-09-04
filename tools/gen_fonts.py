@@ -405,7 +405,7 @@ def normalize_header(path, ttf, provenance):
     lv_font_conv records its own argv in a comment at the top, and two of those
     arguments are absolute paths: the instanced TTF in a mkdtemp directory, and
     the output file. Left alone they make every regeneration produce a diff in
-    all seven faces with nothing in it but a changed random directory name, and
+    all thirteen faces with nothing in it but a changed random directory name, and
     they publish the generating machine's home directory into a committed file.
 
     Substituted rather than deleted, because the rest of that line — the exact

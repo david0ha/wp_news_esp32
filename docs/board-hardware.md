@@ -76,7 +76,15 @@ refresh policy already keeps refreshes rare (see [epaper-13in3.md](epaper-13in3.
 
 ## Firmware footprint
 
-At the time of writing: **1,602,976 bytes** of an 8 MB app partition (81% free), built at `-O2`.
-**121,112 bytes** of that is the seven generated newspaper faces — measured over
-`components/news_core/fonts/*.obj` in the build tree, and the point of having 8 MB. Discussed in
+At the time of writing: **3,194,608 bytes** of an 8 MB app partition (62% free), built at `-O2`.
+**1,695,479 bytes** of that is the thirteen generated newspaper faces — measured over
+`components/news_core/fonts/*.c.obj` in the map file, and the point of having 8 MB. Discussed in
 [pages.md](pages.md).
+
+Nearly all of that is Korean. The six `ko_` faces carry the 2,350 KS X 1001 syllables and weigh
+**1,574,367 bytes** between them, against **121,112** for the seven Latin faces; `ko_display_56`
+alone is 797,557, because a Hangul syllable at 56 px is a large bitmap and there are 2,350 of them.
+That is the whole cost of the second language — the image grew by 1,576,672 bytes and the fonts
+explain 1,574,367 of it, leaving about two kilobytes for `ui_lang.c`, `ui_format.c` and the
+script-aware copyfitter. It is a flash bill, not a RAM one: the faces are `.rodata` read from the
+memory-mapped image, so the framebuffer still decides what this board can hold.

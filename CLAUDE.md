@@ -100,10 +100,13 @@ cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
   && /tmp/vt/test_fit && /tmp/vt/test_chart_scale && /tmp/vt/test_compose \
   && /tmp/vt/test_power_policy && /tmp/vt/test_format && /tmp/vt/test_lang
 
-# 2) provisioning pure logic, and the reference producer against its committed fixture
+# 2) provisioning pure logic, and the reference producer against its committed
+#    fixture — then the producer's language gate: that a Hangul syllable counts
+#    two against a budget, and that one outside KS X 1001 is a validator failure
 sh components/provisioning/test/run.sh
 python3 tools/mock_news_server.py --check
 python3 tools/test_mock_etag.py
+python3 tools/test_validate_lang.py
 
 # 3) the real UI at the real resolution in six inks -> BMP/PNG, plus the layout,
 #    glyph and colour assertions
@@ -346,6 +349,13 @@ agent/                    an example worker that files into the desk, plus the s
   stroke on white paper makes to **GREEN**. A chart drawn with `lv_draw_line()` is a black chart
   fringed with green speckle — and now that a chart *may* carry colour, that is worse rather than
   better: the speckle is the exact ink that means "up", scattered along an axis that means nothing.
+- **The edition's language is one wire field, `lang`.** Fixed strings follow it through `ui_lang()`,
+  the copyfitter through `ui_fit_script()`, and **nothing else may branch on it** — no page file, no
+  module renderer, no chart, no compositor cut. That is the whole rule, and it is what keeps a second
+  language from being a second layout: the glyphs arrive by font fallback, the two words that must
+  change come from one table, and the only thing the copyfitter needs to know is that a Hangul
+  syllable is one wide character rather than a cluster of narrow ones. A `if (lang == ko)` anywhere
+  else is the beginning of two newspapers maintained as one.
 - **Never hand-edit `components/news_core/fonts/*.c`.** Run
   `python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools`, then
   `/tmp/fontenv/bin/python tools/gen_fonts.py --download`. fontTools is needed because Google
