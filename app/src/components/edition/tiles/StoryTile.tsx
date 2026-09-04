@@ -1,12 +1,15 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { colors, type } from '../../../theme'
 import { type Tile } from '../../../lib/edition/tiles'
-import { HEADLINE_SM_LINE, HEADLINE_SM_SIZE, STORY_GAP, storyLines } from './story'
+import { HEADLINE_LINE, HEADLINE_SIZE, STORY_GAP, storyLines } from './story'
 
 /**
- * A story, with no picture — TYPE IS THE IMAGE here. The lead's headline at 22/26 is what carries
- * the weight a photograph would on a page that had one, which is why the lead tile is the only
- * one taller than it is wide.
+ * A story, with no picture — TYPE IS THE IMAGE here. Every headline draws in the same extrabold
+ * 17/21, lead and secondary alike; what makes the lead the lead is that its tile is half again as
+ * tall as it is wide, so five lines of headline, a deck and several legs of body all fit inside
+ * it. It carried a 22/26 face until a render showed the one thing that arrangement could not do:
+ * hold a 57-character headline at a 145 pt measure without ellipsizing it mid-sentence, on the
+ * one story where losing the end of the sentence costs most.
  *
  * The kicker renders exactly as the producer wrote it, in `type.caption` and in sentence case —
  * it is CONTENT. It is not `type.label`: an all-caps eyebrow on every tile is one of the five
@@ -40,10 +43,7 @@ export function StoryTile({
           {story.kicker}
         </Text>
       ) : null}
-      <Text
-        style={lead ? type.pinHeadline : styles.headlineSm}
-        numberOfLines={lines.headline}
-      >
+      <Text style={styles.headline} numberOfLines={lines.headline}>
         {story.headline}
       </Text>
       {lines.deck > 0 ? (
@@ -68,10 +68,12 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: STORY_GAP,
   },
-  headlineSm: {
+  headline: {
+    // `type.pinHeadline`'s extrabold cut and colour, a size down — the token itself is 22/26 and
+    // is now the detail page's headline alone. The tracking loosens with the size.
     ...type.pinHeadline,
-    fontSize: HEADLINE_SM_SIZE,
-    lineHeight: HEADLINE_SM_LINE,
+    fontSize: HEADLINE_SIZE,
+    lineHeight: HEADLINE_LINE,
     letterSpacing: -0.2,
   },
   body: {

@@ -273,54 +273,67 @@ export default function Settings() {
             {source && source.lastResult !== 'ok' ? (
               <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
             ) : null}
-            <NewsUrlEditor
-              // Remount when the board reports a different URL, so the field picks up the new
-              // value instead of holding a draft the board has already moved past. The board's
-              // URL and only that: a save the board slept through changes the phone's copy and
-              // the pending mark but not this key, so the editor keeps the sentence it has just
-              // shown for that save instead of being rebuilt underneath it.
-              key={source?.url ?? ''}
-              initial={pendingSync ? (localUrl ?? '') : (source?.url ?? localUrl ?? '')}
-              pending={pendingSync}
-              hasBoard={hasDevice}
-              onSave={async (next) => {
-                setSyncRejected(null)
-                // What the attempt means — persist or not, pending or not, which voice — is
-                // `decideNewsUrlSave`'s, tested as a rule. This site only makes the attempt and
-                // does what the decision says. The one thing it does before the attempt is wait
-                // for any delivery already on the wire: a POST of an older address racing this
-                // one would land in whichever order the board took them.
-                let outcome: NewsUrlSaveOutcome
-                if (!client) {
-                  outcome = { noClient: true }
-                } else {
-                  await settleNewsUrlSync()
-                  try {
-                    await client.setNewsUrl(next)
-                    outcome = { ok: true }
-                  } catch (e) {
-                    outcome = { error: e }
+            {/* NOT MOUNTED UNTIL STORAGE HAS ANSWERED. The editor captures `initial` into a
+                `useState` on its first render and the key below deliberately does not move when
+                the phone's own copy arrives — so a mount taken before `loadLocal` resolves keeps
+                the empty string it was born with. On a phone with no board that is forever:
+                `source` stays null, the key stays '', and the field sits empty while a saved
+                address is in force, `dirty` reads true against it, and the button offers to
+                "Clear and use demo data" — an offer to discard an address the user cannot see.
+                `localUrl !== null` is the disk having answered (`''` is a real answer meaning no
+                address), so this waits for it rather than showing a lie for a frame or forever. */}
+            {localUrl !== null ? (
+              <NewsUrlEditor
+                // Remount when the board reports a different URL, so the field picks up the new
+                // value instead of holding a draft the board has already moved past. The board's
+                // URL and only that: a save the board slept through changes the phone's copy and
+                // the pending mark but not this key, so the editor keeps the sentence it has just
+                // shown for that save instead of being rebuilt underneath it. That is also why the
+                // gate above is a mount condition and not another term in this key — a key that
+                // moved when the phone's copy did would rebuild the editor on every save.
+                key={source?.url ?? ''}
+                initial={pendingSync ? localUrl : (source?.url ?? localUrl)}
+                pending={pendingSync}
+                hasBoard={hasDevice}
+                onSave={async (next) => {
+                  setSyncRejected(null)
+                  // What the attempt means — persist or not, pending or not, which voice — is
+                  // `decideNewsUrlSave`'s, tested as a rule. This site only makes the attempt and
+                  // does what the decision says. The one thing it does before the attempt is wait
+                  // for any delivery already on the wire: a POST of an older address racing this
+                  // one would land in whichever order the board took them.
+                  let outcome: NewsUrlSaveOutcome
+                  if (!client) {
+                    outcome = { noClient: true }
+                  } else {
+                    await settleNewsUrlSync()
+                    try {
+                      await client.setNewsUrl(next)
+                      outcome = { ok: true }
+                    } catch (e) {
+                      outcome = { error: e }
+                    }
                   }
-                }
-                const decision = decideNewsUrlSave(next, outcome, hasDevice)
-                if (decision.persist) {
-                  await saveNewsUrl(next)
-                  if (!decision.pending) await clearNewsUrlPending()
-                  loadLocal()
-                }
-                if (client && 'ok' in outcome) {
-                  // Re-read so the rows above reflect the change. The board polls the new URL
-                  // immediately, but the result lands a moment later — the next poll of this
-                  // screen (or a pull-to-refresh on the dashboard) will show it.
-                  try {
-                    setSource((await client.getState()).source)
-                  } catch {
-                    // the write succeeded; the value refreshes on the next load
+                  const decision = decideNewsUrlSave(next, outcome, hasDevice)
+                  if (decision.persist) {
+                    await saveNewsUrl(next)
+                    if (!decision.pending) await clearNewsUrlPending()
+                    loadLocal()
                   }
-                }
-                return decision
-              }}
-            />
+                  if (client && 'ok' in outcome) {
+                    // Re-read so the rows above reflect the change. The board polls the new URL
+                    // immediately, but the result lands a moment later — the next poll of this
+                    // screen (or a pull-to-refresh on the dashboard) will show it.
+                    try {
+                      setSource((await client.getState()).source)
+                    } catch {
+                      // the write succeeded; the value refreshes on the next load
+                    }
+                  }
+                  return decision
+                }}
+              />
+            ) : null}
             {syncRejected ? <Text style={styles.error}>{syncRejected}</Text> : null}
           </Section>
 

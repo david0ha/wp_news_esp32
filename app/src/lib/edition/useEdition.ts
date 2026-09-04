@@ -82,6 +82,7 @@ export function useEdition(): {
           url,
           etag: result.etag,
           fetchedAt,
+          wire: result.wire,
           edition: result.edition,
         })
         dispatch({ type: 'fetched', result, url, fetchedAt })

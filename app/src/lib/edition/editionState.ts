@@ -17,7 +17,7 @@
 // With no URL at all the demo goes up and no request is made.
 
 import { type EditionFetch } from './client'
-import { demoEdition } from './demo'
+import { demoEdition, demoWire } from './demo'
 import { type CachedEdition } from './store'
 
 /** How stale the thing on screen has to be before a return to the tab quietly re-checks it. */
@@ -63,7 +63,10 @@ export const INITIAL_EDITION_MACHINE: EditionMachine = { url: null, state: { sta
  * "Updated 3h ago" line about a fetch that never happened.
  */
 export function demoCache(): CachedEdition {
-  return { url: '', etag: null, fetchedAt: 0, edition: demoEdition() }
+  // `wire` beside `edition`, and the two are the same content: every other entry's edition is
+  // `parseEdition(wire)`, and an entry where that did not hold would be a second shape for the
+  // readers to know about.
+  return { url: '', etag: null, fetchedAt: 0, wire: demoWire(), edition: demoEdition() }
 }
 
 /**
@@ -131,6 +134,9 @@ export function nextEditionState(prev: EditionMachine, event: EditionEvent): Edi
               url: event.url,
               etag: event.result.etag,
               fetchedAt: event.fetchedAt,
+              // Carried through from the response so the disk cache can store it — the parsed
+              // edition beside it cannot be re-parsed. See `store.ts`'s header.
+              wire: event.result.wire,
               edition: event.result.edition,
             },
             refreshing: false,

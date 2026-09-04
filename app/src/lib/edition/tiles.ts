@@ -17,17 +17,21 @@
 // a promise the edition did not keep.
 //
 // The lead story comes second and not first because `range` is the only tile that answers "what
-// is this company doing today" in one glance, and the lead is a 227 px object the reader will
+// is this company doing today" in one glance, and the lead is a 255 px object the reader will
 // scroll to anyway. `chart[0]` follows the lead because the lead usually names it.
 //
 // =============================================================================================
-// THE BAND
+// THE BAND, AND WHETHER THERE ARE PICTURES AT ALL
 // =============================================================================================
 // The lead story's photo leaves the grid and becomes a full-width strip above it when its
 // aspect is wider than 2:1. The fixture's lead photo is 1140x320 — 3.56:1 — which at a 170 px
 // column would be a 48 px smear with a caption under it. A lead photo of ordinary aspect stays
 // in the grid and becomes the FIRST photo tile, so the picture the desk chose to lead with leads
 // the pictures.
+//
+// None of that happens for an edition whose pictures cannot be fetched — see `TileOptions`. A
+// photo tile with nothing behind it draws as an empty grey box with a caption, which is the one
+// shape this file's own rule forbids: a kind with nothing behind it is absent, not empty.
 //
 // =============================================================================================
 // THE HEIGHTS — known BEFORE layout, which is the point
@@ -39,12 +43,12 @@
 //
 //   kind            height
 //   -------------   -----------------------------------------------------------
-//   story (lead)    round(colWidth * 4 / 3)
+//   story (lead)    round(colWidth * 3 / 2)
 //   story (other)   colWidth
 //   range           max(colWidth, 2P + TILE_HEAD + RANGE_TRACK_H + 2 * RANGE_STAT_ROW_H)
 //   chart           round(colWidth * 3 / 4)
 //   photo           round(colWidth * clamp(h / w, 2/3, 3/2))
-//   figures         2P + 24 + 28 * min(n, 4) + (n > 4 ? 20 : 0)
+//   figures         2P + 24 + 39 * min(n, 4) + (n > 4 ? 20 : 0)
 //   briefs          2P + 24 + 56 * min(n, 3) + (n > 3 ? 20 : 0)
 //   peers           2P + 24 + 28 * min(n, 6)
 //   table           max(round(colWidth * 5 / 4), 2P + title + heads + rows + note + gaps)
@@ -53,6 +57,11 @@
 // where P = `TILE_PADDING`, 24 is `TILE_HEAD` (the heading line, equal to `type.headingSm`'s line
 // height), 20 is `TILE_MORE` (the "+N more" line), and the per-row constants are `FIGURES_ROW`,
 // `BRIEFS_ROW`, `PEERS_ROW` and `TAPE_ROW` with their `*_SHOWN` row counts beside them.
+//
+// THE LEAD IS 3:2 AND A FIGURE ROW IS 39, both because a render on a 390 pt phone said so. At
+// 4:3 the lead's own furniture filled it and its headline ellipsized mid-sentence, and a figure
+// row of 28 was a label beside a value in 145 pt, which ellipsized the LABEL. Both numbers are
+// the cost of the thing the tile exists to show.
 //
 // THE RANGE AND THE TABLE ARE THE TWO KINDS WITH A FLOOR, because they are the two whose bodies
 // are fixed furniture rather than elastic content: a track box and a 2x2 grid of the day's four
@@ -137,12 +146,33 @@ function hasAnyNumber(s: EditionSubject): boolean {
   )
 }
 
-export function editionToTiles(e: Edition): EditionLayout {
+export interface TileOptions {
+  /**
+   * Whether this edition's photographs can be fetched at all.
+   *
+   * FALSE FOR THE DEMO AND NOTHING ELSE, so far. A photograph lives beside the payload at
+   * `<the news URL's directory>/tiles/<id>.bin`, and the demo has no news URL — it is bundled
+   * JSON, and its tiles are in `sim/tiles/`, on no server a phone can reach. Every one of its
+   * photo tiles therefore drew as an empty grey box with a caption under it, the band across the
+   * top of the page included, which was the first thing a new reader saw. An edition with nowhere
+   * to fetch a picture from is an edition without pictures, so they are cut here rather than
+   * drawn as their own absence. The screens pass `!isDemo(cached)`.
+   *
+   * The default is true, which is what an edition served from a desk is; the two screens that cut
+   * a feed both pass it explicitly.
+   */
+  photos: boolean
+}
+
+export function editionToTiles(
+  e: Edition,
+  options: TileOptions = { photos: true },
+): EditionLayout {
   const tiles: Tile[] = []
 
   // The lead is the lowest rank, which `parseEdition` has already sorted to index 0.
   const lead = e.stories.length > 0 ? e.stories[0] : null
-  const leadPhoto = lead?.photo ?? null
+  const leadPhoto = options.photos ? (lead?.photo ?? null) : null
   const band = leadPhoto !== null && leadPhoto.w > leadPhoto.h * BAND_ASPECT ? leadPhoto : null
 
   // 1. The range. Absent when the subject carries no numbers at all — an empty track with six
@@ -183,7 +213,7 @@ export function editionToTiles(e: Edition): EditionLayout {
   //    the desk chose to lead with leads the pictures.
   const photos: EditionPhoto[] = []
   if (leadPhoto !== null && band === null) photos.push(leadPhoto)
-  photos.push(...e.thumbs)
+  if (options.photos) photos.push(...e.thumbs)
   photos.forEach((photo, i) => {
     tiles.push({ kind: 'photo', id: `photo:${i}`, photo })
   })
@@ -268,7 +298,31 @@ export const TILE_MORE = 20
 // The row heights and the row counts, per kind. Both halves belong here: a body that draws five
 // rows of 28 in a box sized for four is the same silent clipping as a body that draws four rows
 // of 30. The tile bodies import these; see the header comment.
-export const FIGURES_ROW = 28
+// A FIGURE ROW IS STACKED, not a label beside a value. Side by side, a caption-size uppercase
+// label and a bold value share the 145 pt a 390 pt phone leaves inside a tile, and the label is
+// what gives way: "MARKET CAP" rendered as "MARKET…", "NET INCOME TTM" as "NET INCO…". A reader
+// who cannot read the label cannot use the figure, so the label takes its own line above the
+// value and both get the full measure.
+/** The label's line — `type.caption`'s line height, held to it by `metrics.test.ts`. */
+export const FIGURES_LABEL_LINE = 18
+/** Between the label and the value it belongs to. */
+export const FIGURES_ROW_GAP = 2
+// The two faces a figure's value draws in. They live here beside the line box they have to fit
+// inside, and `FiguresTile` imports them, because this is the one part of `FIGURES_ROW` with no
+// theme token behind it: there is nothing for `metrics.test.ts` to hold the line height to except
+// the sizes themselves, and a face raised past its line would crop against a row height that
+// cannot grow. Not a look choice either way — the emphasised figure is a size up because it is
+// the one the group is about.
+export const FIGURES_VALUE_SIZE = 14
+export const FIGURES_VALUE_EMPH_SIZE = 15
+/**
+ * The value's line. Given explicitly rather than left to the face's intrinsic metrics, because
+ * two faces draw in it and a row height built on whichever of them Yoga happened to measure is
+ * not a sum anybody can check. It clears the taller of the two with room for its ascender and
+ * descender, which `metrics.test.ts` holds it to.
+ */
+export const FIGURES_VALUE_LINE = 19
+export const FIGURES_ROW = FIGURES_LABEL_LINE + FIGURES_ROW_GAP + FIGURES_VALUE_LINE
 export const FIGURES_SHOWN = 4
 export const BRIEFS_ROW = 56
 export const BRIEFS_SHOWN = 3
@@ -301,8 +355,19 @@ export const TABLE_HEAD_ROW_H = 22
 export const TABLE_ROW_H = 23
 /** How many body rows the tile shows. The detail page shows every one. */
 export const TABLE_ROWS = 3
-/** How many of the TRAILING columns the tile shows — the newest periods, never the oldest. */
-export const TABLE_COLS_SHOWN = 2
+/**
+ * How many of the TRAILING columns the tile shows — the newest period, never the oldest.
+ *
+ * One, because the tile's other column is the row label and there is not room for three things.
+ * At two values in a 145 pt content box the labels were what gave way — "Net income" rendered as
+ * "Net in…", "Consumer" as "Consu…" — and a statement row nobody can name says nothing at all,
+ * where a statement with one period still says what the company earned last quarter. The detail
+ * page shows every period, which is where a reader who wants the comparison goes.
+ *
+ * It does not enter `estimateTileHeight`: columns are a horizontal question and the tile's height
+ * comes from its rows.
+ */
+export const TABLE_TILE_COLS = 1
 /** One line of the note, `type.caption` at 11/18. */
 export const TABLE_NOTE_LINE = 18
 /** The note's `numberOfLines`. A two-line note is what overshot the aspect-derived box. */
@@ -314,9 +379,12 @@ export function estimateTileHeight(t: Tile, colWidth: number): number {
   const chrome = 2 * TILE_PADDING + TILE_HEAD
   switch (t.kind) {
     case 'story':
-      // The lead is the one tile allowed to be taller than it is wide: its headline at 22/26 is
-      // this design's photograph, and four legs of body under it is what makes it read as a lead.
-      return t.lead ? Math.round((colWidth * 4) / 3) : colWidth
+      // The lead is the one tile allowed to be taller than it is wide, and HALF AGAIN as tall is
+      // what its own furniture costs: at 4:3 the kicker, the headline, the deck and their gaps
+      // filled the box, the headline hit its cap mid-sentence and one line of body was left under
+      // it. At 3:2 a 173 px column gives 260, which holds five lines of headline, two of deck and
+      // several legs of copy — and copy under the headline is what makes it read as a lead.
+      return t.lead ? Math.round((colWidth * 3) / 2) : colWidth
     case 'range':
       // Never below what the body draws — see the header comment. A square at every width a
       // phone this side of a tablet produces, and a floor below that.

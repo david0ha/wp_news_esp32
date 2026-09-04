@@ -53,7 +53,14 @@ export default function EditionScreen() {
   // move `fetchedAt` but keeps the same edition object, so this way the page is cut once and a
   // confirmation that changed nothing re-lays out nothing.
   const edition = state.status === 'ready' ? state.cached.edition : null
-  const feed = useMemo(() => (edition === null ? null : editionToTiles(edition)), [edition])
+  // Whether this edition's photographs can be fetched at all. They live beside the payload at the
+  // news URL, and the demo has none — so the demo is cut without them rather than drawn as three
+  // empty grey boxes. Keyed with the edition so the feed is still cut once.
+  const photos = state.status === 'ready' && !isDemo(state.cached)
+  const feed = useMemo(
+    () => (edition === null ? null : editionToTiles(edition, { photos })),
+    [edition, photos],
+  )
 
   const chips: Chip[] = feed === null ? ['all'] : availableChips(feed.tiles)
   const active = resolveChip(chips, chip)

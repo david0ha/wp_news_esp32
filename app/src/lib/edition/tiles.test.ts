@@ -27,6 +27,7 @@ import {
   TABLE_NOTE_LINES,
   TABLE_ROW_H,
   TABLE_ROWS,
+  TABLE_TILE_COLS,
   TABLE_TITLE_LINE,
   TABLE_TITLE_LINES,
   type Tile,
@@ -144,6 +145,55 @@ describe('editionToTiles — the band rule', () => {
   })
 })
 
+describe('editionToTiles — an edition with no tile source carries no photographs', () => {
+  // The bundled demo is the case: with no news URL there is nothing to fetch a picture FROM, so
+  // its photo tiles drew as empty grey boxes with captions under them — the band across the top
+  // of the page and both thumbs in the grid, which is the first thing a new reader sees. A
+  // photograph that cannot arrive is not a photograph, so the edition is cut without them.
+
+  it('omits the band and every photo tile', () => {
+    const { band, tiles } = editionToTiles(demo(), { photos: false })
+    expect(band).toBeNull()
+    expect(tiles.filter((t) => t.kind === 'photo')).toEqual([])
+  })
+
+  it('takes the Photos chip with them, since the chips derive from the tiles', () => {
+    const { tiles } = editionToTiles(demo(), { photos: false })
+    expect(availableChips(tiles)).toEqual(['all', 'stories', 'numbers', 'accounts'])
+  })
+
+  it('drops a lead photo of ordinary aspect too, not just the wide one', () => {
+    // A lead photo that is not wide enough for the band becomes the first photo TILE, and it has
+    // no more chance of arriving than the band did.
+    const e = demo()
+    const ordinary = { ...e, stories: [...e.stories] }
+    ordinary.stories[0] = {
+      ...ordinary.stories[0],
+      photo: { id: 'square', w: 400, h: 300, caption: 'c', credit: 'k' },
+    }
+    const { band, tiles } = editionToTiles(ordinary, { photos: false })
+    expect(band).toBeNull()
+    expect(tiles.filter((t) => t.kind === 'photo')).toEqual([])
+  })
+
+  it('renumbers nothing else — every other tile keeps the id it had', () => {
+    // The detail route names a tile by id, so dropping a kind must not shift the others. It
+    // cannot, because each kind is numbered among its own, and this holds it to that.
+    const withPhotos = editionToTiles(demo(), { photos: true })
+    const without = editionToTiles(demo(), { photos: false })
+    expect(without.tiles.map((t) => t.id)).toEqual(
+      withPhotos.tiles.filter((t) => t.kind !== 'photo').map((t) => t.id),
+    )
+  })
+
+  it('brings both back for an edition served from a desk', () => {
+    const { band, tiles } = editionToTiles(demo(), { photos: true })
+    expect(band?.id).toBe('sndk_fab')
+    expect(tiles.filter((t) => t.kind === 'photo').map((t) => t.id)).toEqual(['photo:0', 'photo:1'])
+    expect(availableChips(tiles)).toContain('photos')
+  })
+})
+
 describe('editionToTiles — a kind with nothing behind it is absent', () => {
   it('gives an empty edition no tiles and no band', () => {
     expect(editionToTiles(emptyEdition())).toEqual({ band: null, tiles: [] })
@@ -226,15 +276,15 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
     expect(TILE_PADDING).toBe(14)
     expect(TILE_HEAD).toBe(24)
     expect(TILE_MORE).toBe(20)
-    expect(estimateTileHeight(by('story:0'), W)).toBe(227) // lead: round(170 * 4/3)
+    expect(estimateTileHeight(by('story:0'), W)).toBe(255) // lead: round(170 * 3/2)
     expect(estimateTileHeight(by('story:1'), W)).toBe(170) // other: the column, square
     expect(estimateTileHeight(by('range:0'), W)).toBe(170)
     expect(estimateTileHeight(by('chart:0'), W)).toBe(128) // round(170 * 3/4) = round(127.5)
     expect(estimateTileHeight(by('table:0'), W)).toBe(213) // round(170 * 5/4) = round(212.5)
     expect(estimateTileHeight(by('photo:0'), W)).toBe(113) // 364x204 is flatter than 2:3, clamped
-    expect(estimateTileHeight(by('figures:0'), W)).toBe(164) // VALUATION, 4 rows: 52 + 4*28
-    expect(estimateTileHeight(by('figures:1'), W)).toBe(136) // PER SHARE, 3 rows: 52 + 3*28
-    expect(estimateTileHeight(by('figures:5'), W)).toBe(184) // THE STREET, 5 rows -> 4 + "more"
+    expect(estimateTileHeight(by('figures:0'), W)).toBe(208) // VALUATION, 4 rows: 52 + 4*39
+    expect(estimateTileHeight(by('figures:1'), W)).toBe(169) // PER SHARE, 3 rows: 52 + 3*39
+    expect(estimateTileHeight(by('figures:5'), W)).toBe(228) // THE STREET, 5 rows -> 4 + "more"
     expect(estimateTileHeight(by('briefs:0'), W)).toBe(240) // 6 briefs -> 3 + "more": 52 + 3*56 + 20
     expect(estimateTileHeight(by('peers:0'), W)).toBe(192) // 5 peers: 52 + 5*28
     expect(estimateTileHeight(by('tape:0'), W)).toBe(212) // 5 indices: 52 + 5*32
@@ -327,6 +377,22 @@ describe('estimateTileHeight — the table, at a 170px column', () => {
     )
   })
 
+  it('gives the statement tile one period, so its row labels have the room', () => {
+    // At two value columns the labels were what gave way in a 145 pt content box: "Net income"
+    // came out "Net in…", "Consumer" as "Consu…". A statement row nobody can name is not a
+    // statement, and the detail page shows every period anyway — so the tile keeps the newest
+    // one and spends the rest of the measure on the label.
+    expect(TABLE_TILE_COLS).toBe(1)
+    // Which period that is, on the fixture: the LAST, never the first. `TableTile` slices from
+    // `columns.length - TABLE_TILE_COLS` and indexes each row's values by `from + j` for exactly
+    // this reason — the oldest figure under the newest heading is a wrong number that looks right.
+    const t = by('table:0')
+    if (t.kind !== 'table') throw new Error('unreachable')
+    const from = Math.max(0, t.table.columns.length - TABLE_TILE_COLS)
+    expect(t.table.columns.slice(from)).toEqual([t.table.columns[t.table.columns.length - 1]])
+    expect(t.table.columns.slice(from)).not.toEqual([t.table.columns[0]])
+  })
+
   it('leaves a statement room for every row its body draws, at every column', () => {
     // The property behind the numbers above, held across every width a phone can produce.
     const t = by('table:0')
@@ -397,12 +463,12 @@ describe('splitColumns', () => {
   })
 
   it('appends to the shortest column, breaking a tie leftwards', () => {
-    // Heights at W=170: one figure is 80 (52 + 28), four figures are 164 (52 + 4*28).
-    // A(80) -> col0 (tie).  B(80) -> col1.  C(164) -> col0 (tie at 80).  D(80) -> col1 (80 < 244).
+    // Heights at W=170: one figure is 91 (52 + 39), four figures are 208 (52 + 4*39).
+    // A(91) -> col0 (tie).  B(91) -> col1.  C(208) -> col0 (tie at 91).  D(91) -> col1 (91 < 299).
     const tiles = [figuresTile('a', 1), figuresTile('b', 1), figuresTile('c', 4), figuresTile('d', 1)]
     const cols = splitColumns(tiles, W, 2)
     expect(cols.map((c) => c.map((p) => p.tile.id))).toEqual([['a', 'c'], ['b', 'd']])
-    expect(cols[0].map((p) => p.height)).toEqual([80, 164])
+    expect(cols[0].map((p) => p.height)).toEqual([91, 208])
   })
 
   it('places every tile exactly once, keeping feed order inside each column', () => {

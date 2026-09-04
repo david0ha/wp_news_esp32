@@ -21,12 +21,14 @@ import {
 const URL = 'http://desk.local:8123/news.json'
 const OTHER = 'http://other.desk/news.json'
 
-const edition = (symbol: string) => parseEdition({ subject: { symbol }, stories: [{ headline: 'h' }] })
+const wire = (symbol: string) => ({ subject: { symbol }, stories: [{ headline: 'h' }] })
+const edition = (symbol: string) => parseEdition(wire(symbol))
 
 const cache = (over: Partial<CachedEdition> = {}): CachedEdition => ({
   url: URL,
   etag: 'W/"one"',
   fetchedAt: 1000,
+  wire: wire('SNDK'),
   edition: edition('SNDK'),
   ...over,
 })
@@ -34,6 +36,7 @@ const cache = (over: Partial<CachedEdition> = {}): CachedEdition => ({
 const ok = (symbol: string, etag: string | null): EditionFetch => ({
   status: 'ok',
   edition: edition(symbol),
+  wire: wire(symbol),
   etag,
 })
 
@@ -167,8 +170,14 @@ describe('nextEditionState — a fetch that succeeded', () => {
       url: URL,
       etag: 'W/"two"',
       fetchedAt: 5000,
+      // The response's own body, carried through untouched so the disk cache can store it — see
+      // `store.ts`'s header for why a parsed edition cannot be stored in its place.
+      wire: wire('MU'),
       edition: edition('MU'),
     })
+    // And the two halves agree: the entry's edition is what its wire parses to, which is the
+    // invariant every reader of the cache relies on.
+    expect(m.state.cached.edition).toEqual(parseEdition(m.state.cached.wire))
     expect(m.state.refreshing).toBe(false)
     expect(m.state.error).toBeNull()
     expect(isDemo(m.state.cached)).toBe(false)
@@ -392,6 +401,8 @@ describe('demoCache and isDemo', () => {
 
   it('reads the demo off the entry itself, so the two can never disagree', () => {
     expect(isDemo(demoCache())).toBe(true)
-    expect(isDemo({ url: URL, etag: null, fetchedAt: 1, edition: demoCache().edition })).toBe(false)
+    expect(
+      isDemo({ url: URL, etag: null, fetchedAt: 1, wire: demoCache().wire, edition: demoCache().edition }),
+    ).toBe(false)
   })
 })

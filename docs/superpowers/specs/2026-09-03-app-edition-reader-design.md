@@ -241,9 +241,17 @@ acceptable and the alternative is hundreds of kilobytes of base64 per edition in
 
 `demo.json` is a copy of `components/news_core/test/host/fixtures/news.json`, the same payload
 `news_mock.c` prints on an unconfigured board. A jest test reads both files and asserts they are
-byte-identical, the way `test_news_mock` holds the firmware to the fixture. Its photo tiles live
-in `sim/tiles/`, not in the app, so the demo's photo tiles show their captions on a plain ground.
-The masthead shows a `Demo edition` chip whenever the demo is what is on screen.
+byte-identical, the way `test_news_mock` holds the firmware to the fixture. The masthead shows a
+`Demo edition` chip whenever the demo is what is on screen.
+
+**The demo carries no photographs.** A photograph is fetched from beside the payload at the news
+URL, and a phone showing the demo has no news URL — its pictures are in `sim/tiles/`, on no server
+the phone can reach. So the demo edition is cut with `editionToTiles(e, { photos: false })`: no
+photo tiles, no band, no `Photos` chip, and no photo block on a story's detail page. Drawn anyway
+they were three empty grey rectangles with captions under them, which was the first thing a new
+reader saw. Bundling them is not free — three tiles at 4 bpp are about 550 KB of base64 in the JS
+bundle for an edition most readers see once. Shipping PNGs at the tiles' own size instead would
+cost a fraction of that and is a possible follow-up.
 
 ### Freshness (`freshness.ts`)
 
@@ -275,7 +283,8 @@ export type Tile =
   | { kind: 'table';   id: string; table: EditionTable }
   | { kind: 'tape';    id: string; indices: EditionIndex[] }
 export interface EditionLayout { band: EditionPhoto | null; tiles: Tile[] }
-export function editionToTiles(e: Edition): EditionLayout
+export interface TileOptions { photos: boolean }   // false: no tile source, so no photo tiles
+export function editionToTiles(e: Edition, options?: TileOptions): EditionLayout
 export function tileChip(t: Tile): Exclude<Chip, 'all'>
 export function filterTiles(tiles: Tile[], chip: Chip): Tile[]
 export function availableChips(tiles: Tile[]): Chip[]          // 'all' + every chip with ≥1 tile
@@ -303,16 +312,26 @@ photo of ordinary aspect becomes the first `photo` tile.
 
 | kind | height |
 |---|---|
-| story (lead) | `round(colWidth * 4 / 3)` |
+| story (lead) | `round(colWidth * 3 / 2)` |
 | story (other) | `colWidth` |
-| range | `colWidth` |
+| range | `max(colWidth, 2P + 24 + RANGE_TRACK_H + 2 * RANGE_STAT_ROW_H)` |
 | chart | `round(colWidth * 3 / 4)` |
 | photo | `round(colWidth * clamp(h / w, 2/3, 3/2))` |
-| figures | `2P + 22 + 28 * min(n, 4) + (n > 4 ? 20 : 0)` |
-| briefs | `2P + 22 + 56 * min(n, 3) + (n > 3 ? 20 : 0)` |
-| peers | `2P + 22 + 28 * min(n, 6)` |
-| table | `round(colWidth * 5 / 4)` |
-| tape | `2P + 22 + 32 * min(n, 5)` |
+| figures | `2P + 24 + 39 * min(n, 4) + (n > 4 ? 20 : 0)` |
+| briefs | `2P + 24 + 56 * min(n, 3) + (n > 3 ? 20 : 0)` |
+| peers | `2P + 24 + 28 * min(n, 6)` |
+| table | `max(round(colWidth * 5 / 4), 2P + title + heads + rows + note + gaps)` |
+| tape | `2P + 24 + 32 * min(n, 5)` |
+
+Two of those numbers are what a first render on a 390 pt phone cost. The lead was `4 / 3`, which
+its own furniture filled — a 57-character headline needs five lines at a 145 pt measure and the
+tile held four, so the one story that must not lose the end of its sentence was the only one that
+did; at `3 / 2` it holds five lines and body copy under them, and its headline drops to the
+secondaries' 17/21 because what makes a lead is its size on the page, not a louder face. A figures
+row was 28, a label beside a value, and in 145 pt the label was the half that gave way
+(`MARKET CAP` → `MARKET…`); stacked it is a caption line, a 2 px gap and a 19 px value line. The
+range and table rows here are floors as well as aspects — both bodies are fixed furniture, and the
+aspect alone sliced their last block on a 360 dp Android phone.
 
 **Placement:** `splitColumns` walks the tiles in order and appends each to the currently shortest
 column (ties → the leftmost). Properties a test holds: every tile is placed exactly once, order
@@ -367,7 +386,9 @@ never happens here because an empty URL shows the demo. Tapping a tile pushes
 
 Reads `getCurrentEdition()`; if `null` (cold deep link) reads the cache; if still nothing,
 `router.replace('/edition')`. Renders `TileDetail` for the named tile — the full body, every
-figure in the group, every brief, the whole table as a scrollable grid, the chart at full width
+figure in the group, every brief, the whole table as a grid whose label column is fixed and whose
+value columns scroll sideways under it (both halves on the tile's own row heights, so they stay
+aligned across the scroll boundary), the chart at full width
 with its `note` — then a `More from this edition` heading and a `Masonry` of the other tiles.
 Back is `router.canGoBack() ? router.back() : router.replace('/edition')`. A tile id that names
 nothing renders `ScreenMessage` with "This item isn't in today's edition."
@@ -410,6 +431,7 @@ already handles `{ noClient: true }` through `decideNewsUrlSave`.
 | 304 | nothing changes but the freshness line |
 | new content | the tiles re-lay out; the chip resets to `all` only if the current chip is now empty |
 | a tile's photo fails to load | the tile keeps its height, caption on `surfaceAlt` |
+| an edition with no tile source (the demo) | no photo tiles, no band, no `Photos` chip |
 | edition parses but is empty | treated as `bad_json` — the previous cache stays up |
 | URL changed in Settings | the old cache is ignored; `loading` until the new one lands |
 

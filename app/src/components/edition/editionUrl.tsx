@@ -16,9 +16,10 @@ import { createContext, useContext, type ReactNode } from 'react'
  * changed. Both screens already hold the entry, so both can name it once at the top.
  *
  * The default is the empty string, which is exactly what an unconfigured phone has — `tileUrl`
- * answers `''` for it and `PhotoTile` draws its caption on a plain ground, the same as the demo
- * edition does. So a mount outside a provider degrades to the demo's behaviour rather than
- * throwing.
+ * answers `''` for it and `PhotoTile` draws its caption on a plain ground rather than fetching.
+ * So a mount outside a provider degrades rather than throwing. It should not arise for the demo,
+ * whose edition is cut without photo tiles in the first place (`editionToTiles`'s `TileOptions`);
+ * this is the backstop under that, not the mechanism.
  */
 const EditionUrlContext = createContext('')
 

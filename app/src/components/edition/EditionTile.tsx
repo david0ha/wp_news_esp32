@@ -79,20 +79,23 @@ export const EditionTile = memo(function EditionTile({
 })
 
 /**
- * Three kinds do their own arithmetic and are handed the dimensions they use — `StoryTile` the
+ * Four kinds do their own arithmetic and are handed the dimensions they use — `StoryTile` the
  * height alone, because it divides it between the kicker, headline, deck and body and never asks
  * how wide the column is; `ChartTile` and `PhotoTile` both, because each sizes a box in two
- * directions.
+ * directions; and `TapeTile` the width, because its sparkline is an SVG drawn at a pixel size and
+ * it is the thing on that row which yields to the symbol beside it (see `tiles/tape.ts`).
  *
  * WHAT THEY GET IS THE TILE'S OUTER BOX, not the padded content box, and each subtracts
- * `TILE_PADDING` itself where it needs a pixel figure (`storyLines`, `ChartTile`'s plot). One
- * rule for the three beats a pre-padded second set of numbers that would be right for two of them
- * and wrong for the photograph, which has no padding to subtract.
+ * `TILE_PADDING` itself where it needs a pixel figure (`storyLines`, `ChartTile`'s plot,
+ * `tapeSparkWidth`). One rule for the four beats a pre-padded second set of numbers that would be
+ * right for three of them and wrong for the photograph, which has no padding to subtract.
  *
- * The other six take the tile alone. Their bodies are rows and headings whose heights are
+ * The other five take the tile alone. Their bodies are rows and headings whose heights are
  * `tiles.ts`'s constants — the same ones `estimateTileHeight` sized the box with — so the box's
  * own pixels are a number they must NOT read: a body that measured would be a second opinion
- * about a height the estimator has already decided.
+ * about a height the estimator has already decided. WIDTH IS THE NARROWER RULE: a body may be
+ * handed it, as the tape is, when something it draws is a fixed pixel box; what none of them may
+ * do is read a HEIGHT the estimator settled.
  */
 function body(tile: Tile, width: number, height: number) {
   switch (tile.kind) {
@@ -113,7 +116,7 @@ function body(tile: Tile, width: number, height: number) {
     case 'table':
       return <TableTile tile={tile} />
     case 'tape':
-      return <TapeTile tile={tile} />
+      return <TapeTile tile={tile} width={width} />
   }
 }
 

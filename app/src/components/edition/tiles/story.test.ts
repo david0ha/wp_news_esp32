@@ -3,8 +3,8 @@ import { estimateTileHeight, TILE_PADDING, type Tile } from '../../../lib/editio
 import {
   BODY_LINE,
   DECK_LINE,
-  HEADLINE_LEAD_LINE,
-  HEADLINE_SM_LINE,
+  HEADLINE_LEAD_LINES,
+  HEADLINE_LINE,
   KICKER_LINE,
   STORY_GAP,
   storyLines,
@@ -31,10 +31,9 @@ const storyTile = (lead: boolean): Tile => ({
 
 /** What the tile actually draws for a given answer, gaps included. */
 function drawnHeight(fit: StoryFit, lines: ReturnType<typeof storyLines>): number {
-  const headlineLine = fit.lead ? HEADLINE_LEAD_LINE : HEADLINE_SM_LINE
   const parts = [
     lines.kicker * KICKER_LINE,
-    lines.headline * headlineLine,
+    lines.headline * HEADLINE_LINE,
     lines.deck * DECK_LINE,
     lines.body * BODY_LINE,
   ].filter((h) => h > 0)
@@ -44,13 +43,13 @@ function drawnHeight(fit: StoryFit, lines: ReturnType<typeof storyLines>): numbe
 describe('storyLines', () => {
   it('gives the lead exactly what its own estimated height leaves', () => {
     // The whole point: the input is the estimator's answer, not a number typed twice.
-    const h = estimateTileHeight(storyTile(true), W) // round(170 * 4/3) = 227
-    expect(h).toBe(227)
+    const h = estimateTileHeight(storyTile(true), W) // round(170 * 3/2)
+    expect(h).toBe(255)
     expect(storyLines(h, { lead: true, hasKicker: true, hasDeck: true })).toEqual({
       kicker: 1,
-      headline: 4,
+      headline: 5,
       deck: 2,
-      body: 1, // 199 content − 18 − 104 − 38 − 3 gaps = 27, which is one 18 px line
+      body: 3, // 227 content − 18 − 105 − 38 − 3 gaps = 54, which is three 18 px lines
     })
   })
 
@@ -84,7 +83,7 @@ describe('storyLines', () => {
             const h = estimateTileHeight(storyTile(lead), colWidth)
             const content = h - 2 * TILE_PADDING
             const lines = storyLines(h, fit)
-            const headlineLine = lead ? HEADLINE_LEAD_LINE : HEADLINE_SM_LINE
+            const headlineLine = HEADLINE_LINE
             // What the headline costs, charged back ONLY when a single line genuinely did not
             // fit — that is the one overflow `storyLines` is allowed, and this subtracts exactly
             // it. Deducted unconditionally the assertion would be vacuous; not deducted at all it
@@ -105,13 +104,41 @@ describe('storyLines', () => {
   })
 
   it('sheds the deck before the headline when a narrow column runs out', () => {
-    // At 140 the lead's full furniture wants 168 px of a 159 px box. The headline is the tile's
-    // photograph and keeps its four lines; the deck gives up its second.
-    const h = estimateTileHeight(storyTile(true), 140) // 187
+    // The priority order, at the width where it now bites. At a 125 px column the lead's full
+    // furniture — kicker, five headline lines, two deck lines and the two gaps between those three
+    // children — wants 169 px of a 160 px box, so the deck gives up its second line and the
+    // headline keeps all five. (The 173 in the 170 px case is the same sum plus a third gap,
+    // charged there because a line of body follows the deck.)
+    const h = estimateTileHeight(storyTile(true), 125) // round(125 * 3/2) = 188
     const lines = storyLines(h, { lead: true, hasKicker: true, hasDeck: true })
-    expect(lines.headline).toBe(4)
+    expect(lines.headline).toBe(HEADLINE_LEAD_LINES)
     expect(lines.deck).toBe(1)
     expect(lines.body).toBe(0)
+  })
+
+  it('holds the lead’s whole furniture at every column a phone produces', () => {
+    // What the 3:2 lead height bought. At 4:3 with a 26 px headline line the lead was the one
+    // story whose headline ellipsized — five lines of a 57-character headline against a cap of
+    // four — and at the narrow end it lost a deck line as well. From the narrowest phone column
+    // to the widest, the lead now keeps its kicker, all five headline lines and both deck lines.
+    for (let colWidth = 138; colWidth <= 174; colWidth++) {
+      const h = estimateTileHeight(storyTile(true), colWidth)
+      const lines = storyLines(h, { lead: true, hasKicker: true, hasDeck: true })
+      expect(lines.kicker).toBe(1)
+      expect(lines.headline).toBe(HEADLINE_LEAD_LINES)
+      expect(lines.deck).toBe(2)
+    }
+  })
+
+  it('leaves the lead body copy at the column an iPhone 17e produces', () => {
+    // 390 pt wide, 16 pt gutters and a 12 pt column gap give 173. That is the render this height
+    // was retuned for: the headline gets its five lines AND there is copy under the deck, where
+    // the 4:3 lead had an ellipsized headline and one line of body.
+    const h = estimateTileHeight(storyTile(true), 173)
+    expect(h).toBe(260)
+    const lines = storyLines(h, { lead: true, hasKicker: true, hasDeck: true })
+    expect(lines.headline).toBe(5)
+    expect(lines.body).toBeGreaterThanOrEqual(1)
   })
 
   it('keeps a headline line even when nothing fits at all', () => {

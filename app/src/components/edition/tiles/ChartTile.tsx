@@ -38,7 +38,17 @@ export function ChartTile({
 
   return (
     <View style={styles.root}>
-      <Text style={styles.head} numberOfLines={1}>
+      {/* SHRINK TO FIT, for the same reason `FiguresTile`'s group head does and nowhere else on
+          a tile: this is the PRODUCER's label — "NAND CONTRACT PRICE" — and at 18 px in a 145 pt
+          measure it ellipsized to "NAND CONTR…", which names neither the series nor the units the
+          plot underneath is drawn in. One line at a floor of 0.8 keeps the head inside `TILE_HEAD`,
+          so the plot height this file subtracts from is unchanged. */}
+      <Text
+        style={styles.head}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.8}
+      >
         {chart.label !== '' ? chart.label : 'Chart'}
       </Text>
       <ChartFigure chart={chart} width={plotW} height={plotH} />

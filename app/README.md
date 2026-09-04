@@ -65,8 +65,13 @@ deadline and the same 320 KB cap. A payload the app refuses is one the board wou
 - **The demo.** A phone with no URL shows `src/lib/edition/demo.json`, which is byte-identical to
   `components/news_core/test/host/fixtures/news.json` — the payload an unconfigured *board*
   prints. A jest test holds the two files identical, the way `test_news_mock` holds the firmware
-  to the same fixture. Its photo tiles live in `sim/tiles/` and are on no server the phone can
-  reach, so they show their captions on a plain ground.
+  to the same fixture. It carries **no photographs**: a picture is fetched from beside the payload
+  at the news URL, and a phone showing the demo has no news URL — the demo's tiles live in
+  `sim/tiles/`, on no server the phone can reach. So the demo edition is cut without photo tiles,
+  without the band and without the `Photos` chip, rather than drawing three empty grey rectangles
+  with captions under them. Bundling them would put about 550 KB of base64 in the JS bundle for an
+  edition most readers see once; PNGs at the tiles' own size would cost a fraction of that and are
+  a possible follow-up.
 - **The cache.** One AsyncStorage key, `claudepost.edition`, holding the URL, the ETag, when the
   server last *confirmed* the content and the parsed edition. It is re-parsed on read, so a cache
   written by a newer build degrades to defaults instead of crashing a launch. A cache whose URL is

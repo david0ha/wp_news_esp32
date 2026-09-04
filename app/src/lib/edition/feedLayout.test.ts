@@ -11,6 +11,9 @@ const cached = (generatedAt: string, fetchedAt: number): CachedEdition => ({
   url: 'http://desk.local:8123/news.json',
   etag: null,
   fetchedAt,
+  // `editionKey` reads `generatedAt` off the parsed edition and never touches the wire, so this
+  // one is built directly rather than parsed from a body.
+  wire: { generated_at: generatedAt },
   edition: { ...emptyEdition(), generatedAt },
 })
 

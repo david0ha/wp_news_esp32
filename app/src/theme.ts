@@ -174,9 +174,11 @@ export const type = {
     color: colors.textDim,
   } as TextStyle, // the small uppercase section labels
   /**
-   * The tile headline. This design has no photograph on a story tile, so the headline at 22/26
-   * is what carries the visual weight a picture would — which is why it is a token of its own
-   * rather than `heading` reused a size down.
+   * The headline of a story, opened. It is a token of its own rather than `heading` reused a size
+   * down because a headline is extrabold where a heading is semibold, and because the story tiles
+   * take their own headline from this same face — `story.ts`'s HEADLINE_SIZE, a size down from
+   * here. The tiles drew at this full 22/26 until a render showed it ellipsizing a lead headline
+   * mid-sentence in a 145 pt column; the detail page has the whole width and keeps it.
    */
   pinHeadline: {
     fontFamily: fonts.extrabold,

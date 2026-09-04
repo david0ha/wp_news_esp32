@@ -7,7 +7,8 @@ import { Change } from '../Change'
 import { toneGraphicsColor } from '../tone'
 import { changeTone, formatPrice } from '../../../lib/edition/format'
 import { photoBoxHeight } from '../../../lib/edition/feedLayout'
-import { type Tile } from '../../../lib/edition/tiles'
+import { TABLE_HEAD_ROW_H, TABLE_ROW_H, type Tile } from '../../../lib/edition/tiles'
+import { DETAIL_CELL_FONT, detailCellWidth, detailLabelWidth } from './tableGrid'
 import { type Edition, type EditionChart, type EditionPhoto } from '../../../lib/edition/types'
 import { colors, fonts, layout, radius, space, tabular, type } from '../../../theme'
 
@@ -15,18 +16,21 @@ import { colors, fonts, layout, radius, space, tabular, type } from '../../../th
  * One tile, opened.
  *
  * Progressive disclosure, borrowed from YouTube's description and Pinterest's closeup: the tile
- * showed a clamped body, four figures of nine, the last two quarters of six. This shows all of
+ * showed a clamped body, four figures of nine, the last quarter of six. This shows all of
  * it. The SHAPE stays the same so the reader recognises what they tapped — same heading, same
- * order, same drawing, more of it. That is why the story headline keeps `type.pinHeadline`
- * rather than growing into a page title: the tile's headline is what was tapped, and a different
- * face at a different size reads as a different story.
+ * order, same drawing, more of it. The story headline keeps `type.pinHeadline`, which is the same
+ * extrabold cut the tile drew it in and one size up: this page has the full measure where the tile
+ * had 145 pt, so the headline can be as loud here as the tile could not afford to make it. What it
+ * must not do is change FACE — a different family at a different weight reads as a different
+ * story, and the reader is meant to recognise the thing they just tapped.
  *
- * NO TEXT IS CLAMPED WITH `numberOfLines`. This page is not the masonry: there is no estimator to
- * agree with, so the copy sets its own length and every text block grows to fit it. What is
+ * NO COPY IS CLAMPED WITH `numberOfLines`. This page is not the masonry: there is no estimator to
+ * agree with, so the copy sets its own length and every block of prose grows to fit it. What is
  * measured here is only what cannot flex — a photograph and a chart are given a pixel box off the
- * window width, because neither has intrinsic content to be sized by, and the statement's columns
- * are fixed widths so the periods line up under their headings, which is why that grid scrolls
- * sideways rather than shrinking.
+ * window width, because neither has intrinsic content to be sized by, and the statement grid is
+ * built from two computed widths and two fixed row heights, because its two halves straddle a
+ * scroll boundary and have to line up across it. The row labels are the one thing on the page
+ * that IS clamped, to a single line, for exactly that reason.
  *
  * Colour follows the same two rules as everywhere else. A percentage change takes the text pair,
  * inside the shared `Change`; a drawn line takes the graphics pair through `toneGraphicsColor`;
@@ -37,6 +41,7 @@ export function TileDetail({
   tile,
   edition,
   editionKey,
+  photos,
   width,
 }: {
   tile: Tile
@@ -47,6 +52,13 @@ export function TileDetail({
    * so without it React hands a new edition's caption to the old edition's mounted picture.
    */
   editionKey: string
+  /**
+   * Whether this edition's photographs can be fetched — the same flag the feed was cut with, from
+   * the same `isDemo(cached)`. A story's picture is drawn here rather than by `editionToTiles`, so
+   * it is the one photograph the cut does not already govern: without this the demo's story detail
+   * would still print the empty grey box its feed no longer has.
+   */
+  photos: boolean
   /** The window's width. The media below is sized in pixels, not flexed, so it needs the number. */
   width: number
 }) {
@@ -63,7 +75,7 @@ export function TileDetail({
           <Text style={type.pinHeadline}>{story.headline}</Text>
           {story.deck !== '' ? <Text style={styles.deck}>{story.deck}</Text> : null}
           {story.byline !== '' ? <Text style={type.caption}>{story.byline}</Text> : null}
-          {story.photo !== null ? (
+          {photos && story.photo !== null ? (
             <DetailPhoto
               key={`${editionKey}:${story.photo.id}`}
               photo={story.photo}
@@ -182,42 +194,81 @@ export function TileDetail({
 
     case 'table': {
       const { table } = tile
+      // The two widths the grid is built from, decided before anything draws — see `tableGrid.ts`.
+      // The card is the content width less the surface's own padding on both sides.
+      const cardWidth = contentWidth - 2 * space.md
+      const labelWidth = detailLabelWidth(
+        table.rows.map((r) => r.label),
+        cardWidth,
+      )
+      const cellWidth = detailCellWidth(
+        table.columns,
+        table.rows.flatMap((r) => r.values),
+      )
       return (
         <View style={styles.root}>
           <Text style={type.heading}>{table.title !== '' ? table.title : 'Statement'}</Text>
           {table.note !== '' ? <Text style={type.caption}>{table.note}</Text> : null}
-          {/* The whole grid, scrolled sideways rather than cut down to the last two periods the
-              tile showed. A statement is the one thing on this page that must never lose a
-              column: the periods beside each other ARE the argument. */}
+          {/* THE LABEL COLUMN STAYS PUT AND THE PERIODS SCROLL UNDER IT. All six columns in one
+              flex row put "3Q25" half off the card and cut its figures down the middle, and
+              scrolling the whole grid took the row names away with them, which left a wall of
+              numbers naming nothing. So the labels sit outside the `ScrollView` and the periods
+              inside it. A statement is the one thing on this page that must never lose a column:
+              the periods beside each other ARE the argument.
+
+              THE TWO HALVES ARE ALIGNED BY ARITHMETIC, not by a shared parent: every row is
+              exactly `TABLE_ROW_H` and every head `TABLE_HEAD_ROW_H` on both sides, because
+              nothing constrains a scrolled child to its neighbour's height and a single wrapped
+              cell would otherwise slide every label out of step with its figures. */}
           <View style={styles.gridSurface}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View>
-                <View style={styles.gridHead}>
-                  <View style={styles.gridLabel} />
-                  {table.columns.map((c, j) => (
-                    <Text key={`${c}:${j}`} style={[styles.gridCellHead, tabular]}>
-                      {c}
-                    </Text>
-                  ))}
-                </View>
+            <View style={styles.gridBody}>
+              <View style={{ width: labelWidth }}>
+                {/* An empty head cell, carrying the rule across the label column so the hairline
+                    under the headings runs the whole width of the card. */}
+                <View style={styles.gridLabelHead} />
                 {table.rows.map((r, i) => (
-                  <View key={`${r.label}:${i}`} style={styles.gridRow}>
-                    {/* The label WRAPS rather than ellipsizing. The contract caps it at 24
-                        characters, which at 13 px sits right on the edge of the 132 px column,
-                        so a clamp would cut the longest row names on the one page whose whole
-                        job is showing the statement entire. Each row is its own flex row, so a
-                        label that takes two lines takes its row with it and the periods stay
-                        aligned with their headings. */}
-                    <Text style={[type.caption, styles.gridLabel]}>{r.label}</Text>
+                  <Text
+                    key={`${r.label}:${i}`}
+                    style={[type.caption, styles.gridLabel]}
+                    numberOfLines={1}
+                  >
+                    {r.label}
+                  </Text>
+                ))}
+              </View>
+              {/* `flex: 1` and not the ScrollView's own sizing: in a flex row a horizontal
+                  ScrollView with no flex takes its CONTENT's width, which for six periods is
+                  wider than the card, and the grid would run off the page instead of scrolling
+                  inside it. */}
+              <ScrollView style={styles.gridScroll} horizontal showsHorizontalScrollIndicator={false}>
+                <View>
+                  <View style={styles.gridHead}>
                     {table.columns.map((c, j) => (
-                      <Text key={`${c}:${j}`} style={[styles.gridCell, tabular]}>
-                        {r.values[j] ?? ''}
+                      <Text
+                        key={`${c}:${j}`}
+                        style={[styles.gridCellHead, tabular, { width: cellWidth }]}
+                      >
+                        {c}
                       </Text>
                     ))}
                   </View>
-                ))}
-              </View>
-            </ScrollView>
+                  {table.rows.map((r, i) => (
+                    <View key={`${r.label}:${i}`} style={styles.gridRow}>
+                      {/* No clamp on a figure. The column was sized to the widest cell in the
+                          whole grid, so there is nothing here to ellipsize or to wrap. */}
+                      {table.columns.map((c, j) => (
+                        <Text
+                          key={`${c}:${j}`}
+                          style={[styles.gridCell, tabular, { width: cellWidth }]}
+                        >
+                          {r.values[j] ?? ''}
+                        </Text>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
           </View>
         </View>
       )
@@ -485,35 +536,49 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     padding: space.md,
   },
+  gridBody: {
+    flexDirection: 'row',
+  },
+  gridScroll: {
+    flex: 1,
+  },
+  // The four blocks below take their heights from `tiles.ts` — the same two the statement TILE
+  // draws its rows at. They are given as a height AND as the line height, so a glyph sits in the
+  // middle of its own row on both sides of the scroll boundary rather than at the top of one and
+  // the middle of the other.
   gridHead: {
     flexDirection: 'row',
+    height: TABLE_HEAD_ROW_H,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
-    paddingBottom: space.xs,
+  },
+  gridLabelHead: {
+    height: TABLE_HEAD_ROW_H,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   gridRow: {
     flexDirection: 'row',
-    // Top-aligned so a row label that wraps to two lines keeps its figures on the first one,
-    // level with every other row's.
-    alignItems: 'flex-start',
-    paddingVertical: space.xs,
+    height: TABLE_ROW_H,
   },
   gridLabel: {
-    width: 132,
+    height: TABLE_ROW_H,
+    lineHeight: TABLE_ROW_H,
   },
   gridCellHead: {
-    width: 76,
     fontFamily: fonts.semibold,
     fontSize: 12,
-    lineHeight: 18,
+    lineHeight: TABLE_HEAD_ROW_H,
     color: colors.textDim,
     textAlign: 'right',
   },
   gridCell: {
-    width: 76,
     fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 18,
+    // From `tableGrid.ts`, which measured the columns at this size. A number here that the width
+    // estimate does not know about is a cell that wraps inside a fixed-height row and loses its
+    // second line to the surface's clipping.
+    fontSize: DETAIL_CELL_FONT,
+    lineHeight: TABLE_ROW_H,
     color: colors.text,
     textAlign: 'right',
   },

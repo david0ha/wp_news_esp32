@@ -8,6 +8,7 @@ import {
   humanEditionError,
   tileUrl,
 } from './client'
+import { parseEdition } from './parse'
 
 const FIXTURE = join(__dirname, '../../../../components/news_core/test/host/fixtures/news.json')
 const fixtureText = (): string => readFileSync(FIXTURE, 'utf8')
@@ -64,6 +65,11 @@ describe('editionClient.fetch — the happy path', () => {
     expect(r.etag).toBe('W/"abc123"')
     expect(r.edition.subject.symbol).toBe('SNDK')
     expect(r.edition.stories).toHaveLength(4)
+    // AND THE BODY ITSELF, untouched. The disk cache stores this rather than the parsed edition,
+    // because `parseEdition` reads wire names and cannot read its own output back — so what the
+    // client hands over has to be the JSON as served, with its wire spellings intact.
+    expect(r.wire).toEqual(JSON.parse(fixtureText()))
+    expect(r.edition).toEqual(parseEdition(r.wire))
   })
 
   it('reads the ETag whatever case the server spelled the header in', async () => {

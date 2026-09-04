@@ -16,8 +16,9 @@ import { useEditionUrl } from '../editionUrl'
  *
  * WHEN IT DOES NOT ARRIVE THE TILE KEEPS ITS HEIGHT. The layout was computed before the fetch
  * started, so a missing picture must not move the page — the caption goes on a plain ground and
- * the column beside it does not shift. That is also what the demo edition looks like, whose tiles
- * live in `sim/tiles/` and are on no server the phone can reach.
+ * the column beside it does not shift. That is the failure of a picture that SHOULD have arrived:
+ * a slow desk, a deleted tile. An edition with nowhere to fetch from at all — the demo — never
+ * reaches this component, because `editionToTiles` cuts it without photo tiles.
  *
  * THE ADDRESS COMES FROM CONTEXT, not from a prop. This is the only component that needs to know
  * where the edition was served from, and it sits three levels below the screen that holds it —

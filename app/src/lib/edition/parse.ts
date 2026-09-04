@@ -228,7 +228,7 @@ function parseTable(v: unknown): EditionTable {
   const o = obj(v)
   // Six columns and ten rows, `news_model.h`'s NEWS_TABLE_COLS / NEWS_TABLE_ROWS. Eight quarters
   // is a scroll and six is a page: a phone printing quarters seven and eight would be showing
-  // periods that never reach the glass, under a tile whose whole promise is "the last two".
+  // periods that never reach the glass, under a tile whose promise is the LAST of them.
   // A head that is not a string still SPENDS its column (`.map(str)` gives it a blank head),
   // because a row's cells are positional against this header and dropping the third head would
   // slide the fourth quarter's numbers under the third quarter's date.

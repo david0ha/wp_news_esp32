@@ -1,26 +1,31 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, space, tabular, type } from '../../../theme'
 import {
-  TABLE_COLS_SHOWN,
   TABLE_GAP,
   TABLE_HEAD_ROW_H,
   TABLE_NOTE_LINE,
   TABLE_NOTE_LINES,
   TABLE_ROW_H,
   TABLE_ROWS,
+  TABLE_TILE_COLS,
   TABLE_TITLE_LINE,
   TABLE_TITLE_LINES,
   type Tile,
 } from '../../../lib/edition/tiles'
 
 /**
- * A statement, cut down to what fits a column: the row labels and the LAST two periods.
+ * A statement, cut down to what fits a column: the row labels and the LAST period.
  *
- * The last two and not the first two, because the newest quarter is the one being read and a
- * tile that showed 1Q25 and 2Q25 of a six-quarter run would be showing history with the news cut
- * off. Every cell renders verbatim — the producer wrote "(22.1%)" and "9,340", and re-formatting
- * a preformatted cell is how a phone and a sheet come to disagree about a number. The numeric
- * plane beside the cells (`row.n`) is for the detail page's graphics, not for this tile.
+ * The last and not the first, because the newest quarter is the one being read and a tile that
+ * showed 1Q25 of a six-quarter run would be showing history with the news cut off. How many
+ * periods that is — `TABLE_TILE_COLS` — is a question about the LABEL: at two of them the labels
+ * were the flexible half of a 145 pt content box and came out "Net in…", "Consu…", and a
+ * statement row nobody can name is not a statement. Every cell renders verbatim — the producer
+ * wrote "(22.1%)" and "9,340", and re-formatting a preformatted cell is how a phone and a sheet
+ * come to disagree about a number. The numeric plane beside the cells (`row.n`) is parsed but drawn
+ * by NOTHING on this app today — neither this tile nor the detail page reads it. It is there
+ * because the wire carries it and the board plots from it; the phone has no graphic that needs it
+ * yet.
  *
  * Nothing here is coloured. A statement cell carries neither a direction nor a series, and the
  * hairline under the column heads is the only rule on the tile.
@@ -41,7 +46,7 @@ import {
  */
 export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) {
   const { table } = tile
-  const from = Math.max(0, table.columns.length - TABLE_COLS_SHOWN)
+  const from = Math.max(0, table.columns.length - TABLE_TILE_COLS)
   const columns = table.columns.slice(from)
   return (
     <View style={styles.root}>
@@ -50,7 +55,7 @@ export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) 
       </Text>
       <View style={styles.headRow}>
         <View style={styles.labelCell} />
-        {/* Keyed by position as well as label: a statement whose last two columns carry the same
+        {/* Keyed by position as well as label: a statement whose trailing columns carry the same
             heading is a producer mistake, not a crash. */}
         {columns.map((c, j) => (
           <Text key={`${c}:${j}`} style={[styles.colHead, tabular]} numberOfLines={1}>
@@ -63,10 +68,10 @@ export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) 
           <Text style={[type.caption, styles.labelCell]} numberOfLines={1}>
             {r.label}
           </Text>
-          {/* `from + j`, never `j`. `columns` was sliced down to the last two periods, but a
+          {/* `from + j`, never `j`. `columns` was sliced down to the trailing periods, but a
               row's `values` stay positional against the FULL column list the parser built — so
-              indexing by the sliced position would print the OLDEST two figures under the newest
-              two headings, which is a wrong number that looks like a right one. */}
+              indexing by the sliced position would print the OLDEST figure under the newest
+              heading, which is a wrong number that looks like a right one. */}
           {columns.map((c, j) => (
             <Text key={`${c}:${j}`} style={[styles.cell, tabular]} numberOfLines={1}>
               {r.values[from + j] ?? ''}

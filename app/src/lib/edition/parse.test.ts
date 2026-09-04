@@ -469,7 +469,7 @@ describe('parseEdition — totality', () => {
 
   it('caps a statement at the board’s rows and columns', () => {
     // news_parse.c:647/:670/:711 — NEWS_TABLE_ROWS=10, NEWS_TABLE_COLS=6. Eight quarters is a
-    // scroll and six is a page; the tile's "last two periods" must be the last two the board saw.
+    // scroll and six is a page; the newest period the tile prints must be one the board saw.
     const many = (n: number, f: (i: number) => unknown) => Array.from({ length: n }, (_, i) => f(i))
     const e = parseEdition({
       tables: [

@@ -63,7 +63,20 @@ export function humanEditionError(e: unknown): string {
 }
 
 export type EditionFetch =
-  | { status: 'ok'; edition: Edition; etag: string | null }
+  | {
+      status: 'ok'
+      edition: Edition
+      /**
+       * The JSON body this edition was parsed FROM, otherwise untouched.
+       *
+       * It travels with the parsed edition because the disk cache stores wire bodies and not
+       * parsed editions — `parseEdition` reads wire names, so re-parsing a parsed edition drops
+       * every field the two spellings disagree about. See `store.ts`'s header. Re-serialising the
+       * edition here instead would be inventing a second wire format nothing else speaks.
+       */
+      wire: unknown
+      etag: string | null
+    }
   | { status: 'not_modified' }
 
 export interface EditionClientOptions {
@@ -183,7 +196,7 @@ export function createEditionClient(opts: EditionClientOptions = {}): EditionCli
       throw new EditionError('bad_json', 'the payload carries no subject and no stories')
     }
 
-    return { status: 'ok', edition, etag: res.headers.get('etag') }
+    return { status: 'ok', edition, wire: json, etag: res.headers.get('etag') }
   }
 
   async function fetchTile(url: string, w: number, h: number): Promise<Uint8Array> {

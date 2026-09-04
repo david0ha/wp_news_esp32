@@ -7,10 +7,15 @@
 // firmware to it. To change the demo: change the fixture, run
 // `python3 tools/mock_news_server.py --write-fixture`, then copy it here.
 //
-// Its photo tiles live in `sim/tiles/`, not in the app, and are not served from anywhere the
-// phone can reach — so the demo's photo tiles show their captions on a plain ground. That is
-// the honest result and not a bug to fix: a demo that shipped two hundred kilobytes of
-// base64 to look complete would be paying for a picture nobody asked for.
+// THE DEMO CARRIES NO PHOTOGRAPHS. Its pictures live in `sim/tiles/`, not in the app, and a
+// photograph is fetched from beside the payload at the news URL — which a phone showing the demo
+// does not have. So `editionToTiles(e, { photos: false })` cuts the edition without them, and the
+// band and the Photos chip go with them. They used to be drawn anyway, as three empty grey boxes
+// with captions under them, which was the first thing a new reader saw.
+//
+// Bundling them is the obvious alternative and is not free: three pictures at 4 bpp are about
+// 550 KB of base64 in the JS bundle for an edition most readers see once. PNGs at a tile's real
+// size would be a fraction of that and are a possible follow-up; nobody has measured them yet.
 
 import { parseEdition } from './parse'
 import { type Edition } from './types'
@@ -26,6 +31,20 @@ let cached: Edition | null = null
  * the load lazy with it, so the demo costs nothing until it is the thing being shown.
  */
 export function demoEdition(): Edition {
-  if (cached === null) cached = parseEdition(require('./demo.json'))
+  if (cached === null) cached = parseEdition(demoWire())
   return cached
+}
+
+/**
+ * The demo's WIRE JSON — the same bytes a desk would have served, before parsing.
+ *
+ * The cache stores wire bodies rather than parsed editions (see `store.ts`), so the demo needs to
+ * offer one too: `demoCache()` dresses it as a cache entry, and an entry whose `wire` did not
+ * re-parse into its `edition` would be a shape the reader has to special-case.
+ *
+ * Shared and to be treated as read-only, like `demoEdition()`'s result. `require` memoises, so
+ * both calls hand back the one object Metro evaluated.
+ */
+export function demoWire(): unknown {
+  return require('./demo.json')
 }

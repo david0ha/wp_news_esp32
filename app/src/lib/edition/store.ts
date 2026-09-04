@@ -1,10 +1,23 @@
 // The last good edition, kept so the Today tab reads on a train.
 //
 // One AsyncStorage key holding one JSON object: the URL it came from, the ETag to send next
-// time, when the server last CONFIRMED it, and the parsed edition. Four fields and no schema
-// version, because the read re-parses through `parseEdition` — a cache written by a newer build
-// degrades to defaults instead of crashing a launch, which is the only version handling a shape
-// this small needs.
+// time, when the server last CONFIRMED it, and THE WIRE BODY EXACTLY AS THE DESK SERVED IT. Four
+// fields and no schema version, because the read re-parses through `parseEdition` — a cache
+// written by a newer build degrades to defaults instead of crashing a launch, which is the only
+// version handling a shape this small needs.
+//
+// THE WIRE BODY AND NOT THE PARSED EDITION, and that is the whole point of this file's shape.
+// `parseEdition` reads WIRE names — `prev_close`, `change_pct`, `is_subject`, `as_of` — and the
+// model spells them `prevClose`, `changePct`, `isSubject`, `asOf`. Storing the parsed edition and
+// re-parsing THAT dropped every field whose two spellings differ, silently, while every field
+// spelled the same on both sides (`open`, `high`, `last`, `headline`) came through untouched and
+// hid it. The visible half was a Range tile of em dashes on a cold deep link, under a masthead
+// that had the same numbers from the same desk. Re-parsing is only "a cache a newer build wrote
+// degrades gracefully" if what is re-parsed is what the parser reads.
+//
+// So an entry written before this — one carrying `edition` and no `wire` — reads as NO CACHE at
+// all. A parsed edition cannot be turned back into wire names, and half an edition is worse than
+// none. It costs one fetch, once, on the first launch after the update.
 //
 // `fetchedAt` is a confirmation, not a change: a 304 moves it (`touchCachedEdition`) without
 // touching a byte of content. That is exactly the question the freshness line answers, and it is
@@ -29,6 +42,12 @@ export interface CachedEdition {
   etag: string | null
   /** When the server last confirmed this content — a 200 or a 304. */
   fetchedAt: number
+  /**
+   * The JSON body as it arrived, parsed from the response text and otherwise untouched. THIS IS
+   * WHAT IS PERSISTED; `edition` below is derived from it and is not written to disk.
+   */
+  wire: unknown
+  /** `parseEdition(wire)`. Kept beside it so no caller has to re-derive what the reader already did. */
   edition: Edition
 }
 
@@ -55,7 +74,10 @@ function sanitize(raw: unknown): CachedEdition | null {
   const o = raw as Record<string, unknown>
   if (typeof o.url !== 'string') return null
   if (typeof o.fetchedAt !== 'number' || !Number.isFinite(o.fetchedAt)) return null
-  const edition = parseEdition(o.edition)
+  // An entry from before this cache stored wire bodies. See the header: there is no way back to
+  // the wire names from a parsed edition, so it is treated as nothing cached.
+  if (!('wire' in o)) return null
+  const edition = parseEdition(o.wire)
   // An entry with nothing showable in it is worse than no entry: it would put a blank sheet on
   // screen and suppress the load that would have replaced it.
   if (isEmptyEdition(edition)) return null
@@ -63,6 +85,7 @@ function sanitize(raw: unknown): CachedEdition | null {
     url: o.url,
     etag: typeof o.etag === 'string' ? o.etag : null,
     fetchedAt: o.fetchedAt,
+    wire: o.wire,
     edition,
   }
 }
@@ -102,7 +125,11 @@ export async function writeCachedEdition(c: CachedEdition): Promise<void> {
   // write is in flight must see what was just fetched.
   current = c
   try {
-    await AsyncStorage.setItem(EDITION_CACHE_KEY, JSON.stringify(c))
+    // The wire body, NOT the entry: `edition` is derived from `wire` on every read, and writing
+    // both would store the same content twice in two spellings — the second of which is the one
+    // the reader cannot use. See the header.
+    const stored = { url: c.url, etag: c.etag, fetchedAt: c.fetchedAt, wire: c.wire }
+    await AsyncStorage.setItem(EDITION_CACHE_KEY, JSON.stringify(stored))
   } catch {
     // best-effort: the cost is re-fetching one edition on the next cold launch
   }

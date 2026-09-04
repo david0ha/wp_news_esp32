@@ -7,6 +7,7 @@ import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masonry } from '../../components/edition/Masonry'
 import { EditionUrlProvider } from '../../components/edition/editionUrl'
 import { TileDetail } from '../../components/edition/detail/TileDetail'
+import { isDemo } from '../../lib/edition/editionState'
 import { getNewsUrl } from '../../lib/store'
 import { getCurrentEdition, readCachedEdition, type CachedEdition } from '../../lib/edition/store'
 import { COLUMN_GAP, columnWidth, editionKey } from '../../lib/edition/feedLayout'
@@ -93,7 +94,15 @@ export default function TileDetailRoute() {
 
   const cached = held.status === 'have' ? held.cached : null
   const key = cached === null ? '' : editionKey(cached)
-  const feed = useMemo(() => (cached === null ? null : editionToTiles(cached.edition)), [cached])
+  // The same question the Today tab asks, of the same entry: the demo's photographs are on no
+  // server this phone can reach, so its edition is cut without them here too. Both screens must
+  // answer it the same way or a tile would exist on one and not the other, and the id in this
+  // route's path names a tile in the OTHER screen's feed.
+  const photos = cached !== null && !isDemo(cached)
+  const feed = useMemo(
+    () => (cached === null ? null : editionToTiles(cached.edition, { photos })),
+    [cached, photos],
+  )
   const tile = feed === null ? null : findTile(feed, id)
   const rest: Tile[] = feed === null ? [] : feed.tiles.filter((t) => t.id !== id)
   const colWidth = columnWidth(width, layout.gutter, COLUMN_GAP)
@@ -130,7 +139,9 @@ export default function TileDetailRoute() {
   }
 
   // An id that names nothing: a link to yesterday's `photo:3` in an edition with two photographs,
-  // or a hand-typed segment. The edition is fine, so this is a message and not an error.
+  // a `photo:0` saved before this phone fell back to the demo, or a hand-typed segment. The
+  // edition is fine, so this is a message and not an error — and not a redirect either, which
+  // would take the reader somewhere without saying why the link went nowhere.
   if (tile === null) {
     return (
       <Screen>
@@ -147,7 +158,13 @@ export default function TileDetailRoute() {
           disk by a cold deep link rather than the tab's — so the address is this entry's own. */}
       <EditionUrlProvider url={cached.url}>
         <ScrollView contentContainerStyle={styles.scroll}>
-          <TileDetail tile={tile} edition={cached.edition} editionKey={key} width={width} />
+          <TileDetail
+            tile={tile}
+            edition={cached.edition}
+            editionKey={key}
+            photos={photos}
+            width={width}
+          />
           {rest.length > 0 ? (
             <View style={styles.more}>
               <Text style={type.headingSm}>More from this edition</Text>
