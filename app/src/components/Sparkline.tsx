@@ -1,5 +1,6 @@
 import { View } from 'react-native'
 import Svg, { Polyline } from 'react-native-svg'
+import { polylinePoints } from '../lib/polyline'
 
 /**
  * The tiny watchlist-row chart — a single polyline, no fill, no axes. The caller picks the
@@ -22,23 +23,10 @@ export function Sparkline({
   stroke: string
   strokeWidth?: number
 }) {
-  // NaN (and any other non-finite) points are dropped before scaling.
-  const values = data.filter((n) => Number.isFinite(n))
-  if (values.length < 2) return <View style={{ width, height }} />
-
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const span = max - min
-
-  // x: index mapped linearly to [1, width-1]; y: value mapped to [height-2, 2] over
-  // [min, max]. A flat series (span 0) draws the horizontal midline.
-  const points = values
-    .map((v, i) => {
-      const x = 1 + (i * (width - 2)) / (values.length - 1)
-      const y = span === 0 ? height / 2 : height - 2 - ((v - min) * (height - 4)) / span
-      return `${x},${y}`
-    })
-    .join(' ')
+  // The scaling is `lib/polyline.ts`, shared with the edition's line charts: it drops the
+  // non-finite points, insets for the stroke, and answers '' when fewer than two survive.
+  const points = polylinePoints(data, width, height)
+  if (points === '') return <View style={{ width, height }} />
 
   return (
     <Svg width={width} height={height}>

@@ -5,9 +5,10 @@
 // No currency symbol inside formatPrice/formatDelta: screens prefix via
 // currencySymbol(quote.currency) — never a literal '$'.
 
-const DASH = '—'
+import { MONTHS } from '../months'
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/** Exported because `lib/edition/format.ts` re-exports these formatters and their dash. */
+export const DASH = '—'
 
 function isFiniteNumber(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v)

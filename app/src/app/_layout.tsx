@@ -50,6 +50,9 @@ export default function RootLayout() {
             {/* Full-screen pushes over the tab bar. */}
             <Stack.Screen name="preview" />
             <Stack.Screen name="market/[symbol]" />
+            {/* One tile of today's edition, opened. Named `tile` and not `edition` so it does
+                not share a URL prefix with the Today tab, which is `(tabs)/edition.tsx`. */}
+            <Stack.Screen name="tile/[id]" />
             <Stack.Screen name="add-ticker" options={{ presentation: 'modal' }} />
           </Stack>
         </DeviceProvider>

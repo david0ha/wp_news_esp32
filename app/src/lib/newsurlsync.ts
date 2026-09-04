@@ -10,9 +10,10 @@
 // decided once: read the mark, POST, clear the mark on success, leave it on failure.
 //
 // And one pure function, `decideNewsUrlSave`, for what the Save button's own attempt means —
-// which outcomes persist the address, which leave it pending, and which are a verdict on the
-// address that must not be saved at all. It is pure and exported so that those rules can be
-// tested as rules, rather than living in a screen this app has no way to render under test.
+// which outcomes persist the address, which leave it pending, which are a verdict on the address
+// that must not be saved at all, and which of them are about a board this phone does not have. It
+// is pure and exported so that those rules can be tested as rules, rather than living in a screen
+// this app has no way to render under test.
 
 import { Esp32Error, humanError, type Esp32Client } from './esp32'
 import { clearNewsUrl, clearNewsUrlPending, isNewsUrlPending, peekNewsUrl } from './store'
@@ -46,7 +47,8 @@ export type NewsUrlSaveDecision = {
 }
 
 /**
- * What a save came to, from the address and the outcome of the attempt to hand it to the board.
+ * What a save came to, from the address, the outcome of the attempt to hand it to the board, and
+ * whether this phone has a board at all.
  *
  * The board is asked first and the phone written after, and the order is what lets a refusal be
  * honoured: an address the board refuses is a red error and is not saved anywhere, which cannot be
@@ -56,11 +58,24 @@ export type NewsUrlSaveDecision = {
  * A timeout is the board asleep, and is the normal case rather than a failure: a board with deep
  * sleep on is unreachable by design between wakes. Anything else that is not a refusal — off the
  * Wi-Fi, busy redrawing, a 5xx, an error that is not even the client's — is the board not taking
- * it just now, and the sentence should not claim to know more than that. No client at all is its
- * own sentence again, because "asleep" would be a claim about a board this phone is not attached
- * to.
+ * it just now, and the sentence should not claim to know more than that.
+ *
+ * `hasBoard` exists for the one case where every sentence above is about hardware the reader does
+ * not have. The News source editor used to hide itself without a board; it does not any more,
+ * because the Today tab reads this same address, so "it will be sent when this app reaches one"
+ * is now said to people who have never owned one and will never see it clear — nothing without a
+ * client calls `syncPendingNewsUrl`. The mark still goes on, because a board set up later must
+ * still receive the address; only the sentence changes, to name the reader that IS using it.
+ *
+ * IT IS `=== false`, NEVER `!hasBoard`. `null` means storage has not answered yet, and a sentence
+ * about a board this phone may well own must not be said on a guess — the same rule the Board
+ * card's "No board set up on this phone." line follows.
  */
-export function decideNewsUrlSave(url: string, outcome: NewsUrlSaveOutcome): NewsUrlSaveDecision {
+export function decideNewsUrlSave(
+  url: string,
+  outcome: NewsUrlSaveOutcome,
+  hasBoard: boolean | null,
+): NewsUrlSaveDecision {
   if ('ok' in outcome) {
     return {
       persist: true,
@@ -70,6 +85,16 @@ export function decideNewsUrlSave(url: string, outcome: NewsUrlSaveOutcome): New
     }
   }
   if ('noClient' in outcome) {
+    if (hasBoard === false) {
+      return {
+        persist: true,
+        pending: true,
+        tone: 'info',
+        message: url
+          ? 'Saved. Today reads from this address. A board you set up later will get it too.'
+          : 'Cleared — Today is on the demo edition.',
+      }
+    }
     return {
       persist: true,
       pending: true,

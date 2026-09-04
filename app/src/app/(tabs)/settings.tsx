@@ -79,8 +79,9 @@ export default function Settings() {
   // The effect has to be *total* over `baseUrl`, including the null arm, because it is the only
   // thing that reflects a **cleared** board back into this field. "Forget this board" empties
   // storage and the provider, and every other part of this screen notices at once — the Board card
-  // drops to "No board set up on this phone.", News source disappears, the Forget button itself
-  // goes. The old `if (baseUrl)` guard left exactly one survivor: the Connection input, still
+  // drops to "No board set up on this phone.", the poll rows under News source go (they read
+  // `source`, which only a board sets), the Forget button itself goes. The old `if (baseUrl)` guard
+  // left exactly one survivor: the Connection input, still
   // showing 192.168.0.42 a few rows above a Save button that would hand it straight back to
   // `setBaseUrl`. A stale prefill next to a Save button is not a cosmetic leftover, it is an offer
   // to undo a deliberate act, and the undo is one Return key away with no confirmation between.
@@ -239,42 +240,61 @@ export default function Settings() {
           </Section>
 
           {/*
-            The news snapshot URL — the one setting that decides what the board shows. It is the
-            phone's setting now, with the board as a subscriber that catches up when it is awake
-            (`store.ts`, `newsurlsync.ts`); but it still describes *a board*, so with none there
-            is nothing for the field to be about, and the section goes rather than being disabled —
-            and again on `=== false`, so an unknown draws the section it has always drawn.
+            The news snapshot URL — the one setting that decides what the phone and the board
+            show. It is the PHONE's setting (`store.ts`, `newsurlsync.ts`), with the board as a
+            subscriber that catches up when it is awake, and since the Today tab reads the same
+            address directly it is now a setting that does something with no board at all. So the
+            section no longer hides itself without one: hiding it used to be right when the URL
+            was only ever a thing to POST at hardware, and it is wrong now that the phone is a
+            reader too.
+
+            What stays gated is everything that describes a BOARD's polling — Last poll, Last
+            success, Polls. Those come from `source`, which is only ever set from a board's
+            getState(), so they are absent without one for free rather than by a second branch.
 
             What the editor shows is whichever copy is the truth right now. The board echoes its
-            URL back, and whenever nothing is pending that is the address in force. While a save is
-            waiting for the board, the phone's copy is what the user asked for and the board's is
-            what they asked to change, so the phone's wins and the note underneath says why.
+            URL back, and whenever nothing is pending that is the address in force. While a save
+            is waiting for the board, the phone's copy is what the user asked for and the board's
+            is what they asked to change, so the phone's wins and the note underneath says why.
           */}
-          {hasDevice === false ? null : (
-            <Section title="News source">
-              <Text style={styles.help}>
-                The address the board fetches its snapshot from. Clear it and save to put the board
-                back on its built-in demo data.
-              </Text>
-              {source ? (
-                <Card style={styles.infoCard}>
-                  <InfoRow label="Last poll" value={fetchResultLabel(source.lastResult)} />
-                  <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
-                  <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
-                </Card>
-              ) : null}
-              {source && source.lastResult !== 'ok' ? (
-                <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
-              ) : null}
+          <Section title="News source">
+            <Text style={styles.help}>
+              The address today’s edition is fetched from — by this phone on the Today tab, and
+              by the board when it has one. Clear it and save to fall back to the built-in demo
+              edition.
+            </Text>
+            {source ? (
+              <Card style={styles.infoCard}>
+                <InfoRow label="Last poll" value={fetchResultLabel(source.lastResult)} />
+                <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
+                <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
+              </Card>
+            ) : null}
+            {source && source.lastResult !== 'ok' ? (
+              <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
+            ) : null}
+            {/* NOT MOUNTED UNTIL STORAGE HAS ANSWERED. The editor captures `initial` into a
+                `useState` on its first render and the key below deliberately does not move when
+                the phone's own copy arrives — so a mount taken before `loadLocal` resolves keeps
+                the empty string it was born with. On a phone with no board that is forever:
+                `source` stays null, the key stays '', and the field sits empty while a saved
+                address is in force, `dirty` reads true against it, and the button offers to
+                "Clear and use demo data" — an offer to discard an address the user cannot see.
+                `localUrl !== null` is the disk having answered (`''` is a real answer meaning no
+                address), so this waits for it rather than showing a lie for a frame or forever. */}
+            {localUrl !== null ? (
               <NewsUrlEditor
                 // Remount when the board reports a different URL, so the field picks up the new
                 // value instead of holding a draft the board has already moved past. The board's
                 // URL and only that: a save the board slept through changes the phone's copy and
                 // the pending mark but not this key, so the editor keeps the sentence it has just
-                // shown for that save instead of being rebuilt underneath it.
+                // shown for that save instead of being rebuilt underneath it. That is also why the
+                // gate above is a mount condition and not another term in this key — a key that
+                // moved when the phone's copy did would rebuild the editor on every save.
                 key={source?.url ?? ''}
-                initial={pendingSync ? (localUrl ?? '') : (source?.url ?? localUrl ?? '')}
+                initial={pendingSync ? localUrl : (source?.url ?? localUrl)}
                 pending={pendingSync}
+                hasBoard={hasDevice}
                 onSave={async (next) => {
                   setSyncRejected(null)
                   // What the attempt means — persist or not, pending or not, which voice — is
@@ -294,7 +314,7 @@ export default function Settings() {
                       outcome = { error: e }
                     }
                   }
-                  const decision = decideNewsUrlSave(next, outcome)
+                  const decision = decideNewsUrlSave(next, outcome, hasDevice)
                   if (decision.persist) {
                     await saveNewsUrl(next)
                     if (!decision.pending) await clearNewsUrlPending()
@@ -313,9 +333,9 @@ export default function Settings() {
                   return decision
                 }}
               />
-              {syncRejected ? <Text style={styles.error}>{syncRejected}</Text> : null}
-            </Section>
-          )}
+            ) : null}
+            {syncRejected ? <Text style={styles.error}>{syncRejected}</Text> : null}
+          </Section>
 
           {/* Manual host / IP override. Deliberately not hidden without a board: typing a host by
               hand — or tapping "Find board" — is a legitimate way for somebody who skipped setup to
@@ -418,14 +438,24 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * dirty, because the address in it is not saved anywhere. `pending` is the standing version of
  * `info` — an address on this phone the board has not been told about — and is said in the same
  * voice for the same reason.
+ *
+ * WHAT THAT STANDING SENTENCE SAYS DEPENDS ON WHETHER THERE IS A BOARD. The mark is set on every
+ * save this phone makes without one, and nothing without a client ever clears it, so on a phone
+ * that has never had a board "Not yet on the board" is permanent, names hardware that does not
+ * exist, and appears under an address the Today tab is already reading perfectly well. With
+ * `hasBoard === false` it names that reader instead. `=== false` and never `!hasBoard`: `null` is
+ * storage still answering, and it keeps the board owner's wording.
  */
 function NewsUrlEditor({
   initial,
   pending,
+  hasBoard,
   onSave,
 }: {
   initial: string
   pending: boolean
+  /** Tri-state, from `useDevice`. `null` is "storage has not answered", never "no board". */
+  hasBoard: boolean | null
   onSave: (value: string) => Promise<NewsUrlSaveDecision>
 }) {
   const [draft, setDraft] = useState(initial)
@@ -469,7 +499,9 @@ function NewsUrlEditor({
       {outcome ? <Text style={toneStyle[outcome.tone]}>{outcome.message}</Text> : null}
       {pending && !outcome && !dirty ? (
         <Text style={styles.help}>
-          Not yet on the board — it will be sent the next time this app reaches it.
+          {hasBoard === false
+            ? 'Today reads from this address. A board you set up later will get it too.'
+            : 'Not yet on the board — it will be sent the next time this app reaches it.'}
         </Text>
       ) : null}
       <Button

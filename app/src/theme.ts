@@ -173,4 +173,26 @@ export const type = {
     textTransform: 'uppercase',
     color: colors.textDim,
   } as TextStyle, // the small uppercase section labels
+  /**
+   * The headline of a story, opened. It is a token of its own rather than `heading` reused a size
+   * down because a headline is extrabold where a heading is semibold, and because the story tiles
+   * take their own headline from this same face — `story.ts`'s HEADLINE_SIZE, a size down from
+   * here. The tiles drew at this full 22/26 until a render showed it ellipsizing a lead headline
+   * mid-sentence in a 145 pt column; the detail page has the whole width and keeps it.
+   */
+  pinHeadline: {
+    fontFamily: fonts.extrabold,
+    fontSize: 22,
+    lineHeight: 26,
+    letterSpacing: -0.4,
+    color: colors.text,
+  } as TextStyle,
+  /** The deck under a tile headline: the sentence that says why the headline matters. */
+  pinDeck: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    lineHeight: 19,
+    letterSpacing: 0,
+    color: colors.textDim,
+  } as TextStyle,
 } as const
