@@ -299,7 +299,7 @@ class Lang(unittest.TestCase):
         self.assertEqual([p for p in M.validate_payload(d, TILES)[0] if "headline" in p], [])
 
     def test_the_body_floor_is_weighted_too(self):
-        d = self.payload(lang="ko"); d["stories"][0]["body"] = "가 " * 350   # 700 syll ≈ 1400
+        d = self.payload(lang="ko"); d["stories"][0]["body"] = "가나 " * 350   # 700 syllables weigh 1,400
         _, warnings = M.validate_payload(d, TILES)
         self.assertEqual([w for w in warnings if "body is" in w], [])
 
@@ -775,15 +775,16 @@ static void test_no_break_before_closing_or_after_opening_punctuation(void)
 
 static void test_hangul_cut_lands_on_a_boundary_and_continues_from_it(void)
 {
-    /* 5 columns, 2 lines: ten syllables of room. The sentence end after the
-     * sixth glyph would cost a line, so the cut fills line two instead; the
-     * bytes consumed are exactly the source bytes of what was set, so the next
-     * leg starts on the syllable after the cut. */
+    /* 6 columns, 2 lines: twelve glyphs of room. Line one ends on the full
+     * stop (a break before "." is illegal, so "가나다라마." is one line of six);
+     * stopping there would leave line two empty, so the cut fills line two
+     * instead. The bytes consumed are exactly the source bytes of what was
+     * set, so the next leg starts on the syllable after the cut. */
     const char *src = "가나다라마. 바사아자차카타파하";
     char dst[64];
-    size_t used = ui_fit_text(&FACE, 50, LH * 2, 0, UI_FIT_HANGUL, src, dst, sizeof dst);
-    CHECK_STR(dst, "가나다라마.\n바사아자차");
-    CHECK_INT(used, strlen("가나다라마. 바사아자차"));
+    size_t used = ui_fit_text(&FACE, 60, LH * 2, 0, UI_FIT_HANGUL, src, dst, sizeof dst);
+    CHECK_STR(dst, "가나다라마.\n바사아자차카");
+    CHECK_INT(used, strlen("가나다라마. 바사아자차카"));
     CHECK(src[used] != ' ');                            /* the next leg begins on ink, not a space */
 }
 
