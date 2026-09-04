@@ -445,34 +445,53 @@ static void print_measures(void)
            S_RUNNING_HEAD, (int)sz.x, UI_COL(4));
 }
 
+/* Every string the BOARD supplies, as opposed to every string the payload does.
+ * Hoisted out of check_fixed_strings() because two checks read it: that one
+ * asks whether the faces can draw them, and check_fixed_labels_fit() asks
+ * whether the page has room for them. */
+static const char *const FIXED[] = {
+    S_RUNNING_HEAD, S_BRAND,
+    S_BADGE_DEMO, S_BADGE_STALE, S_BADGE_OFFLINE, S_NO_DATA, S_WAITING,
+    S_KEY_PAGE, S_KEY_REFRESH, S_KEY_WIFI,
+    S_PAGE_FRONT, S_PAGE_MARKETS,
+    S_PEERS, S_INSIDE, S_IN_BRIEF, S_EMPTY_CELL,
+    S_COL_SYMBOL, S_COL_NAME, S_COL_PE, S_COL_CAP, S_COL_LAST, S_COL_CHG,
+    /* The same twelve in Korean. They are checked on every run and not only
+     * on the Korean one, because coverage is a property of the committed
+     * faces rather than of the payload in front of the simulator: a face
+     * regenerated without the Hangul fallback would otherwise pass the demo
+     * run and fail on the day an edition arrives in Korean.
+     *
+     * Every one of them goes through cover_all(), which asks all six Latin
+     * text faces — and each of those resolves Hangul through the Korean face
+     * chained behind it. So this checks the CHAIN, which is the thing that
+     * can break, and not merely that six Korean fonts were compiled in. */
+    S_KO_BADGE_DEMO, S_KO_BADGE_STALE, S_KO_BADGE_OFFLINE,
+    S_KO_PEERS, S_KO_INSIDE, S_KO_IN_BRIEF,
+    S_KO_COL_SYMBOL, S_KO_COL_NAME, S_KO_COL_PE, S_KO_COL_CAP,
+    S_KO_COL_LAST, S_KO_COL_CHG,
+    S_WIFI_TITLE, S_RESTARTING,
+    /* The setup sheet's standing type. It is the longest fixed copy on the
+     * board and the first page a new owner sees, so a character outside the
+     * faces' coverage would be a tofu box in the one place nobody can
+     * afford one. */
+    S_SETUP_KICKER, S_SETUP_KEYS, S_SETUP_DECK, S_SETUP_NETWORK,
+    S_SETUP_ABOUT_H, S_SETUP_ABOUT, S_SETUP_AFTER_H, S_SETUP_AFTER,
+    S_SETUP_TROUBLE_H, S_SETUP_TROUBLE,
+    S_SETUP_SOURCE_H, S_SETUP_SOURCE,
+    /* Characters that exist only inside a runtime-composed string — the
+     * separators the tape and the briefs put between two fields, the digits
+     * and the decimal point of every figure ui_money() and ui_pct()
+     * produce. This is the check that catches the whole class of bug where a
+     * label renders but the space in "%s %s" comes out as a box. */
+    S_COMPOSED_CHARS,
+    S_DATA_PUNCT,
+    "0123456789",
+    "\xC2\xB7",                     /* the tape's separator */
+};
+
 static void check_fixed_strings(void)
 {
-    static const char *const FIXED[] = {
-        S_RUNNING_HEAD, S_BRAND,
-        S_BADGE_DEMO, S_BADGE_STALE, S_BADGE_OFFLINE, S_NO_DATA, S_WAITING,
-        S_KEY_PAGE, S_KEY_REFRESH, S_KEY_WIFI,
-        S_PAGE_FRONT, S_PAGE_MARKETS,
-        S_PEERS, S_INSIDE, S_IN_BRIEF, S_EMPTY_CELL,
-        S_COL_SYMBOL, S_COL_NAME, S_COL_PE, S_COL_CAP, S_COL_LAST, S_COL_CHG,
-        S_WIFI_TITLE, S_RESTARTING,
-        /* The setup sheet's standing type. It is the longest fixed copy on the
-         * board and the first page a new owner sees, so a character outside the
-         * faces' coverage would be a tofu box in the one place nobody can
-         * afford one. */
-        S_SETUP_KICKER, S_SETUP_KEYS, S_SETUP_DECK, S_SETUP_NETWORK,
-        S_SETUP_ABOUT_H, S_SETUP_ABOUT, S_SETUP_AFTER_H, S_SETUP_AFTER,
-        S_SETUP_TROUBLE_H, S_SETUP_TROUBLE,
-        S_SETUP_SOURCE_H, S_SETUP_SOURCE,
-        /* Characters that exist only inside a runtime-composed string — the
-         * separators the tape and the briefs put between two fields, the digits
-         * and the decimal point of every figure ui_money() and ui_pct()
-         * produce. This is the check that catches the whole class of bug where a
-         * label renders but the space in "%s %s" comes out as a box. */
-        S_COMPOSED_CHARS,
-        S_DATA_PUNCT,
-        "0123456789",
-        "\xC2\xB7",                     /* the tape's separator */
-    };
     for (size_t i = 0; i < sizeof FIXED / sizeof *FIXED; i++) {
         cover_all("fixed string", FIXED[i]);
     }
@@ -704,7 +723,7 @@ static void check_masthead(const char *pass)
 #define SIM_LABELS_MAX 2048
 #define SIM_ART_MAX      16
 
-static struct { lv_area_t a; const char *txt; const lv_font_t *font; }
+static struct { lv_area_t a; const char *txt; const lv_font_t *font; int track; }
              g_lab[SIM_LABELS_MAX];
 static int   g_labs;
 
@@ -728,6 +747,11 @@ static void walk(lv_obj_t *o, int depth)
                 lv_obj_get_coords(o, &g_lab[g_labs].a);
                 g_lab[g_labs].txt  = txt;
                 g_lab[g_labs].font = lv_obj_get_style_text_font(o, LV_PART_MAIN);
+                /* The tracking too, because every caps label on this sheet
+                 * carries some and a measurement that leaves it out understates
+                 * a six-letter head by a dozen pixels. */
+                g_lab[g_labs].track =
+                    lv_obj_get_style_text_letter_space(o, LV_PART_MAIN);
                 g_labs++;
             }
         } else if (lv_obj_check_type(o, &lv_image_class)) {
@@ -783,6 +807,96 @@ static void check_label_overlap(const char *pass)
     }
     if (seen > REPORT_MAX) {
         printf("       ...and %d more pairs of labels sharing paper\n", seen - REPORT_MAX);
+    }
+}
+
+/* A word the BOARD wrote, wider than the box the page gave it.
+ *
+ * Its slot is fixed and its text is not the payload's, so the two must have been
+ * measured against each other at design time — and when they were not, LVGL
+ * silently writes an ellipsis, because every label on this sheet is
+ * LV_LABEL_LONG_MODE_DOTS. "MKT C…" over a column of market capitalisations is
+ * not a rendering fault and not an overlap; it is a head that has stopped being
+ * a word, and nothing else in this file would have said so.
+ *
+ * FIXED STRINGS ONLY, and that restriction is the whole reason the check can be
+ * strict. A headline, a deck and a caption are ellipsized ON PURPOSE — the
+ * budgets in tools/edition/PROMPT.md exist because the board cuts an overlong
+ * one rather than reflowing the page — so a check that failed on any ellipsis
+ * would fail on the design. The board's own twelve words are the opposite case:
+ * they are chosen, they are short, and there is no producer to blame.
+ *
+ * It earns its place with a second language on the sheet. A Hangul syllable at
+ * label_14 is a full em where a Latin capital is about half of one, so 시가총액
+ * is as wide as eight English letters in a field sized for seven, and the only
+ * way to know before this check existed was to open the PNG and read Korean.
+ *
+ * The measurement matches what LVGL will do: the label's own face, the label's
+ * own letter_space, no wrap. One pixel of slack is allowed, because tracking is
+ * applied per character including the last and a head cut to fit exactly can
+ * measure a pixel over the box LVGL then draws it in happily. */
+/* The board string a label was set from, or NULL, with `dotted` saying whether
+ * LVGL has already eaten the end of it.
+ *
+ * That second answer is the whole difficulty. LV_LABEL_LONG_MODE_DOTS does not
+ * flag a label as truncated: it OVERWRITES the label's own text buffer with the
+ * shortened spelling and keeps the eaten characters privately, so by the time
+ * anything walks the tree the label no longer says what the page asked it to. A
+ * check that compared the text it found against the twelve words would
+ * therefore pass on exactly the labels it exists to catch. What survives the
+ * overwrite is the shape: a prefix of the original, then three ASCII dots. */
+static const char *board_string_of(const char *s, bool *dotted)
+{
+    for (size_t i = 0; i < sizeof FIXED / sizeof *FIXED; i++) {
+        if (strcmp(s, FIXED[i]) == 0) { *dotted = false; return FIXED[i]; }
+    }
+
+    /* Not one of them as it stands — so is it one of them with its tail eaten?
+     * S_WAITING ends in three dots of its own, which is why the exact match
+     * above runs first and this only ever sees a string that is none of them. */
+    const size_t n = strlen(s);
+    if (n <= 3 || strcmp(s + n - 3, "...") != 0) return NULL;
+
+    for (size_t i = 0; i < sizeof FIXED / sizeof *FIXED; i++) {
+        if (strlen(FIXED[i]) <= n - 3) continue;
+        if (strncmp(s, FIXED[i], n - 3) == 0) { *dotted = true; return FIXED[i]; }
+    }
+    return NULL;
+}
+
+static void check_fixed_labels_fit(const char *pass)
+{
+    for (int i = 0; i < g_labs; i++) {
+        if (!g_lab[i].font) continue;
+
+        bool dotted = false;
+        const char *want = board_string_of(g_lab[i].txt, &dotted);
+        if (!want) continue;
+
+        /* The width the page would need for the WHOLE word, measured the way
+         * LVGL will draw it: the label's own face and its own tracking. */
+        lv_point_t sz;
+        lv_text_get_size(&sz, want, g_lab[i].font, g_lab[i].track, 0,
+                         LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+
+        const int box = g_lab[i].a.x2 - g_lab[i].a.x1 + 1;
+        const int hbox = g_lab[i].a.y2 - g_lab[i].a.y1 + 1;
+
+        /* The width test is for ONE-LINE slots only — every badge, head and
+         * column head on both sheets is one. A fixed string in a box deep
+         * enough to wrap is allowed to be wider than the measure, because it
+         * will use the second line; measuring it against LV_COORD_MAX would
+         * fail the setup sheet's standing paragraphs for doing their job. The
+         * dotted test needs no such caveat: LVGL writes dots only when the text
+         * has overflowed the box it was actually given, on any number of
+         * lines. */
+        const bool one_line = hbox < 2 * lv_font_get_line_height(g_lab[i].font);
+        if (!dotted && (!one_line || (int)sz.x <= box + 1)) continue;
+
+        FAILV("%s: \"%s\" wants %d px and has a %d px slot at x[%d..%d] "
+              "y[%d..%d] — it prints as \"%s\". Shorten the WORD, not the column",
+              pass, want, (int)sz.x, box, g_lab[i].a.x1, g_lab[i].a.x2,
+              g_lab[i].a.y1, g_lab[i].a.y2, g_lab[i].txt);
     }
 }
 
@@ -1480,6 +1594,7 @@ static void check_page(const char *pass, ui_page_t page, const news_t *v)
     if (!ui_data_live()) check_no_chg_colour(pass);
 
     check_label_overlap(pass);
+    check_fixed_labels_fit(pass);
 }
 
 /* --- the LVGL memory budget ------------------------------------------------

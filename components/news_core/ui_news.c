@@ -163,9 +163,36 @@ static bool s_demo;
 static bool s_has_dateline;
 static ui_status_t s_status;
 
+/* The edition's language, resolved once per snapshot rather than at each of the
+ * twelve draw sites that read it.
+ *
+ * It defaults to English and to "en" because a board with no snapshot has no
+ * language: the setup sheet, the no-data page and everything drawn before the
+ * first fetch are the board talking about itself, and the one thing the
+ * localisation follows is the edition. A NULL snapshot puts it back, so a board
+ * whose payload is cleared stops printing Korean furniture around nothing.
+ *
+ * The pointer into `s_data->lang` would have done as well and is deliberately
+ * not what is kept: ui_news.h's lifetime rule lets the caller replace the
+ * snapshot, and a tag that outlives the buffer it points into is the kind of
+ * bug that shows up as one wrong word on a page nobody is watching. Eight bytes
+ * copied is the whole of the fix. */
+static const ui_lang_t *s_lang = &UI_LANG_EN;
+static char s_lang_tag[NEWS_LANG_MAX] = "en";
+
 static const char *const PAGE_TITLES[UI_PAGE_COUNT] = {
     S_PAGE_FRONT, S_PAGE_MARKETS,
 };
+
+const ui_lang_t *ui_lang_now(void)
+{
+    return s_lang;
+}
+
+const char *ui_lang_tag_now(void)
+{
+    return s_lang_tag;
+}
 
 const char *ui_news_page_title(ui_page_t page)
 {
@@ -457,7 +484,13 @@ static void build_dateline(lv_obj_t *par)
 
     /* The chip is a filled rectangle with the word reversed out of it, so the
      * fill is created first and the type over it. Both are sized to the word by
-     * refresh_chip(); they are built at the widest state word the board has. */
+     * refresh_chip(), which is also where the word itself comes from.
+     *
+     * The seed below is the English macro rather than a table lookup, and that
+     * is not an oversight: the furniture is built before any snapshot has
+     * arrived, so there is no edition to take a language from yet. The string
+     * never reaches the glass — the chip starts hidden and refresh_chip() sets
+     * the text before it is ever shown. */
     s_chip     = ui_fill(par, SLOT_R_X, UI_DATELINE_Y, SLOT_W, UI_DATELINE_H);
     s_chip_txt = ui_lab_inv(par, SLOT_R_X, y, SLOT_W, UI_F_LABEL,
                             LV_TEXT_ALIGN_CENTER, S_BADGE_OFFLINE);
@@ -482,9 +515,9 @@ static void build_dateline(lv_obj_t *par)
 static void refresh_chip(void)
 {
     const char *text = NULL;
-    if (!s_status.online)           text = S_BADGE_OFFLINE;
-    else if (s_status.stale)        text = S_BADGE_STALE;
-    else if (s_have_data && s_demo) text = S_BADGE_DEMO;
+    if (!s_status.online)           text = ui_lang_now()->badge_offline;
+    else if (s_status.stale)        text = ui_lang_now()->badge_stale;
+    else if (s_have_data && s_demo) text = ui_lang_now()->badge_demo;
 
     ui_show(s_chip, text != NULL);
     ui_show(s_chip_txt, text != NULL);
@@ -793,6 +826,15 @@ void ui_news_set_data(const news_t *v)
     s_have_data    = (v != NULL);
     s_demo         = v && v->demo;
     s_has_dateline = v && v->dateline[0];
+
+    /* The language, before anything below is drawn. Every fixed string the two
+     * pages set from here on reads the table this line chose, so it has to be
+     * chosen before refresh_chip() and before the page updates at the foot of
+     * this function — not after them, which would print one edition's badge in
+     * the previous edition's language. */
+    snprintf(s_lang_tag, sizeof s_lang_tag, "%s",
+             (v && v->lang[0]) ? v->lang : "en");
+    s_lang = ui_lang(s_lang_tag);
 
     /* The desk in the middle of the ruled line and the company on the right of
      * it. Both are upper-cased here rather than in ui_strings.h because both

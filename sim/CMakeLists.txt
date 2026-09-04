@@ -56,6 +56,8 @@ add_executable(sim
     ${CORE}/news_mock.c
     ${CORE}/news_service.c
     ${CORE}/ui_common.c
+    ${CORE}/ui_format.c
+    ${CORE}/ui_lang.c
     ${CORE}/ui_compose.c
     ${CORE}/ui_fit.c
     ${CORE}/ui_chart.c

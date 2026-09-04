@@ -34,6 +34,12 @@
  * ui_mod_create() builds every widget a renderer can ever need and hides it; a
  * placement shows what the day used and hides the rest. On a board that repaints
  * every five minutes for years, object churn is where the heap goes.
+ *
+ * That is why the standing heads below are created carrying an English macro
+ * and set from ui_lang_now() in the renderer. Creation happens once, at
+ * ui_page_front_create(), before any snapshot exists and therefore before there
+ * is a language to take; the string a widget is built with is a placeholder
+ * that every run() overwrites before the module is ever shown.
  */
 #include "ui_modules.h"
 
@@ -1731,7 +1737,7 @@ static void briefs_run(const ui_mod_t *m, const news_t *v, int w,
     ui_w_briefs_t *g = &inst->w.briefs;
     const int h = m->h;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, S_IN_BRIEF);
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang_now()->in_brief);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
     /* How many items the column holds, then the leftover shared out between
@@ -1828,6 +1834,25 @@ enum { PF_SYM = 0, PF_NAME, PF_PE, PF_CAP, PF_LAST, PF_CHG };
 static const int PEER_MIN_W[UI_PEER_FIELDS] = { 74, 100, 68, 80, 84, 84 };
 static const int PEER_DROP[UI_PEER_FIELDS]  = { PF_NAME, PF_PE, PF_CAP,
                                                 PF_LAST, PF_CHG, PF_SYM };
+
+/* The six field heads in the edition's language, indexed by field.
+ *
+ * A function filling a local rather than the static array of macros this used
+ * to be: the heads follow the payload now, so they cannot be decided at compile
+ * time, and a static that a renderer rewrote once per edition would be one
+ * table shared by both pages' instances of this module. Six pointer copies per
+ * draw is not a cost worth a cache. */
+static void peer_heads(const char *head[UI_PEER_FIELDS])
+{
+    const ui_lang_t *L = ui_lang_now();
+
+    head[PF_SYM]  = L->col_symbol;
+    head[PF_NAME] = L->col_name;
+    head[PF_PE]   = L->col_pe;
+    head[PF_CAP]  = L->col_cap;
+    head[PF_LAST] = L->col_last;
+    head[PF_CHG]  = L->col_chg;
+}
 
 /* Which fields a module of `w` keeps, and where each of them sits. Returns the
  * number kept; `x` and `cw` are indexed by field. */
@@ -1936,19 +1961,19 @@ static void peers_run(const ui_mod_t *m, const news_t *v, int w,
      * the block ends rather than trailing off. */
     const int pitch = UI_TAB_ROW_H;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, S_PEERS);
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang_now()->peers);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
-    static const char *const HEAD[UI_PEER_FIELDS] = {
-        S_COL_SYMBOL, S_COL_NAME, S_COL_PE, S_COL_CAP, S_COL_LAST, S_COL_CHG,
-    };
+    const char *head[UI_PEER_FIELDS];
+    peer_heads(head);
+
     const int hy = UI_MOD_KICKER_H + MD_RULE_DY + UI_RULE_HAIR + 6;
     for (int i = 0; i < UI_PEER_FIELDS; i++) {
         if (!keep[i]) { ui_show(g->col[i], false); continue; }
         lv_obj_set_style_text_align(g->col[i],
                                     i <= PF_NAME ? LV_TEXT_ALIGN_LEFT
                                                  : LV_TEXT_ALIGN_RIGHT, 0);
-        md_text(g->col[i], fx[i], hy, fw[i], UI_TAB_HEAD_H, HEAD[i]);
+        md_text(g->col[i], fx[i], hy, fw[i], UI_TAB_HEAD_H, head[i]);
     }
 
     const int top   = MD_PEER_HEAD;
@@ -2920,7 +2945,7 @@ static void thumbs_run(const ui_mod_t *m, const news_t *v, int w,
 
     ui_w_thumbs_t *g = &inst->w.thumbs;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, S_INSIDE);
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang_now()->inside);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
     int ph = m->h - MD_THUMB_HEAD - UI_MOD_CAP_GAP - UI_MOD_CAP_H;

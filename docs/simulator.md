@@ -18,6 +18,50 @@ With `NEWS_URL` set it runs the device's own fetch-and-parse path — the same `
 the same `news_parse()`, the same bytes — and fetches tiles from `<that URL's directory>/tiles/`
 exactly as the device does. A change to the wire contract is caught here rather than on the glass.
 
+## Two runs, because an edition has a language
+
+`./sim.sh` typesets twice. The first pass is the built-in demo snapshot and writes `shots/`; the
+second is the committed Korean fixture, `components/news_core/test/host/fixtures/news.ko.json`, and
+writes `shots/ko/`:
+
+```sh
+./build/sim shots/ko --json ../components/news_core/test/host/fixtures/news.ko.json \
+    --tiles tiles --only-pages
+```
+
+Both passes have to be clean for the script to exit zero. The second exists because the language is
+the one thing about a payload that the demo snapshot can never exercise: the demo is English by
+definition — an unconfigured board has no edition and so has no language — so without a second
+payload the six Korean faces, the fallback chain behind the six Latin ones and the twelve localised
+fixed strings would all be compiled in and never drawn. It is a committed fixture and not a fetch,
+so it asserts the same thing on every machine, and `--only-pages` because A1 and A2 are what a
+language changes: the ink specimen, the provisioning overlay and the no-data sheet are the board
+talking about itself and stay English whatever the edition is.
+
+### A word the board wrote, wider than its slot
+
+`check_fixed_labels_fit()` is what holds the Korean spellings to their columns, and it arrived with
+them. A Hangul syllable is a full em where a Latin capital is about half of one, so a Korean column
+head is roughly twice the width of the English word it replaces in the same 68-to-100 px field, and
+the failure it produces is silent: every label on this sheet is `LV_LABEL_LONG_MODE_DOTS`, so LVGL
+writes an ellipsis and moves on. `MKT C…` over a column of market capitalisations is not a rendering
+fault and not an overlap, and nothing else in the file would have said a word about it.
+
+It runs on **fixed strings only**, and that restriction is what lets it be strict. A headline, a deck
+and a caption are ellipsized *on purpose* — the budgets in `tools/edition/PROMPT.md` exist because
+the board cuts an overlong one rather than reflowing the page — so a check that failed on any
+ellipsis would fail on the design. The board's own twelve words are the opposite case: they are
+chosen, they are short, and there is no producer to blame. When it fails, the Korean spelling is what
+gives; the grid's spans are even by construction and the widths are not negotiable.
+
+Finding them is less obvious than it sounds. `LV_LABEL_LONG_MODE_DOTS` does not flag a label as
+truncated — it overwrites the label's own text buffer with the shortened spelling and keeps the eaten
+characters privately — so by the time the tree is walked the label no longer says what the page asked
+it to, and a check comparing the text it finds against the twelve words would pass on exactly the
+labels it exists to catch. What survives is the shape: a prefix of the original, then three ASCII
+dots. `board_string_of()` matches on that, and the failure names the whole word, the width it wanted,
+the slot it got, and what actually printed.
+
 ## It is not a preview
 
 The two things that make it evidence rather than an approximation:
@@ -37,10 +81,10 @@ the flushed area — the same trap `main.cpp` names, with the same symptom if it
 Bayer pattern seaming at every strip boundary.
 
 **It compiles the real page files.** `sim/CMakeLists.txt` builds `components/news_core/` verbatim:
-the same `ui_news.c`, `ui_page_front.c`, `ui_page_markets.c`, `ui_common.c`, `ui_fit.c`,
-`ui_chart.c`, `ui_tile.c`, `wp_palette.c`, the same parser and the same seven generated fonts. The
-only file that differs between the simulator and the firmware is the HTTP port —
-`http_port_curl.c` instead of `http_port_esp.c`.
+the same `ui_news.c`, `ui_page_front.c`, `ui_page_markets.c`, `ui_common.c`, `ui_format.c`,
+`ui_lang.c`, `ui_fit.c`, `ui_chart.c`, `ui_tile.c`, `wp_palette.c`, the same parser and the same
+thirteen generated fonts. The only file that differs between the simulator and the firmware is the
+HTTP port — `http_port_curl.c` instead of `http_port_esp.c`.
 
 It also puts `components/news_core/` itself on the include path, not just `include/`, so it can
 include `ui_internal.h`. That header is private to the UI files by design; the simulator is the

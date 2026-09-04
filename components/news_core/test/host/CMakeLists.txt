@@ -68,6 +68,19 @@ add_test(NAME epd6_transpose COMMAND test_epd6_transpose)
 add_host_test(test_palette test_palette.c ${CORE}/wp_palette.c)
 add_test(NAME palette COMMAND test_palette)
 
+# How a figure is spelled. ui_format.c is the pure tail of the UI — cents and
+# basis points in, the strings the tape and the industry table set out — and the
+# number of characters it produces is a layout decision, so the rules belong
+# somewhere faster and more legible than a 1200x1600 screenshot.
+add_host_test(test_format test_format.c ${CORE}/ui_format.c)
+add_test(NAME format COMMAND test_format)
+
+# Which spelling of the board's own twelve words an edition gets. The rest of
+# the localisation is a question about widths and the simulator asks it; what
+# lands here is the selection and the completeness of the two tables.
+add_host_test(test_lang test_lang.c ${CORE}/ui_lang.c)
+add_test(NAME lang COMMAND test_lang)
+
 # Copyfitting (spec §5) and integer chart scaling (spec §7) are pure and belong
 # here, but they land with the layout work rather than with the data model.
 # Guarded on existence so this build is green before those files are written and

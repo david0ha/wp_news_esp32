@@ -574,7 +574,46 @@ Franklin** — a revival of Franklin Gothic — for bylines, kickers, captions, 
 | `ui_font_body_16`      | Source Serif 4, opsz 8 | 16 | column body text |
 | `ui_font_label_14`     | Libre Franklin, wght 600 | 14 | bylines, kickers, captions, tables, the tape |
 
-118 KiB of flash for all seven, against an 8 MB app partition. There is no separate numeral face: the
+Six of those seven have a **Korean face chained behind them**, because an edition may arrive written
+in Korean:
+
+| face | family | size | stands behind |
+|------|--------|-----:|------|
+| `ui_font_ko_display_56` | Noto Serif KR Bold | 56 | `ui_font_display_56` |
+| `ui_font_ko_display_36` | Noto Serif KR Bold | 36 | `ui_font_display_36` |
+| `ui_font_ko_deck_24`    | Noto Serif KR Regular | 24 | `ui_font_deck_24` |
+| `ui_font_ko_body_20`    | Noto Serif KR Regular | 20 | `ui_font_body_20` |
+| `ui_font_ko_body_16`    | Noto Serif KR Regular | 16 | `ui_font_body_16` |
+| `ui_font_ko_label_14`   | Noto Sans KR Medium | 14 | `ui_font_label_14` |
+
+Each is reached through the Latin face's `lv_font_t.fallback`, which `tools/gen_fonts.py` writes into
+the generated `.c` because the struct lives in flash and cannot be patched at runtime. **No call site
+names one.** LVGL resolves `fallback` recursively inside `lv_font_get_glyph_dsc()`, so every label,
+every copyfit measurement and the simulator's own coverage check pick up Hangul with no change
+anywhere, and a Korean headline naming "Nvidia" keeps its Latin letters and its figures in Playfair
+rather than taking the CJK family's. The layout arithmetic does not move either: LVGL takes line
+height and baseline from the *primary* face, and the Korean faces are cut at the same pixel size.
+
+The masthead has no Korean face and never will. A blackletter nameplate is the paper's brand rather
+than copy, there is no Korean blackletter, and the same argument keeps A2's running head English.
+
+**The board's own words follow the edition, and there are twelve of them.** `ui_strings.h` carries a
+second block of `S_KO_*` macros and `ui_lang.c` puts both blocks in a `ui_lang_t`; `ui_news_set_data()`
+picks the table from the payload's `lang` and every draw site reads `ui_lang_now()`. The list is the
+two live badges (지연, 오프라인 — 데모 is the third), the three standing heads (동종 업계, 사진,
+단신) and the six industry-table column heads (종목, 회사명, PER, 시가총액, 현재가, 등락). It is this
+short because everything else on the sheet — dateline, kickers, headlines, decks, bodies, statement
+titles, row labels — arrives already written in the edition's language. A board with no edition has no
+language, so the setup sheet, the key legend and the no-payload dateline stay English whatever the
+last edition was.
+
+The spellings are held to their columns rather than the columns to the spellings: a Hangul syllable at
+label_14 is a full em where a Latin capital is about half of one, so 등락 stands where CHG does and a
+longer 전일대비 would not. The simulator's "label wider than its slot" check is what enforces it.
+
+119 KiB of flash for the seven Latin faces and 1.50 MiB for the six Korean ones behind them — 1.62 MiB
+in all, measured as the size of the compiled font objects, against an 8 MB app partition. There is no
+separate numeral face: the
 tape's levels are set in Franklin and the dossier's figures in Source Serif, which is not a
 compromise — lining figures are the point of both families, and a table set in the same face as the
 headlines above it is what makes a front page look typeset rather than assembled.

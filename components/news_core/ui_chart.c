@@ -380,21 +380,13 @@ static void outline_abs(lv_layer_t *L, int x1, int y1, int x2, int y2)
     bar_abs(L, x2, y1, x2, y2, false);          /* right  */
 }
 
-/* 641283 -> "6,412.83". The whole part goes through ui_group_int for the same
- * reason the ribbon's levels do — an ungrouped five-digit number is genuinely
- * slower to read — and the sign is ASCII '-', which is the board's convention
- * because no face here carries U+2212. The negation runs through int64 because
- * -INT32_MIN has nowhere to go in the 32-bit long this compiles to on Xtensa. */
-static void fmt_cents(char *out, size_t n, int32_t cents)
-{
-    int64_t v = cents;
-    bool neg = v < 0;
-    if (neg) v = -v;
-
-    char whole[16];
-    ui_group_int(whole, sizeof whole, (int)(v / 100));
-    snprintf(out, n, "%s%s.%02d", neg ? "-" : "", whole, (int)(v % 100));
-}
+/* A chart's end labels are ui_money(), and used to be a private copy of it that
+ * differed only in the integer type it negated through. The copy is deleted
+ * rather than kept in step: this label sits on the same sheet as the industry
+ * table's LAST column and often quotes the very same price, so the day
+ * ui_money() stopped printing cents above five integer digits was the day a
+ * Korean front page said 96,800 in the table and 96,800.00 on the chart six
+ * inches above it. One formatter, one spelling. */
 
 /* The i-th of m slots: the pixels the candle owns, the column its wick runs
  * down, and the body's own narrower span. Slot edges are computed from i*w/m
@@ -686,12 +678,12 @@ static void label_ends(lv_obj_t *chart, chart_t *s, ui_chart_win_t win,
     }
 
     char txt[24];
-    fmt_cents(txt, sizeof txt, s->c[0]);
+    ui_money(txt, sizeof txt, s->c[0]);
     const int fw = val_w(txt, cap);
     s->first = value_label(chart, s->first, fw, LV_TEXT_ALIGN_LEFT, txt);
 
     char txt2[24];
-    fmt_cents(txt2, sizeof txt2, s->c[s->n - 1]);
+    ui_money(txt2, sizeof txt2, s->c[s->n - 1]);
     const int lw = val_w(txt2, cap);
     s->last = value_label(chart, s->last, lw, LV_TEXT_ALIGN_RIGHT, txt2);
 

@@ -118,7 +118,7 @@ ordering rule:
 | | | |
 |---|---|---|
 | 1 | **Schema and budget** | `tools/mock_news_server.py --validate` — the reference producer is the only thing that knows the contract well enough to judge an arbitrary payload, so it is *invoked* rather than reimplemented |
-| 2 | **Typeset** | `tools/edition/render-check.sh` — the real `news_core`, the real seven faces, the real compositor, the real six-ink quantizer, at 1200 × 1600. Proof sheets kept |
+| 2 | **Typeset** | `tools/edition/render-check.sh` — the real `news_core`, the real thirteen faces (seven Latin, six Korean behind them), the real compositor, the real six-ink quantizer, at 1200 × 1600. Proof sheets kept |
 | 3 | **Fingerprint** | sha256 over the canonicalised JSON plus every tile byte. An identical fingerprint makes the publish a no-op |
 | 4 | **Schedule** | may anything be published at this instant? If not, the edition stages |
 | 5 | **Publish** | build the directory complete, `os.replace` it into place, `os.replace` the pointer |

@@ -127,6 +127,55 @@
 #define S_COL_LAST         "LAST"
 #define S_COL_CHG          "CHG"
 
+/* --- the same twelve strings in Korean ------------------------------------
+ *
+ * The edition carries a `lang`, and these eleven words plus PER are everything
+ * a Korean sheet needs localised: two live badges, three standing heads and six
+ * column heads. Everything else a reader looks at — dateline, kickers,
+ * headlines, decks, bodies, statement titles, row labels — arrives in the
+ * payload already written in the edition's language, which is why the list is
+ * this short. The masthead is not on it: a blackletter nameplate is the paper's
+ * brand rather than copy, and there is no Korean blackletter to set it in.
+ *
+ * They are macros in this file, and not literals in ui_lang.c, for the two
+ * reasons at the top of this header: tools/gen_fonts.py derives the Korean
+ * faces' glyph set from what it finds here, and the simulator checks every
+ * string in this file against every face that could draw it. A Korean word
+ * added straight into ui_lang.c would be a tofu box on the glass.
+ *
+ * THE SPELLINGS ARE HELD TO THEIR COLUMNS. A Hangul syllable at label_14 is a
+ * full em where a Latin capital is about half of one, so a four-syllable head
+ * is as wide as an eight-letter English one and the industry table's narrowest
+ * field is 68 px. The simulator's check_fixed_labels_fit() fails the build on a
+ * word from this block that does not fit the slot the page gives it, and when
+ * it does the Korean is what gives — 등락 rather than 전일대비, 사진 rather
+ * than 화보 — because the slot widths are the grid and the grid is even by
+ * construction. Widening a column to fit a word is how a table stops fitting a
+ * page.
+ *
+ * 시가총액 is spelled out where English abbreviates to MKT CAP: Korean has no
+ * conventional short form for it that a reader would not have to decode, and at
+ * four syllables it still fits the 80 px field.
+ *
+ * PER is the Korean market's own name for the price/earnings ratio, printed in
+ * Latin capitals on every Korean quotation table there is. It is not a failure
+ * to translate P/E — a Korean reader looking for 주가수익비율 in a table looks
+ * for PER.                                                                  */
+#define S_KO_BADGE_DEMO    "데모"
+#define S_KO_BADGE_STALE   "지연"
+#define S_KO_BADGE_OFFLINE "오프라인"
+
+#define S_KO_PEERS         "동종 업계"
+#define S_KO_INSIDE        "사진"
+#define S_KO_IN_BRIEF      "단신"
+
+#define S_KO_COL_SYMBOL    "종목"
+#define S_KO_COL_NAME      "회사명"
+#define S_KO_COL_PE        "PER"
+#define S_KO_COL_CAP       "시가총액"
+#define S_KO_COL_LAST      "현재가"
+#define S_KO_COL_CHG       "등락"
+
 /* A cell the producer had no figure for. An em dash and not a blank: a blank
  * cell in a ruled table reads as a value that failed to print, and every
  * financial statement ever set has used this character to say "none". */
@@ -267,3 +316,36 @@
                            "•·′″‹›«»⁄" \
                            "×÷±≈≠≤≥°‰" \
                            "№€£¥¢§¶©®™†‡"
+
+/* --- which spelling this edition prints -----------------------------------
+ *
+ * The only declaration in a file of macros, and it is here rather than in
+ * ui_internal.h because it is a table OF the strings above: putting the twelve
+ * words in one file and the structure that carries them in another is how the
+ * two lists drift apart.
+ *
+ * A payload names its language and the table follows it. Anything that is not
+ * "ko" — absent, malformed, "en", "fr" — is English, because English is what
+ * the six Latin faces draw and a French edition needs no new word from this
+ * file. Adding a language means adding a table beside UI_LANG_KO, a block of
+ * S_xx_* macros above, and nothing else: no call site names a table.
+ */
+typedef struct {
+    const char *badge_demo, *badge_stale, *badge_offline;
+    const char *peers, *inside, *in_brief;
+    const char *col_symbol, *col_name, *col_pe, *col_cap, *col_last, *col_chg;
+} ui_lang_t;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern const ui_lang_t UI_LANG_EN, UI_LANG_KO;
+
+/* "ko" -> &UI_LANG_KO; every other tag, and NULL, -> &UI_LANG_EN. Never
+ * returns NULL: a board that cannot name its language still has to print. */
+const ui_lang_t *ui_lang(const char *tag);
+
+#ifdef __cplusplus
+}
+#endif

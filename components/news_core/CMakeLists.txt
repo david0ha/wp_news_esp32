@@ -16,6 +16,8 @@ idf_component_register(
         "news_service.c"
         "device_api_json.c"
         "ui_common.c"
+        "ui_format.c"
+        "ui_lang.c"
         "ui_compose.c"
         "ui_fit.c"
         "ui_chart.c"

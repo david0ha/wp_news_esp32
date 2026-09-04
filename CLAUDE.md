@@ -90,15 +90,15 @@ sh server/test/run.sh
 sh agent/test/run.sh
 (cd app && npm test && npm run typecheck)   # the client, the PNG decoder, the formatters
 
-# 1) pure logic — ten host tests: the wire format, the demo snapshot, the fetch
-#    layer, the companion-app JSON, the quantizer, the framebuffer repack,
-#    copyfitting, chart scaling, the compositor's tiling invariants, and the
-#    wake decision
+# 1) pure logic — twelve host tests: the wire format, the demo snapshot, the
+#    fetch layer, the companion-app JSON, the quantizer, the framebuffer repack,
+#    copyfitting, chart scaling, the compositor's tiling invariants, the wake
+#    decision, how a figure is spelled, and which language the fixed words are in
 cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 /tmp/vt/test_news_parse && /tmp/vt/test_news_mock && /tmp/vt/test_news_service \
   && /tmp/vt/test_api_json && /tmp/vt/test_palette && /tmp/vt/test_epd6_transpose \
   && /tmp/vt/test_fit && /tmp/vt/test_chart_scale && /tmp/vt/test_compose \
-  && /tmp/vt/test_power_policy
+  && /tmp/vt/test_power_policy && /tmp/vt/test_format && /tmp/vt/test_lang
 
 # 2) provisioning pure logic, and the reference producer against its committed fixture
 sh components/provisioning/test/run.sh
@@ -115,11 +115,16 @@ idf.py build
 
 The simulator is not a preview, it is a **test**: it fails the build on a missing glyph, on a
 composition that does not tile the well, on ink outside the 30 px margin, on a module that rendered
-nothing, on a label wider than its slot, on a masthead over 1140 px, and on blue or yellow reaching
-the glass. Its assertions are **properties**, not transcriptions — "the modules tile the well" holds
-for every payload, where the old "the lead rule lands on row 1108" could not survive a page that
-changes shape. Look at `sim/shots/*.png` after any UI change — they are drawn in the *measured*
-Spectra 6 inks rather than the saturated ones the UI draws with, so they can be judged as paper.
+nothing, on one of the board's own fixed strings ellipsized by the slot it was given, on a masthead
+over 1140 px, and on blue or yellow reaching the glass. Its assertions are **properties**, not
+transcriptions — "the modules tile the well" holds for every payload, where the old "the lead rule
+lands on row 1108" could not survive a page that changes shape.
+
+It typesets **twice**: the demo snapshot into `sim/shots/`, then the committed Korean fixture into
+`sim/shots/ko/`, and both have to be clean. The second pass is the only thing that exercises a
+language, because the demo edition is English by definition. Look at both after any UI change — the
+sheets are drawn in the *measured* Spectra 6 inks rather than the saturated ones the UI draws with,
+so they can be judged as paper.
 
 The producing agent runs the same typesetter over its own candidate payload before it files, via
 `tools/edition/render-check.sh <news.json>`, and is required to look at the sheets it produces. A
@@ -256,10 +261,13 @@ components/
     ui_chart.c            line / candle / bar / sparkline, integer scaling, hard pixels
     ui_tile.c             the one-entry photo cache
     ui_common.c           the shared shapes; ui_internal.h holds the grid and the furniture
+    ui_format.c           the pure formatters: grouping, money, percentage, caps
+    ui_lang.c             the board's twelve fixed words, in English and Korean
     wp_palette.c          the six inks and the ordered dither — the only quantizer
     device_api_json.c     the JSON the companion app receives
-    fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
-    test/host/            the ten host tests
+    fonts/                thirteen newspaper faces (OFL) — seven Latin, six Korean
+                          chained behind them; generated, do not hand-edit
+    test/host/            the twelve host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
   device_api/             STA-mode HTTP/JSON control server + mDNS (claudepost.local)
   board_io/               battery ADC
@@ -341,12 +349,27 @@ agent/                    an example worker that files into the desk, plus the s
 - **Never hand-edit `components/news_core/fonts/*.c`.** Run
   `python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools`, then
   `/tmp/fontenv/bin/python tools/gen_fonts.py --download`. fontTools is needed because Google
-  publishes three of the four families only as variable fonts, and lv_font_conv would silently take
-  the default instance — Playfair Regular where the table asks for Playfair Bold. The six text faces
-  carry ASCII + Latin-1 + `S_DATA_PUNCT`, because headlines arrive over the network and cannot be
-  subset; only the masthead face is subset, and only to the Latin alphabet.
+  publishes three of the four Latin families only as variable fonts, and lv_font_conv would silently
+  take the default instance — Playfair Regular where the table asks for Playfair Bold. The six text
+  faces carry ASCII + Latin-1 + `S_DATA_PUNCT`, because headlines arrive over the network and cannot
+  be subset; only the masthead face is subset, and only to the Latin alphabet.
+  **There are thirteen faces, not seven.** Six of them are Korean — Noto Serif KR and Noto Sans KR,
+  one per Latin text face, at the same pixel size, carrying `tools/hangul.py`'s 2,350 KS X 1001
+  syllables plus the jamo and CJK punctuation — and each is reached through the matching Latin face's
+  `lv_font_t.fallback`, which the generator writes into the `.c` because the struct is in flash and
+  cannot be patched at runtime. **No call site names one.** So a Korean headline needs no branch
+  anywhere, keeps its Latin letters and figures in Playfair, and lays out on the primary face's
+  baseline. `--link-fallbacks` re-applies just those pointers over the committed files, which is what
+  to run after regenerating a single face rather than the whole set.
   **All fixed user-visible strings belong in `ui_strings.h`** — that is where the generator reads the
-  glyph set from, and where the simulator's coverage check reads it from.
+  glyph set from, and where the simulator's coverage check reads it from. **A Korean fixed string
+  goes in the `S_KO_*` block of that same header and into `UI_LANG_KO` in `ui_lang.c`**, never as a
+  literal in a page file: the generator scans this one header for the non-Latin characters the Korean
+  faces must carry, and the simulator checks every string in it against every face that could draw
+  it. The board localises twelve words and no more — two live badges, three standing heads, six
+  column heads — because everything else on the sheet arrives already written in the edition's
+  language. `check_fixed_labels_fit()` fails the build when one of them does not fit its slot;
+  shorten the word, never the column.
 - **Every face is 1 bpp**, including the 112 px masthead. Anti-aliased text goes through the same
   ordered dither as a photograph: a 16 px serif stem is about 1.5 px wide, so half of it is
   anti-aliasing, and dithering that half turns a solid stem into a dotted one. Measured side by side
