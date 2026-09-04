@@ -34,9 +34,16 @@ the one thing about a payload that the demo snapshot can never exercise: the dem
 definition — an unconfigured board has no edition and so has no language — so without a second
 payload the six Korean faces, the fallback chain behind the six Latin ones and the twelve localised
 fixed strings would all be compiled in and never drawn. It is a committed fixture and not a fetch,
-so it asserts the same thing on every machine, and `--only-pages` because A1 and A2 are what a
-language changes: the ink specimen, the provisioning overlay and the no-data sheet are the board
-talking about itself and stay English whatever the edition is.
+so it asserts the same thing on every machine, and `--only-pages` because A1, A2 and the two badge
+sheets are what a language changes: the ink specimen, the provisioning overlay and the no-data sheet
+are the board talking about itself and stay English whatever the edition is.
+
+`--only-pages` **includes the STALE and OFFLINE sheets**, which is the one part of it worth stating
+outright. They are drawn from the payload the flag was given, so the Korean pass is the only run on
+any machine that puts 지연 and 오프라인 on paper — two of the twelve localised words. They used to sit
+below the flag's early return, which meant they were translated, width-checked against the face, and
+never once rendered where anybody could look at them. What the flag skips is everything that is not
+about this payload: the ink specimen, the three other payloads, the overlay and the no-data sheet.
 
 ### A word the board wrote, wider than its slot
 

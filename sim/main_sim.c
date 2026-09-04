@@ -2378,7 +2378,9 @@ static void usage(void)
         "\n"
         "  --json        typeset this payload instead of the built-in demo snapshot\n"
         "  --tiles       where to look for the photographs it names\n"
-        "  --only-pages  A1 and A2 alone; skip the badge, overlay and no-data sheets\n"
+        "  --only-pages  A1, A2 and the two badge sheets — everything this payload\n"
+        "                is about; skip the ink specimen, the other payloads, the\n"
+        "                overlay and the no-data sheet, which are the board itself\n"
         "  --measure     print the seven faces' advance table and exit\n"
         "\n"
         "  NEWS_URL=<url> fetches and parses over the wire, the way the device does.\n");
@@ -2512,6 +2514,38 @@ int main(int argc, char **argv)
 
     pass(outdir, "full", 1, &v);
 
+    /* The two state chips, which no ordinary render reaches. Both are checked on
+     * the full payload, so a chip that failed to draw shows up against a page
+     * that otherwise did — and both are also the passes where every change
+     * figure on the sheet must have gone back to INK, which is the half of the
+     * state signal a reader actually sees from across a room.
+     *
+     * THEY RUN BEFORE --only-pages RETURNS, and that is the whole reason they
+     * sit here rather than beside the setup sheet below. STALE and OFFLINE are
+     * two of the twelve words the board localises, and the Korean run is the
+     * only pass on this machine that can draw them in Korean: it renders the
+     * committed Korean fixture and nothing else does. Left below the early
+     * return they were compiled, translated, width-checked against the face —
+     * and never once put on a sheet anybody looked at.
+     *
+     * `pass()` leaves the data set to `v` and the page on A1, so there is
+     * nothing to restore before this and only the status to restore after. */
+    ui_status_t st = online;
+    st.stale = true;
+    ui_news_set_status(&st);
+    render();
+    shot(outdir, "09_a1_stale");
+    check_page("A1 stale", UI_PAGE_FRONT, &v);
+
+    st.online = false;
+    st.battery_present = false;
+    ui_news_set_status(&st);
+    render();
+    shot(outdir, "10_a1_offline");
+    check_page("A1 offline", UI_PAGE_FRONT, &v);
+
+    ui_news_set_status(&online);
+
     if (only_pages) {
         printf("%s — %d layout/glyph/colour problem(s)\n",
                g_fail ? "FAILED" : "ok", g_fail);
@@ -2533,28 +2567,9 @@ int main(int argc, char **argv)
     check_data_strings(&quiet);
     pass(outdir, "quiet", 7, &quiet);
 
-    /* The two state chips, which no ordinary render reaches. Both are checked on
-     * the full payload, so a chip that failed to draw shows up against a page
-     * that otherwise did — and both are also the passes where every change
-     * figure on the sheet must have gone back to INK, which is the half of the
-     * state signal a reader actually sees from across a room. */
+    /* The three payloads above left the snapshot on the last of them; the sheets
+     * from here on are about the full one again. */
     ui_news_set_data(&v);
-
-    ui_status_t st = online;
-    st.stale = true;
-    ui_news_set_status(&st);
-    render();
-    shot(outdir, "09_a1_stale");
-    check_page("A1 stale", UI_PAGE_FRONT, &v);
-
-    st.online = false;
-    st.battery_present = false;
-    ui_news_set_status(&st);
-    render();
-    shot(outdir, "10_a1_offline");
-    check_page("A1 offline", UI_PAGE_FRONT, &v);
-
-    ui_news_set_status(&online);
 
     /* The setup sheet. It is a PAGE of this paper rather than a modal: the pane
      * covers the news, because on e-Paper a hidden page is still physically on

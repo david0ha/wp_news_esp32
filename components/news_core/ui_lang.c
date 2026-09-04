@@ -6,8 +6,10 @@
  * headlines, the decks, the bodies, the dateline, the statement titles, the row
  * labels — arrives in the payload already written in Korean, because the desk
  * told the producing agent which language to file in. What the BOARD supplies
- * is the furniture around that copy: two live badges, three standing heads and
- * six column heads. Eleven words and one abbreviation, in a table.
+ * is the furniture around that copy: three badges — two live ones and DEMO —
+ * three standing heads and six column heads. Eleven words and one abbreviation,
+ * in a table, and the three counts are the table's twelve members: an
+ * enumeration that came to eleven is how a thirteenth would arrive unnoticed.
  *
  * The strings themselves are S_* macros in ui_strings.h and not literals here,
  * so that tools/gen_fonts.py can derive the faces' glyph set from one file and

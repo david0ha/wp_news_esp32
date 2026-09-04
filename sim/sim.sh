@@ -32,9 +32,16 @@ status=0
 # fixed strings are all compiled in and never drawn.
 #
 # It is the committed fixture and not a fetch, so it asserts the same thing on
-# every machine. --only-pages because A1 and A2 are what a language changes; the
-# ink specimen, the overlay and the no-data sheet are the board talking about
-# itself and stay English whatever the edition is.
+# every machine. --only-pages because A1, A2 and the two badge sheets are what a
+# language changes; the ink specimen, the other payloads, the overlay and the
+# no-data sheet are the board talking about itself and stay English whatever the
+# edition is.
+#
+# THE BADGE SHEETS ARE INSIDE --only-pages and that is not incidental: STALE and
+# OFFLINE are two of the twelve words the board localises, this run is the only
+# one that draws a Korean sheet, and until they moved above the flag's early
+# return the two Korean badges were translated, width-checked and never once
+# printed on paper anybody looked at.
 ./build/sim shots/ko --json ../components/news_core/test/host/fixtures/news.ko.json \
     --tiles tiles --only-pages || status=$?
 
@@ -52,6 +59,7 @@ echo "previews in sim/shots/, in reading order — the ink specimen first, then"
 echo "both pages on a full payload, on a slow day, on a day whose copy all came"
 echo "in short, and on a day that brought no stories at all; then the STALE and"
 echo "OFFLINE badges, the provisioning overlay, and the sheet before the first"
-echo "snapshot has landed. sim/shots/ko/ is the same A1 and A2 on a Korean"
-echo "edition: Hangul copy, Korean badges and column heads, English nameplate"
+echo "snapshot has landed. sim/shots/ko/ is the same A1, A2 and two badge sheets"
+echo "on a Korean edition: Hangul copy, Korean badges and column heads, English"
+echo "nameplate"
 exit $status

@@ -376,9 +376,9 @@ agent/                    an example worker that files into the desk, plus the s
   goes in the `S_KO_*` block of that same header and into `UI_LANG_KO` in `ui_lang.c`**, never as a
   literal in a page file: the generator scans this one header for the non-Latin characters the Korean
   faces must carry, and the simulator checks every string in it against every face that could draw
-  it. The board localises twelve words and no more — two live badges, three standing heads, six
-  column heads — because everything else on the sheet arrives already written in the edition's
-  language. `check_fixed_labels_fit()` fails the build when one of them does not fit its slot;
+  it. The board localises twelve words and no more — three badges (two live, and `DEMO`), three
+  standing heads, six column heads — because everything else on the sheet arrives already written in
+  the edition's language. `check_fixed_labels_fit()` fails the build when one of them does not fit its slot;
   shorten the word, never the column.
 - **Every face is 1 bpp**, including the 112 px masthead. Anti-aliased text goes through the same
   ordered dither as a photograph: a 16 px serif stem is about 1.5 px wide, so half of it is

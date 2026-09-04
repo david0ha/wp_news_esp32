@@ -40,6 +40,18 @@ void ui_group_int(char *out, size_t n, int v);
 void ui_money(char *out, size_t n, int32_t cents);
 void ui_pct(char *out, size_t n, int32_t bp);
 
+/* ui_money() with the fraction kept whatever the magnitude — 9680000 cents ->
+ * "96,800.00" where ui_money() gives "96,800". It is the shared body of the
+ * two, so there is still exactly one piece of code that groups a figure and
+ * prints its cents.
+ *
+ * ONE CALLER, and it is ui_chart.c's ui_chart_end_labels(): two ends of a chart
+ * that round to the same string, on a series whose cents differ, have to be
+ * told apart. Every other figure on the sheet sits in a column that the dropped
+ * fraction is what keeps it inside, so reach for ui_money() unless the page has
+ * already printed the short form twice and been wrong. */
+void ui_money_frac(char *out, size_t n, int32_t cents);
+
 /* Upper case for the two tracked slots that take a string off the wire: ASCII
  * a-z and Latin-1's own lower case. Everything else — Hangul included, which
  * has no case at all — is copied through untouched. */

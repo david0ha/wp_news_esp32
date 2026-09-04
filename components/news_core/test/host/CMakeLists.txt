@@ -85,13 +85,19 @@ add_test(NAME lang COMMAND test_lang)
 # here, but they land with the layout work rather than with the data model.
 # Guarded on existence so this build is green before those files are written and
 # picks them up the moment they are, without a second edit to this file.
+# ui_lang.c comes along because ui_fit_script() asks ui_lang() which table an
+# edition gets rather than spelling the "ko" compare a second time. It is pure
+# and header-only in its dependencies, so it costs the link nothing.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_fit.c AND EXISTS ${CORE}/ui_fit.c)
-    add_host_test(test_fit test_fit.c ${CORE}/ui_fit.c)
+    add_host_test(test_fit test_fit.c ${CORE}/ui_fit.c ${CORE}/ui_lang.c)
     add_test(NAME fit COMMAND test_fit)
 endif()
 
+# And ui_format.c because ui_chart_end_labels() spells its two figures with the
+# same ui_money() the industry table spells a price with — one formatter on the
+# sheet, so one formatter in the link.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_scale.c AND EXISTS ${CORE}/ui_chart.c)
-    add_host_test(test_chart_scale test_chart_scale.c ${CORE}/ui_chart.c)
+    add_host_test(test_chart_scale test_chart_scale.c ${CORE}/ui_chart.c ${CORE}/ui_format.c)
     add_test(NAME chart_scale COMMAND test_chart_scale)
 endif()
 

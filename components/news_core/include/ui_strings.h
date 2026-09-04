@@ -130,8 +130,8 @@
 /* --- the same twelve strings in Korean ------------------------------------
  *
  * The edition carries a `lang`, and these eleven words plus PER are everything
- * a Korean sheet needs localised: two live badges, three standing heads and six
- * column heads. Everything else a reader looks at — dateline, kickers,
+ * a Korean sheet needs localised: three badges — two live ones and DEMO — three
+ * standing heads and six column heads. Everything else a reader looks at — dateline, kickers,
  * headlines, decks, bodies, statement titles, row labels — arrives in the
  * payload already written in the edition's language, which is why the list is
  * this short. The masthead is not on it: a blackletter nameplate is the paper's

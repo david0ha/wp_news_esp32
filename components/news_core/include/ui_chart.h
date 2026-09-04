@@ -55,6 +55,7 @@
  */
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "news_model.h"
@@ -203,6 +204,28 @@ int ui_chart_cols(int n, int w);
  * narrower than 150 px, the decimation is a correctness guarantee that never
  * actually runs. */
 int ui_chart_pick(int i, int m, int n);
+
+/* The two figures printed at the ends of a labelled chart, from the first and
+ * last values of its series.
+ *
+ * ui_money() drops the fraction at five integer digits and up, which is right
+ * for every column on the sheet and wrong for exactly this pair: a five-digit
+ * series whose whole span is under a unit — a flat index day, which is an
+ * ordinary payload rather than a broken one — rounds both ends to the SAME
+ * string, and a chart annotated 23,842 at each end tells the reader the axis is
+ * broken. So when the short form spells the two identically and the underlying
+ * cents differ, both ends are set in the long form instead. Both, never one: a
+ * pair where one end carries a fraction and the other does not is a second way
+ * of saying the axis is broken.
+ *
+ * Genuinely equal ends still come out equal, because they are equal — a flat
+ * series is a true reading, and lengthening it would invent a difference.
+ *
+ * Pure, and here in the arithmetic half rather than beside the widget, because
+ * "what does this label say" is a decision and test_chart_scale is where the
+ * chart's decisions are settled. Either buffer may be NULL. */
+void ui_chart_end_labels(int32_t first_c, int32_t last_c,
+                         char *first, size_t nf, char *last, size_t nl);
 
 /* --- the widget ----------------------------------------------------------- */
 #if UI_CHART_LVGL

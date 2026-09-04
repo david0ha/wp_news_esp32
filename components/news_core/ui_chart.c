@@ -34,6 +34,14 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+/* The arithmetic half's one dependency, and it is a formatter rather than a
+ * face: ui_chart_end_labels() decides what the two figures at the ends of a
+ * chart SAY, which is arithmetic on the model, and it spells them with the same
+ * ui_money() the industry table spells a price with. See ui_chart.h. */
+#include "ui_format.h"
 
 /* --- series identity ------------------------------------------------------
  *
@@ -253,14 +261,35 @@ int ui_chart_pick(int i, int m, int n)
     return (int)(((int64_t)i * (n - 1) + (m - 1) / 2) / (m - 1));
 }
 
+void ui_chart_end_labels(int32_t first_c, int32_t last_c,
+                         char *first, size_t nf, char *last, size_t nl)
+{
+    char a[24], b[24];
+
+    ui_money(a, sizeof a, first_c);
+    ui_money(b, sizeof b, last_c);
+
+    /* The test is on the STRINGS and not on the magnitude, which is the whole
+     * of the rule: five integer digits is where ui_money() stops printing a
+     * fraction, but whether that costs the reader anything depends on the span
+     * of this particular series, and the span is exactly what "the two labels
+     * came out identical" measures. A four-digit series never reaches here,
+     * because ui_money() already set its cents. */
+    if (first_c != last_c && strcmp(a, b) == 0) {
+        ui_money_frac(a, sizeof a, first_c);
+        ui_money_frac(b, sizeof b, last_c);
+    }
+
+    if (first && nf) snprintf(first, nf, "%s", a);
+    if (last  && nl) snprintf(last,  nl, "%s", b);
+}
+
 /* --- the ink -------------------------------------------------------------- */
 #if UI_CHART_LVGL
 
 #include "ui_internal.h"
 
 #include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
 
 /* Two pixels, for the reason in the file comment. */
 #define CH_STROKE       2
@@ -386,7 +415,11 @@ static void outline_abs(lv_layer_t *L, int x1, int y1, int x2, int y2)
  * table's LAST column and often quotes the very same price, so the day
  * ui_money() stopped printing cents above five integer digits was the day a
  * Korean front page said 96,800 in the table and 96,800.00 on the chart six
- * inches above it. One formatter, one spelling. */
+ * inches above it. One formatter, one spelling.
+ *
+ * That threshold has a cost of its own at the two ends of a chart, and
+ * ui_chart_end_labels() in the arithmetic half is where it is paid — not here,
+ * and not with a second formatter. */
 
 /* The i-th of m slots: the pixels the candle owns, the column its wick runs
  * down, and the body's own narrower span. Slot edges are computed from i*w/m
@@ -677,13 +710,14 @@ static void label_ends(lv_obj_t *chart, chart_t *s, ui_chart_win_t win,
         return;
     }
 
-    char txt[24];
-    ui_money(txt, sizeof txt, s->c[0]);
+    /* Both figures at once, because whether either carries a fraction is a
+     * question about the pair — see ui_chart_end_labels(). */
+    char txt[24], txt2[24];
+    ui_chart_end_labels(s->c[0], s->c[s->n - 1], txt, sizeof txt, txt2, sizeof txt2);
+
     const int fw = val_w(txt, cap);
     s->first = value_label(chart, s->first, fw, LV_TEXT_ALIGN_LEFT, txt);
 
-    char txt2[24];
-    ui_money(txt2, sizeof txt2, s->c[s->n - 1]);
     const int lw = val_w(txt2, cap);
     s->last = value_label(chart, s->last, lw, LV_TEXT_ALIGN_RIGHT, txt2);
 

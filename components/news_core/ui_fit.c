@@ -21,6 +21,10 @@
 #include <stdbool.h>
 #include <string.h>
 
+/* For ui_lang() alone, which ui_fit_script() defers to rather than spelling the
+ * language compare a second time. No string in the table is read here. */
+#include "ui_strings.h"
+
 /* --- the alphabet of a cut ------------------------------------------------ */
 
 /* What separates two words in copy that came off a wire. LVGL will also BREAK a
@@ -226,28 +230,70 @@ static bool is_hangul(uint32_t cp)
  * and the CJK ones a Korean edition actually sets. Korean line-break prohibition
  * (금칙 처리) puts the ideographic full stop and comma under exactly the rule the
  * ASCII pair are under: they belong to the line they close, not the one after.
- * The brackets are the closing halves of U+3008..U+300F, which with 、 and 。 is
- * the whole of tools/hangul.py CJK_PUNCT and therefore everything of this kind
- * the Korean faces can set. */
+ *
+ * The middle dot is the one worth naming, because Korean copy uses it where
+ * English uses a slash or an ampersand — 반도체·디스플레이 — and a leg that
+ * begins with it reads as a bullet somebody forgot to indent. It arrives in two
+ * spellings and both are here: U+00B7, which is what a Latin keyboard and
+ * S_DATA_PUNCT give, and U+30FB, which is what a CJK input method gives.
+ *
+ * Two of these the Korean faces cannot draw — the wave dash and the fullwidth
+ * pair — and they are here anyway, because this table is about where a break
+ * may fall and not about what can be set: the producer's validator is what
+ * refuses an undrawable character, and a rule that was silent about a mark it
+ * had merely never seen is how the middle dot got missed in the first place. */
 static bool is_closing(uint32_t cp)
 {
     return cp == '.' || cp == ',' || cp == '!' || cp == '?' || cp == '%' ||
+           cp == ':' || cp == ';' ||            /* a leg may not open on either */
            cp == ')' || cp == ']' ||
+           cp == 0x00B7 ||                      /* · the middle dot, Latin-1    */
+           cp == 0x30FB ||                      /* ・ and its CJK spelling       */
+           cp == 0x2019 ||                      /* ’ the curly closers          */
+           cp == 0x201D ||                      /* ”                            */
            cp == 0x3002 ||                      /* 。 the ideographic full stop */
            cp == 0x3001 ||                      /* 、 and its comma             */
            cp == 0x3009 ||                      /* 〉 the angle brackets        */
            cp == 0x300B ||                      /* 》                           */
            cp == 0x300D ||                      /* 」 and the corner pair       */
-           cp == 0x300F;                        /* 』                           */
+           cp == 0x300F ||                      /* 』                           */
+           cp == 0x301C ||                      /* 〜 the wave dash             */
+           cp == 0xFF01 ||                      /* ！ the fullwidth marks       */
+           cp == 0xFF1F ||                      /* ？                           */
+           cp == 0xFF09 ||                      /* ） and the fullwidth pairs   */
+           cp == 0xFF3D;                        /* ］                           */
 }
 
 /* A line may not END with one of these: the opening half of each pair above. */
 static bool is_opening(uint32_t cp)
 {
     return cp == '(' || cp == '[' ||
+           cp == 0x2018 || cp == 0x201C ||      /* ‘ “ the curly openers */
            cp == 0x3008 || cp == 0x300A ||      /* 〈 《 */
-           cp == 0x300C || cp == 0x300E;        /* 「 『 */
+           cp == 0x300C || cp == 0x300E ||      /* 「 『 */
+           cp == 0xFF08 || cp == 0xFF3B;        /* （ ［ */
 }
+
+/* Is the run of `len` bytes at `s` a figure? An optional sign, then a digit,
+ * then digits with the grouping comma and the decimal point allowed inside —
+ * "112", "-3", "1,631.47". Deliberately narrow: "3.53%" is not one, because the
+ * '%' has already said what the figure measures and there is nothing after it to
+ * glue. */
+static bool is_numeral(const char *s, size_t len)
+{
+    size_t i = 0;
+
+    if (i < len && (s[i] == '-' || s[i] == '+')) i++;
+    if (i >= len || s[i] < '0' || s[i] > '9') return false;
+
+    for (; i < len; i++)
+        if ((s[i] < '0' || s[i] > '9') && s[i] != ',' && s[i] != '.') return false;
+    return true;
+}
+
+/* How many Hangul characters a figure takes with it. Two, and the cap is the
+ * whole of the rule below — see unit_len(). */
+#define FIT_UNIT_GLUE   2
 
 /* The bytes of the unit beginning at `s`, or 0 at whitespace or at the end of
  * the string. A unit is the smallest thing a Korean line may be built out of:
@@ -257,7 +303,25 @@ static bool is_opening(uint32_t cp)
  * it is ONE unit and there is no boundary inside it for a break to land on —
  * which matters because "." and "," are in LV_TXT_BREAK_CHARS and the first
  * Korean sheets came back with "3." ending a line and "53%" starting the next.
- * A Latin word, a ticker and a date are the same case and get the same answer. */
+ * A Latin word, a ticker and a date are the same case and get the same answer.
+ *
+ * AND A FIGURE TAKES ITS UNIT WITH IT. Korean writes the unit as syllables
+ * pressed against the numeral — 112조, 11.1배, 2025년 — where English writes it
+ * as Latin letters (12kg) that the run above already swallows. Without this the
+ * two are one boundary apart and the committed Korean sheet had "112" at the
+ * end of a leg and "조" at the head of the next, which reads as a number with
+ * its unit dropped. The suffix belongs to the figure the way a closing bracket
+ * belongs to what it closes.
+ *
+ * TWO SYLLABLES AND NO MORE, because the glue is a guess about where the unit
+ * ends and a long guess is worse than a short one: 조원 and 만원 are two, 퍼센트
+ * is three and does not follow a numeral in practice, and 2025년부터 is a figure
+ * followed by a whole word — capped, it keeps 년부 on the line with the year and
+ * gives 터 back to the fill, which is an ordinary Korean syllable break. An
+ * uncapped rule would glue the word and hand the line an eight-syllable unit.
+ *
+ * The Latin path never reaches here: unit_len() is called only under
+ * UI_FIT_HANGUL, and the glue needs a Hangul character to fire at all. */
 static size_t unit_len(const char *s)
 {
     size_t l;
@@ -267,6 +331,14 @@ static size_t unit_len(const char *s)
 
     size_t i = 0;
     while (s[i] != '\0' && !is_space(s[i]) && !is_hangul(cp_at(s + i, &l))) i += l;
+
+    if (!is_numeral(s, i)) return i;
+
+    for (int k = 0; k < FIT_UNIT_GLUE; k++) {
+        if (s[i] == '\0' || is_space(s[i])) break;
+        if (!is_hangul(cp_at(s + i, &l))) break;
+        i += l;
+    }
     return i;
 }
 
@@ -495,13 +567,20 @@ static size_t fit_hangul(const lv_font_t *font, int w, int h, int line_space,
 
 ui_fit_script_t ui_fit_script(const char *lang)
 {
-    /* Two bytes and a NUL. "ko" is the one tag with a breaking rule of its own,
-     * so it is the whole of the test: every other tag takes the Latin rule,
-     * three-letter ones included. The model accepts a two- OR three-letter
-     * primary subtag, so "kor" does reach here — and takes Latin, which is the
-     * honest answer for a tag this file has no rule for. */
-    return (lang && lang[0] == 'k' && lang[1] == 'o' && lang[2] == '\0')
-           ? UI_FIT_HANGUL : UI_FIT_LATIN;
+    /* "ko" is the one tag with a breaking rule of its own, so it is the whole
+     * of the test: every other tag takes the Latin rule, three-letter ones
+     * included. The model accepts a two- OR three-letter primary subtag, so
+     * "kor" does reach here — and takes Latin, which is the honest answer for a
+     * tag this file has no rule for.
+     *
+     * THE COMPARE IS ui_lang()'S AND NOT A SECOND COPY OF IT. These are the two
+     * functions in the project allowed to branch on the wire's `lang`, and a
+     * board that chose its words by one spelling of "which language is this"
+     * and its line breaks by another would work for exactly as long as the two
+     * spellings agreed. There is one, in ui_lang.c, beside the table it
+     * selects; this asks it which table an edition gets and reads the answer
+     * off the pointer. */
+    return ui_lang(lang) == &UI_LANG_KO ? UI_FIT_HANGUL : UI_FIT_LATIN;
 }
 
 size_t ui_fit_text(const lv_font_t *font, int w, int h, int line_space,

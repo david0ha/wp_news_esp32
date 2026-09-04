@@ -65,17 +65,39 @@ void ui_money(char *out, size_t n, int32_t cents)
     if (!out || n == 0) return;
 
     unsigned long a = cents < 0 ? 0UL - (unsigned long)cents : (unsigned long)cents;
-    const char *sign = cents < 0 ? "-" : "";
-    char whole[24];
 
     if (a / 100 >= 10000) {
+        char whole[24];
         ui_group_int(whole, sizeof(whole), (int)((a + 50) / 100));
-        snprintf(out, n, "%s%s", sign, whole);
+        snprintf(out, n, "%s%s", cents < 0 ? "-" : "", whole);
         return;
     }
 
+    ui_money_frac(out, n, cents);
+}
+
+/* The same spelling with the fraction kept whatever the magnitude, and the ONLY
+ * body that groups a figure and prints its cents — ui_money() above is that
+ * rule plus the threshold, and calls this rather than repeating it.
+ *
+ * It has a name of its own because one caller has to be able to ask for the
+ * long form outright: a chart labels its two ends with ui_money(), and on a
+ * five-digit series whose whole span is under a unit — a flat index day — both
+ * ends round to the identical string and the axis reads as broken. ui_chart.c's
+ * ui_chart_end_labels() is the one place that asks, and it asks only when the
+ * two figures genuinely differ. Nothing else may: the threshold in ui_money()
+ * is what keeps a Seoul close inside the industry table's 84 px LAST column,
+ * and a second caller reaching past it would put "96,800.00" back on the sheet
+ * a column at a time. */
+void ui_money_frac(char *out, size_t n, int32_t cents)
+{
+    if (!out || n == 0) return;
+
+    unsigned long a = cents < 0 ? 0UL - (unsigned long)cents : (unsigned long)cents;
+    char whole[24];
+
     ui_group_int(whole, sizeof(whole), (int)(a / 100));
-    snprintf(out, n, "%s%s.%02lu", sign, whole, a % 100);
+    snprintf(out, n, "%s%s.%02lu", cents < 0 ? "-" : "", whole, a % 100);
 }
 
 /* A percentage carries its sign, the plus included, AND IT CARRIES IT AT ZERO:

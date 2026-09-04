@@ -95,6 +95,40 @@ static void check_money_drops_cents_above_five_digits(void)
     ui_money(s, sizeof s, -9680000);         CHECK_STR(s, "-96,800");
 }
 
+/* --- the long form, for the one caller that has to ask for it -------------- */
+
+static void check_money_frac_keeps_the_fraction(void)
+{
+    char s[32], t[32];
+
+    /* Above the threshold it is the whole point: 96,800.00 where ui_money()
+     * gives 96,800. ui_chart.c's end labels are the only caller. */
+    ui_money_frac(s, sizeof s, 9680000);     CHECK_STR(s, "96,800.00");
+    ui_money_frac(s, sizeof s, 9680015);     CHECK_STR(s, "96,800.15");
+    ui_money_frac(s, sizeof s, -9680015);    CHECK_STR(s, "-96,800.15");
+    ui_money_frac(s, sizeof s, 163147000);   CHECK_STR(s, "1,631,470.00");
+
+    /* NOT rounded, because there is nothing to round away: the threshold's
+     * rounding exists to keep a dropped fraction honest, and this form drops
+     * nothing. 96,799.99 is 96,799.99 here and 96,800 there. */
+    ui_money_frac(s, sizeof s, 9679999);     CHECK_STR(s, "96,799.99");
+
+    /* Below the threshold the two agree, because ui_money() IS this function
+     * plus the threshold — one body that groups a figure and prints its cents,
+     * so the two spellings cannot drift. */
+    static const int32_t SAME[] = { 0, 1, -1, 99, 100, 12345, -12345, 999950, 999999 };
+    for (size_t k = 0; k < sizeof SAME / sizeof *SAME; k++) {
+        ui_money(s, sizeof s, SAME[k]);
+        ui_money_frac(t, sizeof t, SAME[k]);
+        CHECK_STR(s, t);
+    }
+
+    /* The degenerate calls every formatter here takes. */
+    ui_money_frac(NULL, sizeof s, 100);
+    s[0] = 'X';
+    ui_money_frac(s, 0, 100);                CHECK(s[0] == 'X');
+}
+
 /* --- percentage ------------------------------------------------------------ */
 
 static void check_pct(void)
@@ -137,6 +171,7 @@ int main(void)
     check_group_int();
     check_money_prints_cents();
     check_money_drops_cents_above_five_digits();
+    check_money_frac_keeps_the_fraction();
     check_pct();
     check_upper();
     TH_REPORT("format");

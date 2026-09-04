@@ -669,6 +669,62 @@ static void t_no_break_before_closing_or_after_opening_punctuation(void)
     CHECK(strstr(dst, "\n』") == NULL);
     CHECK(strstr(dst, "『\n") == NULL);
     CHECK_STR(dst, "가나다\n라』마바\n『사아");
+
+    /* The fullwidth parenthesis and bracket, as PAIRS, in the same shape as the
+     * six CJK brackets above. They are here as pairs rather than as two more
+     * rows of the tables below because that is the property that was missing:
+     * an opening set that knows （ and ［ while the closing set does not know ）
+     * and ］ leaves a line free to begin with a closing half, which is the exact
+     * bug this rule exists to prevent, one bracket rotated. */
+    fit_ko(40, LH * 4, 0, "가나다라）마바（사아", dst, sizeof dst);
+    CHECK(strstr(dst, "\n）") == NULL);
+    CHECK(strstr(dst, "（\n") == NULL);
+    CHECK_STR(dst, "가나다\n라）마바\n（사아");
+
+    fit_ko(40, LH * 4, 0, "가나다라］마바［사아", dst, sizeof dst);
+    CHECK(strstr(dst, "\n］") == NULL);
+    CHECK(strstr(dst, "［\n") == NULL);
+    CHECK_STR(dst, "가나다\n라］마바\n［사아");
+
+    /* The rest of what Korean copy sets, which the first two sets did not know.
+     * The middle dot is the one that shows up on every sheet — Korean writes
+     * 반도체·디스플레이 where English writes a slash — and it arrives in two
+     * spellings, U+00B7 off a Latin keyboard and U+30FB off a CJK one. The
+     * colon and semicolon are here because a leg opening on either reads as a
+     * dropped clause, exactly as one opening on a comma does.
+     *
+     * Same four columns as every case above, so each expects the same shape:
+     * the break backs up a syllable rather than stranding the mark. */
+    static const char *const CLOSERS[] = {
+        "·", "・", ":", ";", "”", "’", "〜", "！", "？", "）", "］",
+    };
+    for (size_t k = 0; k < sizeof CLOSERS / sizeof *CLOSERS; k++) {
+        char src[64], want[64], head[8];
+
+        snprintf(src,  sizeof src,  "가나다라%s마바", CLOSERS[k]);
+        snprintf(want, sizeof want, "가나다\n라%s마바", CLOSERS[k]);
+        snprintf(head, sizeof head, "\n%s", CLOSERS[k]);
+
+        fit_ko(40, LH * 4, 0, src, dst, sizeof dst);
+        CHECK(strstr(dst, head) == NULL);
+        CHECK_STR(dst, want);
+    }
+
+    /* And the openers. Four columns again, but the mark goes one syllable
+     * earlier: the fill reaches it with the line exactly full, so the only
+     * thing that can stop the line ending there is the rule. */
+    static const char *const OPENERS[] = { "“", "‘", "（", "［" };
+    for (size_t k = 0; k < sizeof OPENERS / sizeof *OPENERS; k++) {
+        char src[64], want[64], tail[8];
+
+        snprintf(src,  sizeof src,  "가나다%s라마바", OPENERS[k]);
+        snprintf(want, sizeof want, "가나다\n%s라마바", OPENERS[k]);
+        snprintf(tail, sizeof tail, "%s\n", OPENERS[k]);
+
+        fit_ko(40, LH * 4, 0, src, dst, sizeof dst);
+        CHECK(strstr(dst, tail) == NULL);
+        CHECK_STR(dst, want);
+    }
 }
 
 static void t_hangul_cut_lands_on_a_boundary_and_continues_from_it(void)
@@ -823,6 +879,69 @@ static void t_numbers_never_split(void)
     CHECK_STR(dst, "삼성전자\n3.53%급등");
 }
 
+/* --- and the unit is part of the number ----------------------------------- *
+ *
+ * English writes a unit in the same alphabet as the word beside it — 12kg is
+ * one run of non-space, non-Hangul bytes and the rule above already keeps it
+ * whole. Korean writes it in Hangul, pressed against the numeral: 112조,
+ * 11.1배, 2025년. To the tokeniser above those are TWO units with a legal break
+ * between them, and the committed Korean sheet had "112" at the foot of one leg
+ * and "조" at the head of the next — a figure with its unit dropped, which is
+ * the one thing on a page of accounts a reader cannot repair by reading on.
+ *
+ * The glue is capped at two syllables, because it is a guess about where the
+ * unit ends and a long guess is worse than a short one. 조원 and 만원 are two;
+ * 퍼센트 is three and does not follow a numeral in practice; 2025년부터 is a
+ * figure with a whole word after it, and the cap keeps 년부 with the year and
+ * gives 터 back to the fill, which is an ordinary Korean syllable break. */
+static void t_hangul_unit_stays_with_its_figure(void)
+{
+    const char *src = "삼성전자 112조 원 규모 11.1배 수준 2025년 들어 3.4%p 상승";
+    char dst[512];
+
+    /* From five columns, the width of the widest unit here. Every measure a leg
+     * can be, because which of them strands the suffix is a function of where
+     * the line happens to end — the sheet that showed the defect was one width
+     * out of the range below. */
+    for (int w = 50; w <= 200; w += 10) {
+        size_t used = fit_ko(w, LH * 20, 0, src, dst, sizeof dst);
+        CHECK_INT(used, strlen(src));
+        CHECK(strstr(dst, "112조") != NULL);
+        CHECK(strstr(dst, "11.1배") != NULL);
+        CHECK(strstr(dst, "2025년") != NULL);
+        CHECK(strstr(dst, "3.4%p") != NULL);      /* a Latin suffix already worked */
+    }
+
+    /* The sheet's own case, at the one measure that shows it. Six columns: the
+     * fill reaches "112" with the line exactly full, so before the glue the
+     * break landed between the figure and its unit. */
+    fit_ko(60, LH * 4, 0, "가나 112조 마바", dst, sizeof dst);
+    CHECK(strstr(dst, "112\n") == NULL);
+    CHECK_STR(dst, "가나\n112조 마\n바");
+
+    /* THE CAP, asserted where it is visible: the candidate list a head is
+     * balanced on. Nine glyphs into six columns is two lines, and the only
+     * split that fits the measure is the one after the glued unit. An uncapped
+     * glue would make "2025년부터경신" one unit with no legal split at all and
+     * the head would come back unbalanced; no glue at all would split it after
+     * "2025". */
+    CHECK_INT(ui_fit_balance(&FACE, 60, 2, UI_FIT_HANGUL, "2025년부터경신", dst, sizeof dst), 2);
+    CHECK_STR(dst, "2025년부\n터경신");
+
+    /* A figure at the very end of the copy, with and without its unit: the glue
+     * looks at the byte after the run and that byte is the NUL. */
+    fit_ko(100, LH * 4, 0, "가나다라 112", dst, sizeof dst);
+    CHECK_STR(dst, "가나다라 112");
+
+    fit_ko(100, LH * 4, 0, "가나다라 112조", dst, sizeof dst);
+    CHECK_STR(dst, "가나다라 112조");
+
+    /* A sign leads a figure and a comma and a point sit inside one; a '%' ends
+     * it, and there is nothing after a '%' to glue. */
+    fit_ko(120, LH * 4, 0, "가나 -1,631.47배 다라", dst, sizeof dst);
+    CHECK(strstr(dst, "-1,631.47배") != NULL);
+}
+
 /* --- balancing a Korean head ---------------------------------------------- */
 
 static void t_hangul_heads_balance_on_syllables(void)
@@ -882,6 +1001,7 @@ int main(void)
     t_hangul_continuation();
     t_hangul_over_wide_unit_is_hard_broken();
     t_numbers_never_split();
+    t_hangul_unit_stays_with_its_figure();
     t_hangul_heads_balance_on_syllables();
     TH_REPORT("fit");
 }
