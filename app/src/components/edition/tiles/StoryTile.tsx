@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors, type } from '../../../theme'
+import { colors } from '../../../theme'
 import { type Tile } from '../../../lib/edition/tiles'
+import { useEditionType } from '../typeRamp'
 import { HEADLINE_LINE, HEADLINE_SIZE, STORY_GAP, storyLines } from './story'
 
 /**
@@ -29,6 +30,7 @@ export function StoryTile({
   tile: Extract<Tile, { kind: 'story' }>
   height: number
 }) {
+  const ty = useEditionType()
   const { story, lead } = tile
   const lines = storyLines(height, {
     lead,
@@ -39,15 +41,15 @@ export function StoryTile({
   return (
     <View style={styles.root}>
       {lines.kicker > 0 ? (
-        <Text style={type.caption} numberOfLines={lines.kicker}>
+        <Text style={ty.caption} numberOfLines={lines.kicker}>
           {story.kicker}
         </Text>
       ) : null}
-      <Text style={styles.headline} numberOfLines={lines.headline}>
+      <Text style={[ty.pinHeadline, styles.headline]} numberOfLines={lines.headline}>
         {story.headline}
       </Text>
       {lines.deck > 0 ? (
-        <Text style={type.pinDeck} numberOfLines={lines.deck}>
+        <Text style={ty.pinDeck} numberOfLines={lines.deck}>
           {story.deck}
         </Text>
       ) : null}
@@ -55,7 +57,7 @@ export function StoryTile({
           instead of ending in white paper. A secondary story reaches this too, whenever its own
           arithmetic leaves room — the room, not the rank, is what decides. */}
       {story.body !== '' && lines.body > 0 ? (
-        <Text style={styles.body} numberOfLines={lines.body}>
+        <Text style={[ty.caption, styles.body]} numberOfLines={lines.body}>
           {story.body}
         </Text>
       ) : null}
@@ -68,16 +70,15 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: STORY_GAP,
   },
+  // What this OVERRIDES on `pinHeadline`, which arrives in front of it from the edition's ramp:
+  // the token itself is 22/26 and is now the detail page's headline alone. The cut and the colour
+  // come from the ramp; the tracking loosens with the size.
   headline: {
-    // `type.pinHeadline`'s extrabold cut and colour, a size down — the token itself is 22/26 and
-    // is now the detail page's headline alone. The tracking loosens with the size.
-    ...type.pinHeadline,
     fontSize: HEADLINE_SIZE,
     lineHeight: HEADLINE_LINE,
     letterSpacing: -0.2,
   },
   body: {
-    ...type.caption,
     flex: 1,
     color: colors.textDim,
   },

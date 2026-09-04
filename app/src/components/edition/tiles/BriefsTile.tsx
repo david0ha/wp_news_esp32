@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { fill, useStrings } from '../../../i18n'
-import { colors, fonts, type } from '../../../theme'
+import { colors, fonts } from '../../../theme'
 import {
   TILE_HEAD,
   TILE_MORE,
@@ -8,6 +8,7 @@ import {
   BRIEFS_SHOWN,
   type Tile,
 } from '../../../lib/edition/tiles'
+import { useEditionFace, useEditionType } from '../typeRamp'
 
 /**
  * Up to three briefs, then a count of the rest.
@@ -22,40 +23,44 @@ import {
  */
 export function BriefsTile({ tile }: { tile: Extract<Tile, { kind: 'briefs' }> }) {
   const t = useStrings()
+  const ty = useEditionType()
+  const face = useEditionFace()
   const rest = tile.briefs.length - BRIEFS_SHOWN
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>{t.today.heads.briefs}</Text>
+      <Text style={[ty.headingSm, styles.head]}>{t.today.heads.briefs}</Text>
       {tile.briefs.slice(0, BRIEFS_SHOWN).map((b, i) => (
         <View key={`${b.date}:${i}`} style={styles.row}>
           <View style={styles.meta}>
             {b.date !== '' ? (
-              <Text style={type.caption} numberOfLines={1}>
+              <Text style={ty.caption} numberOfLines={1}>
                 {b.date}
               </Text>
             ) : null}
             {b.kicker !== '' ? (
-              <Text style={type.caption} numberOfLines={1}>
+              <Text style={ty.caption} numberOfLines={1}>
                 {b.kicker}
               </Text>
             ) : null}
           </View>
-          <Text style={styles.text} numberOfLines={2}>
+          <Text style={[ty.caption, styles.text]} numberOfLines={2}>
             {b.text}
           </Text>
         </View>
       ))}
       {rest > 0 ? (
-        <Text style={styles.more}>{fill(t.today.andMore, { n: String(rest) })}</Text>
+        <Text style={[face(fonts.semibold), styles.more]}>
+          {fill(t.today.andMore, { n: String(rest) })}
+        </Text>
       ) : null}
     </View>
   )
 }
 
+// The faces come from the edition's ramp in front of these rules — see `typeRamp.tsx`.
 const styles = StyleSheet.create({
   root: { flex: 1 },
   head: {
-    ...type.headingSm,
     height: TILE_HEAD,
   },
   row: {
@@ -67,11 +72,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   text: {
-    ...type.caption,
     color: colors.text,
   },
   more: {
-    fontFamily: fonts.semibold,
     fontSize: 12,
     // The estimator adds exactly this for the "+N more" line; it is not a look choice.
     lineHeight: TILE_MORE,

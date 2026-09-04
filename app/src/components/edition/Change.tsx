@@ -44,6 +44,12 @@ export function Change({
   )
 }
 
+// THE ONE EDITION COMPONENT THAT STILL NAMES A FAMILY, and deliberately. Everything else on these
+// two screens takes its face from the edition's ramp (`typeRamp.tsx`) because it draws copy, which
+// in a Korean edition is Hangul that Inter cannot set. This draws `▲ 3.53%` — a geometric arrow
+// and tabular digits, both of which Inter has in every language — so the semibold cut is
+// available, and keeping it is what makes the tape's figures line up with the prices beside them.
+// It is also mounted from the Markets screens, which have no edition and no ramp.
 const styles = StyleSheet.create({
   text: {
     fontFamily: fonts.semibold,

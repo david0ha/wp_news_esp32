@@ -25,6 +25,28 @@ import { fontSizeOf } from '../metrics'
  */
 export const DETAIL_LABEL_EM = 0.62
 
+/**
+ * The same average for Hangul, which has none: a syllable block is a full em, every one of them.
+ *
+ * That is the whole of the language's effect on this file. A Korean statement label is written in
+ * about half the characters of its English name and each is nearly twice as wide, so the two land
+ * near the same width — but the ARITHMETIC has to be told, or "판매비와관리비" is estimated at 57
+ * points, given the 72 pt floor, and ellipsized at 91.
+ */
+export const DETAIL_LABEL_EM_HANGUL = 1.0
+
+/**
+ * Which of the two an edition's labels are measured with.
+ *
+ * Keyed off the edition's language and not the app's: the labels being measured are the
+ * producer's, and they are in the language the edition was written in whatever the phone is set
+ * to. Anything that is not Korean is Latin here — Inter's own average is the right guess for a
+ * language nobody has filed an edition in yet.
+ */
+export function labelEm(lang: string): number {
+  return lang === 'ko' ? DETAIL_LABEL_EM_HANGUL : DETAIL_LABEL_EM
+}
+
 /** Below this a label column reads as an indent rather than a column. */
 export const DETAIL_LABEL_MIN = 72
 
@@ -38,10 +60,14 @@ export const DETAIL_LABEL_MAX_FRACTION = 0.4
  * The longest label wins, so no row is the one that ellipsizes. The cap is applied last and beats
  * the floor: on a card narrow enough for the two to cross, protecting the figures matters more
  * than the column looking like one.
+ *
+ * `lang` is the EDITION's, and it is required rather than defaulted: a default would let a caller
+ * measure a Korean statement at Latin advances without saying so, which is the one way this
+ * estimate goes wrong quietly.
  */
-export function detailLabelWidth(labels: string[], cardWidth: number): number {
+export function detailLabelWidth(labels: string[], cardWidth: number, lang: string): number {
   const longest = labels.reduce((n, l) => Math.max(n, l.length), 0)
-  const wanted = Math.ceil(longest * fontSizeOf(type.caption) * DETAIL_LABEL_EM)
+  const wanted = Math.ceil(longest * fontSizeOf(type.caption) * labelEm(lang))
   const cap = Math.round(cardWidth * DETAIL_LABEL_MAX_FRACTION)
   return Math.min(cap, Math.max(DETAIL_LABEL_MIN, wanted))
 }

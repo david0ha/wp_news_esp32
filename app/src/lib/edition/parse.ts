@@ -109,6 +109,26 @@ function nonZeroNum(v: unknown): number | null {
   return n === null || n === 0 ? null : n
 }
 
+/**
+ * The edition's language tag — `news_model.c`'s `news_lang_normalise()`, mirrored.
+ *
+ * Lowercase it, then take it only if what is left is two or three ASCII letters; everything else
+ * is English. IT NORMALISES AND NEVER REJECTS, which is the rule the whole parser follows: a
+ * producer that files `"ko-KR"` or `"Korean"` has written a tag this reader cannot use, and the
+ * edition under it is still an edition. Blanking a front page over a language tag would be the one
+ * failure a reader actually notices.
+ *
+ * The device's default is `"en"` and not `""`, so a payload with no tag and one that says `"en"`
+ * are the same edition — which matters because `news_hash()` fingerprints this field, and two
+ * spellings of English would print the same sheet twice.
+ */
+export const LANG_DEFAULT = 'en'
+
+function lang(v: unknown): string {
+  const tag = str(v).toLowerCase()
+  return /^[a-z]{2,3}$/.test(tag) ? tag : LANG_DEFAULT
+}
+
 function numArray(v: unknown): number[] {
   const out: number[] = []
   for (const e of arr(v)) {
@@ -374,6 +394,7 @@ export function emptyEdition(): Edition {
     session: '',
     asOf: '',
     generatedAt: '',
+    lang: LANG_DEFAULT,
     subject: {
       symbol: '', name: '', exchange: '', sector: '',
       last: null, changePct: null, prevClose: null,
@@ -437,6 +458,7 @@ export function parseEdition(json: unknown): Edition {
     session: str(root.session),
     asOf: str(root.as_of),
     generatedAt: str(root.generated_at),
+    lang: lang(root.lang),
     subject: parseSubject(root.subject),
     stories: stories.slice(0, EDITION_CAPS.stories),
     figures: collect(root.figures, EDITION_CAPS.figures, parseFigure),

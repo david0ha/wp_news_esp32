@@ -25,7 +25,15 @@ function at(table: object, key: string): unknown {
 // entries at all, they are literals at their call sites or fragments inside a sentence that does
 // differ. The list is asserted in both directions below, so an entry that stops being identical
 // fails here rather than quietly excusing a real translation.
-const SAME_IN_BOTH = new Set(['settings.language.english', 'settings.language.korean'])
+// `marketDetail.info.eps` is on it for a different reason: it is a TICKER-TAPE ABBREVIATION that
+// Korean broker screens print in Latin exactly as English ones do, and the calendar row on the
+// same detail screen already says "EPS {actual}". 주당순이익 is the correct expansion and would be
+// the odd one out beside it, which is a worse read than the untranslated initialism.
+const SAME_IN_BOTH = new Set([
+  'settings.language.english',
+  'settings.language.korean',
+  'marketDetail.info.eps',
+])
 
 describe('the catalogue', () => {
   it('ko carries every key en does, and nothing else', () => {

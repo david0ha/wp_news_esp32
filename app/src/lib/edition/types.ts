@@ -144,6 +144,15 @@ export interface Edition {
   asOf: string
   /** ISO-8601 when present; fingerprinted by the board, shown nowhere. */
   generatedAt: string
+  /**
+   * The language every reader-facing string in this edition is written in — `"ko"`, or `"en"`
+   * when the wire says nothing. Shown nowhere; it decides the FACE the edition is drawn with
+   * (`components/edition/typeRamp.tsx`) and how wide a row label is estimated to run.
+   *
+   * Not the app's language, which is the reader's own setting and is kept apart from this one:
+   * a Korean edition on an English phone is still Korean.
+   */
+  lang: string
   subject: EditionSubject
   /** ≤ 5, ascending `rank` — the five lowest ranks survive the cap, not the first five. */
   stories: EditionStory[]

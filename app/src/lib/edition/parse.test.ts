@@ -555,3 +555,63 @@ describe('isEmptyEdition', () => {
     expect(isEmptyEdition(parseEdition({ dateline: 'FRIDAY', edition: 'SEMIS' }))).toBe(true)
   })
 })
+
+// The Korean edition, and the copy of it this app carries.
+//
+// The app needs its own copy because Metro bundles what the app imports and cannot reach up out of
+// `app/` — the same arrangement `demo.json` has with the repo's English fixture, and held together
+// the same way: two files that must never drift, tied by an assertion rather than by a habit. The
+// source is `components/news_core/test/host/fixtures/news.ko.json`, which is what the firmware's
+// host tests and the desk's validator parse.
+const KO_REPO = join(__dirname, '../../../../components/news_core/test/host/fixtures/news.ko.json')
+const KO_APP = join(__dirname, 'fixtures/news.ko.json')
+const fixtureKo = (): unknown => JSON.parse(readFileSync(KO_APP, 'utf8'))
+
+describe('the Korean fixture', () => {
+  it('is byte-identical to the repo fixture', () => {
+    const app = readFileSync(KO_APP)
+    const repo = readFileSync(KO_REPO)
+    // The length first: a mismatch report of two 19 KB buffers is unreadable, and the length
+    // alone already says "somebody edited one of them".
+    expect(app.length).toBe(repo.length)
+    expect(app.equals(repo)).toBe(true)
+  })
+
+  it('parses with its language', () => {
+    expect(parseEdition(fixtureKo()).lang).toBe('ko')
+  })
+
+  it('parses to a complete edition, in Korean', () => {
+    const e = parseEdition(fixtureKo())
+    expect(isEmptyEdition(e)).toBe(false)
+    expect(e.subject.symbol).toBe('005930')
+    expect(e.subject.name).toBe('삼성전자')
+    expect(e.stories.length).toBeGreaterThan(0)
+    expect(e.tables[0].rows.map((r) => r.label)).toEqual(['매출', '순이익', '순이익률'])
+  })
+})
+
+describe('parseEdition — lang', () => {
+  // The device's rule, mirrored (`news_parse.c`): `^[a-z]{2,3}$` after lowercasing, and anything
+  // else is English. It NORMALISES AND NEVER REJECTS — a payload with a nonsense language tag is
+  // still a payload, and blanking a front page over one is the failure a reader actually notices.
+  it('defaults to English when the wire says nothing', () => {
+    expect(parseEdition({}).lang).toBe('en')
+    expect(emptyEdition().lang).toBe('en')
+  })
+
+  it('takes a two- or three-letter tag', () => {
+    expect(parseEdition({ lang: 'ko' }).lang).toBe('ko')
+    expect(parseEdition({ lang: 'jpn' }).lang).toBe('jpn')
+  })
+
+  it('lowercases what it takes', () => {
+    expect(parseEdition({ lang: 'KO' }).lang).toBe('ko')
+    expect(parseEdition({ lang: 'Ko' }).lang).toBe('ko')
+  })
+
+  it('falls back to English on anything that is not that shape', () => {
+    const bad: unknown[] = ['', 'k', 'kore', 'ko-KR', 'k1', ' ko', 3, null, true, ['ko'], {}]
+    for (const v of bad) expect(parseEdition({ lang: v }).lang).toBe('en')
+  })
+})

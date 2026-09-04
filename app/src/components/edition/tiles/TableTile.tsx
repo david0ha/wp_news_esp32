@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { useStrings } from '../../../i18n'
-import { colors, fonts, space, tabular, type } from '../../../theme'
+import { colors, fonts, space, tabular } from '../../../theme'
 import {
   TABLE_GAP,
   TABLE_HEAD_ROW_H,
@@ -13,6 +13,7 @@ import {
   TABLE_TITLE_LINES,
   type Tile,
 } from '../../../lib/edition/tiles'
+import { useEditionFace, useEditionType } from '../typeRamp'
 
 /**
  * A statement, cut down to what fits a column: the row labels and the LAST period.
@@ -47,12 +48,14 @@ import {
  */
 export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) {
   const t = useStrings()
+  const ty = useEditionType()
+  const face = useEditionFace()
   const { table } = tile
   const from = Math.max(0, table.columns.length - TABLE_TILE_COLS)
   const columns = table.columns.slice(from)
   return (
     <View style={styles.root}>
-      <Text style={styles.head} numberOfLines={TABLE_TITLE_LINES}>
+      <Text style={[ty.headingSm, styles.head]} numberOfLines={TABLE_TITLE_LINES}>
         {table.title !== '' ? table.title : t.today.heads.statement}
       </Text>
       <View style={styles.headRow}>
@@ -60,14 +63,18 @@ export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) 
         {/* Keyed by position as well as label: a statement whose trailing columns carry the same
             heading is a producer mistake, not a crash. */}
         {columns.map((c, j) => (
-          <Text key={`${c}:${j}`} style={[styles.colHead, tabular]} numberOfLines={1}>
+          <Text
+            key={`${c}:${j}`}
+            style={[face(fonts.semibold), styles.colHead, tabular]}
+            numberOfLines={1}
+          >
             {c}
           </Text>
         ))}
       </View>
       {table.rows.slice(0, TABLE_ROWS).map((r, i) => (
         <View key={`${r.label}:${i}`} style={styles.row}>
-          <Text style={[type.caption, styles.labelCell]} numberOfLines={1}>
+          <Text style={[ty.caption, styles.labelCell]} numberOfLines={1}>
             {r.label}
           </Text>
           {/* `from + j`, never `j`. `columns` was sliced down to the trailing periods, but a
@@ -75,14 +82,18 @@ export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) 
               indexing by the sliced position would print the OLDEST figure under the newest
               heading, which is a wrong number that looks like a right one. */}
           {columns.map((c, j) => (
-            <Text key={`${c}:${j}`} style={[styles.cell, tabular]} numberOfLines={1}>
+            <Text
+              key={`${c}:${j}`}
+              style={[face(fonts.regular), styles.cell, tabular]}
+              numberOfLines={1}
+            >
               {r.values[from + j] ?? ''}
             </Text>
           ))}
         </View>
       ))}
       {table.note !== '' ? (
-        <Text style={styles.note} numberOfLines={TABLE_NOTE_LINES}>
+        <Text style={[ty.caption, styles.note]} numberOfLines={TABLE_NOTE_LINES}>
           {table.note}
         </Text>
       ) : null}
@@ -96,11 +107,11 @@ const styles = StyleSheet.create({
     gap: TABLE_GAP,
   },
   head: {
-    // A heading a size down from `type.headingSm`, and the one tile that does not draw a
-    // `TILE_HEAD` line: a statement title runs two lines, and at 18/24 those two would take 48 px
-    // of a 213 px tile before a single figure was drawn. It is not exempt from the arithmetic —
+    // A heading a size down from `headingSm`, whose cut and colour arrive in front of this rule
+    // from the edition's ramp — and the one tile that does not draw a `TILE_HEAD` line: a
+    // statement title runs two lines, and at 18/24 those two would take 48 px of a 213 px tile
+    // before a single figure was drawn. It is not exempt from the arithmetic —
     // `estimateTileHeight` reserves `TABLE_TITLE_LINE * TABLE_TITLE_LINES` for exactly this box.
-    ...type.headingSm,
     fontSize: 15,
     lineHeight: TABLE_TITLE_LINE,
   },
@@ -129,7 +140,6 @@ const styles = StyleSheet.create({
   },
   colHead: {
     flex: 1,
-    fontFamily: fonts.semibold,
     fontSize: 11,
     lineHeight: 14,
     color: colors.textDim,
@@ -137,14 +147,12 @@ const styles = StyleSheet.create({
   },
   cell: {
     flex: 1,
-    fontFamily: fonts.regular,
     fontSize: 12,
     lineHeight: 15,
     color: colors.text,
     textAlign: 'right',
   },
   note: {
-    ...type.caption,
     fontSize: 11,
     lineHeight: TABLE_NOTE_LINE,
     // Pushed to the foot of whatever the estimator left over, so the note sits on the bottom

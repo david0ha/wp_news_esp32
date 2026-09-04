@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Image, InteractionManager, StyleSheet, Text, View } from 'react-native'
-import { colors, radius, type } from '../../../theme'
+import { colors, radius } from '../../../theme'
 import { TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
 import { editionClient, tileUrl } from '../../../lib/edition/client'
 import { decodeTile, getCachedTilePng, putCachedTilePng } from '../../../lib/edition/photo'
 import { useEditionUrl } from '../editionUrl'
+import { useEditionType } from '../typeRamp'
 import { useStrings } from '../../../i18n'
 
 /**
@@ -41,6 +42,7 @@ export function PhotoTile({
   height: number
 }) {
   const t = useStrings()
+  const ty = useEditionType()
   const { photo } = tile
   const url = tileUrl(useEditionUrl(), photo.id)
   // Seeded from the session cache so a tile scrolled back into view paints on its first frame
@@ -101,7 +103,7 @@ export function PhotoTile({
         <View style={styles.placeholder} />
       )}
       {photo.caption !== '' ? (
-        <Text style={styles.caption} numberOfLines={2}>
+        <Text style={[ty.caption, styles.caption]} numberOfLines={2}>
           {photo.caption}
         </Text>
       ) : null}
@@ -138,8 +140,9 @@ const styles = StyleSheet.create({
     left: 0,
     backgroundColor: colors.surfaceAlt,
   },
+  // The caption's face arrives in front of this rule from the edition's ramp: it is the
+  // producer's sentence about the picture, so on a Korean day it is Korean.
   caption: {
-    ...type.caption,
     color: colors.text,
     backgroundColor: colors.surface,
     paddingHorizontal: TILE_PADDING,

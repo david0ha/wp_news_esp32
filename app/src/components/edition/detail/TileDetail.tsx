@@ -9,9 +9,10 @@ import { changeTone, formatPrice } from '../../../lib/edition/format'
 import { photoBoxHeight } from '../../../lib/edition/feedLayout'
 import { TABLE_HEAD_ROW_H, TABLE_ROW_H, type Tile } from '../../../lib/edition/tiles'
 import { DETAIL_CELL_FONT, detailCellWidth, detailLabelWidth } from './tableGrid'
+import { useEditionFace, useEditionType } from '../typeRamp'
 import { type Edition, type EditionChart, type EditionPhoto } from '../../../lib/edition/types'
 import { useStrings } from '../../../i18n'
-import { colors, fonts, layout, radius, space, tabular, type } from '../../../theme'
+import { colors, fonts, layout, radius, space, tabular } from '../../../theme'
 
 /**
  * One tile, opened.
@@ -64,6 +65,8 @@ export function TileDetail({
   width: number
 }) {
   const s = useStrings().today
+  const ty = useEditionType()
+  const face = useEditionFace()
   const contentWidth = width - 2 * layout.gutter
 
   switch (tile.kind) {
@@ -73,10 +76,10 @@ export function TileDetail({
       const chart = story.chart !== null ? edition.charts[story.chart] : undefined
       return (
         <View style={styles.root}>
-          {story.kicker !== '' ? <Text style={type.caption}>{story.kicker}</Text> : null}
-          <Text style={type.pinHeadline}>{story.headline}</Text>
-          {story.deck !== '' ? <Text style={styles.deck}>{story.deck}</Text> : null}
-          {story.byline !== '' ? <Text style={type.caption}>{story.byline}</Text> : null}
+          {story.kicker !== '' ? <Text style={ty.caption}>{story.kicker}</Text> : null}
+          <Text style={ty.pinHeadline}>{story.headline}</Text>
+          {story.deck !== '' ? <Text style={[ty.body, styles.deck]}>{story.deck}</Text> : null}
+          {story.byline !== '' ? <Text style={ty.caption}>{story.byline}</Text> : null}
           {photos && story.photo !== null ? (
             <DetailPhoto
               key={`${editionKey}:${story.photo.id}`}
@@ -85,7 +88,7 @@ export function TileDetail({
             />
           ) : null}
           {chart !== undefined ? <ChartBlock chart={chart} width={contentWidth} /> : null}
-          {story.body !== '' ? <Text style={type.body}>{story.body}</Text> : null}
+          {story.body !== '' ? <Text style={ty.body}>{story.body}</Text> : null}
         </View>
       )
     }
@@ -97,7 +100,7 @@ export function TileDetail({
       const has52 = subject.wk52High !== null || subject.wk52Low !== null
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{s.heads.range}</Text>
+          <Text style={ty.heading}>{s.heads.range}</Text>
           <View>
             <Row label={s.range.previousClose} value={formatPrice(subject.prevClose)} />
             <Row label={s.range.open} value={formatPrice(subject.open)} />
@@ -113,7 +116,7 @@ export function TileDetail({
     case 'chart':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>
+          <Text style={ty.heading}>
             {tile.chart.label !== '' ? tile.chart.label : s.heads.chart}
           </Text>
           <ChartBlock chart={tile.chart} width={contentWidth} showLabel={false} />
@@ -134,7 +137,7 @@ export function TileDetail({
     case 'figures':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{tile.group !== '' ? tile.group : s.heads.figures}</Text>
+          <Text style={ty.heading}>{tile.group !== '' ? tile.group : s.heads.figures}</Text>
           {/* Every figure in the group, where the tile showed four and counted the rest. */}
           <View>
             {tile.figures.map((f, i) => (
@@ -153,17 +156,17 @@ export function TileDetail({
     case 'briefs':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{s.heads.briefs}</Text>
+          <Text style={ty.heading}>{s.heads.briefs}</Text>
           <View style={styles.briefList}>
             {tile.briefs.map((b, i) => (
               <View key={`${b.date}:${i}`} style={styles.brief}>
                 {/* Date and kicker at opposite ends of the row, never joined by a middle dot —
                     the same arrangement the tile uses, so the two read as one thing enlarged. */}
                 <View style={styles.briefMeta}>
-                  {b.date !== '' ? <Text style={type.caption}>{b.date}</Text> : null}
-                  {b.kicker !== '' ? <Text style={type.caption}>{b.kicker}</Text> : null}
+                  {b.date !== '' ? <Text style={ty.caption}>{b.date}</Text> : null}
+                  {b.kicker !== '' ? <Text style={ty.caption}>{b.kicker}</Text> : null}
                 </View>
-                <Text style={type.body}>{b.text}</Text>
+                <Text style={ty.body}>{b.text}</Text>
               </View>
             ))}
           </View>
@@ -173,7 +176,7 @@ export function TileDetail({
     case 'peers':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{s.heads.peers}</Text>
+          <Text style={ty.heading}>{s.heads.peers}</Text>
           <View>
             {tile.peers.map((p) => (
               <QuoteRow
@@ -186,8 +189,8 @@ export function TileDetail({
                 trailing={
                   /* Preformatted by the producer — "22.4x", "$241.6B" — rendered verbatim. */
                   <View style={styles.peerRatios}>
-                    <Text style={[type.caption, tabular]}>{p.per}</Text>
-                    <Text style={[type.caption, tabular]}>{p.cap}</Text>
+                    <Text style={[ty.caption, tabular]}>{p.per}</Text>
+                    <Text style={[ty.caption, tabular]}>{p.cap}</Text>
                   </View>
                 }
               />
@@ -201,9 +204,12 @@ export function TileDetail({
       // The two widths the grid is built from, decided before anything draws — see `tableGrid.ts`.
       // The card is the content width less the surface's own padding on both sides.
       const cardWidth = contentWidth - 2 * space.md
+      // The EDITION's language and not the app's: the labels being measured are the producer's,
+      // and a Hangul syllable is a full em where Inter's mixed case averages 0.62.
       const labelWidth = detailLabelWidth(
         table.rows.map((r) => r.label),
         cardWidth,
+        edition.lang,
       )
       const cellWidth = detailCellWidth(
         table.columns,
@@ -211,8 +217,8 @@ export function TileDetail({
       )
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{table.title !== '' ? table.title : s.heads.statement}</Text>
-          {table.note !== '' ? <Text style={type.caption}>{table.note}</Text> : null}
+          <Text style={ty.heading}>{table.title !== '' ? table.title : s.heads.statement}</Text>
+          {table.note !== '' ? <Text style={ty.caption}>{table.note}</Text> : null}
           {/* THE LABEL COLUMN STAYS PUT AND THE PERIODS SCROLL UNDER IT. All six columns in one
               flex row put "3Q25" half off the card and cut its figures down the middle, and
               scrolling the whole grid took the row names away with them, which left a wall of
@@ -233,7 +239,7 @@ export function TileDetail({
                 {table.rows.map((r, i) => (
                   <Text
                     key={`${r.label}:${i}`}
-                    style={[type.caption, styles.gridLabel]}
+                    style={[ty.caption, styles.gridLabel]}
                     numberOfLines={1}
                   >
                     {r.label}
@@ -250,7 +256,12 @@ export function TileDetail({
                     {table.columns.map((c, j) => (
                       <Text
                         key={`${c}:${j}`}
-                        style={[styles.gridCellHead, tabular, { width: cellWidth }]}
+                        style={[
+                          face(fonts.semibold),
+                          styles.gridCellHead,
+                          tabular,
+                          { width: cellWidth },
+                        ]}
                       >
                         {c}
                       </Text>
@@ -263,7 +274,12 @@ export function TileDetail({
                       {table.columns.map((c, j) => (
                         <Text
                           key={`${c}:${j}`}
-                          style={[styles.gridCell, tabular, { width: cellWidth }]}
+                          style={[
+                            face(fonts.regular),
+                            styles.gridCell,
+                            tabular,
+                            { width: cellWidth },
+                          ]}
                         >
                           {r.values[j] ?? ''}
                         </Text>
@@ -281,7 +297,7 @@ export function TileDetail({
     case 'tape':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{s.heads.tape}</Text>
+          <Text style={ty.heading}>{s.heads.tape}</Text>
           <View>
             {tile.indices.map((ix) => (
               <QuoteRow
@@ -319,6 +335,7 @@ export function TileDetail({
  * under it is the same string twice. The producer's text still renders verbatim, in one place.
  */
 function DetailPhoto({ photo, width }: { photo: EditionPhoto; width: number }) {
+  const ty = useEditionType()
   return (
     <View style={styles.photoBlock}>
       {/* The rounded frame lives on this wrapper. `PhotoTile` sets no radius of its own — inside
@@ -330,8 +347,8 @@ function DetailPhoto({ photo, width }: { photo: EditionPhoto; width: number }) {
           height={photoBoxHeight(photo, width)}
         />
       </View>
-      {photo.caption !== '' ? <Text style={type.body}>{photo.caption}</Text> : null}
-      {photo.credit !== '' ? <Text style={type.caption}>{photo.credit}</Text> : null}
+      {photo.caption !== '' ? <Text style={ty.body}>{photo.caption}</Text> : null}
+      {photo.credit !== '' ? <Text style={ty.caption}>{photo.credit}</Text> : null}
     </View>
   )
 }
@@ -355,13 +372,14 @@ function ChartBlock({
   width: number
   showLabel?: boolean
 }) {
+  const ty = useEditionType()
   const plotWidth = Math.max(1, width - 2 * space.md)
   return (
     <View style={styles.chartBlock}>
-      {showLabel && chart.label !== '' ? <Text style={styles.chartLabel}>{chart.label}</Text> : null}
+      {showLabel && chart.label !== '' ? <Text style={ty.headingSm}>{chart.label}</Text> : null}
       <ChartFigure chart={chart} width={plotWidth} height={Math.round(plotWidth * 0.5)} />
-      {chart.span !== '' ? <Text style={type.caption}>{chart.span}</Text> : null}
-      {chart.note !== '' ? <Text style={type.caption}>{chart.note}</Text> : null}
+      {chart.span !== '' ? <Text style={ty.caption}>{chart.span}</Text> : null}
+      {chart.note !== '' ? <Text style={ty.caption}>{chart.note}</Text> : null}
     </View>
   )
 }
@@ -398,15 +416,24 @@ function QuoteRow({
   /** After the numbers — the peers' per and cap. */
   trailing?: ReactNode
 }) {
+  const ty = useEditionType()
+  const face = useEditionFace()
   return (
     <View style={styles.quoteRow}>
       <View style={styles.quoteName}>
-        <Text style={subject ? styles.quoteSymbolSubject : styles.quoteSymbol}>{symbol}</Text>
-        {name !== '' ? <Text style={type.caption}>{name}</Text> : null}
+        <Text
+          style={[
+            face(subject ? fonts.extrabold : fonts.medium),
+            subject ? styles.quoteSymbolSubject : styles.quoteSymbol,
+          ]}
+        >
+          {symbol}
+        </Text>
+        {name !== '' ? <Text style={ty.caption}>{name}</Text> : null}
       </View>
       {middle}
       <View style={styles.quoteNums}>
-        <Text style={[styles.value, tabular]}>{formatPrice(last)}</Text>
+        <Text style={[face(fonts.semibold), styles.value, tabular]}>{formatPrice(last)}</Text>
         <Change pct={changePct} size={13} style={styles.change} />
       </View>
       {trailing}
@@ -427,10 +454,24 @@ function Row({
   changePct?: number | null
   emph?: boolean
 }) {
+  const ty = useEditionType()
+  const face = useEditionFace()
   return (
     <View style={styles.row}>
-      <Text style={[type.caption, styles.rowLabel]}>{label}</Text>
-      <Text style={[emph ? styles.valueEmph : styles.value, tabular]}>{value}</Text>
+      <Text style={[ty.caption, styles.rowLabel]}>{label}</Text>
+      {/* THE VALUE TAKES A FACE AND NOT A FAMILY. A figure arrives from the producer already
+          formatted and carrying its units, which in a Korean edition means "578조원" — Inter
+          cannot set that, so asked for by family it would fall to the system face at regular
+          weight and the emphasised figure would stop looking emphasised. */}
+      <Text
+        style={[
+          face(emph ? fonts.extrabold : fonts.semibold),
+          emph ? styles.valueEmph : styles.value,
+          tabular,
+        ]}
+      >
+        {value}
+      </Text>
       {changePct !== undefined && changePct !== null ? (
         <Change pct={changePct} size={13} style={styles.change} />
       ) : null}
@@ -438,13 +479,16 @@ function Row({
   )
 }
 
+// NO FACE IS NAMED IN THIS SHEET. Every one of them arrives in front of these rules from the
+// edition's ramp (`typeRamp.tsx`), because the page is written in the edition's language and Inter
+// cannot set all of them. What stays here is the geometry, the colour and the two row heights the
+// grid's halves line up across.
 const styles = StyleSheet.create({
   root: {
     paddingHorizontal: layout.gutter,
     gap: space.md,
   },
   deck: {
-    ...type.body,
     color: colors.textDim,
   },
   // A run of rows is one object, so it sits in a bare wrapper `View` rather than as siblings of
@@ -463,12 +507,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   value: {
-    fontFamily: fonts.semibold,
     fontSize: 15,
     color: colors.text,
   },
   valueEmph: {
-    fontFamily: fonts.extrabold,
     fontSize: 17,
     color: colors.text,
   },
@@ -510,12 +552,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   quoteSymbol: {
-    fontFamily: fonts.medium,
     fontSize: 14,
     color: colors.text,
   },
   quoteSymbolSubject: {
-    fontFamily: fonts.extrabold,
     fontSize: 14,
     color: colors.text,
   },
@@ -531,9 +571,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: space.md,
-  },
-  chartLabel: {
-    ...type.headingSm,
   },
   gridSurface: {
     backgroundColor: colors.surface,
@@ -570,14 +607,12 @@ const styles = StyleSheet.create({
     lineHeight: TABLE_ROW_H,
   },
   gridCellHead: {
-    fontFamily: fonts.semibold,
     fontSize: 12,
     lineHeight: TABLE_HEAD_ROW_H,
     color: colors.textDim,
     textAlign: 'right',
   },
   gridCell: {
-    fontFamily: fonts.regular,
     // From `tableGrid.ts`, which measured the columns at this size. A number here that the width
     // estimate does not know about is a cell that wraps inside a fixed-height row and loses its
     // second line to the surface's clipping.

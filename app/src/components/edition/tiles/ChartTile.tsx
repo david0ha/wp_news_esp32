@@ -4,6 +4,7 @@ import { space, type } from '../../../theme'
 import { TILE_HEAD, TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
 import { ChartFigure } from '../ChartFigure'
 import { lineHeightOf } from '../metrics'
+import { useEditionType } from '../typeRamp'
 
 /** The span line under the plot, read off the token it draws with. */
 const CAPTION = lineHeightOf(type.caption)
@@ -32,6 +33,7 @@ export function ChartTile({
   height: number
 }) {
   const t = useStrings()
+  const ty = useEditionType()
   const { chart } = tile
   const hasSpan = chart.span !== ''
   const plotW = Math.max(1, width - 2 * TILE_PADDING)
@@ -46,7 +48,7 @@ export function ChartTile({
           plot underneath is drawn in. One line at a floor of 0.8 keeps the head inside `TILE_HEAD`,
           so the plot height this file subtracts from is unchanged. */}
       <Text
-        style={styles.head}
+        style={[ty.headingSm, styles.head]}
         numberOfLines={1}
         adjustsFontSizeToFit
         minimumFontScale={0.8}
@@ -55,7 +57,7 @@ export function ChartTile({
       </Text>
       <ChartFigure chart={chart} width={plotW} height={plotH} />
       {hasSpan ? (
-        <Text style={type.caption} numberOfLines={1}>
+        <Text style={ty.caption} numberOfLines={1}>
           {chart.span}
         </Text>
       ) : null}
@@ -63,13 +65,14 @@ export function ChartTile({
   )
 }
 
+// The heading's face comes from the edition's ramp in front of this rule — the label is the
+// producer's, so on a Korean day it is Korean. See `typeRamp.tsx`.
 const styles = StyleSheet.create({
   root: {
     flex: 1,
     gap: GAP,
   },
   head: {
-    ...type.headingSm,
     height: TILE_HEAD,
   },
 })

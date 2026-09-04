@@ -248,7 +248,7 @@ export const ko: Strings = {
     minutes: '{n}분 전 업데이트',
     hours: '{n}시간 전 업데이트',
     yesterday: '어제 마지막 업데이트',
-    date: '마지막 업데이트 {month} {day}일',
+    date: '{month} {day}일 마지막 업데이트',
   },
 
   errors: {
@@ -331,7 +331,9 @@ export const ko: Strings = {
     },
     panel: {
       switching: '전환 중… 지면을 바꾸면 전체를 다시 그리므로 20~30초가 걸립니다.',
-      showing: '“{page}”을 표시하고 있습니다. 이 패널의 마지막 갱신에는 {ms}가 걸렸습니다.',
+      // 조사는 앞말의 받침에 따라 달라지는데 {page}와 {ms}는 실행 시점에 정해지는 값이라
+      // 어느 쪽이 올지 알 수 없다. 그래서 값 뒤에 조사를 붙이지 않는 형태로 문장을 끊는다.
+      showing: '현재 지면: “{page}”. 이 패널의 마지막 갱신에 {ms} 걸렸습니다.',
       seeOnGlass: '인쇄된 지면 보기',
     },
     source: {
@@ -348,7 +350,7 @@ export const ko: Strings = {
       off: '꺼짐',
       wakes: '깨어나는 주기',
       sinceUnplug: '마지막 분리 이후',
-      wakeCounts: '{wakes}회 깨어남, 그중 {quiet}회는 조용히',
+      wakeCounts: '{wakes}회 깨어남 (조용한 깨어남 {quiet}회)',
       notSleptYet: '아직 잠든 적 없음',
       awakeEach: '한 번에 깨어 있는 시간',
       battery: '배터리',
@@ -431,7 +433,9 @@ export const ko: Strings = {
       wk52Low: '52주 최저',
       marketCap: '시가총액',
       pe: 'PER',
-      eps: '주당순이익',
+      // 같은 화면의 calendar.epsActualVsEstimate가 'EPS'로 적는다. 한국 증권사 화면도
+      // 주당순이익보다 EPS로 적는 쪽이 흔하므로 둘을 EPS로 맞춘다.
+      eps: 'EPS',
       beta: '베타',
       employees: '임직원 {n}명',
       readMore: '더 보기',
@@ -462,12 +466,13 @@ export const ko: Strings = {
       showAll: '전체 행사가 보기',
       showFewer: '접기',
       putCallRatio: '풋/콜 비율 (미결제)',
-      maxPain: '최대 고통 가격',
+      maxPain: '맥스페인',
       impliedVolatility: '내재변동성',
       ivBothSides: '콜 {calls} · 풋 {puts}',
       strike: '행사가',
       bidAsk: '매수 / 매도',
-      volOi: '거래량 · 미결제',
+      // 좁은 칸에 한 줄로 들어가야 해서 가운뎃점 양옆의 공백을 뺐다. 위의 iv와 같은 이유다.
+      volOi: '거래량·미결제',
       // 좁은 칸에 한 줄로 들어가야 해서 '내재변동성'을 줄인 말이다. 위의 impliedVolatility는
       // 요약 행이라 자리가 있어 전체 표기를 쓴다.
       iv: '변동성',

@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { fill, useStrings } from '../../../i18n'
-import { colors, fonts, tabular, type } from '../../../theme'
+import { colors, fonts, tabular } from '../../../theme'
 import {
   TILE_HEAD,
   TILE_MORE,
@@ -14,6 +14,7 @@ import {
   type Tile,
 } from '../../../lib/edition/tiles'
 import { Change } from '../Change'
+import { useEditionFace, useEditionType } from '../typeRamp'
 
 /**
  * One group of figures — VALUATION, PER SHARE, THE STREET — as stacked label/value rows.
@@ -39,6 +40,8 @@ import { Change } from '../Change'
  */
 export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }> }) {
   const t = useStrings()
+  const ty = useEditionType()
+  const face = useEditionFace()
   const rest = tile.figures.length - FIGURES_SHOWN
   return (
     <View style={styles.root}>
@@ -51,7 +54,7 @@ export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }>
           beside it — and one line keeps the box at `TILE_HEAD`, so the estimator is untouched.
           iOS honours this; Android ignores it and ellipsizes as before, which is today. */}
       <Text
-        style={styles.head}
+        style={[ty.headingSm, styles.head]}
         numberOfLines={1}
         adjustsFontSizeToFit
         minimumFontScale={0.8}
@@ -60,11 +63,23 @@ export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }>
       </Text>
       {tile.figures.slice(0, FIGURES_SHOWN).map((f, i) => (
         <View key={`${f.label}:${i}`} style={styles.row}>
-          <Text style={styles.label} numberOfLines={1}>
+          <Text style={[ty.caption, styles.label]} numberOfLines={1}>
             {f.label}
           </Text>
           <View style={styles.valueRow}>
-            <Text style={[f.emph ? styles.valueEmph : styles.value, tabular]} numberOfLines={1}>
+            {/* THE VALUE TAKES A FACE AND NOT A FAMILY, because it is the producer's own string
+                and carries units: a Korean edition's market cap is "578조원", which Inter cannot
+                set. Asked for by family it would fall to the system face at regular weight, and
+                the emphasised figure — the one the whole group is about — would be the one that
+                stopped looking emphasised. */}
+            <Text
+              style={[
+                face(f.emph ? fonts.extrabold : fonts.semibold),
+                f.emph ? styles.valueEmph : styles.value,
+                tabular,
+              ]}
+              numberOfLines={1}
+            >
               {f.value}
             </Text>
             {f.changePct !== null ? <Change pct={f.changePct} /> : null}
@@ -72,16 +87,19 @@ export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }>
         </View>
       ))}
       {rest > 0 ? (
-        <Text style={styles.more}>{fill(t.today.andMore, { n: String(rest) })}</Text>
+        <Text style={[face(fonts.semibold), styles.more]}>
+          {fill(t.today.andMore, { n: String(rest) })}
+        </Text>
       ) : null}
     </View>
   )
 }
 
+// The faces come from the edition's ramp in front of these rules (`typeRamp.tsx`). The sizes and
+// the line boxes stay here, because they are what `tiles.ts` sized the tile with.
 const styles = StyleSheet.create({
   root: { flex: 1 },
   head: {
-    ...type.headingSm,
     height: TILE_HEAD,
   },
   row: {
@@ -89,7 +107,6 @@ const styles = StyleSheet.create({
     gap: FIGURES_ROW_GAP,
   },
   label: {
-    ...type.caption,
     // Given as a height so the row's two blocks add up to FIGURES_ROW exactly, rather than to
     // whatever the face happens to measure — the rule every other fixed-furniture tile follows.
     height: FIGURES_LABEL_LINE,
@@ -104,19 +121,16 @@ const styles = StyleSheet.create({
   // Both sizes come from `tiles.ts`, beside the line box they draw inside. A size typed here
   // instead would be a face the row's arithmetic knows nothing about.
   value: {
-    fontFamily: fonts.semibold,
     fontSize: FIGURES_VALUE_SIZE,
     lineHeight: FIGURES_VALUE_LINE,
     color: colors.text,
   },
   valueEmph: {
-    fontFamily: fonts.extrabold,
     fontSize: FIGURES_VALUE_EMPH_SIZE,
     lineHeight: FIGURES_VALUE_LINE,
     color: colors.text,
   },
   more: {
-    fontFamily: fonts.semibold,
     fontSize: 12,
     // The estimator adds exactly this for the "+N more" line; it is not a look choice.
     lineHeight: TILE_MORE,

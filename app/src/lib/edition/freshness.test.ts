@@ -62,8 +62,9 @@ describe('freshnessLabel — in Korean', () => {
     expect(ago(12 * MIN)).toMatch(/[가-힣]/)
     expect(ago(3 * HOUR)).toMatch(/[가-힣]/)
     expect(ago(DAY)).toMatch(/[가-힣]/)
-    // 2026-08-30 14:00 minus two days is 2026-08-28, which a Korean paper dates 8월 28일.
-    expect(ago(2 * DAY)).toBe('마지막 업데이트 8월 28일')
+    // 2026-08-30 14:00 minus two days is 2026-08-28, which a Korean paper dates 8월 28일. The
+    // time phrase leads, as it does in this tier's three siblings ("어제 마지막 업데이트").
+    expect(ago(2 * DAY)).toBe('8월 28일 마지막 업데이트')
   })
 
   it('still says nothing under five minutes — silence has no language', () => {

@@ -6,6 +6,7 @@ import { BackButton } from '../../components/BackButton'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masonry } from '../../components/edition/Masonry'
 import { EditionUrlProvider } from '../../components/edition/editionUrl'
+import { EditionTypeProvider } from '../../components/edition/typeRamp'
 import { TileDetail } from '../../components/edition/detail/TileDetail'
 import { isDemo } from '../../lib/edition/editionState'
 import { getNewsUrl } from '../../lib/store'
@@ -157,23 +158,28 @@ export default function TileDetailRoute() {
     <Screen>
       {header}
       {/* This page's photographs come from the edition on screen, which may be the one read off
-          disk by a cold deep link rather than the tab's — so the address is this entry's own. */}
+          disk by a cold deep link rather than the tab's — so the address is this entry's own, and
+          so is the language everything below is set in. */}
       <EditionUrlProvider url={cached.url}>
-        <ScrollView contentContainerStyle={styles.scroll}>
-          <TileDetail
-            tile={tile}
-            edition={cached.edition}
-            editionKey={key}
-            photos={photos}
-            width={width}
-          />
-          {rest.length > 0 ? (
-            <View style={styles.more}>
-              <Text style={type.headingSm}>{t.today.more}</Text>
-              <Masonry tiles={rest} colWidth={colWidth} editionKey={key} onPress={openTile} />
-            </View>
-          ) : null}
-        </ScrollView>
+        <EditionTypeProvider lang={cached.edition.lang}>
+          <ScrollView contentContainerStyle={styles.scroll}>
+            <TileDetail
+              tile={tile}
+              edition={cached.edition}
+              editionKey={key}
+              photos={photos}
+              width={width}
+            />
+            {rest.length > 0 ? (
+              <View style={styles.more}>
+                {/* This heading is the APP's word, not the edition's, so it keeps the app's own
+                    ramp — the tiles under it are the ones the edition's language governs. */}
+                <Text style={type.headingSm}>{t.today.more}</Text>
+                <Masonry tiles={rest} colWidth={colWidth} editionKey={key} onPress={openTile} />
+              </View>
+            ) : null}
+          </ScrollView>
+        </EditionTypeProvider>
       </EditionUrlProvider>
     </Screen>
   )
