@@ -248,7 +248,10 @@ def symbol_sets():
                                # Most faces have no outline for it, and asking
                                # for it makes the "not in the font" report —
                                # which is there to catch real gaps — cry wolf.
-    text |= literal_chars(src)
+    # U+3000 and up is the Korean faces' half of ui_strings.h and no Latin
+    # family has an outline for any of it, so asking for it here would make the
+    # same report cry wolf thirty-five times over and bury a real gap in it.
+    text |= {c for c in literal_chars(src) if ord(c) < 0x3000}
 
     # Masthead: the letters of S_MASTHEAD, plus the whole Latin alphabet and the
     # punctuation a paper's name plausibly uses, so that editing S_MASTHEAD is a
