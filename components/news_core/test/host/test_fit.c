@@ -135,7 +135,7 @@ static size_t fit(int w, int h, const char *src, char *dst, size_t n)
 {
     g_bad_utf8 = 0;
 
-    size_t used = ui_fit_text(&FACE, w, h, LS, src, dst, n);
+    size_t used = ui_fit_text(&FACE, w, h, LS, UI_FIT_LATIN, src, dst, n);
     size_t len  = strlen(dst);
 
     CHECK(g_bad_utf8 == 0);
@@ -171,42 +171,42 @@ static void t_degenerate(void)
     /* No source at all, in each of its shapes. dst is blanked either way, so a
      * caller that ignores the return does not print the previous column twice. */
     memset(buf, 'X', sizeof buf);
-    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, NULL, buf, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, UI_FIT_LATIN, NULL, buf, sizeof buf), 0);
     CHECK_STR(buf, "");
 
     memset(buf, 'X', sizeof buf);
-    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, "", buf, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, UI_FIT_LATIN, "", buf, sizeof buf), 0);
     CHECK_STR(buf, "");
 
     memset(buf, 'X', sizeof buf);
-    CHECK_INT(ui_fit_text(NULL, 100, BOX_H(2), LS, "text", buf, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(NULL, 100, BOX_H(2), LS, UI_FIT_LATIN, "text", buf, sizeof buf), 0);
     CHECK_STR(buf, "");
 
     /* No destination. n == 0 must not write a NUL either: there is no byte to
      * write it to, and a caller passing 0 has no buffer to blank. */
-    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, "text", NULL, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, UI_FIT_LATIN, "text", NULL, sizeof buf), 0);
     memset(buf, 'X', sizeof buf);
-    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, "text", buf, 0), 0);
+    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, UI_FIT_LATIN, "text", buf, 0), 0);
     CHECK(buf[0] == 'X');
 
     /* No box. */
     memset(buf, 'X', sizeof buf);
-    CHECK_INT(ui_fit_text(&FACE, 0, BOX_H(2), LS, "text", buf, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(&FACE, 0, BOX_H(2), LS, UI_FIT_LATIN, "text", buf, sizeof buf), 0);
     CHECK_STR(buf, "");
-    CHECK_INT(ui_fit_text(&FACE, 100, 0, LS, "text", buf, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(&FACE, 100, 0, LS, UI_FIT_LATIN, "text", buf, sizeof buf), 0);
     CHECK_STR(buf, "");
-    CHECK_INT(ui_fit_text(&FACE, -100, -1, LS, "text", buf, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(&FACE, -100, -1, LS, UI_FIT_LATIN, "text", buf, sizeof buf), 0);
     CHECK_STR(buf, "");
 
     /* A box shorter than one line holds nothing, and says so with a 0 rather
      * than by consuming bytes it did not set. A caller walking columns stops. */
-    CHECK_INT(ui_fit_text(&FACE, 100, LH - 1, LS, "text", buf, sizeof buf), 0);
+    CHECK_INT(ui_fit_text(&FACE, 100, LH - 1, LS, UI_FIT_LATIN, "text", buf, sizeof buf), 0);
     CHECK_STR(buf, "");
 
     /* Room for one character and no more: the buffer, not the box, is the
      * limit, and the answer is empty rather than a byte with nowhere to put the
      * NUL. */
-    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, "text", buf, 1), 0);
+    CHECK_INT(ui_fit_text(&FACE, 100, BOX_H(2), LS, UI_FIT_LATIN, "text", buf, 1), 0);
     CHECK_STR(buf, "");
 
     /* Whitespace is consumed even when nothing is set from it, or a caller
@@ -551,6 +551,239 @@ static void t_matches_linear_scan(void)
     }
 }
 
+/* --- Korean: the line breaks between syllables ---------------------------- *
+ *
+ * LVGL 9.5 has no Hangul range in lv_text_is_a_word() and LV_TXT_BREAK_CHARS
+ * cannot name a codepoint above 0x7F, so a Korean leg wraps only at spaces. A
+ * 170 px leg holds ten syllables and an eojeol runs two to five, which puts a
+ * fifth of every line into the rag. UI_FIT_HANGUL takes the layout away from
+ * LVGL: ui_fit.c fills the lines itself and hands down explicit '\n's, so there
+ * is nothing left for LVGL to wrap.
+ *
+ * The stand-in face above already counts a Hangul syllable as one glyph — its
+ * glyph_len() reads three-byte sequences — so the arithmetic in these cases is
+ * the same "count it on a hand" arithmetic as in the Latin ones: ADV per
+ * syllable, ADV per space, and a line of `w / ADV` columns.
+ */
+
+/* Hangul output is not a prefix of the source, so the cases below cannot go
+ * through fit(). What still has to hold about every one of them lands here:
+ * valid UTF-8, inside the buffer, inside the box, and — the property the whole
+ * path exists for — no line wider than the measure once LVGL is handed it. */
+static size_t fit_ko(int w, int h, int line_space, const char *src, char *dst, size_t n)
+{
+    g_bad_utf8 = 0;
+
+    size_t used = ui_fit_text(&FACE, w, h, line_space, UI_FIT_HANGUL, src, dst, n);
+    size_t len  = strlen(dst);
+
+    CHECK(len < n);
+    for (size_t i = 0; i < len; ) i += glyph_len(dst + i);
+    CHECK(g_bad_utf8 == 0);
+    CHECK(used <= strlen(src));
+
+    if (len > 0) {
+        lv_point_t sz;
+
+        lv_text_get_size(&sz, dst, &FACE, 0, line_space, w, LV_TEXT_FLAG_NONE);
+        CHECK(sz.y <= h);
+        CHECK(!ws(dst[len - 1]));
+
+        /* Each line measured on its own, unwrapped. A line wider than `w` is
+         * the one failure this path could hide: LVGL would wrap it again under
+         * the break we put in and the column would run over the rule below.
+         * The single unit a measure cannot hold is the documented exception,
+         * and it is at most a syllable and a mark. */
+        size_t a = 0;
+        for (size_t i = 0; i <= len; i++) {
+            if (dst[i] != '\n' && dst[i] != '\0') continue;
+            char save = dst[i];
+            dst[i] = '\0';
+            lv_text_get_size(&sz, dst + a, &FACE, 0, 0, 1 << 20, LV_TEXT_FLAG_NONE);
+            dst[i] = save;
+            CHECK(sz.x <= w || i - a <= 4);
+            a = i + 1;
+        }
+    }
+    return used;
+}
+
+static void t_hangul_fills_the_measure(void)
+{
+    /* 6 columns. Latin rule wraps at spaces: 가나다 / 라마바사 / 아자차카 / 타파하 = 4 lines.
+     * Hangul rule breaks between syllables: 가나다 라마 / 바사 아자차 / 카 타파하 = 3. */
+    const char *src = "가나다 라마바사 아자차카 타파하";
+    char dst[128];
+    size_t used = fit_ko(60, LH * 3, 0, src, dst, sizeof dst);
+    CHECK_INT(used, strlen(src));                       /* everything fit in 3 lines */
+    CHECK_STR(dst, "가나다 라마\n바사 아자차\n카 타파하");
+
+    used = ui_fit_text(&FACE, 60, LH * 3, 0, UI_FIT_LATIN, src, dst, sizeof dst);
+    CHECK(used < strlen(src));                          /* Latin rule needs 4 lines, so it cut */
+}
+
+static void t_no_break_before_closing_or_after_opening_punctuation(void)
+{
+    char dst[128];
+    fit_ko(40, LH * 4, 0, "가나다라.마바(사아)", dst, sizeof dst);
+    CHECK(strstr(dst, "\n.") == NULL);
+    CHECK(strstr(dst, "\n)") == NULL);
+    CHECK(strstr(dst, "(\n") == NULL);
+
+    /* The backup is the mechanism, and this is what it did: four columns of
+     * room filled to 라, which would have stranded the full stop at the head of
+     * the next line, so the break moved back a syllable. */
+    CHECK_STR(dst, "가나다\n라.마바\n(사아)");
+
+    /* The CJK marks are the same rule and the ones a Korean edition actually
+     * sets: 금칙 처리 forbids a line beginning with 。 or 、 exactly as it forbids
+     * one beginning with a full stop, and the six brackets of U+3008..U+300F —
+     * the whole of tools/hangul.py's CJK_PUNCT beside those two — pair off as
+     * openers and closers. Each case below is the same four columns, so the
+     * expected string is the same shape: the break backs up one syllable. */
+    fit_ko(40, LH * 4, 0, "가나다라。마바", dst, sizeof dst);
+    CHECK(strstr(dst, "\n。") == NULL);
+    CHECK_STR(dst, "가나다\n라。마바");
+
+    fit_ko(40, LH * 4, 0, "가나다라、마바", dst, sizeof dst);
+    CHECK(strstr(dst, "\n、") == NULL);
+    CHECK_STR(dst, "가나다\n라、마바");
+
+    fit_ko(40, LH * 4, 0, "가나다라〉마바〈사아", dst, sizeof dst);
+    CHECK(strstr(dst, "\n〉") == NULL);
+    CHECK(strstr(dst, "〈\n") == NULL);
+    CHECK_STR(dst, "가나다\n라〉마바\n〈사아");
+
+    fit_ko(40, LH * 4, 0, "가나다라》마바《사아", dst, sizeof dst);
+    CHECK(strstr(dst, "\n》") == NULL);
+    CHECK(strstr(dst, "《\n") == NULL);
+    CHECK_STR(dst, "가나다\n라》마바\n《사아");
+
+    fit_ko(40, LH * 4, 0, "가나다라」마바「사아", dst, sizeof dst);
+    CHECK(strstr(dst, "\n」") == NULL);
+    CHECK(strstr(dst, "「\n") == NULL);
+    CHECK_STR(dst, "가나다\n라」마바\n「사아");
+
+    fit_ko(40, LH * 4, 0, "가나다라』마바『사아", dst, sizeof dst);
+    CHECK(strstr(dst, "\n』") == NULL);
+    CHECK(strstr(dst, "『\n") == NULL);
+    CHECK_STR(dst, "가나다\n라』마바\n『사아");
+}
+
+static void t_hangul_cut_lands_on_a_boundary_and_continues_from_it(void)
+{
+    /* 6 columns, 2 lines: twelve glyphs of room. Line one ends on the full
+     * stop (a break before "." is illegal, so "가나다라마." is one line of six);
+     * stopping there would leave line two empty, so the cut fills line two
+     * instead. The bytes consumed are exactly the source bytes of what was
+     * set, so the next leg starts on the syllable after the cut. */
+    const char *src = "가나다라마. 바사아자차카타파하";
+    char dst[64];
+    size_t used = fit_ko(60, LH * 2, 0, src, dst, sizeof dst);
+    CHECK_STR(dst, "가나다라마.\n바사아자차카");
+    CHECK_INT(used, strlen("가나다라마. 바사아자차카"));
+    CHECK(src[used] != ' ');                            /* the next leg begins on ink, not a space */
+
+    /* The sentence preference is the same rule it is in Latin, and here it is
+     * free: one line of room ends on the full stop, and the space after it is
+     * left in the source for the next leg to drop as its own leading space. */
+    CHECK_INT(fit_ko(60, LH, 0, src, dst, sizeof dst), strlen("가나다라마."));
+    CHECK_STR(dst, "가나다라마.");
+}
+
+/* A leg set one column after another must still tile the source: every byte
+ * consumed by exactly one call, nothing repeated, nothing dropped but the
+ * spaces at the joins. The Hangul path emits breaks that are not source bytes,
+ * which is precisely the arithmetic that can get this wrong. */
+static void t_hangul_continuation(void)
+{
+    static const char body[] =
+        "삼성전자가 이번 분기에 시장의 예상을 크게 웃도는 실적을 내놓았다. "
+        "메모리 가격이 바닥을 지났다는 신호가 여러 지표에서 동시에 나타났고, "
+        "회사는 공급 과잉을 걱정하던 투자자들에게 구체적인 숫자를 제시했다. "
+        "주가는 장 마감 직후 거래에서 상승했다.";
+
+    char piece[64][96];
+    size_t off = 0, np = 0;
+    const size_t total = strlen(body);
+
+    while (off < total && np < 64) {
+        size_t used = fit_ko(100, LH * 3, LS, body + off, piece[np], sizeof piece[np]);
+        CHECK(used > 0);                    /* no call may stall on real copy */
+        CHECK(piece[np][0] != '\0');
+        off += used;
+        np++;
+    }
+    CHECK(off == total);                    /* the spans tile the source exactly */
+    CHECK(np > 3);                          /* and this body really did need columns */
+}
+
+/* --- a number is one unit ------------------------------------------------- *
+ *
+ * The first Korean sheets came back with "3.53%" set as "3." and "53%" across a
+ * break, because "." and "," are in LV_TXT_BREAK_CHARS. The tokeniser is the
+ * answer: a maximal run of non-space, non-Hangul bytes is ONE unit, so there is
+ * no boundary inside a figure for a break to land on. Swept across every
+ * measure wide enough to hold the longer of them, because the failure is a
+ * function of where the line happens to end. */
+static void t_numbers_never_split(void)
+{
+    const char *src = "가나다라마 3.53% 바사아자차 1,631.47 카타파";
+    char dst[128];
+
+    for (int w = 80; w <= 200; w += 10) {
+        size_t used = fit_ko(w, LH * 12, 0, src, dst, sizeof dst);
+        CHECK_INT(used, strlen(src));
+        CHECK(strstr(dst, "3.53%") != NULL);
+        CHECK(strstr(dst, "1,631.47") != NULL);
+    }
+
+    /* And in a head, where the candidate list is the thing that has to leave
+     * them alone: eleven glyphs into ten columns is two lines, and the split
+     * that balances them is the one before the figure, not one inside it. */
+    CHECK_INT(ui_fit_balance(&FACE, 100, 2, UI_FIT_HANGUL, "삼성전자3.53%급등", dst, sizeof dst), 2);
+    CHECK_STR(dst, "삼성전자\n3.53%급등");
+}
+
+/* --- balancing a Korean head ---------------------------------------------- */
+
+static void t_hangul_heads_balance_on_syllables(void)
+{
+    char dst[64];
+    int lines = ui_fit_balance(&FACE, 60, 2, UI_FIT_HANGUL, "삼성전자급등마감", dst, sizeof dst);   /* 8 syllables, no spaces */
+    CHECK_INT(lines, 2);
+    CHECK_STR(dst, "삼성전자\n급등마감");
+
+    /* The Latin rule has no boundary to work with in a head without spaces, so
+     * it declines and leaves dst holding the source — which is what a Korean
+     * head got before this, and why they came out as one long line. */
+    CHECK_INT(ui_fit_balance(&FACE, 60, 2, UI_FIT_LATIN, "삼성전자급등마감", dst, sizeof dst), 0);
+    CHECK_STR(dst, "삼성전자급등마감");
+
+    /* A head WITH spaces is the case that says the new candidates are worth
+     * having. Fourteen glyphs and two spaces into eleven columns is two lines
+     * either way, but the two spaces both split it 10/4, and the syllable
+     * boundary in the middle of the second eojeol splits it 8/8. */
+    CHECK_INT(ui_fit_balance(&FACE, 110, 2, UI_FIT_HANGUL,
+                             "코스피가 사상최고치를 경신했다", dst, sizeof dst), 2);
+    CHECK_STR(dst, "코스피가 사상최\n고치를 경신했다");
+
+    CHECK_INT(ui_fit_balance(&FACE, 110, 2, UI_FIT_LATIN,
+                             "코스피가 사상최고치를 경신했다", dst, sizeof dst), 2);
+    CHECK_STR(dst, "코스피가\n사상최고치를 경신했다");
+}
+
+/* --- picking the rule ----------------------------------------------------- */
+
+static void t_script_from_lang(void)
+{
+    CHECK_INT(ui_fit_script("ko"), UI_FIT_HANGUL);
+    CHECK_INT(ui_fit_script("en"), UI_FIT_LATIN);
+    CHECK_INT(ui_fit_script("kor"), UI_FIT_LATIN);      /* the tag is normalised to two */
+    CHECK_INT(ui_fit_script(""), UI_FIT_LATIN);
+    CHECK_INT(ui_fit_script(NULL), UI_FIT_LATIN);
+}
+
 int main(void)
 {
     t_degenerate();
@@ -564,5 +797,12 @@ int main(void)
     t_dst_limit();
     t_continuation();
     t_matches_linear_scan();
+    t_script_from_lang();
+    t_hangul_fills_the_measure();
+    t_no_break_before_closing_or_after_opening_punctuation();
+    t_hangul_cut_lands_on_a_boundary_and_continues_from_it();
+    t_hangul_continuation();
+    t_numbers_never_split();
+    t_hangul_heads_balance_on_syllables();
     TH_REPORT("fit");
 }

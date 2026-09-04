@@ -66,6 +66,29 @@ void lv_text_get_size(lv_point_t *size_res, const char *text, const lv_font_t *f
 extern "C" {
 #endif
 
+/* --- which script's breaking rule a call takes -----------------------------
+ *
+ * LVGL 9.5 breaks a line after every CJK ideograph and every kana but not after
+ * a Hangul syllable: lv_text_is_a_word() carries no Hangul range, and
+ * LV_TXT_BREAK_CHARS cannot name a codepoint above 0x7F. So Korean copy wraps
+ * only at its spaces. That is not a correctness problem — the copyfitter
+ * measures with the same lv_text_get_size() LVGL draws with, so nothing
+ * overflows — it is a typographic one: a 170 px leg holds ten syllables and an
+ * eojeol runs two to five, so a fifth of every line ends up in the rag. Korean
+ * newspapers break between any two syllables.
+ *
+ * The fix belongs where the cut already lives. Under UI_FIT_HANGUL these two
+ * functions lay the lines out themselves and emit explicit '\n's, leaving LVGL
+ * nothing to wrap. Under UI_FIT_LATIN nothing whatsoever changes, which is the
+ * point of the parameter: an English edition takes byte-for-byte the path it
+ * took before the rule existed. */
+typedef enum { UI_FIT_LATIN = 0, UI_FIT_HANGUL = 1 } ui_fit_script_t;
+
+/* The rule an edition's `lang` asks for: "ko" is the only tag with a breaking
+ * rule of its own, and everything else — including an empty or absent tag —
+ * takes the Latin one. Call sites read the tag from ui_lang_tag_now(). */
+ui_fit_script_t ui_fit_script(const char *lang);
+
 /* Copy as much of `src` as fits in `w` x `h`, set in `font` at `line_space`,
  * into `dst` (`n` bytes, always NUL-terminated). Returns the number of SOURCE
  * bytes consumed, so the next column starts at src + the return value.
@@ -93,9 +116,18 @@ extern "C" {
  * A return of 0 for a `src` that holds text means the box cannot hold one
  * character — `h` below a single line, a non-positive span, no room in `dst`.
  * It is the only honest answer, and a caller walking columns must stop on it
- * rather than call again with the same arguments. */
+ * rather than call again with the same arguments.
+ *
+ * Under UI_FIT_HANGUL `dst` is no longer a prefix of `src`: the lines are laid
+ * out here and joined with '\n', so `dst` carries one byte per inserted break
+ * that the source never had. Everything above still holds as stated — the
+ * return is SOURCE bytes, the spans still tile `src`, the copy is still cut at
+ * a boundary a reader would have chosen — and one thing is added: a break never
+ * lands before a closing mark (`.,!?%)]` and `、。〉》」』`), never after an opening
+ * one (`([` and `〈《「『`), and never inside a run of non-Hangul characters,
+ * which is what keeps a figure like 1,631.47 whole. */
 size_t ui_fit_text(const lv_font_t *font, int w, int h, int line_space,
-                   const char *src, char *dst, size_t n);
+                   ui_fit_script_t script, const char *src, char *dst, size_t n);
 
 /* Copy `src` into `dst` with explicit line breaks chosen so that the WIDEST of
  * the lines is as narrow as it can be — a headline broken the way a copy desk
@@ -116,9 +148,16 @@ size_t ui_fit_text(const lv_font_t *font, int w, int h, int line_space,
  * what would have been set without this call.
  *
  * Two and three lines are the cases it handles, because two and three are what
- * a headline slot on this sheet has; four is a paragraph. */
+ * a headline slot on this sheet has; four is a paragraph.
+ *
+ * Under UI_FIT_HANGUL the candidates are the spaces AND every legal syllable
+ * boundary, scored by exactly the same rule — which is what lets a Korean head
+ * with no spaces in it be broken at all, and a Korean head with two of them be
+ * broken somewhere better than either. There the breaks are inserted rather
+ * than substituted, so `dst` needs a byte per break; a `dst` too small for
+ * them declines, as every other refusal here does, with the source intact. */
 int ui_fit_balance(const lv_font_t *font, int w, int max_lines,
-                   const char *src, char *dst, size_t n);
+                   ui_fit_script_t script, const char *src, char *dst, size_t n);
 
 #ifdef __cplusplus
 }

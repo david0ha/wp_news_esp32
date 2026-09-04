@@ -677,7 +677,8 @@ static int story_head(const ui_mod_t *m, const news_t *v, int w, int wt,
     const int hlh = ui_head_lh(wt);
     const int hmax = wt == 0 ? 4 : 5;
 
-    ui_fit_balance(hf, w, hmax, st->headline, s_head, sizeof s_head);
+    ui_fit_balance(hf, w, hmax, ui_fit_script(ui_lang_tag_now()), st->headline,
+                   s_head, sizeof s_head);
     int hl = md_lines(hf, w, s_head);
     if (hl > hmax) hl = hmax;
     if (hl < 1)    hl = 1;
@@ -897,8 +898,8 @@ static void story_run(const ui_mod_t *m, const news_t *v, int w, int wt,
         const int lw = (i == g.legs - 1) ? UI_END_MEASURE(g.leg_w[i])
                                          : g.leg_w[i];
 
-        used += ui_fit_text(g.bf, lw, fit_h, bls, st->body + used,
-                            s_copy[i], sizeof s_copy[i]);
+        used += ui_fit_text(g.bf, lw, fit_h, bls, ui_fit_script(ui_lang_tag_now()),
+                            st->body + used, s_copy[i], sizeof s_copy[i]);
 
         md_font(ws->leg[i], g.bf, blh);
         md_text(ws->leg[i], g.leg_x[i], top, g.leg_w[i], leg_h, s_copy[i]);

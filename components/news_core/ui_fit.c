@@ -83,6 +83,36 @@ static bool fits(const lv_font_t *font, int w, int h, int line_space,
     return text_h(font, w, line_space, buf, len) <= (int32_t)h;
 }
 
+/* Wide enough that lv_text_get_size() never wraps, small enough that no
+ * arithmetic inside it can overflow. */
+#define FIT_WIDE  (1 << 20)
+
+/* The natural width of buf[a..b), unwrapped. Both halves of this file ask the
+ * same question of it: the balancer scores a candidate line with it, and the
+ * Korean fill below tests whether one more syllable still fits the measure. */
+static int32_t seg_w(const lv_font_t *font, char *buf, size_t a, size_t b)
+{
+    lv_point_t sz;
+    char save = buf[b];
+
+    buf[b] = '\0';
+    lv_text_get_size(&sz, buf + a, font, 0, 0, FIT_WIDE, LV_TEXT_FLAG_NONE);
+    buf[b] = save;
+
+    return sz.x;
+}
+
+/* The height of one line, which is the height lv_text_get_size() reports for an
+ * empty string — LVGL's own special case, and the stand-in's. */
+static int32_t line_h_of(const lv_font_t *font, int line_space)
+{
+    lv_point_t sz;
+
+    lv_text_get_size(&sz, "", font, 0, (int32_t)line_space, FIT_WIDE,
+                     LV_TEXT_FLAG_NONE);
+    return sz.y;
+}
+
 /* --- sentence ends -------------------------------------------------------- */
 
 /* The bytes of a closing quotation mark or bracket ending at `j`, or 0. The full
@@ -135,10 +165,257 @@ static bool sentence_end(const char *s, size_t k)
     return true;
 }
 
+/* --- Korean --------------------------------------------------------------
+ *
+ * LVGL will not break a Korean line except at a space, so under UI_FIT_HANGUL
+ * this file stops asking it to: it fills the lines itself, joins them with
+ * '\n', and hands LVGL a string with nothing left to wrap. ui_fit.h says why.
+ *
+ * Everything the rule needs is below, and it is four questions: what a unit is,
+ * whether two of them may be parted, how tall a line is, and how wide the one
+ * being built has grown. The measurement is still lv_text_get_size() and still
+ * the one LVGL will draw with, so the guarantee at the top of this file — a
+ * string this file accepted cannot wrap onto a line that does not exist —
+ * survives the change intact.
+ */
+
+/* The codepoint at `s`, and its length in bytes. Anything that is not a valid
+ * sequence is reported as its own first byte, one byte long, which is also what
+ * keeps this from reading past the end of a truncated string: a NUL is not a
+ * continuation byte, so the loop below always stops at it. */
+static uint32_t cp_at(const char *s, size_t *len)
+{
+    const unsigned char c0 = (unsigned char)s[0];
+    size_t n;
+    uint32_t cp;
+
+    if      (c0 < 0xC0) { *len = 1; return c0; }
+    else if (c0 < 0xE0) { n = 2; cp = c0 & 0x1Fu; }
+    else if (c0 < 0xF0) { n = 3; cp = c0 & 0x0Fu; }
+    else                { n = 4; cp = c0 & 0x07u; }
+
+    for (size_t k = 1; k < n; k++) {
+        if (((unsigned char)s[k] & 0xC0) != 0x80) { *len = 1; return c0; }
+        cp = (cp << 6) | ((unsigned char)s[k] & 0x3Fu);
+    }
+    *len = n;
+    return cp;
+}
+
+/* A character a line may be broken either side of. The syllable block is what
+ * Korean copy is written in; the compatibility jamo are the letters named on
+ * their own, and both are in the drawable set the Korean faces are generated
+ * from. Nothing else on this sheet breaks between characters. */
+static bool is_hangul(uint32_t cp)
+{
+    return (cp >= 0xAC00 && cp <= 0xD7A3) ||    /* Hangul Syllables            */
+           (cp >= 0x3131 && cp <= 0x318E);      /* Hangul Compatibility Jamo   */
+}
+
+/* A line may not BEGIN with one of these — the ASCII marks a wire desk emits,
+ * and the CJK ones a Korean edition actually sets. Korean line-break prohibition
+ * (금칙 처리) puts the ideographic full stop and comma under exactly the rule the
+ * ASCII pair are under: they belong to the line they close, not the one after.
+ * The brackets are the closing halves of U+3008..U+300F, which with 、 and 。 is
+ * the whole of tools/hangul.py CJK_PUNCT and therefore everything of this kind
+ * the Korean faces can set. */
+static bool is_closing(uint32_t cp)
+{
+    return cp == '.' || cp == ',' || cp == '!' || cp == '?' || cp == '%' ||
+           cp == ')' || cp == ']' ||
+           cp == 0x3002 ||                      /* 。 the ideographic full stop */
+           cp == 0x3001 ||                      /* 、 and its comma             */
+           cp == 0x3009 ||                      /* 〉 the angle brackets        */
+           cp == 0x300B ||                      /* 》                           */
+           cp == 0x300D ||                      /* 」 and the corner pair       */
+           cp == 0x300F;                        /* 』                           */
+}
+
+/* A line may not END with one of these: the opening half of each pair above. */
+static bool is_opening(uint32_t cp)
+{
+    return cp == '(' || cp == '[' ||
+           cp == 0x3008 || cp == 0x300A ||      /* 〈 《 */
+           cp == 0x300C || cp == 0x300E;        /* 「 『 */
+}
+
+/* The bytes of the unit beginning at `s`, or 0 at whitespace or at the end of
+ * the string. A unit is the smallest thing a Korean line may be built out of:
+ * one Hangul syllable, or a maximal run of non-space, non-Hangul characters.
+ *
+ * That second half is the rule that keeps a figure whole. "3.53%" is a run, so
+ * it is ONE unit and there is no boundary inside it for a break to land on —
+ * which matters because "." and "," are in LV_TXT_BREAK_CHARS and the first
+ * Korean sheets came back with "3." ending a line and "53%" starting the next.
+ * A Latin word, a ticker and a date are the same case and get the same answer. */
+static size_t unit_len(const char *s)
+{
+    size_t l;
+
+    if (s[0] == '\0' || is_space(s[0])) return 0;
+    if (is_hangul(cp_at(s, &l))) return l;
+
+    size_t i = 0;
+    while (s[i] != '\0' && !is_space(s[i]) && !is_hangul(cp_at(s + i, &l))) i += l;
+    return i;
+}
+
+/* May a line break between the unit ending at `a` and the one beginning at `b`?
+ * Two rules and no more, both about a mark left alone on the wrong side of a
+ * break, which is the thing a reader notices instantly. */
+static bool break_ok(const char *s, size_t a, size_t b)
+{
+    size_t l;
+
+    if (s[b] != '\0' && is_closing(cp_at(s + b, &l))) return false;
+    if (a > 0 && is_opening(cp_at(s + char_floor(s, a - 1), &l))) return false;
+    return true;
+}
+
+/* Set `p` into `w` x `h`, a line at a time, joining the lines with '\n'.
+ * Returns the SOURCE bytes consumed; `dst` is left NUL-terminated.
+ *
+ * The fill is greedy, which is right for body copy for the same reason it is
+ * wrong for a headline: a leg is read down, not looked at, and the thing that
+ * shows from across the room is a leg that did not reach the foot of its box.
+ *
+ * One invariant carries the whole function and is worth stating outright:
+ * WITHIN a line, `dst` is a byte-for-byte copy of `p`. Breaks are the only
+ * place the two diverge — a separator run becomes exactly one '\n', and a
+ * syllable joint gains one that the source never had. That is what lets the
+ * sentence rule at the end map a source offset back into `dst` by subtraction
+ * instead of by remembering every boundary it passed. */
+static size_t fit_hangul(const lv_font_t *font, int w, int h, int line_space,
+                         const char *p, char *dst, size_t n)
+{
+    /* LVGL stacks lines at (letter_height + line_space) and takes the last line
+     * space back off the end, so this is the exact line count and not an
+     * estimate. The guard is on the step rather than on the height because a
+     * caller is free to pass a negative line_space and a divisor of zero is not
+     * a layout question. */
+    const int32_t lh   = line_h_of(font, line_space);
+    const int     step = (int)lh + line_space;
+    if (lh <= 0 || step <= 0) return 0;
+
+    const int max_lines = (h + line_space) / step;
+    if (max_lines < 1) return 0;
+
+    const size_t total = strlen(p);
+    size_t si = 0, di = 0;                  /* source consumed, dst written    */
+    size_t line_src = 0, line_dst = 0;      /* where the last line set began   */
+    int lines = 0;
+
+    while (lines < max_lines) {
+        size_t start = si;
+        while (is_space(p[start])) start++;
+        if (p[start] == '\0') break;
+
+        /* The break that joins this line to the one above. It is written only
+         * once a unit has actually gone onto the line, so a line that turns out
+         * to be empty leaves no newline hanging off the end of the copy. */
+        const size_t nl = lines > 0 ? 1u : 0u;
+        if (di + nl + 1 > n) break;
+
+        line_src = start;
+        line_dst = di + nl;
+
+        size_t cur_src = start, cur_dst = line_dst;
+        size_t ok_src = 0, ok_dst = 0;
+        bool have_ok = false, any = false, forced = false;
+
+        for (;;) {
+            /* The whitespace before the next unit. A newline in it is the
+             * source ending the line itself; honouring it is what keeps the
+             * line count above equal to the number of lines LVGL will set. */
+            size_t sep = cur_src;
+            bool hard = false;
+            while (is_space(p[sep])) {
+                if (p[sep] == '\n' || p[sep] == '\r') hard = true;
+                sep++;
+            }
+
+            const size_t ul = unit_len(p + sep);
+            if (ul == 0) break;                         /* the source ran out */
+            if (hard && any) { forced = true; break; }
+
+            const size_t add = (sep - cur_src) + ul;
+            if (cur_dst + add + 1 > n) break;           /* dst, not the box    */
+
+            memcpy(dst + cur_dst, p + cur_src, add);
+            dst[cur_dst + add] = '\0';
+
+            /* The first unit goes on whatever it measures: a unit too wide for
+             * the measure is the Korean spelling of the too-long first word,
+             * and the alternative is a line with nothing on it. */
+            if (any && seg_w(font, dst, line_dst, cur_dst + add) > w) break;
+
+            any     = true;
+            cur_src = sep + ul;
+            cur_dst = cur_dst + add;
+
+            size_t nxt = cur_src;
+            while (is_space(p[nxt])) nxt++;
+            if (p[nxt] == '\0' || break_ok(p, cur_src, nxt)) {
+                have_ok = true;
+                ok_src  = cur_src;
+                ok_dst  = cur_dst;
+            }
+        }
+
+        if (!any) break;                    /* not one unit would go: stop     */
+
+        /* Back up to the last boundary the punctuation rule allows. A forced
+         * break is the source's own and is taken as it stands; and where NO
+         * boundary on the line is legal the measure wins, because a line wider
+         * than its box is a line LVGL wraps over the rule below. */
+        const bool back = have_ok && !forced;
+        if (nl) dst[di] = '\n';
+        si = back ? ok_src : cur_src;
+        di = back ? ok_dst : cur_dst;
+        dst[di] = '\0';
+        lines++;
+    }
+
+    dst[di] = '\0';
+
+    /* Everything that was left fits. There is no next column to hand the
+     * trailing whitespace to, so it is consumed rather than left to stall a
+     * caller looping on the return value. */
+    size_t rest = si;
+    while (is_space(p[rest])) rest++;
+    if (rest >= total) return total;
+
+    /* The sentence preference, on exactly the terms the Latin path states it:
+     * the nearest sentence end wins over the boundary the fill landed on, but
+     * only where it is FREE. Here that is a question about position rather than
+     * a measurement — the lines were laid out above, so any end inside the last
+     * line leaves the column exactly as tall as it already is, and any end
+     * before it costs a line and is refused. */
+    for (size_t k = si; k > line_src; k--) {
+        if (!sentence_end(p, k)) continue;
+        di -= si - k;                       /* dst mirrors p within a line     */
+        si  = k;
+        dst[di] = '\0';
+        break;
+    }
+
+    return si;
+}
+
 /* --- the cut -------------------------------------------------------------- */
 
+ui_fit_script_t ui_fit_script(const char *lang)
+{
+    /* Two bytes and a NUL. news_parse() normalises `lang` to a lowercase
+     * primary subtag, so "ko" is the whole of the test and "kor" — which that
+     * normalisation never produces — is not Korean as far as this file is
+     * concerned. */
+    return (lang && lang[0] == 'k' && lang[1] == 'o' && lang[2] == '\0')
+           ? UI_FIT_HANGUL : UI_FIT_LATIN;
+}
+
 size_t ui_fit_text(const lv_font_t *font, int w, int h, int line_space,
-                   const char *src, char *dst, size_t n)
+                   ui_fit_script_t script, const char *src, char *dst, size_t n)
 {
     if (!dst || n == 0) return 0;
     dst[0] = '\0';
@@ -154,6 +431,12 @@ size_t ui_fit_text(const lv_font_t *font, int w, int h, int line_space,
     const char *p = src + lead;
     size_t total = strlen(p);
     if (total == 0) return lead;
+
+    /* Korean lays its own lines out; everything below this is the Latin rule,
+     * unchanged, because LVGL breaks Latin copy correctly and the only job left
+     * is deciding where to stop. */
+    if (script == UI_FIT_HANGUL)
+        return lead + fit_hangul(font, w, h, line_space, p, dst, n);
 
     /* dst is both the answer and the buffer the measurement runs on, so the
      * search can never consider more text than dst can hold: a cut capped by `n`
@@ -262,10 +545,13 @@ size_t ui_fit_text(const lv_font_t *font, int w, int h, int line_space,
  * that changed — against a panel refresh that takes twenty-five seconds.
  */
 
-/* Wide enough that lv_text_get_size() never wraps, small enough that no
- * arithmetic inside it can overflow. */
-#define FIT_WIDE        (1 << 20)
-#define FIT_BREAKS_MAX  32
+/* How many break candidates a head may offer. Thirty-two is one per space of a
+ * 120-byte head and generous at it, and it stays the Latin cap so that the
+ * Latin search is the search it was. Korean offers a candidate between every
+ * two syllables and a 120-byte head is forty of them, so that scan needs a cap
+ * that clears forty or the balancer stops looking before the end of the line. */
+#define FIT_BREAKS_MAX    64
+#define FIT_BREAKS_LATIN  32
 
 /* --- where a head may not be broken ---------------------------------------
  *
@@ -322,21 +608,8 @@ static bool stop_word_before(const char *s, size_t b)
     return false;
 }
 
-/* The natural width of dst[a..b), unwrapped. */
-static int32_t seg_w(const lv_font_t *font, char *buf, size_t a, size_t b)
-{
-    lv_point_t sz;
-    char save = buf[b];
-
-    buf[b] = '\0';
-    lv_text_get_size(&sz, buf + a, font, 0, 0, FIT_WIDE, LV_TEXT_FLAG_NONE);
-    buf[b] = save;
-
-    return sz.x;
-}
-
 int ui_fit_balance(const lv_font_t *font, int w, int max_lines,
-                   const char *src, char *dst, size_t n)
+                   ui_fit_script_t script, const char *src, char *dst, size_t n)
 {
     if (!dst || n == 0) return 0;
     dst[0] = '\0';
@@ -365,14 +638,54 @@ int ui_fit_balance(const lv_font_t *font, int w, int max_lines,
      * ui_lab_box()'s rule owns it from here. */
     if (lines > max_lines || lines > 3) return 0;
 
-    size_t brk[FIT_BREAKS_MAX];
+    /* Where a break may go, and where the line after it starts. In Latin those
+     * differ by the one byte of the space a break replaces; in Korean a break
+     * between two syllables is INSERTED, so the two are the same offset and the
+     * copy grows by a byte. Keeping the pair explicit is what lets the scoring
+     * below stay one loop over one ascending list. */
+    size_t brk[FIT_BREAKS_MAX], aft[FIT_BREAKS_MAX];
     int nb = 0;
-    for (size_t i = 1; i + 1 < len && nb < FIT_BREAKS_MAX; i++) {
-        if (dst[i] == ' ' && dst[i - 1] != ' ' && dst[i + 1] != ' ') brk[nb++] = i;
+
+    if (script == UI_FIT_HANGUL) {
+        /* Every unit boundary the punctuation rule allows, syllable joints
+         * included — which is the whole point, since a Korean head often has no
+         * space in it at all and had nothing to be balanced on before. */
+        size_t i = 0;
+        while (i < len && nb < FIT_BREAKS_MAX) {
+            size_t sep = i;
+            while (sep < len && is_space(dst[sep])) sep++;
+
+            const size_t ul = unit_len(dst + sep);
+            if (ul == 0) break;
+
+            const size_t end = sep + ul;
+            if (end >= len) break;              /* the last unit ends the head */
+
+            size_t nxt = end;
+            while (nxt < len && is_space(dst[nxt])) nxt++;
+
+            /* A run of more than one space is left alone for the same reason
+             * the Latin scan below leaves it alone: only one of them can become
+             * the break, and the others would be set at the head of a line. */
+            if (nxt < len && nxt - end <= 1 && break_ok(dst, end, nxt)) {
+                brk[nb] = end;
+                aft[nb] = nxt;
+                nb++;
+            }
+            i = end;
+        }
+    } else {
+        for (size_t i = 1; i + 1 < len && nb < FIT_BREAKS_LATIN; i++) {
+            if (dst[i] == ' ' && dst[i - 1] != ' ' && dst[i + 1] != ' ') {
+                brk[nb] = i;
+                aft[nb] = i + 1;
+                nb++;
+            }
+        }
     }
     if (nb < lines - 1) return 0;
 
-    size_t best[2] = { 0, 0 };
+    size_t best[2] = { 0, 0 }, best_aft[2] = { 0, 0 };
     int32_t best_score = 0;
     bool found = false;
 
@@ -385,11 +698,14 @@ int ui_fit_balance(const lv_font_t *font, int w, int max_lines,
     for (int i = 0; i < nb; i++) {
         if (lines == 2) {
             const int32_t a = seg_w(font, dst, 0, brk[i]);
-            const int32_t b = seg_w(font, dst, brk[i] + 1, len);
+            const int32_t b = seg_w(font, dst, aft[i], len);
             if (a > w || b > w) continue;
             int32_t s = a > b ? a : b;
             if (stop_word_before(dst, brk[i])) s += pen;
-            if (!found || s < best_score) { found = true; best_score = s; best[0] = brk[i]; }
+            if (!found || s < best_score) {
+                found = true; best_score = s;
+                best[0] = brk[i]; best_aft[0] = aft[i];
+            }
             continue;
         }
 
@@ -397,22 +713,38 @@ int ui_fit_balance(const lv_font_t *font, int w, int max_lines,
         if (a > w) continue;
         const bool ai = stop_word_before(dst, brk[i]);
         for (int j = i + 1; j < nb; j++) {
-            const int32_t b = seg_w(font, dst, brk[i] + 1, brk[j]);
-            const int32_t c = seg_w(font, dst, brk[j] + 1, len);
+            const int32_t b = seg_w(font, dst, aft[i], brk[j]);
+            const int32_t c = seg_w(font, dst, aft[j], len);
             if (b > w || c > w) continue;
             int32_t s = a > b ? a : b;
             if (c > s) s = c;
             if (ai)                             s += pen;
             if (stop_word_before(dst, brk[j]))  s += pen;
             if (!found || s < best_score) {
-                found = true; best_score = s; best[0] = brk[i]; best[1] = brk[j];
+                found = true; best_score = s;
+                best[0] = brk[i]; best_aft[0] = aft[i];
+                best[1] = brk[j]; best_aft[1] = aft[j];
             }
         }
     }
 
     if (!found) return 0;
 
-    dst[best[0]] = '\n';
-    if (lines == 3) dst[best[1]] = '\n';
+    /* A break that replaces a space overwrites it; one between two syllables
+     * has to make room, so the tail moves up and the copy grows. Inserting from
+     * the back keeps the earlier offset valid, and a `dst` with no room for the
+     * insertions declines like every other refusal here, leaving the source
+     * intact for ui_lab_box() to set unbalanced. */
+    size_t grow = 0;
+    for (int i = 0; i < lines - 1; i++) if (best_aft[i] == best[i]) grow++;
+    if (len + grow + 1 > n) return 0;
+
+    for (int i = lines - 2; i >= 0; i--) {
+        if (best_aft[i] == best[i]) {
+            memmove(dst + best[i] + 1, dst + best[i], len - best[i] + 1);
+            len++;
+        }
+        dst[best[i]] = '\n';
+    }
     return lines;
 }
