@@ -227,9 +227,48 @@ pad it: `--validate` cannot tell filler from copy, but the sheet can, and so can
 restate your own briefs in it either. A page whose lead and whose related-news column carry the same
 sentence twice is a page the reader stops trusting.
 
-Everything is **English and Latin-1 only**. The bundled fonts carry ASCII, Latin-1 and the
-typography in `ui_strings.h` — nothing else. A CJK character, an emoji or a stray symbol renders as
-an empty box, and the render check will fail you for it.
+## The language
+
+The edition is written in the language named by `lang` in `news.json` — `"en"` unless the desk's
+instruction says otherwise. Every reader-facing string is in that language: headlines, decks,
+bodies, kickers, bylines, captions, briefs, dossier labels and values, statement titles and row
+labels, the dateline, the session line and the as-of line. Tickers, exchange codes, tile ids and
+`generated_at` are not prose and stay as they are.
+
+**What the faces can draw is fixed.** Every language draws ASCII, Latin-1 and the typography in
+`ui_strings.h`. Korean (`"ko"`) additionally draws the 2,350 KS X 1001 syllables, the compatibility
+jamo and `、。〈〉《》「」『』` — and nothing else: a syllable outside KS X 1001 fails `--validate`
+with the codepoint named, so respell it. Won is `원`, `억원`, `조원`, never `₩`. An emoji or a stray
+symbol is an empty box in any language, and the render check will fail you for it. Other scripts are
+not drawable yet.
+
+**Korean is twice as wide.** A Hangul syllable is a full em; a Latin glyph is half of one.
+`--validate` therefore counts every syllable as two characters against the budgets above, and a
+syllable costs three bytes against the array. The column that falls out:
+
+| field | Korean, in syllables | what binds |
+|---|---:|---|
+| lead headline | ≤ 36 | width |
+| lead deck | ≤ 59 | width |
+| lead body | 700–1,300 | floor is width; ceiling is the 4,000-byte array |
+| secondary headline | ≤ 27 | width |
+| secondary deck | ≤ 29 | width |
+| secondary body | 200–330 | floor |
+| kicker | ≤ 9 | bytes |
+| caption | ≤ 36 | width |
+| brief text | ≤ 46 | bytes |
+| figure label / group | ≤ 7 | bytes |
+| figure value | ≤ 7 | bytes |
+| table column header | ≤ 3 | bytes |
+| table cell | ≤ 4 | bytes |
+
+**The last two rows are the ones that bite**, and they bite in bytes rather than in measure: a
+column head lives in twelve bytes and a cell in fourteen, so three syllables and four are all that
+go in — room for `1Q26` and `112,600`, and not much else. That is the right shape anyway. Keep the
+quarters and the figures as they are and put the Korean in the row label, which holds seven, and in
+the title, which holds ten.
+
+Mixed strings count each script at its own weight; `--validate` reports the measure it used.
 
 ## Pictures
 

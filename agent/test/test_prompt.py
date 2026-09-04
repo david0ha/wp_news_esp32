@@ -224,6 +224,19 @@ class LanguageSectionTest(unittest.TestCase):
         self.assertNotIn("KS X 1001", prompt.language_section("fr"))
         self.assertIn("French", prompt.language_section("fr"))
 
+    def test_the_section_it_sends_the_model_to_read_exists(self):
+        # The section does not restate the budget table; it names the place
+        # that carries it. That makes the heading a cross-file reference, and
+        # a cross-file reference by quoted title is exactly the kind that goes
+        # stale silently -- the worker would send a model to a section that is
+        # not there, and file a Korean edition written to the English column.
+        here = os.path.dirname(os.path.abspath(__file__))
+        contract_path = os.path.join(here, "..", "..", "tools", "edition", "PROMPT.md")
+        with open(contract_path, encoding="utf-8") as f:
+            contract = f.read()
+        self.assertIn('section "The language"', prompt.language_section("ko"))
+        self.assertIn("\n## The language\n", contract)
+
 
 class SheetPromptTest(unittest.TestCase):
     """The two prompts that follow a proof."""
