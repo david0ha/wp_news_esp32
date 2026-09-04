@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { Ionicons } from '@expo/vector-icons'
 import { Card } from '../Card'
 import { EventRow } from '../EventRow'
+import { fill, strings, useStrings } from '../../i18n'
 import { colors, fonts, radius, space, tabular, type } from '../../theme'
 import { formatDateShort, formatRatio } from '../../lib/market/format'
 import { marketHumanError, type CalendarEvents, type EarningsRow } from '../../lib/market/types'
@@ -26,6 +27,7 @@ type LoadState =
  * degraded card (a normal outcome from EU IPs), with its own retry.
  */
 export function CalendarSection({ symbol, active }: DetailSectionProps) {
+  const t = useStrings()
   const [state, setState] = useState<LoadState>({ status: 'idle' })
 
   const load = useCallback(async () => {
@@ -62,10 +64,10 @@ export function CalendarSection({ symbol, active }: DetailSectionProps) {
             <Ionicons name="calendar-outline" size={20} color={colors.accent} />
           </View>
           <View style={styles.degradedText}>
-            <Text style={styles.degradedTitle}>Calendar unavailable</Text>
+            <Text style={styles.degradedTitle}>{t.marketDetail.calendar.unavailable}</Text>
             <Text style={type.caption}>{marketHumanError(state.error)}</Text>
             <Pressable onPress={() => void load()} hitSlop={8}>
-              <Text style={styles.ghost}>Try again</Text>
+              <Text style={styles.ghost}>{t.common.tryAgain}</Text>
             </Pressable>
           </View>
         </Card>
@@ -78,14 +80,17 @@ export function CalendarSection({ symbol, active }: DetailSectionProps) {
 
   return (
     <View style={styles.section}>
-      <Text style={styles.label}>Upcoming</Text>
+      <Text style={styles.label}>{t.marketDetail.calendar.upcoming}</Text>
       {upcoming.length === 0 ? (
-        <Text style={styles.empty}>No scheduled events.</Text>
+        <Text style={styles.empty}>{t.marketDetail.calendar.empty}</Text>
       ) : (
         <Card style={styles.listCard}>
           {upcoming.map((row, i) => (
             <EventRow
-              key={row.title}
+              // Keyed on the icon, which is one per kind of row and does not change with the
+              // language — the title now does, and keying on it would remount the list on a
+              // language switch.
+              key={row.icon}
               icon={row.icon}
               title={row.title}
               subtitle={row.subtitle}
@@ -97,7 +102,7 @@ export function CalendarSection({ symbol, active }: DetailSectionProps) {
       )}
       {events.history.length > 0 ? (
         <>
-          <Text style={styles.label}>Past earnings</Text>
+          <Text style={styles.label}>{t.marketDetail.calendar.pastEarnings}</Text>
           <Card style={styles.listCard}>
             {events.history.slice(0, 4).map((row, i, rows) => (
               <EarningsHistoryRow key={`${row.quarter}:${i}`} row={row} last={i === rows.length - 1} />
@@ -116,15 +121,18 @@ interface UpcomingRow {
   value: string
 }
 
+// Not a component, so it reads the catalogue through `strings()` — at call time, which is once
+// per render of the section above it.
 function upcomingRows(events: CalendarEvents): UpcomingRow[] {
+  const t = strings().marketDetail.calendar
   const rows: UpcomingRow[] = []
   const first = events.earningsDates[0]
   if (first !== undefined) {
     const second = events.earningsDates[1]
     rows.push({
       icon: 'megaphone-outline',
-      title: 'Earnings',
-      subtitle: events.earningsDates.length > 1 ? 'Estimated date' : undefined,
+      title: t.earnings,
+      subtitle: events.earningsDates.length > 1 ? t.estimatedDate : undefined,
       value:
         second !== undefined
           ? `${formatDateShort(first)} – ${formatDateShort(second)}`
@@ -134,14 +142,14 @@ function upcomingRows(events: CalendarEvents): UpcomingRow[] {
   if (events.exDividendDate !== null) {
     rows.push({
       icon: 'cut-outline',
-      title: 'Ex-dividend date',
+      title: t.exDividend,
       value: formatDateShort(events.exDividendDate),
     })
   }
   if (events.dividendDate !== null) {
     rows.push({
       icon: 'cash-outline',
-      title: 'Dividend payable',
+      title: t.dividendPayable,
       value: formatDateShort(events.dividendDate),
     })
   }
@@ -149,6 +157,7 @@ function upcomingRows(events: CalendarEvents): UpcomingRow[] {
 }
 
 function EarningsHistoryRow({ row, last }: { row: EarningsRow; last: boolean }) {
+  const t = useStrings()
   const { epsActual, epsEstimate } = row
   // A beat/miss is direction — the green/red rule applies; either side missing is neutral.
   const color =
@@ -165,7 +174,10 @@ function EarningsHistoryRow({ row, last }: { row: EarningsRow; last: boolean }) 
         {row.quarter !== '' ? row.quarter : '—'}
       </Text>
       <Text style={[styles.eps, tabular, { color }]} numberOfLines={1}>
-        EPS {formatRatio(epsActual)} vs {formatRatio(epsEstimate)} est
+        {fill(t.marketDetail.calendar.epsActualVsEstimate, {
+          actual: formatRatio(epsActual),
+          estimate: formatRatio(epsEstimate),
+        })}
       </Text>
     </View>
   )

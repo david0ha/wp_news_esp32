@@ -18,6 +18,7 @@ import { ScreenMessage } from '../components/ScreenMessage'
 import { yahoo } from '../lib/market/yahoo'
 import { marketHumanError, type SearchResult } from '../lib/market/types'
 import { addToWatchlist, getWatchlist, removeFromWatchlist } from '../lib/market/watchlist'
+import { fill, useStrings } from '../i18n'
 import { colors, fonts, layout, radius, space, type } from '../theme'
 
 // Debounce after the last keystroke before the search fires; responses for a query that is no
@@ -26,6 +27,7 @@ const DEBOUNCE_MS = 300
 
 export default function AddTicker() {
   const router = useRouter()
+  const t = useStrings()
 
   const [query, setQuery] = useState('')
   // null = no completed search for the current input (idle or still typing/searching);
@@ -127,13 +129,13 @@ export default function AddTicker() {
   } else if (trimmed.length < 1) {
     body = (
       <View style={styles.idle}>
-        <Text style={type.caption}>Search Yahoo Finance for any listed symbol.</Text>
+        <Text style={type.caption}>{t.addTicker.idle}</Text>
       </View>
     )
   } else if (results === null) {
     body = <ActivityIndicator color={colors.accent} style={styles.spinner} />
   } else if (results.length === 0) {
-    body = <ScreenMessage message="No matches." />
+    body = <ScreenMessage message={t.addTicker.noMatches} />
   } else {
     body = (
       <View style={styles.resultsWrap}>
@@ -174,7 +176,7 @@ export default function AddTicker() {
             <SearchField
               value={query}
               onChangeText={setQuery}
-              placeholder="Symbol or company"
+              placeholder={t.addTicker.placeholder}
               autoFocus
               onClear={() => setQuery('')}
             />
@@ -185,7 +187,7 @@ export default function AddTicker() {
             hitSlop={8}
             style={({ pressed }) => pressed && styles.pressed}
           >
-            <Text style={styles.cancel}>Cancel</Text>
+            <Text style={styles.cancel}>{t.common.cancel}</Text>
           </Pressable>
         </View>
         <View style={styles.body}>{body}</View>
@@ -207,6 +209,7 @@ function ResultRow({
   onOpen: () => void
   onToggle: () => void
 }) {
+  const t = useStrings()
   return (
     <Pressable
       accessibilityRole="button"
@@ -231,7 +234,10 @@ function ResultRow({
       ) : null}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={added ? `Remove ${item.symbol} from watchlist` : `Add ${item.symbol} to watchlist`}
+        accessibilityLabel={fill(
+          added ? t.addTicker.removeFromWatchlist : t.addTicker.addToWatchlist,
+          { symbol: item.symbol },
+        )}
         accessibilityState={{ selected: added }}
         onPress={onToggle}
         hitSlop={8}

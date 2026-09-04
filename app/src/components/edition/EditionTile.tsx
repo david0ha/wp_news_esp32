@@ -1,5 +1,6 @@
 import { memo, useRef } from 'react'
 import { Animated, Pressable, StyleSheet } from 'react-native'
+import { fill, useStrings, type Strings } from '../../i18n'
 import { colors, radius } from '../../theme'
 import { TILE_PADDING, type Tile } from '../../lib/edition/tiles'
 import { StoryTile } from './tiles/StoryTile'
@@ -53,10 +54,15 @@ export const EditionTile = memo(function EditionTile({
   const to = (toValue: number) =>
     Animated.timing(scale, { toValue, duration: 150, useNativeDriver: true }).start()
 
+  // The hook and not `strings()`, even though `tileLabel` is a pure function: this component is
+  // `React.memo`, so a language change that leaves its props untouched would otherwise skip it
+  // and leave a screen reader announcing the previous language's label.
+  const t = useStrings()
+
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={tileLabel(tile)}
+      accessibilityLabel={tileLabel(tile, t.today)}
       onPressIn={() => to(0.97)}
       onPressOut={() => to(1)}
       onPress={() => onPress(tile)}
@@ -125,26 +131,35 @@ function body(tile: Tile, width: number, height: number) {
  * rather than "chart tile", because the reader is choosing between tiles and the kind alone does
  * not distinguish two of them.
  */
-export function tileLabel(t: Tile): string {
-  switch (t.kind) {
+export function tileLabel(tile: Tile, s: Strings['today']): string {
+  // The catalogue is a PARAMETER rather than a `strings()` call, unlike the sentence catalogues in
+  // `lib/`. Its only caller is memoised, so the language has to arrive as something the caller
+  // subscribed to; taking it here also makes this testable in either language with no global to
+  // set and unset.
+  switch (tile.kind) {
     case 'story':
-      return t.story.headline
+      return tile.story.headline
     case 'range':
-      return `Range for ${t.subject.symbol}`
+      return fill(s.a11y.range, { symbol: tile.subject.symbol })
     case 'chart':
-      return `Chart, ${t.chart.label}, ${t.chart.span}`
+      return fill(s.a11y.chart, { label: tile.chart.label, span: tile.chart.span })
     case 'photo':
-      return t.photo.caption !== '' ? `Photograph. ${t.photo.caption}` : 'Photograph'
+      return tile.photo.caption !== ''
+        ? fill(s.a11y.photographCaption, { caption: tile.photo.caption })
+        : s.a11y.photograph
     case 'figures':
-      return `${t.group === '' ? 'Figures' : t.group}, ${t.figures.length} figures`
+      return fill(s.a11y.figures, {
+        group: tile.group === '' ? s.heads.figures : tile.group,
+        n: String(tile.figures.length),
+      })
     case 'briefs':
-      return `${t.briefs.length} briefs`
+      return fill(s.a11y.briefs, { n: String(tile.briefs.length) })
     case 'peers':
-      return `${t.peers.length} peers`
+      return fill(s.a11y.peers, { n: String(tile.peers.length) })
     case 'table':
-      return t.table.title
+      return tile.table.title
     case 'tape':
-      return 'The tape'
+      return s.heads.tape
   }
 }
 

@@ -4,6 +4,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 
 import { en } from '../i18n/en'
+import { setActiveLanguage } from '../i18n'
 import { Esp32Error, humanError } from './esp32'
 import {
   decideNewsUrlSave,
@@ -391,6 +392,34 @@ describe('decideNewsUrlSave', () => {
     expect(decideNewsUrlSave(URL, { ok: true }, false).message).toBe(
       'Saved. The board is fetching it now.',
     )
+  })
+
+  it('says all six of them in the app’s language', () => {
+    // Six sentences, one per branch, and the branching itself is language-free: the decision
+    // above chose which sentence, and only the words change here.
+    setActiveLanguage('ko')
+    try {
+      const HANGUL = /[가-힣]/
+      expect(decideNewsUrlSave(URL, { ok: true }, null).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave('', { ok: true }, null).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave(URL, { noClient: true }, null).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave(URL, { noClient: true }, false).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave('', { noClient: true }, false).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null).message).toMatch(
+        HANGUL,
+      )
+      expect(decideNewsUrlSave(URL, { error: new Esp32Error('busy') }, null).message).toMatch(
+        HANGUL,
+      )
+      // The board's own refusal still comes through `humanError`, so it is Korean for the same
+      // reason and not for a second one.
+      expect(
+        decideNewsUrlSave(URL, { error: new Esp32Error('news_url_invalid', undefined, 400) }, null)
+          .message,
+      ).toBe(humanError(new Esp32Error('news_url_invalid', undefined, 400)))
+    } finally {
+      setActiveLanguage('en')
+    }
   })
 })
 

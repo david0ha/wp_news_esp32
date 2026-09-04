@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { Card } from './Card'
+import { fill, useStrings } from '../i18n'
 import { colors, fonts, tabular, type } from '../theme'
 import { formatIv, formatPrice, formatRatio } from '../lib/market/format'
 import { type OptionsAnalysis } from '../lib/market/analysis'
@@ -10,16 +11,20 @@ import { type OptionsAnalysis } from '../lib/market/analysis'
  * spec instead of importing it — file ownership across the parallel agents is disjoint.
  */
 export function OptionsSummary({ analysis }: { analysis: OptionsAnalysis }) {
+  const t = useStrings().marketDetail.options
   const ratio = analysis.putCallRatioOi
   const ratioTone: 'neutral' | 'up' | 'down' =
     ratio === null ? 'neutral' : ratio > 1 ? 'down' : ratio < 0.7 ? 'up' : 'neutral'
   return (
     <Card floating>
-      <SummaryRow label="Put/Call ratio (OI)" value={formatRatio(ratio)} tone={ratioTone} />
-      <SummaryRow label="Max pain" value={formatPrice(analysis.maxPain)} />
+      <SummaryRow label={t.putCallRatio} value={formatRatio(ratio)} tone={ratioTone} />
+      <SummaryRow label={t.maxPain} value={formatPrice(analysis.maxPain)} />
       <SummaryRow
-        label="Implied volatility"
-        value={`calls ${formatIv(analysis.callIv)} · puts ${formatIv(analysis.putIv)}`}
+        label={t.impliedVolatility}
+        value={fill(t.ivBothSides, {
+          calls: formatIv(analysis.callIv),
+          puts: formatIv(analysis.putIv),
+        })}
         last
       />
     </Card>

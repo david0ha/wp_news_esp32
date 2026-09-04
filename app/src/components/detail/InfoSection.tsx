@@ -7,6 +7,7 @@ import { StatGrid, StatRow } from '../StatRow'
 import { yahoo } from '../../lib/market/yahoo'
 import { marketHumanError, type KeyStats, type ProfileInfo } from '../../lib/market/types'
 import { formatCompact, formatPct, formatPrice, formatRatio } from '../../lib/market/format'
+import { fill, useStrings } from '../../i18n'
 import { colors, fonts, radius, space, tabular, type } from '../../theme'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
@@ -21,6 +22,7 @@ type Status = 'idle' | 'loading' | 'ready' | 'error'
  * first activation and keeps its state when the user tabs away.
  */
 export function InfoSection({ symbol, active }: { symbol: string; active: boolean }) {
+  const t = useStrings()
   const [status, setStatus] = useState<Status>('idle')
   const [data, setData] = useState<{ stats: KeyStats; profile: ProfileInfo } | null>(null)
   const [error, setError] = useState<unknown>(null)
@@ -61,10 +63,10 @@ export function InfoSection({ symbol, active }: { symbol: string; active: boolea
         <View style={styles.degradedIcon}>
           <Ionicons name="lock-closed-outline" size={20} color={colors.accent} />
         </View>
-        <Text style={styles.degradedTitle}>Detailed stats unavailable</Text>
+        <Text style={styles.degradedTitle}>{t.marketDetail.info.unavailable}</Text>
         <Text style={styles.degradedBody}>{marketHumanError(error)}</Text>
         <Pressable accessibilityRole="button" onPress={load} hitSlop={8} style={styles.ghost}>
-          <Text style={styles.ghostLabel}>Try again</Text>
+          <Text style={styles.ghostLabel}>{t.common.tryAgain}</Text>
         </Pressable>
       </Card>
     )
@@ -85,37 +87,37 @@ export function InfoSection({ symbol, active }: { symbol: string; active: boolea
 
   return (
     <View>
-      <Text style={styles.sectionLabel}>Stats</Text>
+      <Text style={styles.sectionLabel}>{t.marketDetail.info.stats}</Text>
       <Card>
         <StatGrid>
           <View>
-            <StatRow label="Open" value={formatPrice(stats.open)} />
-            <StatRow label="High" value={formatPrice(stats.dayHigh)} />
-            <StatRow label="Low" value={formatPrice(stats.dayLow)} />
-            <StatRow label="Volume" value={formatCompact(stats.volume)} />
-            <StatRow label="Avg vol" value={formatCompact(stats.avgVolume)} />
+            <StatRow label={t.marketDetail.info.open} value={formatPrice(stats.open)} />
+            <StatRow label={t.marketDetail.info.high} value={formatPrice(stats.dayHigh)} />
+            <StatRow label={t.marketDetail.info.low} value={formatPrice(stats.dayLow)} />
+            <StatRow label={t.marketDetail.info.volume} value={formatCompact(stats.volume)} />
+            <StatRow label={t.marketDetail.info.avgVolume} value={formatCompact(stats.avgVolume)} />
             {/* dividendYield is a true 0–1 fraction; formatPct takes an already-percent-scaled
                 number (§4.7), so the ×100 happens here, at the call site. */}
             <StatRow
-              label="Div yield"
+              label={t.marketDetail.info.divYield}
               value={formatPct(stats.dividendYield === null ? null : stats.dividendYield * 100)}
               last
             />
           </View>
           <View>
-            <StatRow label="52wk high" value={formatPrice(stats.wk52High)} />
-            <StatRow label="52wk low" value={formatPrice(stats.wk52Low)} />
-            <StatRow label="Mkt cap" value={formatCompact(stats.marketCap)} />
-            <StatRow label="P/E" value={formatRatio(stats.trailingPE)} />
-            <StatRow label="EPS" value={formatRatio(stats.trailingEps)} />
-            <StatRow label="Beta" value={formatRatio(stats.beta)} last />
+            <StatRow label={t.marketDetail.info.wk52High} value={formatPrice(stats.wk52High)} />
+            <StatRow label={t.marketDetail.info.wk52Low} value={formatPrice(stats.wk52Low)} />
+            <StatRow label={t.marketDetail.info.marketCap} value={formatCompact(stats.marketCap)} />
+            <StatRow label={t.marketDetail.info.pe} value={formatRatio(stats.trailingPE)} />
+            <StatRow label={t.marketDetail.info.eps} value={formatRatio(stats.trailingEps)} />
+            <StatRow label={t.marketDetail.info.beta} value={formatRatio(stats.beta)} last />
           </View>
         </StatGrid>
       </Card>
 
       {hasProfile ? (
         <>
-          <Text style={styles.sectionLabel}>About</Text>
+          <Text style={styles.sectionLabel}>{t.marketDetail.info.about}</Text>
           <Card>
             {profile.sector !== '' || profile.industry !== '' ? (
               <View style={styles.chips}>
@@ -125,7 +127,9 @@ export function InfoSection({ symbol, active }: { symbol: string; active: boolea
             ) : null}
             {profile.employees !== null ? (
               <Text style={[styles.employees, tabular]}>
-                {`${profile.employees.toLocaleString('en-US')} employees`}
+                {fill(t.marketDetail.info.employees, {
+                  n: profile.employees.toLocaleString('en-US'),
+                })}
               </Text>
             ) : null}
             {profile.summary !== '' ? (
@@ -139,7 +143,9 @@ export function InfoSection({ symbol, active }: { symbol: string; active: boolea
                   hitSlop={8}
                   style={styles.ghost}
                 >
-                  <Text style={styles.readMore}>{expanded ? 'Show less' : 'Read more'}</Text>
+                  <Text style={styles.readMore}>
+                    {expanded ? t.marketDetail.info.showLess : t.marketDetail.info.readMore}
+                  </Text>
                 </Pressable>
               </>
             ) : null}

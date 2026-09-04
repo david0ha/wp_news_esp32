@@ -1,4 +1,5 @@
-import { describe, it, expect } from '@jest/globals'
+import { afterEach, describe, it, expect } from '@jest/globals'
+import { setActiveLanguage } from '../../i18n'
 import {
   arrow,
   currencySymbol,
@@ -156,6 +157,29 @@ describe('formatDateShort', () => {
     // 23:30 UTC on Dec 31 is already Jan 1 in eastern timezones; the label must say Dec 31.
     const sec = Date.UTC(2025, 11, 31, 23, 30, 0) / 1000
     expect(formatDateShort(sec, Date.UTC(2025, 11, 31))).toBe('Dec 31')
+  })
+})
+
+// A date is not a translation of a date. Korean numbers its months and puts the largest unit
+// first, so "Sep 4, 2025" is rebuilt as "2025년 9월 4일" rather than reordered word by word —
+// which is why the catalogue holds a template with named parts and not twelve month names alone.
+describe('in Korean', () => {
+  afterEach(() => setActiveLanguage('en'))
+
+  it('numbers the month and puts the year in front of it', () => {
+    setActiveLanguage('ko')
+    const sec = Date.UTC(2025, 8, 4, 12, 0, 0) / 1000
+    expect(formatDateShort(sec, Date.UTC(2025, 0, 15))).toBe('9월 4일')
+    expect(formatDateShort(sec, Date.UTC(2026, 0, 15))).toBe('2025년 9월 4일')
+  })
+
+  it('says an age in Korean, and keeps the clock a clock', () => {
+    setActiveLanguage('ko')
+    const nowMs = 1_800_000_000_000
+    expect(relativeTime(nowMs / 1000 - 30, nowMs)).toMatch(/[가-힣]/)
+    expect(relativeTime(nowMs / 1000 - 3600, nowMs)).toBe('1시간 전')
+    // `formatTime` is HH:MM on the reader's own clock — digits and a colon, never copy.
+    expect(formatTime(Date.UTC(2025, 8, 4, 12, 0, 0) / 1000)).toMatch(/^\d{2}:\d{2}$/)
   })
 })
 

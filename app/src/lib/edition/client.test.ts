@@ -9,6 +9,7 @@ import {
   tileUrl,
 } from './client'
 import { parseEdition } from './parse'
+import { setActiveLanguage } from '../../i18n'
 
 const FIXTURE = join(__dirname, '../../../../components/news_core/test/host/fixtures/news.json')
 const fixtureText = (): string => readFileSync(FIXTURE, 'utf8')
@@ -205,8 +206,10 @@ describe('humanEditionError', () => {
     expect(humanEditionError(new EditionError('no_url', 'x'))).toBe(
       'No edition URL yet. Add one in Settings.',
     )
+    // A typographic apostrophe, like every other sentence in the catalogue. These two lines were
+    // the app's only two ASCII ones until the copy moved into `i18n/en.ts`.
     expect(humanEditionError(new EditionError('transport', 'x'))).toBe(
-      "Couldn't reach the edition server. Check the connection, then pull to refresh.",
+      'Couldn’t reach the edition server. Check the connection, then pull to refresh.',
     )
     expect(humanEditionError(new EditionError('http', 'x', 503))).toBe(
       'The edition server answered 503.',
@@ -215,7 +218,7 @@ describe('humanEditionError', () => {
       'The edition is too large to read here.',
     )
     expect(humanEditionError(new EditionError('bad_json', 'x'))).toBe(
-      "The edition didn't parse. The desk may be mid-publish; pull to refresh in a minute.",
+      'The edition didn’t parse. The desk may be mid-publish; pull to refresh in a minute.',
     )
   })
 
@@ -228,6 +231,19 @@ describe('humanEditionError', () => {
   it('has a sentence for something that is not an EditionError at all', () => {
     expect(humanEditionError(new Error('nope'))).toBe('Something went wrong reading the edition.')
     expect(humanEditionError(undefined)).toBe('Something went wrong reading the edition.')
+  })
+
+  it('writes them in the app’s language, the status still a status', () => {
+    setActiveLanguage('ko')
+    try {
+      expect(humanEditionError(new EditionError('no_url', 'x'))).toMatch(/[가-힣]/)
+      expect(humanEditionError(new EditionError('bad_json', 'x'))).toMatch(/[가-힣]/)
+      // The HTTP status is the server's, not the app's, and it survives the translation.
+      expect(humanEditionError(new EditionError('http', 'x', 503))).toMatch(/503/)
+      expect(humanEditionError(undefined)).toMatch(/[가-힣]/)
+    } finally {
+      setActiveLanguage('en')
+    }
   })
 })
 

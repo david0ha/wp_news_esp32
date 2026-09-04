@@ -1,6 +1,7 @@
 import { ScrollView, StyleSheet } from 'react-native'
 import { Chip as Pill } from '../Chip'
 import { CHIPS, type Chip } from '../../lib/edition/tiles'
+import { useStrings } from '../../i18n'
 import { layout, space } from '../../theme'
 
 /**
@@ -13,7 +14,9 @@ import { layout, space } from '../../theme'
  * mean two things in one app.
  *
  * `CHIPS` is iterated rather than the caller's array so the row is always in the canonical
- * order — All, Stories, Numbers, Accounts, Photos — whatever order the caller computed.
+ * order — All, Stories, Numbers, Accounts, Photos — whatever order the caller computed. That
+ * constant is ids alone; the words come from the catalogue here, which is why the cut in
+ * `tiles.ts` has no language in it at all.
  */
 export function ChipRow({
   chips,
@@ -24,10 +27,11 @@ export function ChipRow({
   selected: Chip
   onSelect: (c: Chip) => void
 }) {
+  const labels = useStrings().today.chips
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-      {CHIPS.filter((c) => chips.includes(c.id)).map((c) => (
-        <Pill key={c.id} label={c.label} active={c.id === selected} onPress={() => onSelect(c.id)} />
+      {CHIPS.filter((c) => chips.includes(c)).map((c) => (
+        <Pill key={c} label={labels[c]} active={c === selected} onPress={() => onSelect(c)} />
       ))}
     </ScrollView>
   )

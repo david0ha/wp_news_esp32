@@ -107,13 +107,12 @@ export const TILE_PADDING = 14
 
 export type Chip = 'all' | 'stories' | 'numbers' | 'accounts' | 'photos'
 
-export const CHIPS: ReadonlyArray<{ id: Chip; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'stories', label: 'Stories' },
-  { id: 'numbers', label: 'Numbers' },
-  { id: 'accounts', label: 'Accounts' },
-  { id: 'photos', label: 'Photos' },
-]
+/**
+ * The filter row's canonical order. IDS ONLY: the labels are copy and live in the string
+ * catalogue as `today.chips`, which `ChipRow` reads. Keeping the order here and the words there
+ * is what lets `availableChips` stay a pure function of the feed with no language in it.
+ */
+export const CHIPS: readonly Chip[] = ['all', 'stories', 'numbers', 'accounts', 'photos']
 
 export type Tile =
   | { kind: 'story'; id: string; story: EditionStory; lead: boolean }
@@ -277,7 +276,7 @@ export function filterTiles(tiles: Tile[], chip: Chip): Tile[] {
  */
 export function availableChips(tiles: Tile[]): Chip[] {
   const present = new Set<Chip>(tiles.map(tileChip))
-  return CHIPS.filter((c) => c.id === 'all' || present.has(c.id)).map((c) => c.id)
+  return CHIPS.filter((c) => c === 'all' || present.has(c))
 }
 
 function clamp(n: number, lo: number, hi: number): number {

@@ -12,6 +12,7 @@ import { getNewsUrl } from '../../lib/store'
 import { getCurrentEdition, readCachedEdition, type CachedEdition } from '../../lib/edition/store'
 import { COLUMN_GAP, columnWidth, editionKey } from '../../lib/edition/feedLayout'
 import { editionToTiles, findTile, type Tile } from '../../lib/edition/tiles'
+import { useStrings } from '../../i18n'
 import { colors, fonts, layout, space, type } from '../../theme'
 
 // One tile, opened — and the rest of the edition continuing underneath it.
@@ -61,6 +62,7 @@ type Held =
 
 export default function TileDetailRoute() {
   const router = useRouter()
+  const t = useStrings()
   const { width } = useWindowDimensions()
   const params = useLocalSearchParams<{ id: string }>()
   const id = String(params.id ?? '')
@@ -122,7 +124,7 @@ export default function TileDetailRoute() {
       <BackButton
         onPress={() => (router.canGoBack() ? router.back() : router.replace('/edition'))}
       />
-      <Text style={styles.title}>Today</Text>
+      <Text style={styles.title}>{t.tabs.today}</Text>
       <View style={styles.backSpacer} />
     </View>
   )
@@ -146,7 +148,7 @@ export default function TileDetailRoute() {
     return (
       <Screen>
         {header}
-        <ScreenMessage message="This item isn’t in today’s edition." />
+        <ScreenMessage message={t.today.notInEdition} />
       </Screen>
     )
   }
@@ -167,7 +169,7 @@ export default function TileDetailRoute() {
           />
           {rest.length > 0 ? (
             <View style={styles.more}>
-              <Text style={type.headingSm}>More from this edition</Text>
+              <Text style={type.headingSm}>{t.today.more}</Text>
               <Masonry tiles={rest} colWidth={colWidth} editionKey={key} onPress={openTile} />
             </View>
           ) : null}

@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { fill, useStrings } from '../../../i18n'
 import { colors, fonts, tabular, type } from '../../../theme'
 import {
   TILE_HEAD,
@@ -37,6 +38,7 @@ import { Change } from '../Change'
  * shift the column it sits in.
  */
 export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }> }) {
+  const t = useStrings()
   const rest = tile.figures.length - FIGURES_SHOWN
   return (
     <View style={styles.root}>
@@ -54,7 +56,7 @@ export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }>
         adjustsFontSizeToFit
         minimumFontScale={0.8}
       >
-        {tile.group !== '' ? tile.group : 'Figures'}
+        {tile.group !== '' ? tile.group : t.today.heads.figures}
       </Text>
       {tile.figures.slice(0, FIGURES_SHOWN).map((f, i) => (
         <View key={`${f.label}:${i}`} style={styles.row}>
@@ -69,7 +71,9 @@ export function FiguresTile({ tile }: { tile: Extract<Tile, { kind: 'figures' }>
           </View>
         </View>
       ))}
-      {rest > 0 ? <Text style={styles.more}>{`+${rest} more`}</Text> : null}
+      {rest > 0 ? (
+        <Text style={styles.more}>{fill(t.today.andMore, { n: String(rest) })}</Text>
+      ) : null}
     </View>
   )
 }

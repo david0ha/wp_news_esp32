@@ -1,4 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../../i18n'
 import { colors, fonts, layout, radius, space, tabular, type } from '../../theme'
 import { formatPrice } from '../../lib/edition/format'
 import { Chip } from '../Chip'
@@ -37,6 +38,7 @@ export function Masthead({
   onRetry: () => void
   onPressSymbol: () => void
 }) {
+  const t = useStrings()
   const s = edition.subject
 
   return (
@@ -83,14 +85,14 @@ export function Masthead({
 
       {/* The demo chip and the freshness line are mutually exclusive by construction: the demo's
           fetchedAt is 0, so freshnessLabel answers null for it. */}
-      {demo ? <Chip label="Demo edition" tone="accent" style={styles.demoChip} /> : null}
+      {demo ? <Chip label={t.today.demoChip} tone="accent" style={styles.demoChip} /> : null}
       {freshness !== null ? <Text style={styles.freshness}>{freshness}</Text> : null}
 
       {error !== null ? (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{error}</Text>
           <Pressable accessibilityRole="button" onPress={onRetry} hitSlop={8}>
-            <Text style={styles.retry}>Retry</Text>
+            <Text style={styles.retry}>{t.common.retry}</Text>
           </Pressable>
         </View>
       ) : null}

@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { fill, useStrings } from '../../../i18n'
 import { colors, fonts, type } from '../../../theme'
 import {
   TILE_HEAD,
@@ -20,10 +21,11 @@ import {
  * apart read faster than two facts glued together.
  */
 export function BriefsTile({ tile }: { tile: Extract<Tile, { kind: 'briefs' }> }) {
+  const t = useStrings()
   const rest = tile.briefs.length - BRIEFS_SHOWN
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>Briefs</Text>
+      <Text style={styles.head}>{t.today.heads.briefs}</Text>
       {tile.briefs.slice(0, BRIEFS_SHOWN).map((b, i) => (
         <View key={`${b.date}:${i}`} style={styles.row}>
           <View style={styles.meta}>
@@ -43,7 +45,9 @@ export function BriefsTile({ tile }: { tile: Extract<Tile, { kind: 'briefs' }> }
           </Text>
         </View>
       ))}
-      {rest > 0 ? <Text style={styles.more}>{`+${rest} more`}</Text> : null}
+      {rest > 0 ? (
+        <Text style={styles.more}>{fill(t.today.andMore, { n: String(rest) })}</Text>
+      ) : null}
     </View>
   )
 }

@@ -6,6 +6,7 @@ import { Chip } from '../Chip'
 import { OptionChainHeader, OptionChainRow } from '../OptionChainRow'
 import { OptionsSummary } from '../OptionsSummary'
 import { SegmentedControl } from '../SegmentedControl'
+import { fill, useStrings } from '../../i18n'
 import { colors, fonts, radius, space, type } from '../../theme'
 import { analyzeChain } from '../../lib/market/analysis'
 import { formatDateShort } from '../../lib/market/format'
@@ -35,6 +36,7 @@ type LoadState =
  * with a ghost show-all/show-fewer toggle at the foot.
  */
 export function OptionsSection({ symbol, active }: DetailSectionProps) {
+  const t = useStrings()
   const [state, setState] = useState<LoadState>({ status: 'idle' })
   const [side, setSide] = useState(0) // 0 calls, 1 puts
   const [showAll, setShowAll] = useState(false)
@@ -101,10 +103,10 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
             <Ionicons name="options-outline" size={20} color={colors.accent} />
           </View>
           <View style={styles.degradedText}>
-            <Text style={styles.degradedTitle}>Options unavailable</Text>
+            <Text style={styles.degradedTitle}>{t.marketDetail.options.unavailable}</Text>
             <Text style={type.caption}>{marketHumanError(state.error)}</Text>
             <Pressable onPress={() => void load(retryExpiryRef.current)} hitSlop={8}>
-              <Text style={styles.ghost}>Try again</Text>
+              <Text style={styles.ghost}>{t.common.tryAgain}</Text>
             </Pressable>
           </View>
         </Card>
@@ -137,11 +139,20 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
         ))}
       </ScrollView>
       {state.switchError !== null ? (
-        <Text style={styles.switchError}>{`Couldn’t load that expiry — still showing ${formatDateShort(loadedChain.expiration)}. ${state.switchError}`}</Text>
+        <Text style={styles.switchError}>
+          {fill(t.marketDetail.options.switchError, {
+            date: formatDateShort(loadedChain.expiration),
+            reason: state.switchError,
+          })}
+        </Text>
       ) : null}
       {analysis !== null ? <OptionsSummary analysis={analysis} /> : null}
       <View style={styles.toggleWrap}>
-        <SegmentedControl segments={['Calls', 'Puts']} selectedIndex={side} onChange={setSide} />
+        <SegmentedControl
+          segments={[t.marketDetail.options.calls, t.marketDetail.options.puts]}
+          selectedIndex={side}
+          onChange={setSide}
+        />
       </View>
       <Card style={styles.chainCard}>
         <OptionChainHeader />
@@ -150,7 +161,11 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
             <ActivityIndicator color={colors.accent} />
           </View>
         ) : rows.length === 0 ? (
-          <Text style={styles.empty}>No {side === 0 ? 'calls' : 'puts'} for this expiry.</Text>
+          // Two whole sentences rather than one with the side dropped into it: "No calls for this
+          // expiry" is not a Korean sentence with a word swapped, it is a different sentence.
+          <Text style={styles.empty}>
+            {side === 0 ? t.marketDetail.options.emptyCalls : t.marketDetail.options.emptyPuts}
+          </Text>
         ) : (
           <>
             {rows.map((c, i) => (
@@ -158,7 +173,9 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
             ))}
             {canToggle ? (
               <Pressable style={styles.foot} onPress={() => setShowAll(!showAll)} hitSlop={8}>
-                <Text style={styles.ghost}>{showAll ? 'Show fewer' : 'Show all strikes'}</Text>
+                <Text style={styles.ghost}>
+                  {showAll ? t.marketDetail.options.showFewer : t.marketDetail.options.showAll}
+                </Text>
               </Pressable>
             ) : null}
           </>

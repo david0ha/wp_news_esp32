@@ -1,6 +1,5 @@
-import { describe, it, expect } from '@jest/globals'
+import { afterEach, beforeEach, describe, it, expect } from '@jest/globals'
 import {
-  PAGE_LABELS,
   changeTone,
   fetchResultLabel,
   fetchResultMessage,
@@ -13,18 +12,20 @@ import {
   formatInterval,
   formatMs,
   pageLabel,
+  pageLabels,
   pollSourceLabel,
   sleepPresetInForce,
   sleepSourceLabel,
 } from './format'
 import { PAGE_COUNT } from './esp32'
+import { setActiveLanguage } from '../i18n'
 
 describe('pageLabel', () => {
   it('names the board’s two pages, in its order', () => {
     // Two, not four: 0 is A1, the front page, and 1 is A2, the company's accounts
     // (docs/app-control.md). The four-page notes board this forked from is gone.
-    expect([...PAGE_LABELS]).toEqual(['A1 Front', 'A2 Accounts'])
-    expect(PAGE_LABELS).toHaveLength(PAGE_COUNT)
+    expect([...pageLabels()]).toEqual(['A1 Front', 'A2 Accounts'])
+    expect(pageLabels()).toHaveLength(PAGE_COUNT)
     expect(pageLabel(0)).toBe('A1 Front')
     expect(pageLabel(1)).toBe('A2 Accounts')
   })
@@ -256,5 +257,55 @@ describe('sleepPresetInForce', () => {
     // A board carrying 20 minutes from somewhere else lights nothing, which is honest: none of the
     // chips describes it. The caller compares, so this need not know what is on offer.
     expect(sleepPresetInForce('nvs', 1200)).toBe(1200)
+  })
+})
+
+// The catalogue reaches these functions at CALL time, not at import time. That is the property
+// this block holds, and it is the one that breaks first: a `const MSG = strings().…` at module
+// scope would pass every test above and still hand a Korean phone English forever.
+//
+// What is asserted is that the sentence changed and came back in Hangul — never its exact
+// wording, which belongs to `i18n/ko.ts` and would make this file a second copy of it. The one
+// exception is the date, where the ORDER is the point and only a whole string can show it.
+describe('in Korean', () => {
+  const HANGUL = /[가-힣]/
+
+  beforeEach(() => setActiveLanguage('ko'))
+  // The table is module-level state, so a language left set here would follow the next file's
+  // tests into a suite that never asked for it.
+  afterEach(() => setActiveLanguage('en'))
+
+  it('names the two pages, an age and an interval in Korean', () => {
+    expect(pageLabel(0)).toMatch(HANGUL)
+    expect(pageLabel(0)).not.toBe('A1 Front')
+    expect(formatAge(-1)).toMatch(HANGUL)
+    expect(formatAge(180)).toMatch(HANGUL)
+    expect(formatInterval(300)).toMatch(HANGUL)
+  })
+
+  it('says how the last poll went in Korean, label and sentence alike', () => {
+    expect(fetchResultLabel('transport')).toMatch(HANGUL)
+    expect(fetchResultMessage('transport')).toMatch(HANGUL)
+    expect(fetchResultMessage('bad_payload')).toMatch(HANGUL)
+  })
+
+  it('names who set the cadence in Korean', () => {
+    expect(pollSourceLabel('policy')).toMatch(HANGUL)
+    expect(sleepSourceLabel('nvs')).toMatch(HANGUL)
+    expect(sleepSourceLabel('default')).toMatch(HANGUL)
+  })
+
+  it('writes the producer’s stamp the way a Korean date is written', () => {
+    // Year first, and the month numbered rather than abbreviated — the English order is not
+    // translated word for word, it is rebuilt, which is what the named placeholders are for.
+    expect(formatGeneratedAt('2026-08-14T13:12:00Z')).toBe('2026년 8월 14일 13:12 UTC')
+  })
+
+  it('leaves the numbers themselves alone', () => {
+    // A price, a change and a duration in SI units are digits and symbols, not copy. None of
+    // them is in the catalogue and none of them may move.
+    expect(formatCents(163147)).toBe('1,631.47')
+    expect(formatChange(-421)).toBe('-4.21%')
+    expect(formatMs(1500)).toBe('1.5 s')
   })
 })

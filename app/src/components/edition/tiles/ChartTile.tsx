@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../../../i18n'
 import { space, type } from '../../../theme'
 import { TILE_HEAD, TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
 import { ChartFigure } from '../ChartFigure'
@@ -30,6 +31,7 @@ export function ChartTile({
   width: number
   height: number
 }) {
+  const t = useStrings()
   const { chart } = tile
   const hasSpan = chart.span !== ''
   const plotW = Math.max(1, width - 2 * TILE_PADDING)
@@ -49,7 +51,7 @@ export function ChartTile({
         adjustsFontSizeToFit
         minimumFontScale={0.8}
       >
-        {chart.label !== '' ? chart.label : 'Chart'}
+        {chart.label !== '' ? chart.label : t.today.heads.chart}
       </Text>
       <ChartFigure chart={chart} width={plotW} height={plotH} />
       {hasSpan ? (

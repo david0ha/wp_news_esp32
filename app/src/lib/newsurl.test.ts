@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@jest/globals'
 import { NEWS_URL_MAX_LEN } from './esp32'
 import { validateNewsUrl, newsUrlErrorMessage } from './newsurl'
+import { setActiveLanguage } from '../i18n'
 
 // These cases are the firmware's own, from components/provisioning/test/test_prov_config.c and
 // prov_validate_news_url(). If this file and that one ever disagree, one of the two is wrong —
@@ -77,5 +78,20 @@ describe('newsUrlErrorMessage', () => {
 
   it('has a fallback for a result with no error code', () => {
     expect(newsUrlErrorMessage({ ok: false })).toMatch(/valid address/)
+  })
+
+  it('says it in the app’s language, and keeps the board’s limit a number', () => {
+    setActiveLanguage('ko')
+    try {
+      expect(newsUrlErrorMessage({ ok: false, error: 'bad_scheme' })).toMatch(/[가-힣]/)
+      // The limit is the firmware's, interpolated into the sentence rather than spelled inside
+      // it — so it stays 128 in both languages and neither catalogue can get it wrong.
+      expect(newsUrlErrorMessage({ ok: false, error: 'too_long' })).toMatch(
+        new RegExp(String(NEWS_URL_MAX_LEN)),
+      )
+      expect(newsUrlErrorMessage({ ok: false, error: 'too_long' })).toMatch(/[가-힣]/)
+    } finally {
+      setActiveLanguage('en')
+    }
   })
 })

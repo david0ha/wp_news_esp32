@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { Sparkline } from '../../Sparkline'
+import { useStrings } from '../../../i18n'
 import { colors, fonts, type } from '../../../theme'
 import {
   TILE_HEAD,
@@ -33,10 +34,11 @@ export function TapeTile({
   /** The tile's OUTER width. `tape.ts` subtracts the padding, as `ChartTile` does with its own. */
   width: number
 }) {
+  const t = useStrings()
   const sparkW = tapeSparkWidth(width)
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>The tape</Text>
+      <Text style={styles.head}>{t.today.heads.tape}</Text>
       {tile.indices.slice(0, TAPE_SHOWN).map((ix) => (
         <View key={ix.symbol} style={styles.row}>
           <Text style={styles.symbol} numberOfLines={1}>

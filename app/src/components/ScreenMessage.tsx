@@ -1,4 +1,5 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../i18n'
 import { colors, fonts } from '../theme'
 
 /**
@@ -16,6 +17,7 @@ export function ScreenMessage({
   message?: string
   onRetry?: () => void
 }) {
+  const t = useStrings()
   return (
     <View style={styles.center}>
       {loading ? (
@@ -25,7 +27,7 @@ export function ScreenMessage({
           <Text style={styles.error}>{error}</Text>
           {onRetry ? (
             <Pressable accessibilityRole="button" onPress={onRetry} style={styles.retry} hitSlop={8}>
-              <Text style={styles.retryText}>Try again</Text>
+              <Text style={styles.retryText}>{t.common.tryAgain}</Text>
             </Pressable>
           ) : null}
         </>

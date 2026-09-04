@@ -222,8 +222,9 @@ describe('editionToTiles — a kind with nothing behind it is absent', () => {
 
 describe('chips', () => {
   it('names five, in the order the row draws them', () => {
-    expect(CHIPS.map((c) => c.id)).toEqual(['all', 'stories', 'numbers', 'accounts', 'photos'])
-    expect(CHIPS.map((c) => c.label)).toEqual(['All', 'Stories', 'Numbers', 'Accounts', 'Photos'])
+    // Ids only. The words are `today.chips` in the string catalogue, which `ChipRow` reads and
+    // `i18n/index.test.ts` holds to the same key set in both languages.
+    expect([...CHIPS]).toEqual(['all', 'stories', 'numbers', 'accounts', 'photos'])
   })
 
   it('splits the fixture’s twenty tiles into the four buckets', () => {

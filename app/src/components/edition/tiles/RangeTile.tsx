@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../../../i18n'
 import { colors, fonts, radius, space, tabular, type } from '../../../theme'
 import {
   RANGE_STAT_ROW_H,
@@ -57,18 +58,19 @@ const STAT_VALUE_LINE = 17
  * firmware's rule for a hero figure's range bar, carried over unchanged.
  */
 export function RangeTile({ tile }: { tile: Extract<Tile, { kind: 'range' }> }) {
+  const t = useStrings().today
   const s = tile.subject
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>Range</Text>
+      <Text style={styles.head}>{t.heads.range}</Text>
 
-      <Track low={s.wk52Low} high={s.wk52High} at={s.last} caption="52 weeks" />
+      <Track low={s.wk52Low} high={s.wk52High} at={s.last} caption={t.range.weeks52} />
 
       <View style={styles.grid}>
-        <Stat label="Open" value={s.open} />
-        <Stat label="Prev close" value={s.prevClose} />
-        <Stat label="High" value={s.high} />
-        <Stat label="Low" value={s.low} />
+        <Stat label={t.range.open} value={s.open} />
+        <Stat label={t.range.prevClose} value={s.prevClose} />
+        <Stat label={t.range.high} value={s.high} />
+        <Stat label={t.range.low} value={s.low} />
       </View>
     </View>
   )

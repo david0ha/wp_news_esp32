@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../../../i18n'
 import { colors, fonts, space, tabular, type } from '../../../theme'
 import {
   TABLE_GAP,
@@ -45,13 +46,14 @@ import {
  *                                                                     175 + 2*14 padding = 203
  */
 export function TableTile({ tile }: { tile: Extract<Tile, { kind: 'table' }> }) {
+  const t = useStrings()
   const { table } = tile
   const from = Math.max(0, table.columns.length - TABLE_TILE_COLS)
   const columns = table.columns.slice(from)
   return (
     <View style={styles.root}>
       <Text style={styles.head} numberOfLines={TABLE_TITLE_LINES}>
-        {table.title !== '' ? table.title : 'Statement'}
+        {table.title !== '' ? table.title : t.today.heads.statement}
       </Text>
       <View style={styles.headRow}>
         <View style={styles.labelCell} />

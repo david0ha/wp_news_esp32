@@ -9,7 +9,8 @@
 // time it changed. That is the question the line answers: "is what I am reading still what the
 // desk is serving?"
 
-import { MONTHS } from '../months'
+import { months } from '../months'
+import { fill, strings } from '../../i18n'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -32,12 +33,13 @@ const DAY = 24 * HOUR
  * and "Updated -60m ago" is worse than silence.
  */
 export function freshnessLabel(fetchedAt: number, now: number): string | null {
+  const t = strings().freshness
   if (!Number.isFinite(fetchedAt) || fetchedAt <= 0) return null
   const age = now - fetchedAt
   if (age < 5 * MINUTE) return null
-  if (age < HOUR) return `Updated ${Math.floor(age / MINUTE)}m ago`
-  if (age < DAY) return `Updated ${Math.floor(age / HOUR)}h ago`
-  if (age < 2 * DAY) return 'Last updated yesterday'
+  if (age < HOUR) return fill(t.minutes, { n: String(Math.floor(age / MINUTE)) })
+  if (age < DAY) return fill(t.hours, { n: String(Math.floor(age / HOUR)) })
+  if (age < 2 * DAY) return t.yesterday
   const d = new Date(fetchedAt)
-  return `Last updated ${d.getDate()} ${MONTHS[d.getMonth()]}`
+  return fill(t.date, { day: String(d.getDate()), month: months()[d.getMonth()] })
 }

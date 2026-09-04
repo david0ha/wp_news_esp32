@@ -21,7 +21,6 @@ import { DEFAULT_HOST, discoverDevice } from '../../lib/discovery'
 import { getDeviceBaseUrl } from '../../lib/store'
 import { syncPendingNewsUrl } from '../../lib/newsurlsync'
 import {
-  PAGE_LABELS,
   changeTone,
   fetchResultLabel,
   fetchResultMessage,
@@ -33,10 +32,12 @@ import {
   formatGeneratedAt,
   formatInterval,
   formatMs,
+  pageLabels,
   pollSourceLabel,
   sleepPresetInForce,
   sleepSourceLabel,
 } from '../../lib/format'
+import { fill, useStrings } from '../../i18n'
 import { colors, fonts, layout, radius, space, tabular } from '../../theme'
 
 // The board polls its desk every few minutes and only redraws when the edition changed, so there
@@ -46,24 +47,20 @@ import { colors, fonts, layout, radius, space, tabular } from '../../theme'
 const POLL_MS = 5000
 
 /**
- * The sleep intervals offered.
+ * The sleep intervals offered, as seconds. Their labels are `board.sleep.presets` in the string
+ * catalogue and are zipped onto these by index — the two lists are one thing split in half, which
+ * is why the parity test's key paths for that array are worth reading if either is ever reordered.
  *
  * The board clamps to [60, 86400] and takes 0 for "use the build-time default", so these are
  * points inside that range rather than a limit on it. They are clustered around the knee the
  * deep-sleep design names — 15 to 30 minutes, past which a longer interval buys progressively less
  * because the refreshes and the standing current start to dominate.
  */
-const SLEEP_PRESETS: ReadonlyArray<{ label: string; seconds: number }> = [
-  { label: '5m', seconds: 300 },
-  { label: '15m', seconds: 900 },
-  { label: '30m', seconds: 1800 },
-  { label: '1h', seconds: 3600 },
-  { label: '6h', seconds: 21600 },
-  { label: 'Default', seconds: SLEEP_SECONDS_DEFAULT },
-]
+const SLEEP_PRESET_SECONDS: readonly number[] = [300, 900, 1800, 3600, 21600, SLEEP_SECONDS_DEFAULT]
 
 export default function Board() {
   const router = useRouter()
+  const t = useStrings()
   const { client, baseUrl, hasDevice, setBaseUrl } = useDevice()
 
   const [state, setState] = useState<DeviceState | null>(null)
@@ -113,11 +110,11 @@ export default function Board() {
         // Keep the last good snapshot on a transient poll failure; only surface an error when we
         // have nothing to show yet.
         if (!opts.silent) {
-          setError(e instanceof Esp32Error ? humanError(e) : 'Couldn’t reach the board.')
+          setError(e instanceof Esp32Error ? humanError(e) : t.board.unreachable)
         }
       }
     },
-    [client],
+    [client, t],
   )
 
   // Poll while the screen is focused. useFocusEffect pauses polling when the user navigates away
@@ -177,12 +174,12 @@ export default function Board() {
         await fn()
         await load({ silent: true })
       } catch (e) {
-        setError(e instanceof Esp32Error ? humanError(e) : 'That command failed. Please try again.')
+        setError(e instanceof Esp32Error ? humanError(e) : t.board.commandFailed)
       } finally {
         setBusy(false)
       }
     },
-    [client, busy, load],
+    [client, busy, load, t],
   )
 
   // Three branches, and their ORDER is load-bearing. This app has no component-testing library, so
@@ -205,7 +202,7 @@ export default function Board() {
   if (hasDevice === null) {
     return (
       <Screen edges={['top']}>
-        <ScreenMessage loading message="Connecting…" />
+        <ScreenMessage loading message={t.board.connecting} />
       </Screen>
     )
   }
@@ -238,7 +235,7 @@ export default function Board() {
     return (
       <Screen edges={['top']}>
         <Header baseUrl={baseUrl} />
-        <ScreenMessage loading={!error} error={error} message="Loading…" onRetry={retry} />
+        <ScreenMessage loading={!error} error={error} message={t.board.loading} onRetry={retry} />
       </Screen>
     )
   }
@@ -265,9 +262,9 @@ export default function Board() {
             icon="cloud-download"
             tone={fetchResultTone(source.lastResult)}
           />
-          {news.demo ? <Chip label="demo edition" icon="flask" tone="warn" /> : null}
-          {source.stale ? <Chip label="stale" icon="time" tone="warn" /> : null}
-          {power.deepSleep ? <Chip label="sleeps" icon="moon" tone="accent" /> : null}
+          {news.demo ? <Chip label={t.board.chips.demo} icon="flask" tone="warn" /> : null}
+          {source.stale ? <Chip label={t.board.chips.stale} icon="time" tone="warn" /> : null}
+          {power.deepSleep ? <Chip label={t.board.chips.sleeps} icon="moon" tone="accent" /> : null}
           {battery.present ? (
             <Chip
               label={`${battery.percent}%`}
@@ -302,11 +299,8 @@ export default function Board() {
             </>
           ) : (
             <>
-              <Text style={styles.heroName}>No edition yet</Text>
-              <Text style={styles.heroMeta}>
-                The board has not parsed an edition since it started. Everything below describes
-                the board, not a page.
-              </Text>
+              <Text style={styles.heroName}>{t.board.hero.none}</Text>
+              <Text style={styles.heroMeta}>{t.board.hero.noneBody}</Text>
             </>
           )}
         </Card>
@@ -326,7 +320,7 @@ export default function Board() {
         ) : null}
 
         {news.headlines.length > 0 ? (
-          <Section title="Headlines">
+          <Section title={t.board.sections.headlines}>
             <Card style={styles.rows}>
               {news.headlines.map((h, i) => (
                 <View
@@ -341,24 +335,28 @@ export default function Board() {
             {/* What ARRIVED, after parsing. It is the difference between "the desk filed a thin
                 day" and "the parser dropped something" — a distinction no other field can make. */}
             <Text style={styles.counts}>
-              {[
-                `${formatCount(news.counts.stories)} stories`,
-                `${formatCount(news.counts.figures)} figures`,
-                `${formatCount(news.counts.briefs)} briefs`,
-                `${formatCount(news.counts.peers)} peers`,
-                `${formatCount(news.counts.tables)} tables`,
-                `${formatCount(news.counts.charts)} charts`,
-                `${formatCount(news.counts.thumbs)} photos`,
-              ].join(' · ')}
+              {(
+                [
+                  [t.board.counts.stories, news.counts.stories],
+                  [t.board.counts.figures, news.counts.figures],
+                  [t.board.counts.briefs, news.counts.briefs],
+                  [t.board.counts.peers, news.counts.peers],
+                  [t.board.counts.tables, news.counts.tables],
+                  [t.board.counts.charts, news.counts.charts],
+                  [t.board.counts.photos, news.counts.thumbs],
+                ] as const
+              )
+                .map(([template, n]) => fill(template, { n: formatCount(n) }))
+                .join(' · ')}
             </Text>
           </Section>
         ) : null}
 
         {/* Page control. The board's own title for the page it is showing sits underneath — that is
             the ground truth for what is on the glass. */}
-        <Section title="On the panel">
+        <Section title={t.board.sections.panel}>
           <SegmentedControl
-            segments={[...PAGE_LABELS]}
+            segments={[...pageLabels()]}
             selectedIndex={shownPage}
             disabled={busy}
             onChange={(page) => {
@@ -368,28 +366,38 @@ export default function Board() {
           />
           <Text style={styles.note}>
             {pendingPage !== null && pendingPage !== state.page
-              ? 'Switching… a page change is a full refresh, which takes twenty to thirty seconds.'
-              : `Showing “${state.pageTitle || PAGE_LABELS[state.page] || '—'}”. A refresh of this panel last took ${formatMs(panel.refreshMs)}.`}
+              ? t.board.panel.switching
+              : fill(t.board.panel.showing, {
+                  // The board's own title for the page it is showing is the ground truth for
+                  // what is on the glass, and it arrives in the EDITION's language rather than
+                  // this phone's — so it is quoted, not translated.
+                  page: state.pageTitle || pageLabels()[state.page] || '—',
+                  ms: formatMs(panel.refreshMs),
+                })}
           </Text>
           <Button
-            label="See the page on the glass"
+            label={t.board.panel.seeOnGlass}
             variant="secondary"
             onPress={() => router.push('/preview')}
           />
         </Section>
 
         {/* Where the edition comes from, and how the last poll went. */}
-        <Section title="Source">
+        <Section title={t.board.sections.source}>
           <Card style={styles.rows}>
-            <InfoRow label="URL" value={source.url || 'not set (demo)'} tone={source.url ? 'neutral' : 'dim'} />
             <InfoRow
-              label="Last poll"
+              label={t.board.source.url}
+              value={source.url || t.board.source.notSet}
+              tone={source.url ? 'neutral' : 'dim'}
+            />
+            <InfoRow
+              label={t.board.source.lastPoll}
               value={fetchResultLabel(source.lastResult)}
               tone={fetchResultTone(source.lastResult) === 'down' ? 'down' : 'neutral'}
             />
-            <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
+            <InfoRow label={t.board.source.lastSuccess} value={formatAge(source.ageSeconds)} />
             <InfoRow
-              label="Polls"
+              label={t.board.source.polls}
               value={`${formatInterval(source.pollSeconds)}, ${pollSourceLabel(source.pollSource)}`}
               last
             />
@@ -397,10 +405,10 @@ export default function Board() {
           {source.lastResult !== 'ok' ? (
             <Text style={styles.note}>{fetchResultMessage(source.lastResult)}</Text>
           ) : null}
-          <Text style={styles.note}>The address itself is changed from the Settings tab.</Text>
+          <Text style={styles.note}>{t.board.source.note}</Text>
         </Section>
 
-        <Section title="Power">
+        <Section title={t.board.sections.power}>
           <PowerCard
             power={power}
             batteryPresent={battery.present}
@@ -416,24 +424,21 @@ export default function Board() {
 
         <View style={styles.actions}>
           <Button
-            label="Poll now"
+            label={t.board.actions.pollNow}
             variant="secondary"
             disabled={busy}
             onPress={() => command(() => client.refresh())}
             style={styles.actionBtn}
           />
           <Button
-            label="Self-test"
+            label={t.board.actions.selfTest}
             variant="secondary"
             disabled={busy}
             onPress={() => command(() => client.displayTest())}
             style={styles.actionBtn}
           />
         </View>
-        <Text style={styles.note}>
-          Polling only redraws the panel if the edition changed. The self-test sweeps the panel for
-          about a minute and a half, and the board answers nothing else while it does.
-        </Text>
+        <Text style={styles.note}>{t.board.actions.note}</Text>
 
         {error ? <Text style={styles.errorLine}>{error}</Text> : null}
       </ScrollView>
@@ -460,6 +465,7 @@ function PowerCard({
   batteryPercent: number
   batteryMv: number
 }) {
+  const t = useStrings()
   // Both derived numbers are 0 until the board has slept at least once, because neither has an
   // input yet. That is not an error and it is not a real figure either, so it is said in words.
   const measured = power.wakes > 0 && power.meanAwakeMs > 0
@@ -468,27 +474,37 @@ function PowerCard({
     <>
       <Card style={styles.rows}>
         <InfoRow
-          label="Deep sleep"
-          value={power.deepSleep ? 'on' : 'off'}
+          label={t.board.power.deepSleep}
+          value={power.deepSleep ? t.board.power.on : t.board.power.off}
           tone={power.deepSleep ? 'neutral' : 'dim'}
         />
         <InfoRow
-          label="Wakes"
+          label={t.board.power.wakes}
           value={`${formatInterval(power.sleepSeconds)}, ${sleepSourceLabel(power.sleepSource)}`}
         />
         <InfoRow
-          label="Since last unplug"
+          label={t.board.power.sinceUnplug}
           value={
             power.wakes > 0
-              ? `${formatCount(power.wakes)} wakes, ${formatCount(power.quietWakes)} of them quiet`
-              : 'has not slept yet'
+              ? fill(t.board.power.wakeCounts, {
+                  wakes: formatCount(power.wakes),
+                  quiet: formatCount(power.quietWakes),
+                })
+              : t.board.power.notSleptYet
           }
         />
-        <InfoRow label="Awake each time" value={measured ? formatMs(power.meanAwakeMs) : '—'} />
         <InfoRow
-          label="Battery"
+          label={t.board.power.awakeEach}
+          value={measured ? formatMs(power.meanAwakeMs) : '—'}
+        />
+        <InfoRow
+          label={t.board.power.battery}
+          // A percentage and a voltage: digits and SI symbols, so this one stays a literal here
+          // rather than becoming a catalogue row that would read identically in both languages.
           value={
-            batteryPresent ? `${batteryPercent}% · ${(batteryMv / 1000).toFixed(2)} V` : 'not fitted'
+            batteryPresent
+              ? `${batteryPercent}% · ${(batteryMv / 1000).toFixed(2)} V`
+              : t.board.power.notFitted
           }
           tone={batteryPresent && batteryPercent < 20 ? 'down' : 'neutral'}
           last
@@ -496,8 +512,8 @@ function PowerCard({
       </Card>
       <Text style={styles.note}>
         {measured
-          ? `About ${formatCount(power.estMahPerDay)} mAh a day — awake time only. It does not include the 2.3 mAh a refresh costs, or the standing sleep current, because nobody has measured that on this board yet. Expect the real figure to be higher.`
-          : 'No estimate yet: the board has to sleep at least once before there is anything to average. Read these after a day on a wall, not after a minute.'}
+          ? fill(t.board.power.estimate, { mah: formatCount(power.estMahPerDay) })
+          : t.board.power.noEstimate}
       </Text>
     </>
   )
@@ -523,33 +539,29 @@ function SleepEditor({
   disabled: boolean
   onPick: (seconds: number) => void
 }) {
+  const t = useStrings()
   const inForce = sleepPresetInForce(power.sleepSource, power.sleepSeconds)
 
   return (
     <View style={styles.sleep}>
-      <Text style={styles.sleepTitle}>How often it wakes</Text>
+      <Text style={styles.sleepTitle}>{t.board.sleep.title}</Text>
       <View style={styles.chipRow}>
-        {SLEEP_PRESETS.map((p) => (
+        {SLEEP_PRESET_SECONDS.map((seconds, i) => (
+          // Keyed on the interval and not on the label: the label is copy and changes with the
+          // language, which would remount every chip on a language switch.
           <Chip
-            key={p.label}
-            label={p.label}
-            active={p.seconds === inForce}
+            key={seconds}
+            label={t.board.sleep.presets[i]}
+            active={seconds === inForce}
             disabled={disabled}
-            onPress={() => onPick(p.seconds)}
+            onPress={() => onPick(seconds)}
           />
         ))}
       </View>
       <Text style={styles.note}>
-        {power.sleepSource === 'policy'
-          ? 'The desk is setting the cadence at the moment, so your value is stored and waiting rather than in force.'
-          : 'This is the fallback the board uses when its desk says nothing about cadence. Below fifteen minutes the cell drains noticeably faster; “Default” hands it back to the firmware.'}
+        {power.sleepSource === 'policy' ? t.board.sleep.deskDriving : t.board.sleep.fallback}
       </Text>
-      {!power.deepSleep ? (
-        <Text style={styles.note}>
-          Deep sleep is off on this board — on USB with a console attached it never sleeps at all,
-          so this setting is stored for the day it runs on a cell.
-        </Text>
-      ) : null}
+      {!power.deepSleep ? <Text style={styles.note}>{t.board.sleep.sleepOff}</Text> : null}
     </View>
   )
 }

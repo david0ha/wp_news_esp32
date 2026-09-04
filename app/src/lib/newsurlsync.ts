@@ -17,6 +17,7 @@
 
 import { Esp32Error, humanError, type Esp32Client } from './esp32'
 import { clearNewsUrl, clearNewsUrlPending, isNewsUrlPending, peekNewsUrl } from './store'
+import { strings } from '../i18n'
 
 /**
  * Which failures mean "the board answered, and said no to this address" — as opposed to the board
@@ -76,12 +77,17 @@ export function decideNewsUrlSave(
   outcome: NewsUrlSaveOutcome,
   hasBoard: boolean | null,
 ): NewsUrlSaveDecision {
+  // The catalogue is read here, inside the call, for the reason every other sentence catalogue in
+  // `lib/` reads it here: this module is imported at startup, before a language has been resolved.
+  // Which sentence is chosen has no language in it at all — that is the decision this function
+  // exists to make, and it is unchanged.
+  const m = strings().settings.news.saved
   if ('ok' in outcome) {
     return {
       persist: true,
       pending: false,
       tone: 'ok',
-      message: url ? 'Saved. The board is fetching it now.' : 'Cleared — the board is back on demo data.',
+      message: url ? m.fetching : m.clearedDemo,
     }
   }
   if ('noClient' in outcome) {
@@ -90,17 +96,14 @@ export function decideNewsUrlSave(
         persist: true,
         pending: true,
         tone: 'info',
-        message: url
-          ? 'Saved. Today reads from this address. A board you set up later will get it too.'
-          : 'Cleared — Today is on the demo edition.',
+        message: url ? m.todayOnly : m.clearedTodayDemo,
       }
     }
     return {
       persist: true,
       pending: true,
       tone: 'info',
-      message:
-        'Saved on this phone. Not connected to a board right now — it will be sent when this app reaches one.',
+      message: m.noClient,
     }
   }
   const e = outcome.error
@@ -112,9 +115,7 @@ export function decideNewsUrlSave(
     persist: true,
     pending: true,
     tone: 'info',
-    message: asleep
-      ? 'Saved. The board is asleep, so it will get the new address the next time this app reaches it.'
-      : 'Saved on this phone. The board didn’t take it just now — it will get the new address the next time this app reaches it.',
+    message: asleep ? m.boardAsleep : m.boardBusy,
   }
 }
 

@@ -15,13 +15,12 @@ import { yahoo } from '../../lib/market/yahoo'
 import { baselineFor, type Timeframe } from '../../lib/market/timeframes'
 import { marketHumanError, type ChartData, type ChartPoint, type Quote } from '../../lib/market/types'
 import { currencySymbol, formatDateShort, formatPrice, formatTime } from '../../lib/market/format'
+import { useStrings } from '../../i18n'
 import { colors, fonts, layout, radius, space, tabular, type } from '../../theme'
 
 // Robinhood cadence: the header quote and the 1D line stay roughly live while the screen is
 // focused; longer timeframes are history and refetch only when the user asks for them.
 const POLL_MS = 60_000
-
-const SECTION_TABS = ['Info', 'News', 'Calendar', 'Options']
 
 /**
  * The symbol detail screen (spec §6.3): one ScrollView from back chrome through price hero,
@@ -31,6 +30,7 @@ const SECTION_TABS = ['Info', 'News', 'Calendar', 'Options']
  */
 export default function MarketDetail() {
   const router = useRouter()
+  const t = useStrings()
   const params = useLocalSearchParams<{ symbol: string }>()
   // Uppercase once at the top — deep links arrive as claudepost://market/aapl too.
   const symbol = String(params.symbol ?? '').toUpperCase()
@@ -174,7 +174,7 @@ export default function MarketDetail() {
     if (shownTf === '1D') {
       delta = quote?.delta
       pct = quote?.pct
-      suffix = 'Today'
+      suffix = t.marketDetail.todaySuffix
     } else {
       const last = points.length > 0 ? points[points.length - 1].close : null
       if (last !== null && effectiveBaseline !== null) {
@@ -204,7 +204,7 @@ export default function MarketDetail() {
             <View style={styles.banner}>
               <Text style={styles.bannerText}>{banner}</Text>
               <Pressable accessibilityRole="button" onPress={retry} hitSlop={8}>
-                <Text style={styles.bannerRetry}>Retry</Text>
+                <Text style={styles.bannerRetry}>{t.common.retry}</Text>
               </Pressable>
             </View>
           </View>
@@ -247,7 +247,16 @@ export default function MarketDetail() {
         </View>
 
         <View style={styles.gutter}>
-          <SectionTabs tabs={SECTION_TABS} selected={tab} onChange={setTab} />
+          <SectionTabs
+            tabs={[
+              t.marketDetail.tabs.info,
+              t.marketDetail.tabs.news,
+              t.marketDetail.tabs.calendar,
+              t.marketDetail.tabs.options,
+            ]}
+            selected={tab}
+            onChange={setTab}
+          />
           {/* All four stay mounted so a section's fetched data survives tabbing away; only the
               active one is displayed. Keyed by symbol: a deep link arriving while this screen
               is mounted swaps the param in place (NAVIGATE, same route key), and the sections'

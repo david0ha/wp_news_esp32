@@ -29,6 +29,7 @@
 // Every function takes an injectable fetch/clock so it can be unit-tested without a board.
 
 import { FB_SIZE, SCREEN_BPP, SCREEN_FORMAT, SCREEN_H, SCREEN_STRIDE, SCREEN_W } from './screen'
+import { strings } from '../i18n'
 
 // ---------------------------------------------------------------------------
 // Response types (one interface per documented payload).
@@ -295,41 +296,44 @@ export class Esp32Error extends Error {
  * there.
  */
 export function humanError(e: Esp32Error): string {
+  // Read inside the call, never captured beside the imports: this module is imported at startup,
+  // long before the language provider has resolved anything.
+  const m = strings().errors.device
   switch (e.code) {
     case 'timeout':
-      return 'No answer — the board is probably asleep. It wakes for a few seconds at a time and runs no server in between; press a button on it, then try again.'
+      return m.timeout
     case 'network_error':
-      return 'Couldn’t reach the board. Check it’s powered on and on the same Wi-Fi.'
+      return m.networkError
     case 'page_range':
-      return 'That page doesn’t exist. The board has two: A1, the front page, and A2, the accounts.'
+      return m.pageRange
     case 'news_url_invalid':
-      return 'The board wouldn’t accept that address.'
+      return m.newsUrlInvalid
     case 'sleep_seconds_invalid':
-      return 'The board takes an interval of 60 seconds to 24 hours, or 0 for its built-in default.'
+      return m.sleepSecondsInvalid
     case 'busy':
-      return 'The board is busy redrawing. A refresh of this panel takes twenty to thirty seconds — try again after that.'
+      return m.busy
     case 'no_framebuffer':
-      return 'The board is answering but hasn’t finished starting up. Give it a moment.'
+      return m.noFramebuffer
     case 'screen_size':
-      return 'The page came back the wrong size — the download was cut short. Try again.'
+      return m.screenSize
     case 'screen_format':
-      return 'This board is sending a screen format this app doesn’t know. Update the app.'
+      return m.screenFormat
     case 'bad_json':
-      return 'The board couldn’t read that request. This is a bug in the app, not something you did.'
+      return m.badJson
     case 'too_large':
-      return 'That was too long for the board to accept.'
+      return m.tooLarge
     case 'read_error':
-      return 'The board lost the request halfway through. Try again.'
+      return m.readError
     case 'ssid_empty':
-      return 'Pick a Wi-Fi network first.'
+      return m.ssidEmpty
     case 'ssid_too_long':
-      return 'That network name is longer than the board can store.'
+      return m.ssidTooLong
     case 'pass_too_long':
-      return 'That password is longer than the board can store.'
+      return m.passTooLong
     case 'http_error':
-      return 'The board answered with an error. Try again in a moment.'
+      return m.httpError
     default:
-      return 'That command failed. Please try again.'
+      return m.unknown
   }
 }
 

@@ -1,5 +1,6 @@
-import { describe, it, expect } from '@jest/globals'
+import { afterEach, describe, it, expect } from '@jest/globals'
 import { freshnessLabel } from './freshness'
+import { setActiveLanguage } from '../../i18n'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -50,5 +51,23 @@ describe('freshnessLabel — the tiers', () => {
   it('says nothing for a fetch that never happened', () => {
     // `fetchedAt: 0` is the demo edition's stamp: no server ever confirmed it.
     expect(freshnessLabel(0, NOW)).toBeNull()
+  })
+})
+
+describe('freshnessLabel — in Korean', () => {
+  afterEach(() => setActiveLanguage('en'))
+
+  it('says every tier in Korean, and numbers the month rather than abbreviating it', () => {
+    setActiveLanguage('ko')
+    expect(ago(12 * MIN)).toMatch(/[가-힣]/)
+    expect(ago(3 * HOUR)).toMatch(/[가-힣]/)
+    expect(ago(DAY)).toMatch(/[가-힣]/)
+    // 2026-08-30 14:00 minus two days is 2026-08-28, which a Korean paper dates 8월 28일.
+    expect(ago(2 * DAY)).toBe('마지막 업데이트 8월 28일')
+  })
+
+  it('still says nothing under five minutes — silence has no language', () => {
+    setActiveLanguage('ko')
+    expect(ago(30_000)).toBeNull()
   })
 })

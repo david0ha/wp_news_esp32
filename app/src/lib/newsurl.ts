@@ -16,6 +16,7 @@
 // a bug in one of the two, which is what `newsurl.test.ts` is for.
 
 import { NEWS_URL_MAX_LEN } from './esp32'
+import { fill, strings } from '../i18n'
 
 export type NewsUrlError = 'too_long' | 'bad_scheme' | 'no_host'
 
@@ -61,17 +62,23 @@ export function validateNewsUrl(input: string): NewsUrlResult {
   return { ok: true, value: url }
 }
 
-/** A sentence for each rejection, for the field's error line. */
+/**
+ * A sentence for each rejection, for the field's error line.
+ *
+ * The limit is interpolated rather than spelled inside the sentence, so both catalogues quote the
+ * firmware's own number and neither can be left behind when it changes.
+ */
 export function newsUrlErrorMessage(result: NewsUrlResult): string {
+  const m = strings().errors.newsUrl
   switch (result.error) {
     case 'too_long':
-      return `That address is too long — the board stores at most ${NEWS_URL_MAX_LEN} characters.`
+      return fill(m.tooLong, { max: String(NEWS_URL_MAX_LEN) })
     case 'bad_scheme':
-      return 'The address must start with http:// or https://.'
+      return m.badScheme
     case 'no_host':
-      return 'The address is missing a host, e.g. http://mymac.local:8123/news.json.'
+      return m.noHost
     default:
-      return 'That doesn’t look like a valid address.'
+      return m.invalid
   }
 }
 

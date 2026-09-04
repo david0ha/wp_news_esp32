@@ -5,6 +5,7 @@ import { TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
 import { editionClient, tileUrl } from '../../../lib/edition/client'
 import { decodeTile, getCachedTilePng, putCachedTilePng } from '../../../lib/edition/photo'
 import { useEditionUrl } from '../editionUrl'
+import { useStrings } from '../../../i18n'
 
 /**
  * A photograph, fetched beside the payload and decoded on the phone.
@@ -39,6 +40,7 @@ export function PhotoTile({
   width: number
   height: number
 }) {
+  const t = useStrings()
   const { photo } = tile
   const url = tileUrl(useEditionUrl(), photo.id)
   // Seeded from the session cache so a tile scrolled back into view paints on its first frame
@@ -90,7 +92,7 @@ export function PhotoTile({
     <View style={[styles.root, { width, height }]}>
       {png !== null ? (
         <Image
-          accessibilityLabel={photo.caption !== '' ? photo.caption : 'Photograph'}
+          accessibilityLabel={photo.caption !== '' ? photo.caption : t.today.a11y.photograph}
           source={{ uri: `data:image/png;base64,${png}` }}
           style={styles.image}
           resizeMode="cover"

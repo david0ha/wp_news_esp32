@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../../../i18n'
 import { colors, fonts, space, type } from '../../../theme'
 import {
   TILE_HEAD,
@@ -25,9 +26,10 @@ import { Change } from '../Change'
  * not a direction.
  */
 export function PeersTile({ tile }: { tile: Extract<Tile, { kind: 'peers' }> }) {
+  const t = useStrings()
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>Peers</Text>
+      <Text style={styles.head}>{t.today.heads.peers}</Text>
       {tile.peers.slice(0, PEERS_SHOWN).map((p) => (
         <View key={p.symbol} style={styles.row}>
           <Text style={p.isSubject ? styles.symbolSubject : styles.symbol} numberOfLines={1}>

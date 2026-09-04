@@ -10,6 +10,7 @@ import { photoBoxHeight } from '../../../lib/edition/feedLayout'
 import { TABLE_HEAD_ROW_H, TABLE_ROW_H, type Tile } from '../../../lib/edition/tiles'
 import { DETAIL_CELL_FONT, detailCellWidth, detailLabelWidth } from './tableGrid'
 import { type Edition, type EditionChart, type EditionPhoto } from '../../../lib/edition/types'
+import { useStrings } from '../../../i18n'
 import { colors, fonts, layout, radius, space, tabular, type } from '../../../theme'
 
 /**
@@ -62,6 +63,7 @@ export function TileDetail({
   /** The window's width. The media below is sized in pixels, not flexed, so it needs the number. */
   width: number
 }) {
+  const s = useStrings().today
   const contentWidth = width - 2 * layout.gutter
 
   switch (tile.kind) {
@@ -89,20 +91,20 @@ export function TileDetail({
     }
 
     case 'range': {
-      const s = tile.subject
+      const subject = tile.subject
       // No `Last` row. The masthead two taps up carries the price at 38 px, and repeating it here
       // as one row among six would make the reader check whether the two numbers agree.
-      const has52 = s.wk52High !== null || s.wk52Low !== null
+      const has52 = subject.wk52High !== null || subject.wk52Low !== null
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>Range</Text>
+          <Text style={type.heading}>{s.heads.range}</Text>
           <View>
-            <Row label="Previous close" value={formatPrice(s.prevClose)} />
-            <Row label="Open" value={formatPrice(s.open)} />
-            <Row label="Day high" value={formatPrice(s.high)} />
-            <Row label="Day low" value={formatPrice(s.low)} />
-            {has52 ? <Row label="52-week high" value={formatPrice(s.wk52High)} /> : null}
-            {has52 ? <Row label="52-week low" value={formatPrice(s.wk52Low)} /> : null}
+            <Row label={s.range.previousClose} value={formatPrice(subject.prevClose)} />
+            <Row label={s.range.open} value={formatPrice(subject.open)} />
+            <Row label={s.range.dayHigh} value={formatPrice(subject.high)} />
+            <Row label={s.range.dayLow} value={formatPrice(subject.low)} />
+            {has52 ? <Row label={s.range.wk52High} value={formatPrice(subject.wk52High)} /> : null}
+            {has52 ? <Row label={s.range.wk52Low} value={formatPrice(subject.wk52Low)} /> : null}
           </View>
         </View>
       )
@@ -111,7 +113,9 @@ export function TileDetail({
     case 'chart':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{tile.chart.label !== '' ? tile.chart.label : 'Chart'}</Text>
+          <Text style={type.heading}>
+            {tile.chart.label !== '' ? tile.chart.label : s.heads.chart}
+          </Text>
           <ChartBlock chart={tile.chart} width={contentWidth} showLabel={false} />
         </View>
       )
@@ -130,7 +134,7 @@ export function TileDetail({
     case 'figures':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{tile.group !== '' ? tile.group : 'Figures'}</Text>
+          <Text style={type.heading}>{tile.group !== '' ? tile.group : s.heads.figures}</Text>
           {/* Every figure in the group, where the tile showed four and counted the rest. */}
           <View>
             {tile.figures.map((f, i) => (
@@ -149,7 +153,7 @@ export function TileDetail({
     case 'briefs':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>Briefs</Text>
+          <Text style={type.heading}>{s.heads.briefs}</Text>
           <View style={styles.briefList}>
             {tile.briefs.map((b, i) => (
               <View key={`${b.date}:${i}`} style={styles.brief}>
@@ -169,7 +173,7 @@ export function TileDetail({
     case 'peers':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>Peers</Text>
+          <Text style={type.heading}>{s.heads.peers}</Text>
           <View>
             {tile.peers.map((p) => (
               <QuoteRow
@@ -207,7 +211,7 @@ export function TileDetail({
       )
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>{table.title !== '' ? table.title : 'Statement'}</Text>
+          <Text style={type.heading}>{table.title !== '' ? table.title : s.heads.statement}</Text>
           {table.note !== '' ? <Text style={type.caption}>{table.note}</Text> : null}
           {/* THE LABEL COLUMN STAYS PUT AND THE PERIODS SCROLL UNDER IT. All six columns in one
               flex row put "3Q25" half off the card and cut its figures down the middle, and
@@ -277,7 +281,7 @@ export function TileDetail({
     case 'tape':
       return (
         <View style={styles.root}>
-          <Text style={type.heading}>The tape</Text>
+          <Text style={type.heading}>{s.heads.tape}</Text>
           <View>
             {tile.indices.map((ix) => (
               <QuoteRow
