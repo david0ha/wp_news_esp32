@@ -61,6 +61,7 @@
 #define DEV_PAGE_MAXLEN      32
 #define DEV_EDITION_MAXLEN   32
 #define DEV_TIME_MAXLEN      24
+#define DEV_LANG_MAXLEN       8   /* == NEWS_LANG_MAX */
 #define DEV_URL_MAXLEN      129   /* == PROV_URL_MAX_LEN + 1 */
 #define DEV_RESULT_MAXLEN    16
 
@@ -140,6 +141,13 @@ typedef struct {
     bool demo;                          /* rendered from the built-in sample */
     char edition[DEV_EDITION_MAXLEN];
     char generated_at[DEV_TIME_MAXLEN];
+
+    /* The language the edition on the glass is written in, already normalised
+     * by the parser. The app needs it because its own faces carry no Hangul and
+     * a Korean edition has to be drawn with a different type ramp — so it
+     * travels with the edition rather than being something the phone asks the
+     * desk for and then has to keep in step. */
+    char lang[DEV_LANG_MAXLEN];
 
     dev_subject_t subject;
 

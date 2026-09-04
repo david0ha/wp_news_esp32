@@ -140,6 +140,7 @@ static void test_mock_matches_the_wire_fixture(void)
     CHECK_STR(g_mock.session, g_wire.session);
     CHECK_STR(g_mock.as_of, g_wire.as_of);
     CHECK_STR(g_mock.generated_at, g_wire.generated_at);
+    CHECK_STR(g_mock.lang, g_wire.lang);
 
     CHECK_STR(g_mock.subject.symbol, g_wire.subject.symbol);
     CHECK_STR(g_mock.subject.name, g_wire.subject.name);

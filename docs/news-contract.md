@@ -32,7 +32,7 @@ That is also why the badge order in `ui_news.c` is `OFFLINE`, then `STALE`, then
 the obvious one: a configured board whose server is unreachable would otherwise badge itself `DEMO`
 — true, and useless.
 
-The scratch is not on the stack, because `sizeof(news_t)` is **32,952 bytes** — measured, against
+The scratch is not on the stack, because `sizeof(news_t)` is **32,960 bytes** — measured, against
 `NewsTask`'s 16 KB and `UiTask`'s 8 KB. That is a hard constraint rather than a preference: an
 automatic `news_t` overflows either stack before it is even filled in. An allocation failure is a
 rejection like any other, which keeps the rule true on that path too.
@@ -394,6 +394,7 @@ plus the terminator.
 | `session` | string | 48 | the tape's left end, caps |
 | `as_of` | string | 24 | the tape's right end, caps |
 | `generated_at` | string | 24 | **not drawn, but fingerprinted** — moving it every poll reprints the sheet every poll, see [above](#the-one-field-that-is-not-free-generated_at). Reaches the companion app as `generatedAt`. `as_of` is the line a reader gets, and nothing on the sheet prints a clock |
+| `lang` | string | 8 | the language the copy is written in, a BCP-47 primary subtag (`en`, `ko`). Absent or malformed means `en`. **Fingerprinted**: it chooses the fixed strings beside the copy. Reaches the companion app as `lang` |
 | `subject` | object | one | the whole edition. See below |
 | `stories[]` | array of story | 5 | the lead and up to four more |
 | `figures[]` | array of figure | 28 | the dossier rail |

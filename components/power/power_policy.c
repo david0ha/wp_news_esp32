@@ -296,7 +296,7 @@ void power_decide(const power_input_t *in, power_plan_t *out)
          * it, because the awake firmware badges the sheet OFFLINE as soon as a
          * poll stops working and a sleeping board never does.
          *
-         * It cannot. A wake is a boot: RAM is gone, and sizeof(news_t) is 32,952
+         * It cannot. A wake is a boot: RAM is gone, and sizeof(news_t) is 32,960
          * bytes against 8 KB of RTC memory, so the snapshot did not survive.
          * What did survive is the image on the glass, and it cannot be read
          * back. To badge a sheet you must redraw it, to redraw it you need a

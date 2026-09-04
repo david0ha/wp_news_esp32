@@ -553,7 +553,7 @@ them long rather than short, so the column always fills and the compositor has s
 
 The copy buffers are sized in bytes against slots measured in characters, at the model's own field
 width, because a copy desk emits em dashes and accented names and a UTF-8 character is up to four
-bytes. They are file statics rather than locals: a `news_t` is **32,952 bytes** — measured — which is
+bytes. They are file statics rather than locals: a `news_t` is **32,960 bytes** — measured — which is
 already too big for a task stack, and six kilobytes of copy on the same frame would be worse. That is
 the same reason both snapshots on the device are static buffers.
 

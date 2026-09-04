@@ -65,6 +65,7 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
     "valid": true, "demo": false,
     "edition": "SEMICONDUCTORS",
     "generatedAt": "2026-08-14T05:12:00Z",
+    "lang": "en",
 
     "subject": {
       "symbol": "SNDK", "name": "Sandisk Corp.",
@@ -112,10 +113,10 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
 }
 ```
 
-That document is 1,378 bytes without the indentation shown here. The buffer is
+That document is 1,390 bytes without the indentation shown here. The buffer is
 `DEVICE_API_STATE_BUF_SZ`, 5120, and `test_api_json` builds the worst case — every string at its
 maximum length, every array at capacity, every character one the escaper expands to six — and asserts
-it fits, printing the margin (currently **4,280 of 5,120**). The margin is checked rather than
+it fits, printing the margin (currently **4,304 of 5,120**). The margin is checked rather than
 assumed because the overflow path returns `-1` and an **empty body**, so the symptom of being one
 byte over is "the app shows nothing" with no error anywhere.
 

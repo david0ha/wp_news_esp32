@@ -770,6 +770,14 @@ bool news_parse(const char *json, size_t len, news_t *out)
     news_str_copy(v->as_of,        sizeof(v->as_of),        jstr(root, "as_of"));
     news_str_copy(v->generated_at, sizeof(v->generated_at), jstr(root, "generated_at"));
 
+    /* Copy then normalise, rather than validate then copy: jstr() returns NULL
+     * for a missing field AND for a number where a string belongs, and both of
+     * those have to end at "en" rather than at an empty tag. The copy leaves
+     * the buffer empty in either case and the normalise turns empty into "en",
+     * so there is one path and no branch that can be forgotten. */
+    news_str_copy(v->lang, sizeof(v->lang), jstr(root, "lang"));
+    news_lang_normalise(v->lang);
+
     parse_subject(root, &v->subject);
     parse_charts(root, v);          /* before the stories: a story names one by index */
     parse_stories(root, v);

@@ -635,6 +635,7 @@ def snapshot(generated_at="2026-08-14T05:12:00Z", as_of="AS OF 05:12 KST"):
         "session": "U.S. MARKETS CLOSED — AUG 13",
         "as_of": as_of,
         "generated_at": generated_at,
+        "lang": "en",
         "subject": dict(SUBJECT),
         "stories": stories(),
         "figures": [figure(r) for r in FIGURES],
@@ -1251,7 +1252,7 @@ def _measured_fields(d):
             out.append((where, value, cap, budget, soft))
 
     for k, cap in (("edition", 32), ("dateline", 40), ("session", 48),
-                   ("as_of", 24), ("generated_at", 24)):
+                   ("as_of", 24), ("generated_at", 24), ("lang", 8)):
         add(k, d.get(k), cap)
 
     subject = d.get("subject") or {}
@@ -1539,6 +1540,7 @@ def check_caps_against_header():
         "indices[].symbol":        "NEWS_SYMBOL_MAX",
         "as_of":                   "NEWS_TIME_MAX",
         "generated_at":            "NEWS_TIME_MAX",
+        "lang":                    "NEWS_LANG_MAX",
     }
 
     sample = _measured_fields(snapshot())

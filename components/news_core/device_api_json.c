@@ -241,6 +241,7 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put_bool_field(&s, "demo", st->demo, false);
     put_str_field(&s, "edition", st->edition, false);
     put_str_field(&s, "generatedAt", st->generated_at, false);
+    put_str_field(&s, "lang", st->lang, false);
 
     /* The subject identifies the edition better than any count does: it is what
      * the board is actually about, and it is how the app tells "polled fine,

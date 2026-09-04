@@ -31,7 +31,7 @@ days on a 4200 mAh cell. This document is how it gets to months.
 **Waking from deep sleep is not resuming. It is booting.**
 
 Every byte of RAM is gone. PSRAM is gone. The 960,000-byte framebuffer is gone.
-`sizeof(news_t)` is 32,952 bytes and RTC slow memory is 8 KB, so the snapshot has
+`sizeof(news_t)` is 32,960 bytes and RTC slow memory is 8 KB, so the snapshot has
 no way to survive and no clever packing will make it.
 
 What survives is **the glass**. Spectra 6 is bistable: cut the power entirely and
@@ -137,7 +137,7 @@ the full path. That is a second round trip for something the board had in hand
 seconds earlier.
 
 It is deliberate. Carrying the snapshot across would mean threading a
-32,952-byte `news_t` from `app_main` through `UserApp_TaskInit` into `NewsTask`'s
+32,960-byte `news_t` from `app_main` through `UserApp_TaskInit` into `NewsTask`'s
 state, and the measured saving is about one 20 KB transfer and a second of awake
 time — roughly 0.02 mAh against the 2.3 mAh refresh that same wake is about to
 spend, or about 1%. The simpler code is worth more than the 1%.

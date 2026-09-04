@@ -206,7 +206,7 @@ fingerprint means the same pixels and the device skips a 25-second refresh on th
 
 **4. A wake is a boot, and the page on the glass is the only thing that survives it.** Deep sleep
 does not resume: RAM is gone, PSRAM is gone, the 960,000-byte framebuffer is gone. `sizeof(news_t)`
-is 32,952 bytes against the 8 KB of RTC retention RAM that crosses a sleep, so the snapshot cannot
+is 32,960 bytes against the 8 KB of RTC retention RAM that crosses a sleep, so the snapshot cannot
 survive and no clever packing will make it. What survives is **the glass**, because Spectra 6 is
 bistable — cut the power entirely and the last edition hangs there indefinitely, drawing nothing.
 That one property is the whole reason this is possible, and it makes the feature narrower than its
@@ -407,12 +407,14 @@ agent/                    an example worker that files into the desk, plus the s
   per-wake figure that belongs in `plan.sleep_seconds` — writing it into `wp_rtc_state.sleep_seconds`
   would turn one 120-second targeted wake into this board's local interval permanently, at 720 wakes
   a day, with every log line agreeing.
-- **`sizeof(news_t)` is 32,952 bytes** — measured, not estimated. That is four times `UiTask`'s whole
+- **`sizeof(news_t)` is 32,960 bytes** — measured, not estimated. That is four times `UiTask`'s whole
   8 KB stack, so all three snapshots in `user_app.cpp` — the state, the UI copy and the fetch buffer —
   are file-scope statics, safe only because the single-owner rule holds: `UiTask` is the only caller
-  of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown three times:
+  of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown four times:
   19,720 to 24,328 when both statements gained a numeric plane beside their printed cells, 24,328 to
-  32,932 when `NEWS_BODY_MAX` went to 4,000, and 32,932 to 32,952 for the `policy` block. The second
+  32,932 when `NEWS_BODY_MAX` went to 4,000, 32,932 to 32,952 for the `policy` block, and 32,952 to
+  32,960 for `lang` — eight bytes of language tag, four of which land in padding that was already
+  there and four of which push `policy` up to its next eight-byte boundary. The second
   is the banner forme's bill — a lead across the whole measure runs four legs down most of a 1,600 px
   sheet, which is about four thousand characters of body, and at 2,400 the field truncated the copy
   mid-word and the legs came up short. The third is sixteen bytes of policy and four of tail padding:
