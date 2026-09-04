@@ -1664,10 +1664,17 @@ def validate_payload(d, tiles_dir):
     # own — news_parse() normalises this field to "en" instead of rejecting the payload, and a
     # validator that stopped here would hide every undrawable character in the edition behind one
     # typo, in the one report the producer gets.
+    #
+    # The message says what the DEVICE would do with the tag, not only that the validator
+    # dislikes it. "en-US is not a language tag" reads as pedantry about a string every other
+    # piece of software on earth accepts; "the board would clamp this to en" is the consequence,
+    # and it is the sentence that tells a producer their Korean edition is about to print in
+    # English with its fixed words in the wrong language and nothing anywhere saying so.
     lang = d.get("lang", "en")
     if not isinstance(lang, str) or not re.match(r"^[a-z]{2,3}\Z", lang):
-        problems.append(f"lang: {lang!r} is not a language tag (two or three lowercase "
-                        f'letters, e.g. "en", "ko")')
+        problems.append(f"lang: {lang!r} is not a language tag — the board would clamp this "
+                        f'to en. A tag here is two or three lowercase letters and nothing '
+                        f'after it: "en", "ko". No region, no script, no casing')
         lang = "en"
 
     # The device rejects a payload that names no company AND carries no story, because that is what

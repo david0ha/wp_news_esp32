@@ -612,10 +612,21 @@ function DeskSection() {
     setAddressMsg({ tone: 'ok', message: s.settings.desk.addressSaved })
   }
 
+  // THE EMPTY FIELD IS ITS OWN ANSWER. The Save button is disabled while the field is blank, but
+  // the field also submits on return — so pressing it on an empty box is the easiest way into this
+  // handler and it used to end at "this phone's keychain wouldn't store the token", an alarming
+  // sentence about a component nothing had asked. It is a no-op and says so, and it deliberately
+  // does NOT clear the saved token: forgetting one is a button of its own, and an accidental
+  // return should never be the way somebody loses the credential that is working.
   const applyToken = async () => {
     setTokenMsg(null)
     const typed = tokenDraft.trim()
-    if (!(await saveDeskToken(typed))) {
+    const outcome = await saveDeskToken(typed)
+    if (outcome === 'empty') {
+      setTokenMsg({ tone: 'info', message: s.settings.desk.tokenEmpty })
+      return
+    }
+    if (outcome === 'refused') {
       setTokenMsg({ tone: 'error', message: s.settings.desk.tokenNotSaved })
       return
     }

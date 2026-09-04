@@ -155,6 +155,22 @@ export function EditionTypeProvider({ lang, children }: { lang: string; children
   return <EditionLangContext.Provider value={lang}>{children}</EditionLangContext.Provider>
 }
 
+/**
+ * The edition's own language tag, for the few decisions the ramp cannot carry.
+ *
+ * The ramp is a set of type tokens and may not touch size or line height (see the top of this
+ * file), so a rule like "this one figure is set a point smaller in a script whose digits run
+ * wider" has nowhere to live inside it. Those rules are pure functions keyed off the language --
+ * `detail/tableGrid.ts`'s `labelEm`, `tiles/range.ts`'s `rangeStatValueSize` -- and this is how a
+ * component that has no `Edition` in hand gets the argument to pass them.
+ *
+ * The EDITION's language, like everything else in this file: a cached Korean edition on an English
+ * phone is still Korean.
+ */
+export function useEditionLang(): string {
+  return useContext(EditionLangContext)
+}
+
 /** The ramp for the edition on screen. Replaces a direct `type.x` inside an edition component. */
 export function useEditionType(): EditionTypeRamp {
   return rampFor(useContext(EditionLangContext))

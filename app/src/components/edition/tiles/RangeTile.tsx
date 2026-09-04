@@ -9,7 +9,8 @@ import {
 } from '../../../lib/edition/tiles'
 import { DASH, formatPrice } from '../../../lib/edition/format'
 import { lineHeightOf } from '../metrics'
-import { useEditionFace, useEditionType } from '../typeRamp'
+import { useEditionFace, useEditionLang, useEditionType } from '../typeRamp'
+import { rangeStatValueStyle } from './range'
 
 // ---------------------------------------------------------------------------------------------
 // THE VERTICAL SUM. This tile's body is fixed furniture — a track box and four numbers, none of
@@ -52,7 +53,7 @@ const STAT_LABEL_LINE = 16
 const STAT_VALUE_LINE = 17
 
 /**
- * THE GUTTER BETWEEN THE TWO STAT COLUMNS, and the size that fits a price inside one.
+ * THE GUTTER BETWEEN THE TWO STAT COLUMNS. The size that fits a price inside one is `range.ts`.
  *
  * The grid is two 50% cells and had neither. A Korean edition found what that costs: a KRX price
  * is five digits and two decimals, and `94,100.00` measures 70 pt against the 72 pt cell — so
@@ -66,15 +67,20 @@ const STAT_VALUE_LINE = 17
  * ellipsizes the price. Together they leave about three points at each, which is the whole
  * budget. Check both when either moves.
  *
+ * The point of size is spent only where it is needed, which is why it is not here: it follows the
+ * edition's language, like the ramp and the statement grid's label column, and `range.ts` holds
+ * that rule and the test on it. An English edition draws these numbers at the size it always did.
+ * The gutter is charged to both, because two numbers with four points between them is the right
+ * spacing at either size and it costs an English price — six characters in a 68 pt cell — nothing.
+ *
  * `adjustsFontSizeToFit` was tried here first and is the wrong tool: iOS shrinks to fit the
  * HEIGHT as well, and the stat grid is a `flex: 1` box whose second wrapped row runs a point
  * short — so High and Low came out at about 8 pt beside a full-size Open and Prev close. Nothing
  * about that is visible in a width estimate.
  *
- * Neither line height moves, so `RANGE_STAT_ROW_H` and the estimator are untouched.
+ * Neither line height moves at either size, so `RANGE_STAT_ROW_H` and the estimator are untouched.
  */
 const STAT_GUTTER = space.xs
-const STAT_VALUE_SIZE = 13
 
 /**
  * Where today's price sits in the year's range, with the day's four numbers under it.
@@ -106,12 +112,13 @@ export function RangeTile({ tile }: { tile: Extract<Tile, { kind: 'range' }> }) 
 function Stat({ label, value }: { label: string; value: number | null }) {
   const ty = useEditionType()
   const face = useEditionFace()
+  const size = rangeStatValueStyle(useEditionLang())
   return (
     <View style={styles.stat}>
       <Text style={[ty.caption, styles.statLabel]} numberOfLines={1}>
         {label}
       </Text>
-      <Text style={[face(fonts.semibold), styles.statValue, tabular]} numberOfLines={1}>
+      <Text style={[face(fonts.semibold), styles.statValue, size, tabular]} numberOfLines={1}>
         {formatPrice(value)}
       </Text>
     </View>
@@ -228,8 +235,11 @@ const styles = StyleSheet.create({
   statLabel: {
     lineHeight: STAT_LABEL_LINE,
   },
+  // No `fontSize`: that one follows the edition's language and arrives from `range.ts` in front of
+  // this rule. The line height does NOT follow it — the estimator sized the row off 17 before
+  // anything rendered, and a ramp that moved it would leave the box measured for the other
+  // language.
   statValue: {
-    fontSize: STAT_VALUE_SIZE,
     lineHeight: STAT_VALUE_LINE,
     color: colors.text,
   },

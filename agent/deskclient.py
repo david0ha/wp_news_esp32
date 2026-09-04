@@ -26,6 +26,7 @@ node:22-slim (3.11), so nothing newer than that is used here.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -347,10 +348,21 @@ class DeskClient:
         below HTTP through. Connection refused, no route to host and a name
         that does not resolve all arrive as ``URLError`` -- an ``OSError`` --
         and this is the one method whose contract says they are not fatal.
+
+        ``http.client.HTTPException`` is caught beside it because the two are
+        the same failure to this method and only one of them is an
+        ``OSError``. A response with no status line, a truncated body, a
+        chunked encoding that ends early -- ``BadStatusLine``,
+        ``IncompleteRead``, ``LineTooLong`` -- are what a proxy in front of a
+        desk produces when it is having a bad minute, and every one of them
+        derives from ``Exception`` directly. Leaving them uncaught would make
+        a malformed answer to the one enrichment call the thing that ends the
+        worker, while a desk that is comprehensively down merely files in
+        English.
         """
         try:
             status, doc = self._json("GET", "/api/settings")
-        except OSError as e:
+        except (OSError, http.client.HTTPException) as e:
             LOG.warning("desk settings unreadable (%s) -- filing in English",
                         type(e).__name__)
             return dict(SETTINGS_FALLBACK)

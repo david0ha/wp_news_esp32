@@ -415,6 +415,24 @@ describe('the desk address', () => {
       expect(await saved('desk.local')).toBe('http://desk.local')
     })
 
+    it('leaves a single-label LAN host on http', async () => {
+      // A name with no dot in it cannot have been registered anywhere, so it can only be resolved
+      // by this network — an `/etc/hosts` line, a router's DHCP name, a Docker service. It is also
+      // the shape a desk on the operator's own machine is usually typed in, and `https://claudepost`
+      // is served by nothing at all: the address simply stops working.
+      expect(await saved('claudepost')).toBe('http://claudepost')
+      expect(await saved('claudepost:8791')).toBe('http://claudepost:8791')
+      // Said absolutely. The root dot is not a label, so this is the same host as above.
+      expect(deskScheme('claudepost.')).toBe('claudepost.')
+    })
+
+    it('still sends a dotted public name to https', async () => {
+      // The other half of the rule above, which is the half that protects the token: one dot is
+      // all it takes for a name to be one somebody could have registered.
+      expect(await saved('desk.dev')).toBe('https://desk.dev')
+      expect(await saved('a.b.example.com:8443')).toBe('https://a.b.example.com:8443')
+    })
+
     it('never overrides a scheme the operator typed', async () => {
       // Including the one that downgrades: somebody running a desk on their LAN by name has said
       // what they meant, and silently upgrading it would make the address unreachable instead.

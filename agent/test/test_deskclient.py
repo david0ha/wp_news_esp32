@@ -13,6 +13,7 @@ bearer token written to a log file that outlives it.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
@@ -276,15 +277,23 @@ class RequestTest(unittest.TestCase):
         the exception class and nothing else: the request holds the bearer
         token, and the base URL is allowed to carry credentials.
 
-        The third answer is the one `_request()` does not catch. It catches
-        `HTTPError` only, so a desk that is not answering at all raises
-        `URLError` out of `settings()` itself -- which is what the docstring
-        there describes and therefore what it has to do.
+        The third and fourth answers are the ones `_request()` does not catch.
+        It catches `HTTPError` only, so a desk that is not answering at all
+        raises `URLError` out of `settings()` itself -- which is what the
+        docstring there describes and therefore what it has to do.
+
+        `IncompleteRead` is the fourth, and it is a different class of thing
+        rather than another spelling of the third: `http.client`'s exceptions
+        derive from `Exception` and not from `OSError`, so an `except OSError`
+        alone lets a proxy that truncated its answer take the whole worker
+        down -- over the one call on this client whose entire contract is that
+        failing is survivable.
         """
         for answer, names in (
                 ((404, b'{"ok":false,"error":"not_found"}'), "404"),
                 ((500, b"boom"), "500"),
                 (urllib.error.URLError("connection refused"), "URLError"),
+                (http.client.IncompleteRead(b"{\"ok\":tr"), "IncompleteRead"),
                 ((200, b'{"ok":true}'), None),
                 ((200, b""), None)):
             desk, _ = client(answer)

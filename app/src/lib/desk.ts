@@ -97,9 +97,13 @@ export function humanDeskError(e: unknown): string {
  * The languages the phone can put a desk into, in the order the segments are drawn.
  *
  * NOT the same list as the app's own `APP_LANGUAGES`, which carries `system` — a paper has no
- * system to ask. It is also not the set of languages the desk will ACCEPT: `lang` is any BCP-47
- * primary subtag, and a desk set to `fr` by hand is a state this screen has to draw honestly
- * rather than one it can refuse to have.
+ * system to ask.
+ *
+ * It is the same list a current desk validates against (`settings.LANGS`), and it is still not
+ * safe to assume the desk answers with one of them: a `settings.json` hand-edited before that
+ * validation existed, or a desk on an older release, can hold `fr` perfectly legally. That is a
+ * state this screen has to draw honestly rather than one it can refuse to have — see
+ * `deskLanguageView`'s `unsupported` note.
  */
 export const EDITION_LANGUAGES = ['en', 'ko'] as const
 

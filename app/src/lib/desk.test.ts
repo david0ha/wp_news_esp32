@@ -115,14 +115,14 @@ describe('the failures', () => {
         text: JSON.stringify({
           ok: false,
           error: 'bad_settings',
-          detail: 'lang is two or three lowercase letters, not "Korean"',
+          detail: "lang: must be one of: en, ko -- got 'Korean'",
         }),
       },
     ])
     const e = await c.putSettings({ lang: 'Korean' }).catch((x: unknown) => x)
     expect(e).toBeInstanceOf(DeskError)
     expect(e).toMatchObject({ code: 'http', status: 400, error: 'bad_settings' })
-    expect((e as DeskError).detail).toBe('lang is two or three lowercase letters, not "Korean"')
+    expect((e as DeskError).detail).toBe("lang: must be one of: en, ko -- got 'Korean'")
   })
 
   it('reads a 500 with no envelope as an http failure carrying the status', async () => {
@@ -227,9 +227,10 @@ describe('deskLanguageView — what the Settings selector draws', () => {
   })
 
   it('highlights nothing, and says so, for a language this app does not offer', () => {
-    // A desk set to French is a real state — `lang` is any BCP-47 primary subtag. Highlighting
-    // English for it would be a lie about the paper, and highlighting nothing without a word of
-    // explanation looks like a bug.
+    // A desk set to French is a real state: a current desk refuses `fr` at the door, and a
+    // `settings.json` written by hand before it did — or a desk on an older release — holds one
+    // perfectly legally. Highlighting English for it would be a lie about the paper, and
+    // highlighting nothing without a word of explanation looks like a bug.
     expect(view({ lang: 'fr' })).toEqual({ selectedIndex: -1, disabled: false, note: 'unsupported' })
   })
 

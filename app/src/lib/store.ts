@@ -441,10 +441,18 @@ export async function getDeskBaseUrl(): Promise<string | null> {
  * build setting, iOS in Expo Go).
  *
  * So a bare name is assumed `https://` unless it can only be local: an IP literal of either family,
- * `localhost`, or an mDNS `.local` name. Those are how a desk on the operator's own Mac is reached,
- * and an https they cannot serve would make it unreachable instead of safe. A scheme the operator
- * typed is never overridden in either direction — including a deliberate `http://` on a LAN
- * hostname, which is a statement of what they meant.
+ * an mDNS `.local` name, or a name with no dot in it at all. Those are how a desk on the operator's
+ * own Mac is reached, and an https they cannot serve would make it unreachable instead of safe. A
+ * scheme the operator typed is never overridden in either direction — including a deliberate
+ * `http://` on a LAN hostname, which is a statement of what they meant.
+ *
+ * THE DOT IS THE TEST, and it is what `localhost` was always a single instance of. A public name is
+ * a registered one and every registry sells a name under a suffix, so a name with no dot cannot be
+ * bought and cannot be resolved by anything but the local network — `claudepost`, `desk`, `nas`, a
+ * Docker service name, an `/etc/hosts` line. Those are the ordinary way a LAN host is typed, and
+ * before this the rule sent them to `https://claudepost`, which nothing serves: the token was safe
+ * because the desk was unreachable. A trailing dot is stripped before the test rather than counted,
+ * because `claudepost.` is the same host said absolutely.
  *
  * The IPv6 arm is about the colon rather than about the address. `[::1]:8791` has more colons than
  * the one that separates the port, and splitting on the last of them leaves `[::1]` as the host —
@@ -466,11 +474,13 @@ export function deskScheme(input: string): string {
   const authority = raw.split(/[/?#]/)[0]
   const colon = authority.lastIndexOf(':')
   const host = (colon === -1 ? authority : authority.slice(0, colon)).toLowerCase()
+  // The root dot is not a label: `claudepost.` is `claudepost`, said absolutely.
+  const name = host.replace(/\.+$/, '')
   const local =
     host.startsWith('[') ||
-    host === 'localhost' ||
-    host.endsWith('.local') ||
-    DOTTED_NUMERIC_RE.test(host)
+    !name.includes('.') ||          // `localhost`, `claudepost`, `nas` — a LAN name, never a public one
+    name.endsWith('.local') ||
+    DOTTED_NUMERIC_RE.test(name)
   return local ? raw : `https://${raw}`
 }
 

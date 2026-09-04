@@ -247,21 +247,43 @@ the CJK brackets named above — everything Korean sets on the square body. A La
 one. `--validate` therefore counts each of those as two characters against the budgets above, and
 each costs three bytes against the array. The column that falls out:
 
-| field | Korean, in syllables | what binds |
-|---|---:|---|
-| lead headline | ≤ 36 | width |
-| lead deck | ≤ 59 | width |
-| lead body | 700–1,300 | floor is width; ceiling is the 4,000-byte array |
-| secondary headline | ≤ 27 | width |
-| secondary deck | ≤ 29 | width |
-| secondary body | 200–330 | floor |
-| kicker | ≤ 9 | bytes |
-| caption | ≤ 36 | width |
-| brief text | ≤ 46 | bytes |
-| figure label / group | ≤ 7 | bytes |
-| figure value | ≤ 7 | bytes |
-| table column header | ≤ 3 | bytes |
-| table cell | ≤ 4 | bytes |
+| field | Korean, in syllables | the array it sits in | what binds |
+|---|---:|---:|---|
+| lead headline | ≤ 36 | 120 B → 39 | width |
+| lead deck | ≤ 59 | 180 B → 59 | both, exactly |
+| lead body | 700–1,100 | 4,000 B → ~1,145 | width, with the array 160 B behind it |
+| secondary headline | ≤ 27 | 120 B → 39 | width |
+| secondary deck | ≤ 29 | 180 B → 59 | width |
+| secondary body | 200–325 | 4,000 B | the floor is the number that matters |
+| kicker | ≤ 9, or 8 with a space in it | 28 B → 9 | bytes |
+| caption | ≤ 36 | 120 B → 39 | width |
+| brief text | ≤ 46 | 140 B → 46 | bytes |
+| figure label / group | ≤ 7 | 24 B → 7 | bytes |
+| figure value | ≤ 7 | 24 B → 7 | both |
+| table column header | ≤ 3 | 12 B → 3 | bytes |
+| table cell | ≤ 4 | 14 B → 4 | bytes |
+
+**The third column is there so you can check the second.** It is the C array from
+`news_model.h` and how many syllables it holds: three bytes each, less one byte the array keeps for
+its terminator, so `(array − 1) ÷ 3`. Every space, digit and Latin letter in the string costs a byte
+of that too, which is the whole of why the kicker row has two numbers — nine syllables is 27 bytes
+and fits exactly, and one space makes it 28 and does not. `D램 가격` is what a kicker looks like
+inside the budget: three syllables, a Latin letter and a space, 8 of measure and 11 bytes.
+
+**The bodies are the one place the arithmetic is not the worst case**, because running prose is not
+all Hangul. The committed Korean fixture's lead body is 1,116 syllables with 544 spaces, figures and
+punctuation between them — 3,894 bytes, or **3.5 bytes for every syllable**. At that rate the
+4,000-byte array holds about 1,145 syllables and not the 1,300 an earlier version of this table
+claimed: 1,300 is 3,900 bytes of Hangul before a single space, and `news_str_copy()` would cut the
+rest off at a character boundary with nothing on the sheet to say so. The ceiling above is 1,100
+because that is what the English 2,200 halves to — the same legs filled with the same measure — and
+it leaves about 160 bytes of the field spare.
+
+The two ceilings fail differently, which is why both are stated. Past 1,100 is copy the legs run out
+of room for, and `ui_fit_text()` cuts it at a word: nobody reads it and nothing looks wrong. Past
+about 1,145 is the array, and that copy vanishes mid-word. The fixture's own lead is 1,116 — sixteen
+over the recommendation and still a hundred bytes short of the field, which is exactly the band this
+number is drawn to keep you inside.
 
 **The last two rows are the ones that bite**, and they bite in bytes rather than in measure: a
 column head lives in twelve bytes and a cell in fourteen, so three syllables and four are all that

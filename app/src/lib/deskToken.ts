@@ -48,21 +48,37 @@ export async function getDeskToken(): Promise<string | null> {
 }
 
 /**
- * Save a token, trimmed. Answers whether it actually reached the keychain.
+ * What became of a token somebody submitted.
  *
- * A blank one is refused rather than stored: an empty credential is not a credential, and storing
- * it would leave the Desk section claiming a token is set while every call comes back 401.
+ * THREE ANSWERS AND NOT A BOOLEAN, because two of these are not the same kind of no and the
+ * screen has to say something different about each. `refused` is the keychain declining to
+ * write — the phone is locked, the store is unavailable — and it is worth telling somebody to
+ * unlock and try again. `empty` is a person pressing return on a blank field, which is not a
+ * failure of anything: it is the commonest way to reach this function by accident, and the
+ * keychain was never asked. Collapsing them into `false`, as this once did, put "this phone's
+ * keychain wouldn't store the token" under an empty box — an alarming message about a component
+ * that had not been touched, for somebody who had typed nothing.
  */
-export async function saveDeskToken(token: string): Promise<boolean> {
+export type DeskTokenSave = 'saved' | 'empty' | 'refused'
+
+/**
+ * Save a token, trimmed. Answers which of the three happened.
+ *
+ * A blank one is `empty` rather than stored: an empty credential is not a credential, and storing
+ * it would leave the Desk section claiming a token is set while every call comes back 401. It is
+ * also a no-op on whatever is already there — an accidental return must not be a way to lose the
+ * token that is working, which is what `clearDeskToken` and a deliberate button are for.
+ */
+export async function saveDeskToken(token: string): Promise<DeskTokenSave> {
   const trimmed = token.trim()
-  if (!trimmed) return false
+  if (!trimmed) return 'empty'
   try {
     await SecureStore.setItemAsync(DESK_TOKEN_KEY, trimmed)
   } catch {
-    return false
+    return 'refused'
   }
   cache = trimmed
-  return true
+  return 'saved'
 }
 
 /** Forget the token. The cache goes first, so the screen agrees immediately either way. */

@@ -1165,6 +1165,19 @@ class SettingsTest(DeskTestCase):
         status, doc = self.api("GET", "/api/settings", scope="producer")
         self.assertEqual(doc["settings"], {"lang": "ko"})       # the bad PUT changed nothing
 
+    def test_a_language_the_board_cannot_print_is_refused_by_name(self):
+        # `ja` is a well-formed BCP-47 primary subtag and the firmware has no
+        # Japanese faces, so a desk that took it would commission a Japanese
+        # paper and print a sheet of tofu boxes -- no error on the desk, none
+        # in the worker, none on the board. The 400 has to carry the set,
+        # because "bad_settings" alone leaves the caller guessing at a
+        # two-letter string.
+        status, doc = self.api("PUT", "/api/settings", {"lang": "ja"})
+        self.assertEqual((status, doc["error"]), (400, "bad_settings"))
+        self.assertIn("en, ko", doc["detail"])
+        status, doc = self.api("GET", "/api/settings", scope="producer")
+        self.assertEqual(doc["settings"], {"lang": "en"})       # nothing changed
+
     def test_an_edited_setting_survives_a_restart(self):
         # The point of the file, and the same one the schedule's own restart
         # test makes: the desk that comes up tomorrow is the one that was told

@@ -12,6 +12,13 @@ The third rule is the watchlist's rather than the schedule's: an unknown key
 is refused whole. A settings document is where a future field will be added,
 and a desk that silently dropped one would leave an operator -- or a phone
 app one release ahead of the desk -- believing it had set something.
+
+The fourth is this module's own: ``lang`` is checked against the two
+languages the board has faces for and not against the shape of a BCP-47 tag.
+``ja`` is a perfectly well-formed tag and there is no Japanese type in the
+firmware, so a desk that accepted it would commission a paper that prints as
+tofu boxes -- the one failure on this document that produces no error
+anywhere and a ruined sheet on the wall.
 """
 
 from __future__ import annotations
@@ -37,11 +44,33 @@ class Parse(unittest.TestCase):
     def test_the_default_is_english(self):
         self.assertEqual(settings.DEFAULT, {"lang": "en"})
 
-    def test_a_language_tag_is_two_or_three_lowercase_letters(self):
+    def test_the_languages_are_the_two_the_board_has_faces_for(self):
+        for good in settings.LANGS:
+            self.assertEqual(settings.parse_settings({"lang": good}), {"lang": good})
         self.assertEqual(settings.parse_settings({"lang": "ko"}), {"lang": "ko"})
-        for bad in ("KO", "ko-KR", "", 7, None):
+
+    def test_a_well_formed_tag_the_board_cannot_print_is_refused(self):
+        # `ja` matches every shape rule a language tag has and there is no
+        # Japanese face in the firmware. Accepting it would commission a
+        # Japanese paper and print a sheet of empty boxes, with no error on
+        # the desk, in the agent or on the board to say what happened.
+        with self.assertRaises(BadRequest):
+            settings.parse_settings({"lang": "ja"})
+
+    def test_the_other_ways_of_being_wrong_are_still_refused(self):
+        for bad in ("KO", "ko-KR", "", "english", 7, None):
             with self.assertRaises(BadRequest):
                 settings.parse_settings({"lang": bad})
+
+    def test_the_refusal_names_every_language_on_offer(self):
+        # The message is the 400's body and the only thing the caller gets. A
+        # phone that offers two languages and a desk that takes three would
+        # otherwise be an argument settled by trial and error.
+        with self.assertRaises(BadRequest) as caught:
+            settings.parse_settings({"lang": "ja"})
+        for lang in settings.LANGS:
+            self.assertIn(lang, caught.exception.message)
+        self.assertIn("en, ko", caught.exception.message)
 
     def test_a_document_that_says_nothing_takes_the_default(self):
         # Absent is not the same as `null`: nobody said, so the desk answers
@@ -81,8 +110,12 @@ class File(unittest.TestCase):
         return path
 
     def test_missing_is_the_default_and_not_an_error(self):
-        self.assertEqual(settings.load(os.path.join(self.tmp, "settings.json")),
-                         ({"lang": "en"}, "default"))
+        p = os.path.join(self.tmp, "settings.json")
+        # And silently: a desk nobody has configured is the ordinary case, and
+        # a warning on every start-up of every default desk is a warning
+        # nobody reads by the time one of them means something.
+        with self.assertNoLogs("claudepost.settings", level="WARNING"):
+            self.assertEqual(settings.load(p), ({"lang": "en"}, "default"))
         # Reading must not write. The default is what a desk runs on until
         # somebody chooses otherwise, and a file laid down at first boot would
         # pin every future desk to this release's default.
@@ -92,6 +125,27 @@ class File(unittest.TestCase):
         p = self.write('{"lang": "Korean"}')
         self.assertEqual(settings.load(p), ({"lang": "en"}, "default"))
         self.assertTrue(os.path.exists(p))
+
+    def test_a_file_that_will_not_open_says_so_and_keeps_the_default(self):
+        """The one failure here that would otherwise leave no trace at all.
+
+        A desk whose ``settings.json`` cannot be read looks exactly like a
+        desk nobody has configured: English paper, source ``"default"``, and
+        every start-up log line agreeing. The difference is the operator's own
+        setting being dropped, so it is worth a line naming the path and what
+        the filesystem said -- and never the file's contents, which are
+        somebody's document rather than a diagnostic.
+
+        A directory where the file should be is the portable way to spell "the
+        open fails and it is not a missing file": every OS refuses to read one
+        and none of them raises ``FileNotFoundError`` for it.
+        """
+        p = os.path.join(self.tmp, "settings.json")
+        os.mkdir(p)
+        with self.assertLogs("claudepost.settings", level="WARNING") as caught:
+            self.assertEqual(settings.load(p), ({"lang": "en"}, "default"))
+        self.assertEqual(len(caught.output), 1)
+        self.assertIn(p, caught.output[0])
 
     def test_a_file_that_is_not_json_leaves_the_default_in_force(self):
         p = self.write("{ not json at all")

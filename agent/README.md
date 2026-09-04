@@ -224,7 +224,7 @@ same setting from the desk instead.
 | `CLAUDEPOST_USE_API_KEY` | `0` | spend the metered key even when a CLI login is present; otherwise the key is kept out of the child so the subscription pays |
 | `CLAUDEPOST_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |
 | `TZ` | `UTC` | log timestamps and the date a brief is filed under |
-| `EDITION_LANG` | `en` | **the standalone producer's, not the worker's**: the language the edition is written in, a BCP-47 primary subtag (`ko` for Korean). `file-edition.sh` turns it into a section of the prompt, and the page carries it back as its top-level `lang`. The worker asks the desk for the same thing — `PUT /api/settings` sets `{"lang": "ko"}` there, and every turn reads it before it builds the prompt, so setting this variable on a worker does nothing |
+| `EDITION_LANG` | `en` | **the standalone producer's, not the worker's**: the language the edition is written in — `en` or `ko`, the two the board has faces for, and anything else is refused before the run starts. `file-edition.sh` turns it into a section of the prompt, and the page carries it back as its top-level `lang`. The worker asks the desk for the same thing — `PUT /api/settings` sets `{"lang": "ko"}` there, and every turn reads it before it builds the prompt, so setting this variable on a worker does nothing |
 
 ## The watch list
 

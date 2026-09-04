@@ -65,6 +65,25 @@ class Lang(unittest.TestCase):
         problems, _ = M.validate_payload(self.payload(lang="Korean"), TILES)
         self.assertTrue(any("lang" in p and "Korean" in p for p in problems), problems)
 
+    def test_a_malformed_tag_says_what_the_board_would_do_with_it(self):
+        """The refusal has to carry the consequence, not only the rule.
+
+        `en-US` is a language tag everywhere else in software, so "not a
+        language tag" reads as pedantry and invites a producer to file it
+        again unchanged. What is actually about to happen is that
+        `news_parse()` clamps the field to `en` and the board sets its twelve
+        fixed words in English beside Korean copy — which is the one failure
+        on this field that produces no error anywhere and a wrong sheet on the
+        wall. So the message says the clamp, and then says what a tag looks
+        like, so the fix is in the same sentence as the problem.
+        """
+        problems, _ = M.validate_payload(self.payload(lang="en-US"), TILES)
+        said = [p for p in problems if p.startswith("lang:")]
+        self.assertEqual(len(said), 1, problems)
+        self.assertIn("'en-US'", said[0])
+        self.assertIn("clamp this to en", said[0])
+        self.assertIn('"en", "ko"', said[0])
+
     def test_a_malformed_tag_does_not_hide_the_rest_of_the_payload(self):
         """The bad tag is NAMED and then ignored, exactly as the device normalises it.
 
@@ -97,6 +116,25 @@ class Lang(unittest.TestCase):
         self.assertTrue(any("KS X 1001" in p and "U+BDC1" in p for p in problems), problems)
         # And not ALSO as a generic undrawable character: one character, one message.
         self.assertEqual([p for p in problems if "undrawable" in p], [])
+
+    def test_the_out_of_set_message_carries_all_three_things(self):
+        """The syllable, its codepoint, and the name of the set that omits it.
+
+        Each does a different job. The syllable is the thing to find in the
+        copy; the codepoint is what survives a terminal, a log file or an
+        editor that cannot draw it; and "KS X 1001" is what turns "not
+        drawable" into a fix — the producer wrote real Korean and reached one
+        of the syllables the faces leave out, so the answer is to respell one
+        word rather than to stop writing Korean.
+        """
+        d = self.payload(lang="ko")
+        d["stories"][0]["headline"] = "뷁"
+        said = [p for p in M.validate_payload(d, TILES)[0] if "headline" in p]
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("'뷁'", said[0])
+        self.assertIn("U+BDC1", said[0])
+        self.assertIn("KS X 1001", said[0])
+        self.assertIn("respell", said[0])
 
     def test_a_repeated_out_of_set_syllable_is_named_once(self):
         """A word the producer used four times down a story is one thing to respell."""

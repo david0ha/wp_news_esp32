@@ -77,8 +77,33 @@ echo "filing into $EDITION_DIR  (log: $LOG)"
 # The PROMPT.md read below is left inline on purpose: it is the whole contract,
 # and a run that lost it asks the model for nothing and ends at the "no news.json
 # was produced" check a few lines down. It fails loudly already.
-if ! LANGUAGE_SECTION="$(python3 "$REPO/agent/prompt.py" --language-section "${EDITION_LANG:-en}")"; then
-    echo "file-edition: python3 $REPO/agent/prompt.py --language-section ${EDITION_LANG:-en} failed;" >&2
+#
+# CHECKED FIRST, AND LOUDLY. prompt.py takes any tag and asks for a paper in it,
+# deliberately -- a desk set to something nobody here anticipated should still
+# file. Nothing downstream of that is so relaxed: the board carries faces for two
+# languages and clamps its own fixed words to English for anything else, so
+# `EDITION_LANG=kr` (or `KO`, or `ko-KR`) spends a full research turn and a model
+# session producing a page nobody asked for, and the only symptom is an English
+# paper on a day somebody wanted Korean. A typo in a launchd plist is exactly how
+# that arrives.
+#
+# The set is the desk's `settings.LANGS` and the phone's `EDITION_LANGUAGES`, and
+# this is a third copy of it on purpose: the standalone producer has no desk to
+# ask. What adds to it is not a line here -- it is a font face pair from
+# tools/gen_fonts.py and a UI_LANG_* table in components/news_core/ui_lang.c.
+EDITION_LANG="${EDITION_LANG:-en}"
+case "$EDITION_LANG" in
+    en|ko) ;;
+    *)
+        echo "file-edition: EDITION_LANG=$EDITION_LANG is not a language this board can print." >&2
+        echo "  Accepted: en, ko. The firmware carries faces for those two and nothing else," >&2
+        echo "  so any other tag files a paper that prints as empty boxes, or as English." >&2
+        exit 1
+        ;;
+esac
+
+if ! LANGUAGE_SECTION="$(python3 "$REPO/agent/prompt.py" --language-section "$EDITION_LANG")"; then
+    echo "file-edition: python3 $REPO/agent/prompt.py --language-section $EDITION_LANG failed;" >&2
     echo "  refusing to file, because the paper would come out in English without saying so." >&2
     exit 1
 fi

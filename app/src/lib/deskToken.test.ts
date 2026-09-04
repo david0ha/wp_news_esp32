@@ -20,7 +20,7 @@ describe('the operator token', () => {
   })
 
   it('round-trips through the keychain and nowhere else', async () => {
-    expect(await saveDeskToken('  operator-token  ')).toBe(true)
+    expect(await saveDeskToken('  operator-token  ')).toBe('saved')
     __resetDeskTokenCacheForTests()
     expect(await getDeskToken()).toBe('operator-token')
     // The key it is filed under, pinned: an install that renames it silently forgets the token
@@ -29,8 +29,27 @@ describe('the operator token', () => {
   })
 
   it('refuses to save an empty token instead of storing a blank secret', async () => {
-    expect(await saveDeskToken('   ')).toBe(false)
+    expect(await saveDeskToken('   ')).toBe('empty')
     expect(await getDeskToken()).toBeNull()
+  })
+
+  it('tells an empty field apart from a keychain that said no', async () => {
+    // They are one word to a boolean and two different things to the person looking at the
+    // screen. The field submits on return, so a blank submit is the commonest way into this
+    // function — and it used to answer "this phone's keychain wouldn't store the token", which
+    // is an alarming sentence about a component that was never asked.
+    const setItem = jest.spyOn(SecureStore, 'setItemAsync')
+    expect(await saveDeskToken('')).toBe('empty')
+    expect(setItem).not.toHaveBeenCalled()
+  })
+
+  it('leaves a saved token alone when the field comes in empty', async () => {
+    // Forgetting a token is a button of its own. An accidental return on an empty box must not
+    // be a second, silent way to lose the credential that is working.
+    await saveDeskToken('operator-token')
+    expect(await saveDeskToken('   ')).toBe('empty')
+    __resetDeskTokenCacheForTests()
+    expect(await getDeskToken()).toBe('operator-token')
   })
 
   it('forgets a saved token', async () => {
@@ -56,6 +75,6 @@ describe('the operator token', () => {
 
   it('reports a write the keychain refused, because only the caller can say so', async () => {
     jest.spyOn(SecureStore, 'setItemAsync').mockRejectedValueOnce(new Error('keychain unavailable'))
-    expect(await saveDeskToken('operator-token')).toBe(false)
+    expect(await saveDeskToken('operator-token')).toBe('refused')
   })
 })
