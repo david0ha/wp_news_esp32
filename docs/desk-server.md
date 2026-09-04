@@ -249,7 +249,7 @@ whole deliverable there.
 
 | Root | Where | Holds |
 |---|---|---|
-| **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json` |
+| **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json`, `settings.json` |
 | **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` |
 
 **Secrets are not in the repository, the image, or any synced directory.**
@@ -394,6 +394,58 @@ looks like a private one. `GET /api/state` carries only a summary —
 `"watchlist": {"updatedAt": int|null, "count": int}` — for the same reason:
 a client checking whether the desk has one yet should not have to fetch the
 whole document, thesis notes included, to find out.
+
+## The settings
+
+`GET /api/settings` and `PUT /api/settings` carry the desk's own preferences.
+Today there is exactly one:
+
+```json
+{ "lang": "en" }
+```
+
+`lang` is the language **the edition is written in** — headlines, decks,
+bodies, the labels down the side of a drawn statement — and it is a BCP-47
+primary language subtag, `^[a-z]{2,3}$`. It is not the phone app's own
+chrome, which its owner sets on the phone, and not the board's setup sheet,
+which stays English because a board with no edition has no language to take
+one from. Three separate things are called a language on this system and this
+is only the first of them.
+
+**It is a document, not a directive.** A standing directive is a sentence in
+a prompt, and three consumers need this as data: the agent, which builds the
+prompt from it; the phone, which draws a control for it and cannot parse a
+sentence to know what is set; and whoever reads the desk's own state.
+
+`GET` is `producer` scope — the agent must know what to write in — and `PUT`
+is `operator`, because which language the paper prints in is the owner's own
+call rather than a remote worker's. `PUT` validates through
+[`settings.py`](../server/claudepost/settings.py)'s `parse_settings`, writes
+`<data>/settings.json`, and echoes the stored document with the `source` it
+is now in force from. It is audited as `settings`, carrying the tag.
+
+A document that fails validation is refused `400 bad_settings` whole and the
+language in force is untouched, the same rule `PUT /api/schedule` follows.
+An unknown key is part of that refusal, and here the argument is the
+watchlist's rather than the schedule's typo guard turned to a different
+purpose: this is the document a later release adds a second setting to, so a
+phone app one version ahead of the desk has to be told no at the door instead
+of being left believing it changed something.
+
+`<data>/settings.json` is read once at start-up and again in the same call
+that handles a `PUT`, exactly as the schedule is, and for the same reason —
+the desk is its only writer, so polling it would be the desk watching its own
+output. A file that will not parse is a warning naming the field, the default
+in force, and the bad file left where it is: the desk comes up in English
+rather than not coming up at all, which is `schedulefile.py`'s argument that a
+newspaper should not come off the wall over a typo.
+
+**The desk does not cross-check an edition's own `lang` against this
+setting.** The field on a payload describes the text that is actually in that
+payload; refusing a Korean edition because the operator flipped the setting an
+hour ago would keep the wrong sheet on the glass for nothing. Gate 1 needs no
+new code either — it already runs the validator, and the validator now knows
+`lang`.
 
 ## Quotes
 

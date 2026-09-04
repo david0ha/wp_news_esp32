@@ -65,7 +65,7 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' "$DESK/healthz") || fail "no answ
 [ "$code" = "200" ] || fail "healthz answered $code"
 
 say "the device plane serves nothing but the edition and its tiles"
-for path in / /watchlist.json /api/state /schedule.json /../etc/passwd; do
+for path in / /watchlist.json /settings.json /api/state /schedule.json /../etc/passwd; do
     code=$(curl -sS -o /dev/null -w '%{http_code}' "$DESK$path")
     [ "$code" = "404" ] || [ "$code" = "401" ] || \
         fail "$path answered $code on the device plane; expected 404"
