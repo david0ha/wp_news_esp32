@@ -182,7 +182,14 @@ describe('humanDeskError', () => {
 
 describe('deskLanguageView — what the Settings selector draws', () => {
   const view = (over: Partial<Parameters<typeof deskLanguageView>[0]> = {}) =>
-    deskLanguageView({ address: BASE, token: TOKEN, lang: 'en', busy: false, ...over })
+    deskLanguageView({
+      address: BASE,
+      token: TOKEN,
+      lang: 'en',
+      busy: false,
+      loaded: true,
+      ...over,
+    })
 
   it('offers English and Korean, in that order', () => {
     expect([...EDITION_LANGUAGES]).toEqual(['en', 'ko'])
@@ -232,5 +239,19 @@ describe('deskLanguageView — what the Settings selector draws', () => {
       disabled: true,
       note: null,
     })
+  })
+
+  it('says nothing before storage has answered, rather than flashing "add a token"', () => {
+    // Both fields start null behind an async read of AsyncStorage and the keychain, so every
+    // open of Settings would otherwise show "Add the desk's address and an operator token" for a
+    // frame — to the operator who has already saved both. The control is still disabled, which is
+    // true: there is nothing to call with yet.
+    expect(deskLanguageView({ address: null, token: null, lang: null, busy: false, loaded: false }))
+      .toEqual({ selectedIndex: -1, disabled: true, note: null })
+  })
+
+  it('says it once storage has answered and there really is nothing saved', () => {
+    expect(deskLanguageView({ address: null, token: null, lang: null, busy: false, loaded: true }))
+      .toEqual({ selectedIndex: -1, disabled: true, note: 'needs_setup' })
   })
 })

@@ -481,6 +481,16 @@ from `esp32.ts` rather than a base URL passed to it:
   reports. The desk *address* is ordinary state and does live in AsyncStorage,
   under `claudepost.deskBaseUrl`.
 
+**A scheme-less desk address is assumed to be `https://`**, which is the
+opposite of the board's, and the token is the reason. `normalizeBaseUrl`
+defaults to `http://` because that is what the board speaks on the LAN, and
+`app.json`'s `usesCleartextTraffic` lets Android make that call — so applying
+the same default to a desk would put an operator token on the wire in the
+clear with the platform allowing it. `saveDeskBaseUrl` therefore prepends
+`https://` to a bare name and leaves the three shapes that can only be local —
+an IPv4 literal, `localhost`, and a `.local` name — on `http://`. A scheme the
+operator typed is never overridden in either direction.
+
 Everything else the app does with a desk is still unauthenticated: the Today
 tab reads `/news.json` and `/tiles/<id>.bin` off the open device plane, so a
 phone that only reads the paper never holds a credential at all.

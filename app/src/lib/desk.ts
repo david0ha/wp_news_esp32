@@ -122,17 +122,34 @@ export function deskLanguageView(input: {
   lang: string | null
   /** A read or a write is in flight. */
   busy: boolean
+  /**
+   * The phone's own storage has answered about both fields.
+   *
+   * Until it has, `address` and `token` are `null` because nothing has been read yet — not because
+   * nothing is saved. The two are indistinguishable in the state and completely different to the
+   * reader, which is why this is a separate input rather than something inferred: without it the
+   * section tells an operator who saved both to go and add them, for one frame, on every open.
+   */
+  loaded: boolean
 }): DeskLanguageView {
   const ready = Boolean(input.address) && Boolean(input.token)
   const selectedIndex =
     input.lang === null ? -1 : (EDITION_LANGUAGES as readonly string[]).indexOf(input.lang)
   return {
     selectedIndex,
+    // Disabled while unloaded too, and that one IS inferable: there is nothing to call with yet,
+    // whichever reason there is nothing.
     disabled: !ready || input.busy,
     // Not knowing the language yet says nothing — the desk has simply not answered. The two notes
     // are for the states that would otherwise look like a bug: a dead control, and a control with
     // no segment lit under a desk that answered perfectly well.
-    note: !ready ? 'needs_setup' : selectedIndex < 0 && input.lang !== null ? 'unsupported' : null,
+    note: !input.loaded
+      ? null
+      : !ready
+        ? 'needs_setup'
+        : selectedIndex < 0 && input.lang !== null
+          ? 'unsupported'
+          : null,
   }
 }
 

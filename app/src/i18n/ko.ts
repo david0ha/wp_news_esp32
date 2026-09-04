@@ -96,10 +96,10 @@ export const ko: Strings = {
       korean: '한국어',
     },
     desk: {
-      help: '신문을 만드는 데스크입니다. 데스크 주소와 본인의 operator 토큰을 입력하면, 이 휴대폰에서 신문을 어떤 언어로 쓸지 정할 수 있습니다.',
+      help: '신문을 만드는 데스크입니다. 데스크 주소와 본인의 operator 토큰을 입력하면, 이 휴대폰에서 신문을 어떤 언어로 쓸지 정할 수 있습니다. 호스트 이름만 입력하면 https로 연결하므로 토큰이 평문으로 전송되지 않습니다.',
       saveAddress: '데스크 주소 저장',
       addressSaved: '저장했습니다.',
-      addressInvalid: '데스크 주소 형식이 아닙니다. 데스크가 이 Wi-Fi에 있지 않다면 https:// 로 시작해야 합니다.',
+      addressInvalid: '데스크 주소 형식이 아닙니다. 호스트 이름을 입력하거나, http:// 또는 https:// 로 시작하는 전체 주소를 입력하세요.',
       tokenPlaceholder: 'operator 토큰',
       saveToken: '토큰 저장',
       tokenSaved: '이 휴대폰의 키체인에 저장했습니다. 다시 표시되지 않으며, 바꾸려면 새 토큰을 저장하세요.',

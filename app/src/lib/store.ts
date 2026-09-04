@@ -431,16 +431,44 @@ export async function getDeskBaseUrl(): Promise<string | null> {
 }
 
 /**
+ * What a scheme-less desk address means, and why it is not what a scheme-less BOARD address means.
+ *
+ * `normalizeBaseUrl` defaults to `http://`, which is correct for the board: it speaks plain HTTP,
+ * it is on this Wi-Fi, and `app.json` sets `usesCleartextTraffic` on Android so that it can be
+ * reached at all. Applying that default to a desk is a different act entirely — every call on this
+ * address carries the operator's token in an `Authorization` header, and `desk.example.dev` saved
+ * as `http://` would send that token in the clear with both platforms allowing it (Android by that
+ * build setting, iOS in Expo Go).
+ *
+ * So a bare name is assumed `https://` unless it can only be local: an IPv4 literal, `localhost`,
+ * or an mDNS `.local` name. Those three are how a desk on the operator's own Mac is reached, and
+ * an https they cannot serve would make it unreachable instead of safe. A scheme the operator
+ * typed is never overridden in either direction — including a deliberate `http://` on a LAN
+ * hostname, which is a statement of what they meant.
+ *
+ * `normalizeBaseUrl` itself is left alone: the board's address wants the old default.
+ */
+function deskScheme(input: string): string {
+  const raw = input.trim()
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) return raw
+  // The authority only — the path, query, port and any trailing dot are none of this decision's
+  // business, and `normalizeBaseUrl` re-parses the whole thing straight afterwards.
+  const authority = raw.split(/[/?#]/)[0]
+  const colon = authority.lastIndexOf(':')
+  const host = (colon === -1 ? authority : authority.slice(0, colon)).toLowerCase()
+  const local =
+    host === 'localhost' || host.endsWith('.local') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
+  return local ? raw : `https://${raw}`
+}
+
+/**
  * Persist a desk address, normalized. Invalid input is ignored (returns false).
  *
- * `normalizeBaseUrl` strips the path and any trailing slash and keeps the scheme that was typed,
- * which is what this needs: a desk on the public internet must be `https://` for iOS's ATS to
- * allow it at all, while a desk running on the operator's own Mac is plain `http://` on the LAN.
- * Defaulting either way would be wrong for the other, so the scheme stays the operator's to type
- * and the placeholder shows the shape.
+ * `normalizeBaseUrl` strips the path and any trailing slash and keeps whatever scheme it is given,
+ * which is what this needs once `deskScheme` above has decided what a scheme-less address meant.
  */
 export async function saveDeskBaseUrl(url: string): Promise<boolean> {
-  const norm = normalizeBaseUrl(url)
+  const norm = normalizeBaseUrl(deskScheme(url))
   if (!norm.ok || !norm.value) return false
   deskBaseUrlCache = norm.value
   try {

@@ -381,6 +381,46 @@ describe('the desk address', () => {
     expect(await getDeskBaseUrl()).toBe('https://desk.example.dev')
   })
 
+  // WHAT A BARE HOSTNAME MEANS, and why it is not the board's answer. Every call on this address
+  // carries the operator's token in a header. `normalizeBaseUrl` defaults a scheme-less address to
+  // `http://` because that is right for the board on the LAN, and Android is built with
+  // `usesCleartextTraffic` for exactly that reason — so a desk saved as `http://desk.example.dev`
+  // would put the token on the wire in the clear, with the platform allowing it. A public name
+  // therefore gets `https://`; the three shapes that can only be local keep `http://`.
+  describe('a scheme-less address', () => {
+    const saved = async (typed: string) => {
+      expect(await saveDeskBaseUrl(typed)).toBe(true)
+      __resetStoreCacheForTests()
+      return getDeskBaseUrl()
+    }
+
+    it('assumes https for a public hostname', async () => {
+      expect(await saved('desk.example.dev')).toBe('https://desk.example.dev')
+    })
+
+    it('assumes https even with a port on it', async () => {
+      expect(await saved('desk.example.dev:8443')).toBe('https://desk.example.dev:8443')
+    })
+
+    it('leaves an IPv4 literal on http — a desk on the operator’s own Mac', async () => {
+      expect(await saved('192.168.0.42:8791')).toBe('http://192.168.0.42:8791')
+    })
+
+    it('leaves localhost on http', async () => {
+      expect(await saved('localhost:8791')).toBe('http://localhost:8791')
+    })
+
+    it('leaves an mDNS .local name on http', async () => {
+      expect(await saved('desk.local')).toBe('http://desk.local')
+    })
+
+    it('never overrides a scheme the operator typed', async () => {
+      // Including the one that downgrades: somebody running a desk on their LAN by name has said
+      // what they meant, and silently upgrading it would make the address unreachable instead.
+      expect(await saved('http://desk.example.dev')).toBe('http://desk.example.dev')
+    })
+  })
+
   it('rejects an address it cannot use and stores nothing', async () => {
     expect(await saveDeskBaseUrl('not a url')).toBe(false)
     expect(await saveDeskBaseUrl('')).toBe(false)

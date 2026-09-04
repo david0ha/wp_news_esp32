@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   KeyboardAvoidingView,
   Platform,
@@ -532,6 +532,21 @@ function DeskSection() {
   const [lang, setLang] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [langMsg, setLangMsg] = useState<Toned | null>(null)
+  // Storage has answered about both. Until it has, `address` and `token` being null means "not
+  // read yet" rather than "not saved", and the note under the selector must not read it as the
+  // second — see `deskLanguageView`.
+  const [loaded, setLoaded] = useState(false)
+
+  // Whether this section is still on screen, for the one handler that awaits the NETWORK. The
+  // effects below have their own `active` flags; a handler has no cleanup to hang one on, and
+  // `chooseLanguage` can be waiting out a fifteen-second deadline when the tab is torn down.
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
 
   // Read both once, on mount rather than on focus. Neither changes behind this screen's back —
   // this is the only place in the app that writes either — so re-reading on every focus would be
@@ -544,6 +559,7 @@ function DeskSection() {
       setAddress(saved)
       setAddressDraft(saved ?? '')
       setToken(held)
+      setLoaded(true)
     })()
     return () => {
       active = false
@@ -556,6 +572,10 @@ function DeskSection() {
   useEffect(() => {
     if (!address || !token) {
       setLang(null)
+      // And nothing is in flight any more. This arm is where "Forget token" lands: its own read
+      // was abandoned by the cleanup below, whose `active` flag is false by then, so the `finally`
+      // that would have cleared this is skipped and only here can do it.
+      setBusy(false)
       return
     }
     let active = true
@@ -614,6 +634,10 @@ function DeskSection() {
 
   // Write the language, then draw WHAT THE DESK PUT IN FORCE rather than what was asked for. A
   // failure leaves the selector where it was, which is the truth: the desk did not change.
+  //
+  // Every write here is guarded by `alive`, because this is the one thing on the screen that can
+  // still be waiting when the section is gone: a desk behind a cold tunnel has fifteen seconds to
+  // answer, and the tab can be left in one.
   const chooseLanguage = async (next: string) => {
     if (!address || !token || next === lang) return
     setBusy(true)
@@ -622,16 +646,17 @@ function DeskSection() {
       const settings = await createDeskClient({ baseUrl: address, token }).putSettings({
         lang: next,
       })
+      if (!alive.current) return
       setLang(settings.lang)
       setLangMsg({ tone: 'ok', message: s.settings.desk.languageSaved })
     } catch (e) {
-      setLangMsg({ tone: 'error', message: humanDeskError(e) })
+      if (alive.current) setLangMsg({ tone: 'error', message: humanDeskError(e) })
     } finally {
-      setBusy(false)
+      if (alive.current) setBusy(false)
     }
   }
 
-  const view = deskLanguageView({ address, token, lang, busy })
+  const view = deskLanguageView({ address, token, lang, busy, loaded })
   const toneStyle = { ok: styles.saved, info: styles.help, error: styles.error } as const
   const note =
     view.note === 'needs_setup'

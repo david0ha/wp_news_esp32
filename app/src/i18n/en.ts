@@ -108,10 +108,10 @@ export const en = {
     // The desk — the only section on this screen that talks to something that is not the board.
     // Its own block so that a copy fix to the sections above cannot collide with it.
     desk: {
-      help: 'The desk that writes your paper. Give it its address and an operator token of your own, and this phone can set what the newspaper is written in.',
+      help: 'The desk that writes your paper. Give it its address and an operator token of your own, and this phone can set what the newspaper is written in. A plain hostname is reached over https, so the token is never sent in the clear.',
       saveAddress: 'Save desk address',
       addressSaved: 'Saved.',
-      addressInvalid: 'That doesn’t look like a desk address. It should start with https:// unless the desk is on this Wi-Fi.',
+      addressInvalid: 'That doesn’t look like a desk address. Enter its hostname, or a full address beginning with http:// or https://.',
       tokenPlaceholder: 'Operator token',
       saveToken: 'Save token',
       tokenSaved: 'Saved to this phone’s keychain. It is never shown again — save a new one to replace it.',
