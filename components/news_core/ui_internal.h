@@ -775,22 +775,21 @@ void ui_draw_tri_abs(lv_layer_t *L, int x, int y, int w, int h,
 
 /* --- the language the edition is written in -------------------------------
  *
- * The fixed strings the board prints beside the copy follow the payload's
+ * There is no accessor here, deliberately, and this note stands where one used
+ * to. The fixed strings the board prints beside the copy follow the payload's
  * `lang`, and nothing else on the sheet does: everything a reader looks at
- * arrived already written in that language. ui_news_set_data() picks the table
- * once, and every draw site reads it back here rather than naming a macro.
+ * arrived already written in that language. So every draw site takes the table
+ * from the snapshot it was handed — ui_lang(v->lang) for the words,
+ * ui_fit_script(v->lang) for the break rule — and the renderers stay a function
+ * of their argument alone, which is what ui_compose.h's purity and
+ * news_hash()'s "same fingerprint, same pixels" both rest on.
  *
- * Before the first snapshot — a board that is still connecting, the setup
- * sheet, the no-data page — this is UI_LANG_EN and the tag is "en". A board
- * with no edition has no language to take, which is the same reason the
- * masthead and the no-payload dateline stay English in every edition. */
-const ui_lang_t *ui_lang_now(void);
-
-/* The normalised tag the table above was selected from — "ko", "en", "fr" —
- * for the code that has to branch on the language itself rather than on a
- * string it prints. The copyfitter is the one such caller: Korean breaks
- * between syllables and Latin does not. */
-const char *ui_lang_tag_now(void);
+ * A board with no snapshot has no language, and ui_lang(NULL) is English: the
+ * setup sheet, the no-data page and everything drawn before the first fetch are
+ * the board talking about itself. That is the same reason the masthead and the
+ * no-payload dateline stay English in every edition.
+ *
+ * ui_lang() itself is declared in ui_strings.h, beside the tables. */
 
 /* --- the pages ------------------------------------------------------------
  * Two pages, and KEY0 toggles them. Each is one file and obeys the same

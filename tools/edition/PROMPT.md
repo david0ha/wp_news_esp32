@@ -242,9 +242,10 @@ with the codepoint named, so respell it. Won is `원`, `억원`, `조원`, never
 symbol is an empty box in any language, and the render check will fail you for it. Other scripts are
 not drawable yet.
 
-**Korean is twice as wide.** A Hangul syllable is a full em; a Latin glyph is half of one.
-`--validate` therefore counts every syllable as two characters against the budgets above, and a
-syllable costs three bytes against the array. The column that falls out:
+**Korean is twice as wide.** A Hangul syllable is a full em, and so are the compatibility jamo and
+the CJK brackets named above — everything Korean sets on the square body. A Latin glyph is half of
+one. `--validate` therefore counts each of those as two characters against the budgets above, and
+each costs three bytes against the array. The column that falls out:
 
 | field | Korean, in syllables | what binds |
 |---|---:|---|

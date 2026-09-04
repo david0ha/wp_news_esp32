@@ -446,8 +446,9 @@ agent/                    an example worker that files into the desk, plus the s
   of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown four times:
   19,720 to 24,328 when both statements gained a numeric plane beside their printed cells, 24,328 to
   32,932 when `NEWS_BODY_MAX` went to 4,000, 32,932 to 32,952 for the `policy` block, and 32,952 to
-  32,960 for `lang` — eight bytes of language tag, four of which land in padding that was already
-  there and four of which push `policy` up to its next eight-byte boundary. The second
+  32,960 for `lang` — eight bytes of language tag and not a byte more, because `char[8]` aligns to
+  one: it goes in ahead of the four bytes of padding that already stood before `policy`, which are
+  still four bytes of padding. The second
   is the banner forme's bill — a lead across the whole measure runs four legs down most of a 1,600 px
   sheet, which is about four thousand characters of body, and at 2,400 the field truncated the copy
   mid-word and the legs came up short. The third is sixteen bytes of policy and four of tail padding:

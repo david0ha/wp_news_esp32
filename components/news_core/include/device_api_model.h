@@ -143,10 +143,12 @@ typedef struct {
     char generated_at[DEV_TIME_MAXLEN];
 
     /* The language the edition on the glass is written in, already normalised
-     * by the parser. The app needs it because its own faces carry no Hangul and
-     * a Korean edition has to be drawn with a different type ramp — so it
-     * travels with the edition rather than being something the phone asks the
-     * desk for and then has to keep in step. */
+     * by the parser. Available rather than used: the app picks its type ramp
+     * from the `lang` on the edition JSON it fetches from the desk, and nothing
+     * reads this field today. It is here because this document is what a client
+     * asks the BOARD about the page actually on the glass, and a client that
+     * had to infer the language of that page from a document it fetched
+     * somewhere else would be guessing. */
     char lang[DEV_LANG_MAXLEN];
 
     dev_subject_t subject;

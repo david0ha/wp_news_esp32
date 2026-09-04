@@ -1351,10 +1351,16 @@ def _measure(text):
     The phrasing comes back with the number because a producer who counted thirty-seven
     characters into a field with a budget of seventy-two, and was told "74 characters",
     would read the validator as unable to count rather than as counting something else.
+
+    Which is also why the count is every character that was doubled and not only the
+    syllables. Noto sets a CJK bracket and a compatibility jamo on the same square body,
+    so 「반도체」 is ten of measure and not eight; a parenthetical that named three
+    syllables against a measure of ten would leave the two numbers irreconcilable, which
+    is the same failure in a different place.
     """
-    n = sum(1 for c in text if hangul.is_syllable(c))
+    n = sum(1 for c in text if hangul.is_full_em(c))
     w = hangul.weight(text)
-    return w, (f"{w} characters of measure ({n} Hangul syllables count double)"
+    return w, (f"{w} characters of measure ({n} Korean characters count double)"
                if n else f"{w} characters")
 
 

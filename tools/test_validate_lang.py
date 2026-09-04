@@ -34,6 +34,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import hangul  # noqa: E402
 import mock_news_server as M  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -119,6 +120,18 @@ class Lang(unittest.TestCase):
         d["stories"][0]["headline"] = "「반도체」 ㄱ의 조건"
         self.assertEqual(M.validate_payload(d, TILES)[0], [])
 
+    def test_everything_the_faces_draw_in_korean_weighs_two(self):
+        """Not only the syllables. Noto sets a CJK bracket and a compatibility jamo
+        on the same square body as 가, so a headline quoting a title is two
+        characters of measure wider than its codepoint count — and a budget that
+        counted the brackets as Latin would pass a line the panel then ellipsizes."""
+        self.assertEqual(hangul.weight("「가」"), 6)
+        self.assertEqual(hangul.weight("ㄱ"), 2)
+        self.assertEqual(hangul.weight("x"), 1)
+        # Every character the faces carry for Korean, and nothing narrower.
+        for c in hangul.DRAWABLE_KO:
+            self.assertEqual(hangul.weight(c), 2, repr(c))
+
     def test_a_syllable_weighs_two_against_the_budget(self):
         d = self.payload(lang="ko")
         d["stories"][0]["headline"] = "가" * 37          # 74 of measure, over 72
@@ -127,14 +140,29 @@ class Lang(unittest.TestCase):
         d["stories"][0]["headline"] = "가" * 36          # exactly 72
         self.assertEqual([p for p in M.validate_payload(d, TILES)[0] if "headline" in p], [])
 
-    def test_the_measure_says_it_counted_syllables_double(self):
+    def test_the_measure_says_it_counted_korean_double(self):
         """A producer who counted 37 characters against a budget of 72 has to be
         told which arithmetic the validator used, or the message reads as a bug."""
         d = self.payload(lang="ko")
         d["stories"][0]["headline"] = "가" * 37
         problems, _ = M.validate_payload(d, TILES)
         said = [p for p in problems if "headline" in p]
-        self.assertTrue(said and "37 Hangul syllables" in said[0], problems)
+        self.assertTrue(said and "37 Korean characters" in said[0], problems)
+
+    def test_the_measure_explains_every_character_it_doubled(self):
+        """The two numbers in the message have to reconcile.
+
+        A producer reads "78 characters of measure (13 …count double)", multiplies,
+        gets 26 against a 39-character headline and concludes the validator cannot
+        count. So the parenthetical counts everything the measure doubled — the
+        brackets as well as the syllables — and not only the syllables.
+        """
+        d = self.payload(lang="ko")
+        d["stories"][0]["headline"] = "「가」" * 13          # 39 characters, all full-em
+        said = [p for p in M.validate_payload(d, TILES)[0] if "headline" in p]
+        self.assertTrue(said, "no headline problem at all")
+        self.assertIn("78 characters of measure", said[0])
+        self.assertIn("39 Korean characters count double", said[0])
 
     def test_the_overshoot_is_stated_in_the_same_unit_as_the_count(self):
         """One syllable too many is two of measure over. A bare "2 over" invites the

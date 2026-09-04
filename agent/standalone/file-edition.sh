@@ -66,9 +66,26 @@ echo "filing into $EDITION_DIR  (log: $LOG)"
 # two copies of an instruction is one copy that drifts. It prints nothing for
 # "en", which is why there is no branch here -- an English run's prompt is byte
 # for byte the one this script has always sent.
+#
+# Read into a variable BEFORE the printf, and checked. `set -e` does not see a
+# command substitution that fails inside an argument list, so with this inlined
+# below a broken interpreter or an import error would substitute an empty string
+# and file a perfectly ordinary ENGLISH paper without a word about it -- the one
+# failure this feature can have that nobody notices. The section is empty for
+# "en" and that is a success, so the exit status is what is tested, not the text.
+#
+# The PROMPT.md read below is left inline on purpose: it is the whole contract,
+# and a run that lost it asks the model for nothing and ends at the "no news.json
+# was produced" check a few lines down. It fails loudly already.
+if ! LANGUAGE_SECTION="$(python3 "$REPO/agent/prompt.py" --language-section "${EDITION_LANG:-en}")"; then
+    echo "file-edition: python3 $REPO/agent/prompt.py --language-section ${EDITION_LANG:-en} failed;" >&2
+    echo "  refusing to file, because the paper would come out in English without saying so." >&2
+    exit 1
+fi
+
 printf '%s%s\n\nThe repository is at %s. The edition directory is %s.\n' \
     "$(cat "$REPO/tools/edition/PROMPT.md")" \
-    "$(python3 "$REPO/agent/prompt.py" --language-section "${EDITION_LANG:-en}")" \
+    "$LANGUAGE_SECTION" \
     "$REPO" "$EDITION_DIR" |
 EDITION_DIR="$EDITION_DIR" \
 claude --print \

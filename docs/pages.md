@@ -598,8 +598,8 @@ The masthead has no Korean face and never will. A blackletter nameplate is the p
 than copy, there is no Korean blackletter, and the same argument keeps A2's running head English.
 
 **The board's own words follow the edition, and there are twelve of them.** `ui_strings.h` carries a
-second block of `S_KO_*` macros and `ui_lang.c` puts both blocks in a `ui_lang_t`; `ui_news_set_data()`
-picks the table from the payload's `lang` and every draw site reads `ui_lang_now()`. The list is the
+second block of `S_KO_*` macros and `ui_lang.c` puts both blocks in a `ui_lang_t`; every draw site
+picks the table from the snapshot it was handed, with `ui_lang(v->lang)`. The list is the
 two live badges (지연, 오프라인 — 데모 is the third), the three standing heads (동종 업계, 사진,
 단신) and the six industry-table column heads (종목, 회사명, PER, 시가총액, 현재가, 등락). It is this
 short because everything else on the sheet — dateline, kickers, headlines, decks, bodies, statement

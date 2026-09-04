@@ -318,11 +318,41 @@ class DeskClient:
         English page rather than no page -- which is the right failure, because
         the alternative is a worker that stops filing over a setting the
         operator has probably never changed.
+
+        It is never a *silent* failure, though, and that is the difference
+        between this and :meth:`directives`. A missing directive is visible in
+        the page it did not shape; a language that fell back is invisible --
+        an operator who set Korean gets a perfectly ordinary English paper, and
+        without the line below the only evidence that this route answered 500
+        is the front page itself. So each way out of here warns exactly once,
+        naming the status or the exception class and nothing more: the request
+        carries the bearer token in a header, and ``self.base`` is allowed to
+        carry credentials.
+
+        The down-desk case is the one that needs catching here rather than in
+        :meth:`_request`, which turns a 4xx into an answer but lets everything
+        below HTTP through. Connection refused, no route to host and a name
+        that does not resolve all arrive as ``URLError`` -- an ``OSError`` --
+        and this is the one method whose contract says they are not fatal.
         """
-        status, doc = self._json("GET", "/api/settings")
-        if status != 200:
+        try:
+            status, doc = self._json("GET", "/api/settings")
+        except OSError as e:
+            LOG.warning("desk settings unreadable (%s) -- filing in English",
+                        type(e).__name__)
             return {"lang": "en"}
-        return (doc or {}).get("settings") or {"lang": "en"}
+
+        if status != 200:
+            LOG.warning("desk settings unreadable (HTTP %s) -- filing in English",
+                        status)
+            return {"lang": "en"}
+
+        settings = doc.get("settings") if isinstance(doc, dict) else None
+        if not isinstance(settings, dict) or not settings:
+            LOG.warning("desk answered 200 with no settings document "
+                        "-- filing in English")
+            return {"lang": "en"}
+        return settings
 
 
 def read_token(secrets: str) -> str:

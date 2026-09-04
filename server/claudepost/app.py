@@ -145,10 +145,12 @@ class Desk:
         self.watchlist_path = os.path.join(cfg.data_dir, "watchlist.json")
         self.watchlist: dict | None = None
 
-        #: The third document read off the serving root, on `schedule_path`'s
-        #: reasoning again -- and like the schedule rather than the watchlist,
-        #: it has a default, because there is no state in which the paper has
-        #: no language.
+        #: The fourth operator document, after the schedule, the watchlist and
+        #: the standing directives -- and the third of the four kept as a file
+        #: under the serving root, on `schedule_path`'s reasoning again (the
+        #: directives are rows in the store). Like the schedule rather than the
+        #: watchlist it has a default, because there is no state in which the
+        #: paper has no language.
         self.settings_path = os.path.join(cfg.data_dir, "settings.json")
 
         self.settings = dict(st.DEFAULT)

@@ -206,9 +206,10 @@ static void test_state_shape(void)
     check_str(v, "edition", "SEMICONDUCTORS");
     check_str(v, "generatedAt", "2026-08-14T05:12:00Z");
 
-    /* The language the edition is written in. The app reads it to pick its own
-     * type ramp — Inter carries no Hangul — so it travels beside the edition
-     * rather than being something the phone has to ask the desk for. */
+    /* The language the edition is written in. Available rather than used: the
+     * app picks its type ramp from the `lang` on the edition JSON it fetches
+     * from the desk. This is what the BOARD says about the page on the glass,
+     * which is the only place a client can learn it without guessing. */
     check_str(v, "lang", "en");
 
     /* One company a day. The subject is what the edition is about, and it is

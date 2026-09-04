@@ -86,7 +86,9 @@ typedef enum { UI_FIT_LATIN = 0, UI_FIT_HANGUL = 1 } ui_fit_script_t;
 
 /* The rule an edition's `lang` asks for: "ko" is the only tag with a breaking
  * rule of its own, and everything else — including an empty or absent tag —
- * takes the Latin one. Call sites read the tag from ui_lang_tag_now(). */
+ * takes the Latin one. Call sites pass the snapshot's own `v->lang` rather than
+ * reading it off anything else, so a renderer's output stays a function of the
+ * snapshot it was handed. NULL is Latin, like every other unknown tag. */
 ui_fit_script_t ui_fit_script(const char *lang);
 
 /* Copy as much of `src` as fits in `w` x `h`, set in `font` at `line_space`,

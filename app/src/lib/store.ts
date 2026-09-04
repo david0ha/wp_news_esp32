@@ -440,15 +440,25 @@ export async function getDeskBaseUrl(): Promise<string | null> {
  * as `http://` would send that token in the clear with both platforms allowing it (Android by that
  * build setting, iOS in Expo Go).
  *
- * So a bare name is assumed `https://` unless it can only be local: an IPv4 literal, `localhost`,
- * or an mDNS `.local` name. Those three are how a desk on the operator's own Mac is reached, and
- * an https they cannot serve would make it unreachable instead of safe. A scheme the operator
+ * So a bare name is assumed `https://` unless it can only be local: an IP literal of either family,
+ * `localhost`, or an mDNS `.local` name. Those are how a desk on the operator's own Mac is reached,
+ * and an https they cannot serve would make it unreachable instead of safe. A scheme the operator
  * typed is never overridden in either direction — including a deliberate `http://` on a LAN
  * hostname, which is a statement of what they meant.
  *
+ * The IPv6 arm is about the colon rather than about the address. `[::1]:8791` has more colons than
+ * the one that separates the port, and splitting on the last of them leaves `[::1]` as the host —
+ * which matches none of the other shapes and would take the https default. A literal in brackets is
+ * numeric by definition, so it can never be a public name and is treated as local without looking
+ * inside it. `normalizeBaseUrl` rejects the bracketed form downstream, so this closes the decision
+ * rather than the feature.
+ *
+ * Exported for its own test: it is the whole of this rule, and going through `saveDeskBaseUrl` can
+ * only see the shapes `normalizeBaseUrl` also accepts.
+ *
  * `normalizeBaseUrl` itself is left alone: the board's address wants the old default.
  */
-function deskScheme(input: string): string {
+export function deskScheme(input: string): string {
   const raw = input.trim()
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) return raw
   // The authority only — the path, query, port and any trailing dot are none of this decision's
@@ -457,7 +467,10 @@ function deskScheme(input: string): string {
   const colon = authority.lastIndexOf(':')
   const host = (colon === -1 ? authority : authority.slice(0, colon)).toLowerCase()
   const local =
-    host === 'localhost' || host.endsWith('.local') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
+    host.startsWith('[') ||
+    host === 'localhost' ||
+    host.endsWith('.local') ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
   return local ? raw : `https://${raw}`
 }
 

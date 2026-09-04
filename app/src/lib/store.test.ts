@@ -6,6 +6,7 @@ import {
   clearNewsUrl,
   clearNewsUrlPending,
   clearSetupSkipped,
+  deskScheme,
   getDeskBaseUrl,
   getDeviceBaseUrl,
   getLanguage,
@@ -418,6 +419,18 @@ describe('the desk address', () => {
       // Including the one that downgrades: somebody running a desk on their LAN by name has said
       // what they meant, and silently upgrading it would make the address unreachable instead.
       expect(await saved('http://desk.example.dev')).toBe('http://desk.example.dev')
+    })
+
+    // Asserted on the decision itself rather than through `saveDeskBaseUrl`, because
+    // `normalizeBaseUrl` refuses a bracketed literal outright — it wants a hostname or a dotted
+    // quad — so an IPv6 desk address cannot be saved by either spelling today. That makes this the
+    // contract of `deskScheme` alone: the port's colon is not the host's, and a loopback the
+    // operator typed in brackets must not be told to speak https, which nothing on their own Mac
+    // is serving.
+    it('leaves a bracketed IPv6 literal on http', () => {
+      expect(deskScheme('[::1]:8791')).toBe('[::1]:8791')
+      expect(deskScheme('[fe80::1]')).toBe('[fe80::1]')
+      expect(deskScheme('[2001:db8::1]/api')).toBe('[2001:db8::1]/api')
     })
   })
 

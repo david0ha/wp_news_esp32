@@ -36,10 +36,22 @@
  * every five minutes for years, object churn is where the heap goes.
  *
  * That is why the standing heads below are created carrying an English macro
- * and set from ui_lang_now() in the renderer. Creation happens once, at
+ * and set from ui_lang(v->lang) in the renderer. Creation happens once, at
  * ui_page_front_create(), before any snapshot exists and therefore before there
  * is a language to take; the string a widget is built with is a placeholder
  * that every run() overwrites before the module is ever shown.
+ *
+ * ## The language comes from the snapshot, never from a global
+ *
+ * Every renderer here takes `v`, and the edition's language is `v->lang`. There
+ * was an accessor on ui_news.c's copy of it and it read more nicely at each of
+ * these five sites, but it made this file's output a function of the order two
+ * files are called in rather than of its own argument. ui_compose.h promises
+ * the layout is pure and news_hash() promises the same fingerprint means the
+ * same pixels — the board skips a twenty-five-second refresh on that promise —
+ * and both are far easier to keep when the only input is the one in the
+ * signature. ui_lang() is a lookup over a string, so reading it per draw costs
+ * a strcmp and buys the invariant.
  */
 #include "ui_modules.h"
 
@@ -677,7 +689,7 @@ static int story_head(const ui_mod_t *m, const news_t *v, int w, int wt,
     const int hlh = ui_head_lh(wt);
     const int hmax = wt == 0 ? 4 : 5;
 
-    ui_fit_balance(hf, w, hmax, ui_fit_script(ui_lang_tag_now()), st->headline,
+    ui_fit_balance(hf, w, hmax, ui_fit_script(v->lang), st->headline,
                    s_head, sizeof s_head);
     int hl = md_lines(hf, w, s_head);
     if (hl > hmax) hl = hmax;
@@ -898,7 +910,7 @@ static void story_run(const ui_mod_t *m, const news_t *v, int w, int wt,
         const int lw = (i == g.legs - 1) ? UI_END_MEASURE(g.leg_w[i])
                                          : g.leg_w[i];
 
-        used += ui_fit_text(g.bf, lw, fit_h, bls, ui_fit_script(ui_lang_tag_now()),
+        used += ui_fit_text(g.bf, lw, fit_h, bls, ui_fit_script(v->lang),
                             st->body + used, s_copy[i], sizeof s_copy[i]);
 
         md_font(ws->leg[i], g.bf, blh);
@@ -1738,7 +1750,7 @@ static void briefs_run(const ui_mod_t *m, const news_t *v, int w,
     ui_w_briefs_t *g = &inst->w.briefs;
     const int h = m->h;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang_now()->in_brief);
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang(v->lang)->in_brief);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
     /* How many items the column holds, then the leftover shared out between
@@ -1842,11 +1854,13 @@ static const int PEER_DROP[UI_PEER_FIELDS]  = { PF_NAME, PF_PE, PF_CAP,
  * to be: the heads follow the payload now, so they cannot be decided at compile
  * time, and a static that a renderer rewrote once per edition would be one
  * table shared by both pages' instances of this module. Six pointer copies per
- * draw is not a cost worth a cache. */
-static void peer_heads(const char *head[UI_PEER_FIELDS])
+ * draw is not a cost worth a cache.
+ *
+ * The table is an argument and not a lookup of its own, because the caller has
+ * already resolved it from `v->lang` for the kicker above the heads: two
+ * lookups in one draw could not disagree, but one is the honest count. */
+static void peer_heads(const char *head[UI_PEER_FIELDS], const ui_lang_t *L)
 {
-    const ui_lang_t *L = ui_lang_now();
-
     head[PF_SYM]  = L->col_symbol;
     head[PF_NAME] = L->col_name;
     head[PF_PE]   = L->col_pe;
@@ -1962,11 +1976,13 @@ static void peers_run(const ui_mod_t *m, const news_t *v, int w,
      * the block ends rather than trailing off. */
     const int pitch = UI_TAB_ROW_H;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang_now()->peers);
+    const ui_lang_t *L = ui_lang(v->lang);
+
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, L->peers);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
     const char *head[UI_PEER_FIELDS];
-    peer_heads(head);
+    peer_heads(head, L);
 
     const int hy = UI_MOD_KICKER_H + MD_RULE_DY + UI_RULE_HAIR + 6;
     for (int i = 0; i < UI_PEER_FIELDS; i++) {
@@ -2946,7 +2962,7 @@ static void thumbs_run(const ui_mod_t *m, const news_t *v, int w,
 
     ui_w_thumbs_t *g = &inst->w.thumbs;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang_now()->inside);
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang(v->lang)->inside);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
     int ph = m->h - MD_THUMB_HEAD - UI_MOD_CAP_GAP - UI_MOD_CAP_H;
