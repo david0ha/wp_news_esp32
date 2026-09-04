@@ -340,9 +340,10 @@ paper from here, and validating the schema does not catch a headline four charac
 tools/edition/render-check.sh "$EDITION_DIR/news.json.tmp"
 ```
 
-It runs the real typesetter — the same news_core, the same seven faces, the same compositor, the
-same six-ink quantizer the firmware runs — at the panel's real 1200 × 1600, and leaves both sheets
-as PNGs. Then:
+It runs the real typesetter — the same news_core, the same thirteen faces (seven Latin, and the six
+Korean ones each of them reaches through its fallback, so an edition filed in Korean sets in the
+same run), the same compositor, the same six-ink quantizer the firmware runs — at the panel's real
+1200 × 1600, and leaves both sheets as PNGs. Then:
 
 1. **If it exits non-zero, fix what it named and run it again.** It fails on a missing glyph, a
    rule off its row, ink outside the margin, a module that rendered nothing, a label wider than its

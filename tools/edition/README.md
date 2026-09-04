@@ -29,8 +29,9 @@ catches it.
 tools/edition/render-check.sh <path/to/news.json>
 ```
 
-That runs the **real typesetter** — the same `news_core`, the same seven faces, the same
-compositor, the same six-ink quantizer the firmware runs — over the candidate payload at the
+That runs the **real typesetter** — the same `news_core`, the same thirteen faces (seven Latin, and
+the six Korean ones each of them reaches through its fallback, so a Korean edition sets in the same
+run), the same compositor, the same six-ink quantizer the firmware runs — over the candidate payload at the
 panel's real 1200 × 1600, and leaves both sheets as PNGs. It fails what the build fails: a missing
 glyph, a rule off its row, ink outside the margin, a module that rendered nothing, a label wider
 than its slot, a masthead over 1140 px, blue or yellow reaching the glass, a composition that does

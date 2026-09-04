@@ -100,8 +100,17 @@ static void check_english_is_unchanged(void)
 }
 
 /* Every Korean field is Hangul or Latin capitals and nothing else — no stray
- * byte, no half-decoded sequence. PER is the one Latin entry and it is
- * deliberate; everything else must be three-byte UTF-8 above U+3000. */
+ * byte, no half-decoded sequence, and nothing that merely happens to be three
+ * bytes wide. PER is the one Latin entry and it is deliberate.
+ *
+ * The codepoint is decoded rather than the byte count checked, because "three
+ * bytes of UTF-8" is U+0800 to U+FFFF and admits Greek, Hebrew, arrows, CJK
+ * ideographs and the replacement character under a message that says "is not
+ * Hangul". What the faces actually carry is the 완성형 syllable block and the
+ * compatibility jamo, so those are what this asks for. */
+#define IS_HANGUL(cp) (((cp) >= 0xAC00 && (cp) <= 0xD7A3) ||   /* 완성형        */ \
+                       ((cp) >= 0x3131 && (cp) <= 0x318E))     /* 호환용 자모   */
+
 static void check_korean_is_korean(void)
 {
     const char *const ko[12] = LANG_FIELDS(UI_LANG_KO);
@@ -112,15 +121,34 @@ static void check_korean_is_korean(void)
         int hangul = 0;
         for (const unsigned char *p = (const unsigned char *)ko[i]; *p; ) {
             if (*p == ' ') { p++; continue; }
+
             g_total++;
+
+            /* A three-byte sequence, well formed, and then what it decodes to.
+             * The length test comes first because the shift below would read
+             * past the NUL of a truncated one. */
             if (*p < 0xE0 || *p > 0xEF || (p[1] & 0xC0) != 0x80
                           || (p[2] & 0xC0) != 0x80) {
                 g_fail++;
-                printf("  FAIL UI_LANG_KO.%s: \"%s\" is not Hangul at byte %d\n",
+                printf("  FAIL UI_LANG_KO.%s: \"%s\" is not Hangul at byte %d "
+                       "(0x%02X is not the start of a three-byte sequence)\n",
                        FIELD_NAME[i], ko[i],
-                       (int)(p - (const unsigned char *)ko[i]));
+                       (int)(p - (const unsigned char *)ko[i]), *p);
                 break;
             }
+
+            const unsigned cp = ((unsigned)(p[0] & 0x0F) << 12)
+                              | ((unsigned)(p[1] & 0x3F) << 6)
+                              |  (unsigned)(p[2] & 0x3F);
+            if (!IS_HANGUL(cp)) {
+                g_fail++;
+                printf("  FAIL UI_LANG_KO.%s: \"%s\" is not Hangul at byte %d "
+                       "(U+%04X is outside AC00..D7A3 and 3131..318E)\n",
+                       FIELD_NAME[i], ko[i],
+                       (int)(p - (const unsigned char *)ko[i]), cp);
+                break;
+            }
+
             hangul++;
             p += 3;
         }
