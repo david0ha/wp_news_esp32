@@ -64,6 +64,14 @@ import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# hangul.py sits beside this file, and every ordinary invocation already finds it: a script
+# run by path gets its own directory at sys.path[0], which is how the desk's gate runs this
+# one. The line below is for the invocation that does not — `python -m tools.mock_news_server`,
+# where sys.path[0] is the repository root instead and the bare import would fail.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import hangul  # noqa: E402  (needs the sys.path line above)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "components", "news_core", "test", "host",
                        "fixtures", "news.json")
@@ -635,6 +643,7 @@ def snapshot(generated_at="2026-08-14T05:12:00Z", as_of="AS OF 05:12 KST"):
         "session": "U.S. MARKETS CLOSED — AUG 13",
         "as_of": as_of,
         "generated_at": generated_at,
+        "lang": "en",
         "subject": dict(SUBJECT),
         "stories": stories(),
         "figures": [figure(r) for r in FIGURES],
@@ -1194,6 +1203,9 @@ MAKEUP = ("the make-up desk can give this table three columns instead of six, an
 # be most of the sheet, and four legs of thirty-three characters over 600 px of depth is about two
 # thousand characters of copy. The old 600 was sized for a story that sat in a fixed band; against an
 # elastic module it is a third of a column of prose and two thirds of a column of white paper.
+#
+# Counted in the same characters of measure as the budgets, because the floor is a depth of
+# column and not a count of words: 700 Hangul syllables fill the legs 1,400 Latin characters do.
 BODY_FLOOR = {"lead": 1400, "secondary": 400}
 
 # Everything the bundled faces can draw: ASCII, Latin-1, and the typography in ui_strings.h’s
@@ -1201,9 +1213,20 @@ BODY_FLOOR = {"lead": 1400, "secondary": 400}
 DATA_PUNCT = "—–‐…“”‘’‚„•·′″‹›«»⁄×÷±≈≠≤≥°‰№€£¥¢§¶©®™†‡"
 
 
-def _drawable(s):
+def _drawable(s, lang="en"):
+    """The characters of `s` the bundled faces cannot draw, in the edition's language.
+
+    Every language draws ASCII, Latin-1 and DATA_PUNCT. `ko` additionally draws what
+    tools/hangul.py derives — the 2,350 KS X 1001 syllables, the compatibility jamo and the
+    CJK punctuation — because gen_fonts.py generated the six Korean faces from that same
+    set, and the one place the two could disagree is the one place they must not. Any other
+    tag keeps the Latin-1 rule: a French edition is "fr" and draws with the faces the board
+    already has.
+    """
+    extra = hangul.DRAWABLE_KO if lang == "ko" else frozenset()
     return [c for c in s
-            if not (0x20 <= ord(c) <= 0x7E or 0xA0 <= ord(c) <= 0xFF or c in DATA_PUNCT)]
+            if not (0x20 <= ord(c) <= 0x7E or 0xA0 <= ord(c) <= 0xFF
+                    or c in DATA_PUNCT or c in extra)]
 
 
 def _walk_strings(node, path, out):
@@ -1251,7 +1274,7 @@ def _measured_fields(d):
             out.append((where, value, cap, budget, soft))
 
     for k, cap in (("edition", 32), ("dateline", 40), ("session", 48),
-                   ("as_of", 24), ("generated_at", 24)):
+                   ("as_of", 24), ("generated_at", 24), ("lang", 8)):
         add(k, d.get(k), cap)
 
     subject = d.get("subject") or {}
@@ -1317,6 +1340,39 @@ def _measured_fields(d):
     return out
 
 
+def _measure(text):
+    """(characters of measure, how to say that number) — the budgets counted in ems.
+
+    PROMPT.md's character budgets are widths in disguise, and they were written for a Latin
+    glyph, which averages half an em. A Hangul syllable is a full one, so it costs two: a
+    thirty-six-syllable Korean headline sets the same measure as a seventy-two-character
+    English one, and counting either in codepoints gets the other one wrong.
+
+    The phrasing comes back with the number because a producer who counted thirty-seven
+    characters into a field with a budget of seventy-two, and was told "74 characters",
+    would read the validator as unable to count rather than as counting something else.
+
+    Which is also why the count is every character that was doubled and not only the
+    syllables. Noto sets a CJK bracket and a compatibility jamo on the same square body,
+    so 「반도체」 is ten of measure and not eight; a parenthetical that named three
+    syllables against a measure of ten would leave the two numbers irreconcilable, which
+    is the same failure in a different place.
+
+    One walk, and on an English edition none at all. Every full-em character is above
+    U+3000, so an all-ASCII string has none of them and its measure is its length --
+    which is every field of every English payload, and this function sees about eight
+    thousand characters of one (the story bodies dominate; a lead is up to 4,000).
+    Where the walk does happen, the count of doubled characters is the only thing
+    `hangul.weight()` would tell us that `len()` does not: weight(s) == len(s) + n.
+    """
+    if text.isascii():
+        return len(text), f"{len(text)} characters"
+    n = sum(1 for c in text if hangul.is_full_em(c))
+    w = len(text) + n
+    return w, (f"{w} characters of measure ({n} Korean characters count double)"
+               if n else f"{w} characters")
+
+
 def _length_check(where, text, cap, budget, soft):
     """(problem, warning) for one string — at most one of the two is ever set.
 
@@ -1325,10 +1381,10 @@ def _length_check(where, text, cap, budget, soft):
 
     A BUDGET that is a limit fails. Those are the ellipsized fields — a headline,
     a deck, a caption — where overshooting sets more type than the slot holds and
-    the panel prints a `…` in the middle of the sentence. Counted in characters,
-    because an em dash is one character of measure and failing a headline for
-    being three bytes over when it sets perfectly well would be worse than not
-    checking at all.
+    the panel prints a `…` in the middle of the sentence. Counted in characters of
+    measure — see _measure() — because an em dash is one of those and a Hangul
+    syllable is two, and failing a headline for being three bytes over when it sets
+    perfectly well would be worse than not checking at all.
 
     A BUDGET that is a margin warns. PROMPT.md holds six fields well inside their
     arrays, and going past one is not a defect: the page still typesets. Failing
@@ -1342,7 +1398,8 @@ def _length_check(where, text, cap, budget, soft):
     because the payload carries typography, which is exactly the case where the
     character count looks fine and the field runs out.
     """
-    n_chars, n_bytes = len(text), len(text.encode("utf-8"))
+    n_chars, measured = _measure(text)
+    n_bytes = len(text.encode("utf-8"))
     warning = None
 
     if budget is not None and n_chars > budget:
@@ -1350,18 +1407,22 @@ def _length_check(where, text, cap, budget, soft):
             # Noted, but NOT returned yet: a margin must not swallow the hard limit under it. A
             # fourteen-character cell is outside the margin AND outside the fourteen-byte array
             # that carries it, and the second of those is the one that actually truncates.
-            warning = (f"{where}: {n_chars} characters against PROMPT.md's {budget} — it fits the "
+            warning = (f"{where}: {measured} against PROMPT.md's {budget} — it fits the "
                        f"{cap}-byte field, but {soft}")
         else:
-            return (f"{where}: {n_chars} characters against a budget of {budget}, "
-                    f"{n_chars - budget} over — the panel ellipsizes it mid-sentence"), None
+            # "of measure" on the overshoot as well as on the count. A headline one syllable
+            # too long is two over, and a bare "2 over" invites the producer to delete two
+            # characters and file it again still over budget.
+            return (f"{where}: {measured} against a budget of {budget}, "
+                    f"{n_chars - budget} of measure over — the panel ellipsizes it "
+                    f"mid-sentence"), None
 
     if n_bytes > cap - 1:
         # Only claim the budget was met when it actually was. A margin does not stop the payload,
         # so a string can be over the budget AND over the array, and telling a desk that its
         # twenty-character label "is inside the sixteen-character budget" would be a lie in the
         # one message it gets.
-        inside = (f"{n_chars} characters is inside the {budget}-character budget, but "
+        inside = (f"{measured} is inside the {budget}-character budget, but "
                   if budget is not None and n_chars <= budget else "")
         return (f"{where}: {inside}{n_bytes} bytes does not fit the {cap}-byte field — "
                 f"news_str_copy() cuts it at {cap - 1} and nothing on the sheet says so"), None
@@ -1539,6 +1600,7 @@ def check_caps_against_header():
         "indices[].symbol":        "NEWS_SYMBOL_MAX",
         "as_of":                   "NEWS_TIME_MAX",
         "generated_at":            "NEWS_TIME_MAX",
+        "lang":                    "NEWS_LANG_MAX",
     }
 
     sample = _measured_fields(snapshot())
@@ -1597,6 +1659,24 @@ def validate_payload(d, tiles_dir):
     if not isinstance(d, dict):
         return ["the payload must be a JSON object"], []
 
+    # The edition's language, which decides two things below: what the faces can draw, and how
+    # wide a character is. A malformed tag is NAMED and then ignored rather than returned on its
+    # own — news_parse() normalises this field to "en" instead of rejecting the payload, and a
+    # validator that stopped here would hide every undrawable character in the edition behind one
+    # typo, in the one report the producer gets.
+    #
+    # The message says what the DEVICE would do with the tag, not only that the validator
+    # dislikes it. "en-US is not a language tag" reads as pedantry about a string every other
+    # piece of software on earth accepts; "the board would clamp this to en" is the consequence,
+    # and it is the sentence that tells a producer their Korean edition is about to print in
+    # English with its fixed words in the wrong language and nothing anywhere saying so.
+    lang = d.get("lang", "en")
+    if not isinstance(lang, str) or not re.match(r"^[a-z]{2,3}\Z", lang):
+        problems.append(f"lang: {lang!r} is not a language tag — the board would clamp this "
+                        f'to en. A tag here is two or three lowercase letters and nothing '
+                        f'after it: "en", "ko". No region, no script, no casing')
+        lang = "en"
+
     # The device rejects a payload that names no company AND carries no story, because that is what
     # an error envelope parses down to. A rejection leaves yesterday's page on the glass badged
     # STALE, which is a failure nobody can diagnose hours later.
@@ -1613,8 +1693,9 @@ def validate_payload(d, tiles_dir):
         who = f"stories[{i}] ({s.get('kicker') or tier})"
 
         body = s.get("body") or ""
-        if body and len(body) < BODY_FLOOR[tier]:
-            warnings.append(f"{who}: body is {len(body)} characters, under {BODY_FLOOR[tier]} "
+        depth, said = _measure(body)
+        if body and depth < BODY_FLOOR[tier]:
+            warnings.append(f"{who}: body is {said}, under {BODY_FLOOR[tier]} "
                             f"— the column will not fill")
 
         # A story names a chart by index into the top-level array. Out of range is silently
@@ -1725,7 +1806,25 @@ def validate_payload(d, tiles_dir):
     found = []
     _walk_strings(d, "", found)
     for where, s in found:
-        if bad := _drawable(s):
+        bad = _drawable(s, lang)
+
+        # A Hangul syllable in a Korean edition is a different failure from a character the
+        # faces never heard of, and it gets its own message rather than a place in the list
+        # below. The producer wrote real Korean and reached one of the syllables KS X 1001
+        # leaves out; being told the fonts carry "ASCII, Latin-1 and S_DATA_PUNCT only" would
+        # read as "stop writing Korean", when the fix is to respell one word.
+        if lang == "ko":
+            # One message per DISTINCT syllable, in the order it first appears. A word the
+            # producer used four times down a story is one thing to respell, and four
+            # identical lines about it add nothing to the report while burying whatever else
+            # the field got wrong. dict.fromkeys() is what keeps that order.
+            for c in dict.fromkeys(c for c in bad if hangul.is_syllable(c)):
+                problems.append(f"{where}: {c!r} (U+{ord(c):04X}) is a Hangul syllable outside "
+                                f"KS X 1001 — the faces carry the 2,350 완성형 syllables only; "
+                                f"respell it")
+            bad = [c for c in bad if not hangul.is_syllable(c)]
+
+        if bad:
             problems.append(f"{where}: undrawable character(s) {''.join(bad)!r} (U+"
                             + ", U+".join(f"{ord(c):04X}" for c in bad)
                             + ") — the fonts carry ASCII, Latin-1 and S_DATA_PUNCT only")

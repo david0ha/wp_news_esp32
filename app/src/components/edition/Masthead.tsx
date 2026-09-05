@@ -1,8 +1,10 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { colors, fonts, layout, radius, space, tabular, type } from '../../theme'
+import { useStrings } from '../../i18n'
+import { colors, fonts, layout, radius, space, tabular } from '../../theme'
 import { formatPrice } from '../../lib/edition/format'
 import { Chip } from '../Chip'
 import { Change } from './Change'
+import { useEditionFace, useEditionType } from './typeRamp'
 import { type Edition } from '../../lib/edition/types'
 
 /**
@@ -37,11 +39,14 @@ export function Masthead({
   onRetry: () => void
   onPressSymbol: () => void
 }) {
+  const t = useStrings()
+  const ty = useEditionType()
+  const face = useEditionFace()
   const s = edition.subject
 
   return (
     <View style={styles.root}>
-      <Text style={type.headingLg} numberOfLines={2}>
+      <Text style={ty.headingLg} numberOfLines={2}>
         {s.name !== '' ? s.name : s.symbol}
       </Text>
 
@@ -52,45 +57,47 @@ export function Masthead({
           hitSlop={6}
           style={styles.symbolRow}
         >
-          <Text style={styles.symbol}>{s.symbol}</Text>
-          {s.exchange !== '' ? <Text style={type.caption}>{s.exchange}</Text> : null}
+          <Text style={[face(fonts.semibold), styles.symbol]}>{s.symbol}</Text>
+          {s.exchange !== '' ? <Text style={ty.caption}>{s.exchange}</Text> : null}
         </Pressable>
       ) : s.exchange !== '' ? (
         // No symbol: the exchange still reads, as plain text. A row that looks like a button and
         // goes nowhere is worse than no row.
         <View style={styles.symbolRow}>
-          <Text style={type.caption}>{s.exchange}</Text>
+          <Text style={ty.caption}>{s.exchange}</Text>
         </View>
       ) : null}
 
       <View style={styles.priceRow}>
-        <Text style={[styles.price, tabular]} numberOfLines={1}>
+        <Text style={[ty.display, styles.price, tabular]} numberOfLines={1}>
           {formatPrice(s.last)}
         </Text>
         <Change pct={s.changePct} size={17} />
       </View>
 
       {edition.dateline !== '' ? (
-        <Text style={type.caption} numberOfLines={1}>
+        <Text style={ty.caption} numberOfLines={1}>
           {edition.dateline}
         </Text>
       ) : null}
       {edition.session !== '' ? (
-        <Text style={type.caption} numberOfLines={1}>
+        <Text style={ty.caption} numberOfLines={1}>
           {edition.session}
         </Text>
       ) : null}
 
       {/* The demo chip and the freshness line are mutually exclusive by construction: the demo's
           fetchedAt is 0, so freshnessLabel answers null for it. */}
-      {demo ? <Chip label="Demo edition" tone="accent" style={styles.demoChip} /> : null}
-      {freshness !== null ? <Text style={styles.freshness}>{freshness}</Text> : null}
+      {demo ? <Chip label={t.today.demoChip} tone="accent" style={styles.demoChip} /> : null}
+      {freshness !== null ? (
+        <Text style={[ty.caption, styles.freshness]}>{freshness}</Text>
+      ) : null}
 
       {error !== null ? (
         <View style={styles.banner}>
-          <Text style={styles.bannerText}>{error}</Text>
+          <Text style={[face(fonts.medium), styles.bannerText]}>{error}</Text>
           <Pressable accessibilityRole="button" onPress={onRetry} hitSlop={8}>
-            <Text style={styles.retry}>Retry</Text>
+            <Text style={[face(fonts.semibold), styles.retry]}>{t.common.retry}</Text>
           </Pressable>
         </View>
       ) : null}
@@ -98,6 +105,9 @@ export function Masthead({
   )
 }
 
+// EVERY FACE ON THIS SHEET COMES FROM THE EDITION'S RAMP, not from the theme directly — see
+// `typeRamp.tsx`. What is left in this StyleSheet is the geometry and the colour; the family or
+// the weight arrives in front of it in the style array.
 const styles = StyleSheet.create({
   root: {
     paddingHorizontal: layout.gutter,
@@ -110,7 +120,6 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   symbol: {
-    fontFamily: fonts.semibold,
     fontSize: 15,
     color: colors.accent,
     letterSpacing: 0.4,
@@ -122,12 +131,10 @@ const styles = StyleSheet.create({
     paddingTop: space.xs,
   },
   price: {
-    ...type.display,
     fontSize: 38,
     lineHeight: 44,
   },
   freshness: {
-    ...type.caption,
     paddingTop: space.xs,
   },
   // The pill itself is the app's `Chip` — the same one `ChipRow` and the Board screen use, whose
@@ -149,13 +156,11 @@ const styles = StyleSheet.create({
   },
   bannerText: {
     flex: 1,
-    fontFamily: fonts.medium,
     fontSize: 13,
     lineHeight: 18,
     color: colors.warn,
   },
   retry: {
-    fontFamily: fonts.semibold,
     fontSize: 13,
     color: colors.warn,
   },

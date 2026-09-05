@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../i18n'
 import { colors, fonts, space, tabular, type } from '../theme'
 import { formatCompact, formatIv, formatPrice } from '../lib/market/format'
 import { type OptionContract } from '../lib/market/types'
@@ -42,19 +43,20 @@ export function OptionChainRow({
 
 /** The column captions — the first row of the chain card (nothing is sticky). */
 export function OptionChainHeader() {
+  const t = useStrings().marketDetail.options
   return (
     <View style={styles.headerRow}>
       <Text style={[styles.caption, styles.flexStrike]} numberOfLines={1}>
-        Strike
+        {t.strike}
       </Text>
       <Text style={[styles.caption, styles.captionRight, styles.flexBidAsk]} numberOfLines={1}>
-        Bid / Ask
+        {t.bidAsk}
       </Text>
       <Text style={[styles.caption, styles.captionRight, styles.flexVolOi]} numberOfLines={1}>
-        Vol · OI
+        {t.volOi}
       </Text>
       <Text style={[styles.caption, styles.captionRight, styles.flexIv]} numberOfLines={1}>
-        IV
+        {t.iv}
       </Text>
     </View>
   )

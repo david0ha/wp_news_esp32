@@ -59,8 +59,59 @@ echo "filing into $EDITION_DIR  (log: $LOG)"
 # -- and the run exits with "Input must be provided", having first warned about
 # every word of the contract that contained an asterisk. Nothing in that names
 # the cause.
-printf '%s\n\nThe repository is at %s. The edition directory is %s.\n' \
-    "$(cat "$REPO/tools/edition/PROMPT.md")" "$REPO" "$EDITION_DIR" |
+#
+# EDITION_LANG is the language the paper is written in, and the section that asks
+# for it comes from agent/prompt.py rather than from a here-doc in this file: the
+# containerised worker sends the same words, taken from the desk's setting, and
+# two copies of an instruction is one copy that drifts. It prints nothing for
+# "en", which is why there is no branch here -- an English run's prompt is byte
+# for byte the one this script has always sent.
+#
+# Read into a variable BEFORE the printf, and checked. `set -e` does not see a
+# command substitution that fails inside an argument list, so with this inlined
+# below a broken interpreter or an import error would substitute an empty string
+# and file a perfectly ordinary ENGLISH paper without a word about it -- the one
+# failure this feature can have that nobody notices. The section is empty for
+# "en" and that is a success, so the exit status is what is tested, not the text.
+#
+# The PROMPT.md read below is left inline on purpose: it is the whole contract,
+# and a run that lost it asks the model for nothing and ends at the "no news.json
+# was produced" check a few lines down. It fails loudly already.
+#
+# CHECKED FIRST, AND LOUDLY. prompt.py takes any tag and asks for a paper in it,
+# deliberately -- a desk set to something nobody here anticipated should still
+# file. Nothing downstream of that is so relaxed: the board carries faces for two
+# languages and clamps its own fixed words to English for anything else, so
+# `EDITION_LANG=kr` (or `KO`, or `ko-KR`) spends a full research turn and a model
+# session producing a page nobody asked for, and the only symptom is an English
+# paper on a day somebody wanted Korean. A typo in a launchd plist is exactly how
+# that arrives.
+#
+# The set is the desk's `settings.LANGS` and the phone's `EDITION_LANGUAGES`, and
+# this is a third copy of it on purpose: the standalone producer has no desk to
+# ask. What adds to it is not a line here -- it is a font face pair from
+# tools/gen_fonts.py and a UI_LANG_* table in components/news_core/ui_lang.c.
+EDITION_LANG="${EDITION_LANG:-en}"
+case "$EDITION_LANG" in
+    en|ko) ;;
+    *)
+        echo "file-edition: EDITION_LANG=$EDITION_LANG is not a language this board can print." >&2
+        echo "  Accepted: en, ko. The firmware carries faces for those two and nothing else," >&2
+        echo "  so any other tag files a paper that prints as empty boxes, or as English." >&2
+        exit 1
+        ;;
+esac
+
+if ! LANGUAGE_SECTION="$(python3 "$REPO/agent/prompt.py" --language-section "$EDITION_LANG")"; then
+    echo "file-edition: python3 $REPO/agent/prompt.py --language-section $EDITION_LANG failed;" >&2
+    echo "  refusing to file, because the paper would come out in English without saying so." >&2
+    exit 1
+fi
+
+printf '%s%s\n\nThe repository is at %s. The edition directory is %s.\n' \
+    "$(cat "$REPO/tools/edition/PROMPT.md")" \
+    "$LANGUAGE_SECTION" \
+    "$REPO" "$EDITION_DIR" |
 EDITION_DIR="$EDITION_DIR" \
 claude --print \
     --add-dir "$EDITION_DIR" \

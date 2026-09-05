@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
+import { en } from '../i18n/en'
+import { setActiveLanguage } from '../i18n'
 import { Esp32Error, humanError } from './esp32'
 import {
   decideNewsUrlSave,
@@ -391,6 +393,34 @@ describe('decideNewsUrlSave', () => {
       'Saved. The board is fetching it now.',
     )
   })
+
+  it('says all six of them in the app’s language', () => {
+    // Six sentences, one per branch, and the branching itself is language-free: the decision
+    // above chose which sentence, and only the words change here.
+    setActiveLanguage('ko')
+    try {
+      const HANGUL = /[가-힣]/
+      expect(decideNewsUrlSave(URL, { ok: true }, null).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave('', { ok: true }, null).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave(URL, { noClient: true }, null).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave(URL, { noClient: true }, false).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave('', { noClient: true }, false).message).toMatch(HANGUL)
+      expect(decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null).message).toMatch(
+        HANGUL,
+      )
+      expect(decideNewsUrlSave(URL, { error: new Esp32Error('busy') }, null).message).toMatch(
+        HANGUL,
+      )
+      // The board's own refusal still comes through `humanError`, so it is Korean for the same
+      // reason and not for a second one.
+      expect(
+        decideNewsUrlSave(URL, { error: new Esp32Error('news_url_invalid', undefined, 400) }, null)
+          .message,
+      ).toBe(humanError(new Esp32Error('news_url_invalid', undefined, 400)))
+    } finally {
+      setActiveLanguage('en')
+    }
+  })
 })
 
 // This app has no component-testing library, so the wiring is pinned the way the humanError rule
@@ -418,10 +448,19 @@ describe('the screens are wired to the rules', () => {
   })
 
   it('settings offers the board-less phone the reader’s sentence, on `=== false` and not on falsiness', () => {
-    const src = read('src/app/(tabs)/settings.tsx')
-    expect(src).toMatch(/Today reads from this address\. A board you set up later will get it too\./)
-    expect(src).toMatch(/Not yet on the board — it will be sent the next time this app reaches it\./)
-    expect(src).toMatch(/hasBoard === false/)
+    // Both sentences moved into the string catalogue when the app learned a second language, so
+    // this now pins the two halves separately: the *wording* against `en.ts`, and the *branch* —
+    // including which key each arm reaches for — against the screen. Either half alone would pass
+    // a screen that reads perfectly and says the wrong thing to the wrong phone.
+    expect(en.settings.news.pendingNoBoard).toMatch(
+      /Today reads from this address\. A board you set up later will get it too\./,
+    )
+    expect(en.settings.news.pendingWithBoard).toMatch(
+      /Not yet on the board — it will be sent the next time this app reaches it\./,
+    )
+    expect(read('src/app/(tabs)/settings.tsx')).toMatch(
+      /hasBoard === false \? s\.settings\.news\.pendingNoBoard : s\.settings\.news\.pendingWithBoard/,
+    )
   })
 
   it('settings.tsx decides a save by the rule, and waits for the wire first', () => {

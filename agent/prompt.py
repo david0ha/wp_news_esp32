@@ -21,11 +21,19 @@ an argument, the contract is an argument, and the only I/O is reading the
 directory it was handed. That is what lets ``agent/test/test_prompt.py`` assert
 the order of the sections and the shape of a truncated file in milliseconds,
 without a desk, an API key or a network.
+
+The one thing that runs is at the bottom, and it is a printer rather than a
+program: ``python3 agent/prompt.py --language-section ko`` writes
+:func:`language_section` to stdout so that ``agent/standalone/file-edition.sh``
+-- which assembles its own prompt in a shell, with no desk to ask -- can splice
+in the same words rather than carry a second copy of them that drifts.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 
 #: How much of one context file may reach a prompt. Sixty-four kilobytes is far
 #: more standing instruction than anybody writes; the cap is here because this
@@ -37,6 +45,16 @@ MAX_CONTEXT_BYTES = 64 * 1024
 #: also holds images, attachments and editor lock files, and none of those are
 #: something to put in front of a language model.
 CONTEXT_SUFFIXES = (".md", ".json")
+
+#: What to call a language in the one sentence that asks for it. A tag the model
+#: has certainly seen reads better spelled out than as two letters, and Korean
+#: carries its own name beside the English one because that is the language the
+#: instruction is asking for. This is a courtesy and not a gate: an unlisted tag
+#: is asked for by its tag rather than refused, so a desk set to a language
+#: nobody here anticipated still files a page in it. See
+#: :func:`language_section`.
+LANGUAGE_NAMES = {"en": "English", "ko": "Korean (한국어)", "ja": "Japanese", "fr": "French",
+                  "de": "German", "es": "Spanish"}
 
 #: Appended to the day's prompt, after everything either side supplied. It is
 #: the one instruction that is about the *mechanism* rather than the paper: the
@@ -113,9 +131,61 @@ def read_context_dir(path: str | None) -> list[tuple[str, str]]:
     return out
 
 
+def language_section(lang: str | None) -> str:
+    """What goes between the contract and the operator's context when the desk
+    is not set to English. Empty for ``"en"``: today's prompt, byte for byte.
+
+    Args:
+        lang: the edition's language -- a BCP-47 primary subtag, the field the
+            desk keeps in ``settings.json`` and the payload carries as its
+            top-level ``lang``. ``None`` and ``""`` are English, because this
+            is read out of a dict the desk filled in and both are shapes a
+            missing setting arrives as.
+
+    Returns:
+        A section to splice in after the contract, or ``""``.
+
+    **Where this lands is the argument, and it is the same one the contract
+    makes.** The section sits above everything the operator wrote, so a house
+    style that has been in Korean all along cannot push the instruction off
+    the top -- and below the contract, so the length budgets are still read
+    first. It names the fields rather than saying "write in Korean", because
+    the ones that are *not* copy are the ones a model gets wrong: a ticker is
+    not a word, and a translated ``generated_at`` is a payload the parser
+    throws away.
+
+    It also does not restate the budget table. The contract's own "The
+    language" section carries what the faces can draw and how a syllable is
+    counted; two copies of a number is one copy that goes stale.
+    """
+    if not lang or lang == "en":
+        return ""
+    name = LANGUAGE_NAMES.get(lang, lang)
+    lines = [
+        "\n\n---\n\n# The edition's language\n\n",
+        f"Write every reader-facing string in {name}: headlines, decks, bodies, kickers, "
+        "bylines, captions, briefs, dossier labels and values, statement titles and row "
+        "labels, the dateline, the session line and the as-of line. Tickers, exchange codes, "
+        f"tile ids and `generated_at` stay as they are. Set `\"lang\": \"{lang}\"` at the top "
+        "level of news.json. The contract's section \"The language\" says what the faces can "
+        "draw and how the length budget is counted in this language; read it before writing.\n",
+    ]
+    if lang == "ko":
+        # The two Korean specifics that are not in any general instruction: the
+        # faces carry the KS X 1001 set and nothing beyond it, and a won sign
+        # is a glyph none of them has -- a page that spells it "₩" fails the
+        # validator on a character rather than on anything a reader would call
+        # an error.
+        lines.append(
+            "\nUse only KS X 1001 완성형 syllables; write won as 원/억원/조원, never ₩; "
+            "a syllable counts as two characters against every budget — use the "
+            "Korean column of the table.\n")
+    return "".join(lines)
+
+
 def build_prompt(contract: str, context: list[tuple[str, str]],
                  directives: list[dict], command_text: str,
-                 kind: str = "file_edition") -> str:
+                 kind: str = "file_edition", lang: str = "en") -> str:
     """Assemble one turn's prompt.
 
     Args:
@@ -131,18 +201,25 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
             ``store.COMMAND_KINDS``, the same way ``loop.handle`` treats a
             kind it does not recognise as ``"file_edition"`` rather than
             raising over it.
+        lang: the edition's language, from the desk's settings. ``"en"`` --
+            the default, and what an unset or unreadable setting reads as --
+            leaves this prompt byte-identical to the one this worker has
+            always sent; anything else adds :func:`language_section`.
 
     Returns:
-        The contract first, then the operator's files under their own names,
-        then the directives as bullets, then today's instruction, then the tail
-        `kind` selects.
+        The contract first, then the language section when there is one, then
+        the operator's files under their own names, then the directives as
+        bullets, then today's instruction, then the tail `kind` selects.
 
     The order is the argument. The contract is first because everything after it
     is somebody's opinion and an opinion must not be able to push the length
-    budgets off the top. The instruction is last because it is the thing being
-    answered, and a model reading a long prompt answers the end of it.
+    budgets off the top. The language comes straight after it for the same
+    reason and one more: it is not an opinion either, it is what the paper is,
+    and the operator's own notes are quite likely written in it already. The
+    instruction is last because it is the thing being answered, and a model
+    reading a long prompt answers the end of it.
     """
-    parts = [contract]
+    parts = [contract, language_section(lang)]
 
     if context or directives:
         parts.append("\n\n---\n\n# This desk's standing instructions\n")
@@ -214,3 +291,27 @@ def look_prompt(sheet_paths: list[str]) -> str:
         "disagrees with the bar drawn under it.\n\n"
         "Answer with exactly one word on the first line — FILE or REVISE — and then, if "
         "REVISE, what is wrong and fix it in $EDITION_DIR.\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Print one piece of a prompt, for a caller that is not Python.
+
+    The standalone producer builds its prompt in ``printf``, so the only way it
+    can say the same thing about the language as the worker does is to ask this
+    module for the words. ``--language-section en`` prints nothing and exits 0,
+    which is what makes the shell side a plain substitution with no branch in it.
+    """
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--language-section", metavar="TAG",
+                    help="print the section for a language tag, and nothing for 'en'")
+    args = ap.parse_args(argv)
+
+    if args.language_section is None:
+        ap.print_help(sys.stderr)
+        return 2
+    sys.stdout.write(language_section(args.language_section))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -17,6 +17,7 @@ import { ScreenMessage } from '../components/ScreenMessage'
 import { useDevice } from '../lib/device'
 import { Esp32Error, humanError } from '../lib/esp32'
 import { SCREEN_H, SCREEN_W, decode } from '../lib/screen'
+import { useStrings } from '../i18n'
 import { colors, fonts, layout, radius, space } from '../theme'
 
 /**
@@ -32,6 +33,7 @@ import { colors, fonts, layout, radius, space } from '../theme'
  */
 export default function Preview() {
   const router = useRouter()
+  const t = useStrings()
   const { client, hasDevice } = useDevice()
   const { width } = useWindowDimensions()
 
@@ -51,13 +53,11 @@ export default function Preview() {
       await new Promise((resolve) => setTimeout(resolve, 0))
       setPng(decode(fb).pngBase64)
     } catch (e) {
-      setError(
-        e instanceof Esp32Error ? humanError(e) : 'Couldn’t read the page off the board.',
-      )
+      setError(e instanceof Esp32Error ? humanError(e) : t.preview.readFailed)
     } finally {
       setLoading(false)
     }
-  }, [client])
+  }, [client, t])
 
   useEffect(() => {
     load()
@@ -88,7 +88,7 @@ export default function Preview() {
   const header = (
     <View style={styles.titleRow}>
       <BackButton onPress={() => (router.canGoBack() ? router.back() : router.replace('/board'))} />
-      <Text style={styles.title}>On the glass</Text>
+      <Text style={styles.title}>{t.preview.title}</Text>
       <View style={styles.backSpacer} />
     </View>
   )
@@ -139,16 +139,12 @@ export default function Preview() {
           centerContent
         >
           <Image
-            accessibilityLabel="The page currently printed on the board"
+            accessibilityLabel={t.preview.sheet}
             source={{ uri: `data:image/png;base64,${png}` }}
             style={[styles.sheet, { width: sheetWidth, height: sheetHeight }]}
             resizeMode="contain"
           />
-          <Text style={styles.note}>
-            This is the framebuffer itself, in the measured inks. A frame caught mid-render can show
-            part of one edition and part of the next — that is the download, not the panel. Fetch it
-            again.
-          </Text>
+          <Text style={styles.note}>{t.preview.note}</Text>
           {/* A failed REFRESH, said out loud over the sheet it failed to replace.
               This is not the same case as a failed first load, and it is the more common one: a
               board on a cell answers while it is awake, and the visit after that finds it asleep.
@@ -160,34 +156,37 @@ export default function Preview() {
           {error ? (
             <View style={styles.staleNote}>
               <Text style={styles.error}>{error}</Text>
-              <Text style={styles.note}>
-                The sheet above is the last one that came back, not a fresh read.
-              </Text>
+              <Text style={styles.note}>{t.preview.staleNote}</Text>
             </View>
           ) : null}
-          <Button label="Fetch it again" variant="secondary" loading={loading} onPress={load} />
+          <Button
+            label={t.preview.fetchAgain}
+            variant="secondary"
+            loading={loading}
+            onPress={load}
+          />
         </ScrollView>
       ) : (
         <View style={styles.center}>
           {loading ? (
             <>
               <ActivityIndicator color={colors.accent} />
-              <Text style={styles.centerNote}>
-                Reading 960,000 bytes off the board, then drawing them.
-              </Text>
+              <Text style={styles.centerNote}>{t.preview.reading}</Text>
             </>
           ) : (
             <>
-              <Text style={styles.error}>{error ?? 'Nothing fetched yet.'}</Text>
+              <Text style={styles.error}>{error ?? t.preview.nothingYet}</Text>
               {/* The awake window, said in full. A board with deep sleep on is unreachable most of
                   the time BY DESIGN — it wakes for about three seconds, asks its desk one
                   question, and goes back down without running a server. There is no fault here to
                   find, and sending someone to look for one is the failure this screen avoids. */}
-              <Text style={styles.centerNote}>
-                A board on a battery only answers while it is awake. Press a button on it — that
-                holds it awake for a couple of minutes, and every request restarts the clock.
-              </Text>
-              <Button label="Try again" onPress={load} loading={loading} style={styles.retryBtn} />
+              <Text style={styles.centerNote}>{t.preview.awakeWindow}</Text>
+              <Button
+                label={t.common.tryAgain}
+                onPress={load}
+                loading={loading}
+                style={styles.retryBtn}
+              />
             </>
           )}
         </View>

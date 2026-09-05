@@ -7,10 +7,11 @@
 # the reader gets an ellipsis in the middle of a sentence and nobody finds out.
 # Validating the SCHEMA does not catch that. Only setting the type catches it.
 #
-# So this runs the actual typesetter — the same news_core, the same seven faces,
-# the same compositor, the same six-ink quantizer the firmware runs — over a
-# candidate payload, at the panel's real 1200x1600, and leaves the sheets as
-# PNGs. It is the last step before filing, and it is not optional:
+# So this runs the actual typesetter — the same news_core, the same thirteen
+# faces (seven Latin, and the six Korean ones each of them reaches through its
+# fallback), the same compositor, the same six-ink quantizer the firmware runs —
+# over a candidate payload, at the panel's real 1200x1600, and leaves the sheets
+# as PNGs. It is the last step before filing, and it is not optional:
 #
 #     tools/edition/render-check.sh "$EDITION_DIR/news.json.tmp"
 #     # -> look at the PNGs it names, THEN rename to news.json

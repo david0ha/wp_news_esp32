@@ -1,23 +1,32 @@
 // Pure display formatters for the dashboard. Kept tiny and testable so the same number is
 // rendered the same way everywhere and nothing throws on the board's loosely-typed JSON.
+//
+// EVERY SENTENCE HERE IS READ FROM THE CATALOGUE INSIDE THE CALL, never captured at module scope.
+// These are the functions a screen imports once at startup and calls on every render, so a
+// `const MSG = strings().…` beside the imports would answer in whatever language was current when
+// the bundle loaded — English, always, since the provider has not run yet — and no test that
+// exercised one function would ever see it. `format.test.ts`'s Korean block is what holds this.
 
-import { MONTHS } from './months'
+import { fill, strings } from '../i18n'
 import { SLEEP_SECONDS_DEFAULT, type NewsFetchResult, type PollSource, type SleepSource } from './esp32'
 
 /** The value that means "the board's own built-in interval" — POST /api/sleep's `0`. */
 const SLEEP_PRESET_DEFAULT = SLEEP_SECONDS_DEFAULT
 
 /**
- * Page index → the app's label, in the firmware's order (ui_news.c).
+ * The app's label for each page, in the firmware's order (ui_news.c).
  *
  * There are two. The board also reports its own `pageTitle` — "FRONT PAGE" / "MARKETS" — which is
  * what is actually printed on the sheet; these are the switcher's labels, which name the pages the
  * way a reader holding the paper would.
  */
-export const PAGE_LABELS = ['A1 Front', 'A2 Accounts'] as const
+export function pageLabels(): readonly string[] {
+  const { front, accounts } = strings().format.pages
+  return [front, accounts]
+}
 
 export function pageLabel(page: number): string {
-  return PAGE_LABELS[page] ?? `Page ${page}`
+  return pageLabels()[page] ?? fill(strings().format.pages.other, { n: String(page) })
 }
 
 /** Thousands-separated count. Returns '—' for non-finite. */
@@ -70,11 +79,12 @@ export function formatChange(bp: number): string {
  * freshly synced.
  */
 export function formatAge(ageSec: number): string {
-  if (!Number.isFinite(ageSec) || ageSec < 0) return 'never'
-  if (ageSec < 60) return `${Math.round(ageSec)}s ago`
-  if (ageSec < 3600) return `${Math.round(ageSec / 60)}m ago`
-  if (ageSec < 86400) return `${Math.round(ageSec / 3600)}h ago`
-  return `${Math.round(ageSec / 86400)}d ago`
+  const ago = strings().format.ago
+  if (!Number.isFinite(ageSec) || ageSec < 0) return ago.never
+  if (ageSec < 60) return fill(ago.seconds, { n: String(Math.round(ageSec)) })
+  if (ageSec < 3600) return fill(ago.minutes, { n: String(Math.round(ageSec / 60)) })
+  if (ageSec < 86400) return fill(ago.hours, { n: String(Math.round(ageSec / 3600)) })
+  return fill(ago.days, { n: String(Math.round(ageSec / 86400)) })
 }
 
 /**
@@ -84,19 +94,24 @@ export function formatAge(ageSec: number): string {
  * a day: "every 1440m" is a number nobody can picture.
  */
 export function formatInterval(seconds: number): string {
+  const interval = strings().format.interval
   if (!Number.isFinite(seconds) || seconds <= 0) return '—'
-  if (seconds < 60) return `every ${Math.round(seconds)}s`
+  if (seconds < 60) return fill(interval.seconds, { n: String(Math.round(seconds)) })
   if (seconds < 3600) {
     const m = seconds / 60
-    return `every ${Number.isInteger(m) ? m : m.toFixed(1)}m`
+    return fill(interval.minutes, { n: Number.isInteger(m) ? String(m) : m.toFixed(1) })
   }
   const h = seconds / 3600
-  return `every ${Number.isInteger(h) ? h : h.toFixed(1)}h`
+  return fill(interval.hours, { n: Number.isInteger(h) ? String(h) : h.toFixed(1) })
 }
 
 /**
  * The measured refresh time. Zero means the firmware has not refreshed since boot, which is "not
  * measured yet" — printing "0 ms" would read as an impossibly fast e-Paper panel.
+ *
+ * `ms` and `s` are SI symbols and stay out of the catalogue, for the same reason "Wi-Fi" and "IP"
+ * do: they are what a Korean phone's own settings print, and a translation would make the figure
+ * harder to read rather than easier.
  */
 export function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '—'
@@ -106,41 +121,43 @@ export function formatMs(ms: number): string {
 
 /** A sentence for each `source.lastResult`, saying what to go and check. */
 export function fetchResultMessage(result: NewsFetchResult): string {
+  const m = strings().format.fetchMessage
   switch (result) {
     case 'ok':
-      return 'Last poll succeeded.'
+      return m.ok
     case 'not_modified':
-      return 'The board asked and the desk said nothing had changed. That is a successful poll.'
+      return m.notModified
     case 'no_url':
-      return 'No news URL set — the board is showing its built-in demo edition.'
+      return m.noUrl
     case 'transport':
-      return 'Couldn’t reach that address. Is the machine serving it awake and on this network?'
+      return m.transport
     case 'http_status':
-      return 'The server answered, but with an error. Check the path in the address.'
+      return m.httpStatus
     case 'bad_payload':
-      return 'The server answered with something that isn’t an edition.'
+      return m.badPayload
     default:
-      return 'The board reported a result this app doesn’t recognise.'
+      return m.unknown
   }
 }
 
 /** Short status word for the chip beside the edition. */
 export function fetchResultLabel(result: NewsFetchResult): string {
+  const l = strings().format.fetchLabel
   switch (result) {
     case 'ok':
-      return 'synced'
+      return l.ok
     case 'not_modified':
-      return 'up to date'
+      return l.notModified
     case 'no_url':
-      return 'demo'
+      return l.noUrl
     case 'transport':
-      return 'unreachable'
+      return l.transport
     case 'http_status':
-      return 'server error'
+      return l.httpStatus
     case 'bad_payload':
-      return 'bad payload'
+      return l.badPayload
     default:
-      return 'unknown'
+      return l.unknown
   }
 }
 
@@ -184,20 +201,22 @@ export function changeTone(bp: number): Tone {
  * number will still be true tomorrow.
  */
 export function pollSourceLabel(source: PollSource): string {
-  return source === 'policy' ? 'set by the desk' : 'built into this board'
+  const s = strings().format.pollSource
+  return source === 'policy' ? s.policy : s.board
 }
 
 /** Which of the four layers set the sleep interval (docs/app-control.md's table). */
 export function sleepSourceLabel(source: SleepSource): string {
+  const s = strings().format.sleepSource
   switch (source) {
     case 'policy':
-      return 'set by the desk'
+      return s.policy
     case 'api':
-      return 'set from this app'
+      return s.api
     case 'nvs':
-      return 'set during setup'
+      return s.nvs
     default:
-      return 'the board’s built-in default'
+      return s.default
   }
 }
 
@@ -210,13 +229,23 @@ export function sleepSourceLabel(source: SleepSource): string {
  * another timezone rendering "13 Aug, 22:12" beside a sheet that says the 14th is the app
  * disagreeing with the thing it is describing. Anything that is not an ISO timestamp is shown as
  * it arrived — a producer sending something else is a producer bug, and this is where it is seen.
+ *
+ * The ORDER is the catalogue's, not this function's. English reads "14 Aug 2026, 13:12"; Korean
+ * counts down from the year, "2026년 8월 14일 13:12". So the template names its four parts and
+ * each language arranges them. The ` UTC` suffix stays outside it — a timezone is not a word.
  */
 export function formatGeneratedAt(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso)
   if (!m) return iso
-  const month = MONTHS[Number(m[2]) - 1]
+  const month = strings().months.short[Number(m[2]) - 1]
   if (!month) return iso
-  return `${Number(m[3])} ${month} ${m[1]}, ${m[4]}:${m[5]}${iso.endsWith('Z') ? ' UTC' : ''}`
+  const stamp = fill(strings().format.generatedAt, {
+    day: String(Number(m[3])),
+    month,
+    year: m[1],
+    time: `${m[4]}:${m[5]}`,
+  })
+  return `${stamp}${iso.endsWith('Z') ? ' UTC' : ''}`
 }
 
 /**

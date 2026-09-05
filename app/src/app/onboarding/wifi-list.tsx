@@ -14,10 +14,12 @@ import {
 } from '../../onboarding/flow'
 import { skipSetup } from '../../onboarding/skip'
 import { esp32, type ScanNetwork } from '../../lib/esp32'
+import { useStrings } from '../../i18n'
 import { colors, fonts, radius } from '../../theme'
 
 export default function WifiList() {
   const router = useRouter()
+  const s = useStrings()
   // Why the wizard opened, and therefore whether the top-right control is an exit. Back is
   // unconditional here — wifi-list is never the first screen, so there is always a turn-on behind
   // it — but SET UP LATER only makes sense on a first run: a re-entry from Settings already has
@@ -77,8 +79,8 @@ export default function WifiList() {
       progress={progressFor('wifi-list')}
       onBack={() => router.back()}
       onSkip={wizardOffersSkip(flow) ? () => void skipSetup(router) : undefined}
-      skipLabel="SET UP LATER"
-      ctaLabel="NEXT"
+      skipLabel={s.onboarding.nav.setUpLater}
+      ctaLabel={s.onboarding.nav.next}
       ctaVariant="secondary"
       canProceed={proceed}
       // news is the first step that does not read the flow — its own SKIP means "leave the URL
@@ -89,12 +91,17 @@ export default function WifiList() {
     >
       <View style={styles.header}>
         <IconBadge name="wifi" size={44} />
-        <Text style={styles.caption}>Choose the Wi-Fi the board should join.</Text>
+        <Text style={styles.caption}>{s.onboarding.wifi.caption}</Text>
       </View>
 
       <View style={styles.sectionRow}>
-        <Text style={styles.sectionLabel}>NETWORKS</Text>
-        <Pressable accessibilityLabel="Rescan networks" onPress={scan} hitSlop={8} disabled={loading}>
+        <Text style={styles.sectionLabel}>{s.onboarding.wifi.networks}</Text>
+        <Pressable
+          accessibilityLabel={s.onboarding.wifi.rescan}
+          onPress={scan}
+          hitSlop={8}
+          disabled={loading}
+        >
           <Ionicons name="refresh" size={18} color={loading ? colors.textFaint : colors.text} />
         </Pressable>
       </View>
@@ -103,14 +110,14 @@ export default function WifiList() {
         {loading ? (
           <View style={styles.state}>
             <ActivityIndicator color={colors.accent} />
-            <Text style={styles.stateText}>Scanning…</Text>
+            <Text style={styles.stateText}>{s.onboarding.wifi.scanning}</Text>
           </View>
         ) : (
           <>
             {error ? (
               <Pressable style={styles.state} onPress={scan} accessibilityRole="button">
-                <Text style={styles.stateText}>Couldn’t reach the board. Make sure you’re on its setup Wi-Fi.</Text>
-                <Text style={styles.retry}>TAP TO RETRY</Text>
+                <Text style={styles.stateText}>{s.onboarding.wifi.scanFailed}</Text>
+                <Text style={styles.retry}>{s.onboarding.wifi.tapToRetry}</Text>
               </Pressable>
             ) : (
               uniqueNetworks.map((net, i) => {
@@ -157,7 +164,7 @@ export default function WifiList() {
                 setSelectedSecured(true)
               }}
             >
-              <Text style={[styles.ssid, other && styles.ssidSelected]}>Other…</Text>
+              <Text style={[styles.ssid, other && styles.ssidSelected]}>{s.onboarding.wifi.other}</Text>
               {other ? <Ionicons name="checkmark" size={20} color={colors.accent} /> : null}
             </Pressable>
           </>

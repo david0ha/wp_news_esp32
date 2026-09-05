@@ -6,7 +6,10 @@ import {
   clearNewsUrl,
   clearNewsUrlPending,
   clearSetupSkipped,
+  deskScheme,
+  getDeskBaseUrl,
   getDeviceBaseUrl,
+  getLanguage,
   getNewsUrl,
   isNewsUrlPending,
   isOnboardingComplete,
@@ -15,6 +18,8 @@ import {
   markSetupSkipped,
   peekDeviceBaseUrl,
   peekNewsUrl,
+  saveDeskBaseUrl,
+  saveLanguage,
   saveNewsUrl,
   setDeviceBaseUrl,
 } from './store'
@@ -340,6 +345,164 @@ describe('persisted key strings', () => {
   it('writes the skip mark under claudepost.setupSkipped', async () => {
     await markSetupSkipped()
     expect(await AsyncStorage.getItem('claudepost.setupSkipped')).toBe('1')
+  })
+
+  it('writes the language choice under claudepost.language', async () => {
+    await saveLanguage('ko')
+    expect(await AsyncStorage.getItem('claudepost.language')).toBe('ko')
+  })
+
+  it('writes the desk address under claudepost.deskBaseUrl, and no token beside it', async () => {
+    await saveDeskBaseUrl('https://desk.example.dev')
+    expect(await AsyncStorage.getItem('claudepost.deskBaseUrl')).toBe('https://desk.example.dev')
+    // The credential that goes with this address lives in the keychain (`deskToken.ts`). Nothing
+    // in AsyncStorage may hold it, and this file is where somebody would put it by reflex.
+    const keys = await AsyncStorage.getAllKeys()
+    expect(keys.filter((k) => /token|secret|password/i.test(k))).toEqual([])
+  })
+})
+
+describe('the desk address', () => {
+  it('is null when nothing is stored', async () => {
+    expect(await getDeskBaseUrl()).toBeNull()
+  })
+
+  it('normalizes before persisting and reads it back', async () => {
+    expect(await saveDeskBaseUrl('https://desk.example.dev/')).toBe(true)
+    __resetStoreCacheForTests()
+    expect(await getDeskBaseUrl()).toBe('https://desk.example.dev')
+  })
+
+  it('keeps the scheme that was typed, because a desk is not always on the LAN', async () => {
+    // The board's address defaults to `http://` and belongs to a machine on this Wi-Fi. A desk
+    // usually does not: on iOS, ATS refuses plain http to anything off the local network, so an
+    // https the operator typed has to survive being saved.
+    expect(await saveDeskBaseUrl('https://desk.example.dev')).toBe(true)
+    __resetStoreCacheForTests()
+    expect(await getDeskBaseUrl()).toBe('https://desk.example.dev')
+  })
+
+  // WHAT A BARE HOSTNAME MEANS, and why it is not the board's answer. Every call on this address
+  // carries the operator's token in a header. `normalizeBaseUrl` defaults a scheme-less address to
+  // `http://` because that is right for the board on the LAN, and Android is built with
+  // `usesCleartextTraffic` for exactly that reason — so a desk saved as `http://desk.example.dev`
+  // would put the token on the wire in the clear, with the platform allowing it. A public name
+  // therefore gets `https://`; the three shapes that can only be local keep `http://`.
+  describe('a scheme-less address', () => {
+    const saved = async (typed: string) => {
+      expect(await saveDeskBaseUrl(typed)).toBe(true)
+      __resetStoreCacheForTests()
+      return getDeskBaseUrl()
+    }
+
+    it('assumes https for a public hostname', async () => {
+      expect(await saved('desk.example.dev')).toBe('https://desk.example.dev')
+    })
+
+    it('assumes https even with a port on it', async () => {
+      expect(await saved('desk.example.dev:8443')).toBe('https://desk.example.dev:8443')
+    })
+
+    it('leaves an IPv4 literal on http — a desk on the operator’s own Mac', async () => {
+      expect(await saved('192.168.0.42:8791')).toBe('http://192.168.0.42:8791')
+    })
+
+    it('leaves localhost on http', async () => {
+      expect(await saved('localhost:8791')).toBe('http://localhost:8791')
+    })
+
+    it('leaves an mDNS .local name on http', async () => {
+      expect(await saved('desk.local')).toBe('http://desk.local')
+    })
+
+    it('leaves a single-label LAN host on http', async () => {
+      // A name with no dot in it cannot have been registered anywhere, so it can only be resolved
+      // by this network — an `/etc/hosts` line, a router's DHCP name, a Docker service. It is also
+      // the shape a desk on the operator's own machine is usually typed in, and `https://claudepost`
+      // is served by nothing at all: the address simply stops working.
+      expect(await saved('claudepost')).toBe('http://claudepost')
+      expect(await saved('claudepost:8791')).toBe('http://claudepost:8791')
+      // Said absolutely. The root dot is not a label, so this is the same host as above.
+      expect(deskScheme('claudepost.')).toBe('claudepost.')
+    })
+
+    it('still sends a dotted public name to https', async () => {
+      // The other half of the rule above, which is the half that protects the token: one dot is
+      // all it takes for a name to be one somebody could have registered.
+      expect(await saved('desk.dev')).toBe('https://desk.dev')
+      expect(await saved('a.b.example.com:8443')).toBe('https://a.b.example.com:8443')
+    })
+
+    it('never overrides a scheme the operator typed', async () => {
+      // Including the one that downgrades: somebody running a desk on their LAN by name has said
+      // what they meant, and silently upgrading it would make the address unreachable instead.
+      expect(await saved('http://desk.example.dev')).toBe('http://desk.example.dev')
+    })
+
+    // Asserted on the decision itself rather than through `saveDeskBaseUrl`, because
+    // `normalizeBaseUrl` refuses a bracketed literal outright — it wants a hostname or a dotted
+    // quad — so an IPv6 desk address cannot be saved by either spelling today. That makes this the
+    // contract of `deskScheme` alone: the port's colon is not the host's, and a loopback the
+    // operator typed in brackets must not be told to speak https, which nothing on their own Mac
+    // is serving.
+    it('leaves a bracketed IPv6 literal on http', () => {
+      expect(deskScheme('[::1]:8791')).toBe('[::1]:8791')
+      expect(deskScheme('[fe80::1]')).toBe('[fe80::1]')
+      expect(deskScheme('[2001:db8::1]/api')).toBe('[2001:db8::1]/api')
+    })
+  })
+
+  it('rejects an address it cannot use and stores nothing', async () => {
+    expect(await saveDeskBaseUrl('not a url')).toBe(false)
+    expect(await saveDeskBaseUrl('')).toBe(false)
+    __resetStoreCacheForTests()
+    expect(await getDeskBaseUrl()).toBeNull()
+  })
+
+  it('retries after a rejecting read', async () => {
+    await saveDeskBaseUrl('https://desk.example.dev')
+    __resetStoreCacheForTests()
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk is having a moment'))
+
+    expect(await getDeskBaseUrl()).toBeNull()
+    expect(await getDeskBaseUrl()).toBe('https://desk.example.dev')
+  })
+})
+
+describe('app language', () => {
+  it('defaults to system with nothing stored', async () => {
+    expect(await getLanguage()).toBe('system')
+  })
+
+  it('round-trips a choice', async () => {
+    await saveLanguage('ko')
+    __resetStoreCacheForTests()
+    expect(await getLanguage()).toBe('ko')
+  })
+
+  it('reads back through the cache before the disk has been asked again', async () => {
+    // The setter fills the cache before its write is awaited, because the caller's next act is to
+    // redraw the app in the new language.
+    await saveLanguage('en')
+    expect(await getLanguage()).toBe('en')
+  })
+
+  // A value this build does not recognise is a setting from another version of the app, or
+  // something that was never written here at all. Reading it loosely would let an unknown string
+  // decide the language — or, worse, become one by being handed straight to the resolver. Falling
+  // to `system` asks the phone, which is what a fresh install does and is right for most people.
+  it.each(['korean', 'KO', '', 'ko-KR', 'fr'])('treats %p as system', async (stored) => {
+    await AsyncStorage.setItem('claudepost.language', stored)
+    expect(await getLanguage()).toBe('system')
+  })
+
+  it('retries after a rejecting read', async () => {
+    await saveLanguage('ko')
+    __resetStoreCacheForTests()
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk is having a moment'))
+
+    expect(await getLanguage()).toBe('system')
+    expect(await getLanguage()).toBe('ko')
   })
 })
 

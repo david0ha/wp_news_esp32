@@ -40,10 +40,10 @@ controllers** that own its columns — master `x 0…599`, slave `x 600…1199`.
 
 ## Fonts
 
-Four families from Google Fonts, all SIL Open Font License 1.1, generated into the seven faces in
-`components/news_core/fonts/` by `tools/gen_fonts.py`. Licence text is bundled per family directory
-as `OFL-<family>.txt` — four files for five downloads, because Source Serif's upright and italic
-share one.
+Six families, all SIL Open Font License 1.1, generated into the thirteen faces in
+`components/news_core/fonts/` by `tools/gen_fonts.py` — seven Latin and six Korean. Licence text is
+bundled per family directory as `OFL-<family>.txt`; Source Serif's upright and italic share one, and
+the three Noto CJK downloads land together as `OFL-noto-cjk.txt`.
 
 - **UnifrakturMaguntia** (masthead blackletter) — https://github.com/google/fonts/tree/main/ofl/unifrakturmaguntia
 - **Playfair Display** (headlines; a Didone, standing in for the Postoni a broadsheet would set) —
@@ -52,15 +52,25 @@ share one.
   https://github.com/google/fonts/tree/main/ofl/sourceserif4
 - **Libre Franklin** (labels; a revival of the Franklin Gothic these slots want) —
   https://github.com/google/fonts/tree/main/ofl/librefranklin
+- **Noto Serif KR** and **Noto Sans KR** (the Korean faces behind the six Latin text faces — Serif
+  Bold under Playfair, Serif Regular under Source Serif, Sans Medium under Libre Franklin) —
+  https://github.com/notofonts/noto-cjk. The `SubsetOTF/KR` builds are downloaded, not the variable
+  Noto CJK, which is a 20 MB multi-language file.
 - [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) — invoked by `tools/gen_fonts.py`.
 - [`fontTools`](https://github.com/fonttools/fonttools) — also invoked by it, and not optional:
   Google publishes three of these four only as variable fonts, and `lv_font_conv` would silently
   take the default instance — Playfair Regular where the table asks for Playfair Bold.
 
-The two 완성형 Korean faces this board used to carry are gone, and with them the `euc-kr`-derived
-2350-syllable table. Headlines now arrive over the network in Latin, so the six text faces carry
-ASCII + Latin-1 + `S_DATA_PUNCT` and cannot be subset further; only the masthead is, and only to the
-Latin alphabet. `ui_strings.h` is where the generator reads the fixed strings from.
+Headlines arrive over the network and cannot be subset, so the six Latin text faces carry
+ASCII + Latin-1 + `S_DATA_PUNCT` in full; only the masthead is subset, and only to the Latin
+alphabet. `ui_strings.h` is where the generator reads the fixed strings from.
+
+The two 완성형 Korean faces this board once carried came back in a different shape. The
+`euc-kr`-derived 2,350-syllable table is `tools/hangul.py` now, asserted on its own count and
+imported by both the font generator and the payload validator, and it feeds **six** Korean faces
+rather than two — one behind each Latin text face, at the same pixel size, reached through
+`lv_font_t.fallback` and named by no call site. An edition says which language it is written in and
+the glyphs follow; see [pages.md](pages.md) for the chain and what it costs.
 
 ## Framework
 

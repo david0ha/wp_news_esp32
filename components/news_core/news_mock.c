@@ -592,6 +592,7 @@ void news_mock(news_t *v)
     CP(v->session,      "U.S. MARKETS CLOSED — AUG 13");
     CP(v->as_of,        "AS OF 05:12 KST");
     CP(v->generated_at, "2026-08-14T05:12:00Z");
+    CP(v->lang,         "en");
 
     CP(v->subject.symbol,   "SNDK");
     CP(v->subject.name,     "Sandisk Corp.");

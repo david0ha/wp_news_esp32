@@ -266,6 +266,9 @@ class HandleResearchTest(unittest.TestCase):
         def directives(self):
             return []
 
+        def settings(self):
+            return {"lang": "en"}
+
         def put_notes(self, text, *, draft=None, command=None):
             self.notes_calls.append({"text": text, "draft": draft, "command": command})
 
@@ -350,6 +353,9 @@ class HandleCustomTest(unittest.TestCase):
         def directives(self):
             return []
 
+        def settings(self):
+            return {"lang": "en"}
+
         def open_draft(self):
             return "d" * 32
 
@@ -384,6 +390,9 @@ class HandleCustomTest(unittest.TestCase):
 
         def directives(self):
             return []
+
+        def settings(self):
+            return {"lang": "en"}
 
         def put_notes(self, text, *, draft=None, command=None):
             self.notes_calls.append({"text": text, "draft": draft, "command": command})

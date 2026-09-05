@@ -90,20 +90,23 @@ sh server/test/run.sh
 sh agent/test/run.sh
 (cd app && npm test && npm run typecheck)   # the client, the PNG decoder, the formatters
 
-# 1) pure logic — ten host tests: the wire format, the demo snapshot, the fetch
-#    layer, the companion-app JSON, the quantizer, the framebuffer repack,
-#    copyfitting, chart scaling, the compositor's tiling invariants, and the
-#    wake decision
+# 1) pure logic — twelve host tests: the wire format, the demo snapshot, the
+#    fetch layer, the companion-app JSON, the quantizer, the framebuffer repack,
+#    copyfitting, chart scaling, the compositor's tiling invariants, the wake
+#    decision, how a figure is spelled, and which language the fixed words are in
 cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 /tmp/vt/test_news_parse && /tmp/vt/test_news_mock && /tmp/vt/test_news_service \
   && /tmp/vt/test_api_json && /tmp/vt/test_palette && /tmp/vt/test_epd6_transpose \
   && /tmp/vt/test_fit && /tmp/vt/test_chart_scale && /tmp/vt/test_compose \
-  && /tmp/vt/test_power_policy
+  && /tmp/vt/test_power_policy && /tmp/vt/test_format && /tmp/vt/test_lang
 
-# 2) provisioning pure logic, and the reference producer against its committed fixture
+# 2) provisioning pure logic, and the reference producer against its committed
+#    fixture — then the producer's language gate: that a Hangul syllable counts
+#    two against a budget, and that one outside KS X 1001 is a validator failure
 sh components/provisioning/test/run.sh
 python3 tools/mock_news_server.py --check
 python3 tools/test_mock_etag.py
+python3 tools/test_validate_lang.py
 
 # 3) the real UI at the real resolution in six inks -> BMP/PNG, plus the layout,
 #    glyph and colour assertions
@@ -115,11 +118,16 @@ idf.py build
 
 The simulator is not a preview, it is a **test**: it fails the build on a missing glyph, on a
 composition that does not tile the well, on ink outside the 30 px margin, on a module that rendered
-nothing, on a label wider than its slot, on a masthead over 1140 px, and on blue or yellow reaching
-the glass. Its assertions are **properties**, not transcriptions — "the modules tile the well" holds
-for every payload, where the old "the lead rule lands on row 1108" could not survive a page that
-changes shape. Look at `sim/shots/*.png` after any UI change — they are drawn in the *measured*
-Spectra 6 inks rather than the saturated ones the UI draws with, so they can be judged as paper.
+nothing, on one of the board's own fixed strings ellipsized by the slot it was given, on a masthead
+over 1140 px, and on blue or yellow reaching the glass. Its assertions are **properties**, not
+transcriptions — "the modules tile the well" holds for every payload, where the old "the lead rule
+lands on row 1108" could not survive a page that changes shape.
+
+It typesets **twice**: the demo snapshot into `sim/shots/`, then the committed Korean fixture into
+`sim/shots/ko/`, and both have to be clean. The second pass is the only thing that exercises a
+language, because the demo edition is English by definition. Look at both after any UI change — the
+sheets are drawn in the *measured* Spectra 6 inks rather than the saturated ones the UI draws with,
+so they can be judged as paper.
 
 The producing agent runs the same typesetter over its own candidate payload before it files, via
 `tools/edition/render-check.sh <news.json>`, and is required to look at the sheets it produces. A
@@ -206,7 +214,7 @@ fingerprint means the same pixels and the device skips a 25-second refresh on th
 
 **4. A wake is a boot, and the page on the glass is the only thing that survives it.** Deep sleep
 does not resume: RAM is gone, PSRAM is gone, the 960,000-byte framebuffer is gone. `sizeof(news_t)`
-is 32,952 bytes against the 8 KB of RTC retention RAM that crosses a sleep, so the snapshot cannot
+is 32,960 bytes against the 8 KB of RTC retention RAM that crosses a sleep, so the snapshot cannot
 survive and no clever packing will make it. What survives is **the glass**, because Spectra 6 is
 bistable — cut the power entirely and the last edition hangs there indefinitely, drawing nothing.
 That one property is the whole reason this is possible, and it makes the feature narrower than its
@@ -256,10 +264,13 @@ components/
     ui_chart.c            line / candle / bar / sparkline, integer scaling, hard pixels
     ui_tile.c             the one-entry photo cache
     ui_common.c           the shared shapes; ui_internal.h holds the grid and the furniture
+    ui_format.c           the pure formatters: grouping, money, percentage, caps
+    ui_lang.c             the board's twelve fixed words, in English and Korean
     wp_palette.c          the six inks and the ordered dither — the only quantizer
     device_api_json.c     the JSON the companion app receives
-    fonts/                seven newspaper faces (OFL) — generated, do not hand-edit
-    test/host/            the ten host tests
+    fonts/                thirteen newspaper faces (OFL) — seven Latin, six Korean
+                          chained behind them; generated, do not hand-edit
+    test/host/            the twelve host tests
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
   device_api/             STA-mode HTTP/JSON control server + mDNS (claudepost.local)
   board_io/               battery ADC
@@ -338,15 +349,37 @@ agent/                    an example worker that files into the desk, plus the s
   stroke on white paper makes to **GREEN**. A chart drawn with `lv_draw_line()` is a black chart
   fringed with green speckle — and now that a chart *may* carry colour, that is worse rather than
   better: the speckle is the exact ink that means "up", scattered along an axis that means nothing.
+- **The edition's language is one wire field, `lang`.** Fixed strings follow it through `ui_lang()`,
+  the copyfitter through `ui_fit_script()`, and **nothing else may branch on it** — no page file, no
+  module renderer, no chart, no compositor cut. That is the whole rule, and it is what keeps a second
+  language from being a second layout: the glyphs arrive by font fallback, the two words that must
+  change come from one table, and the only thing the copyfitter needs to know is that a Hangul
+  syllable is one wide character rather than a cluster of narrow ones. A `if (lang == ko)` anywhere
+  else is the beginning of two newspapers maintained as one.
 - **Never hand-edit `components/news_core/fonts/*.c`.** Run
   `python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools`, then
   `/tmp/fontenv/bin/python tools/gen_fonts.py --download`. fontTools is needed because Google
-  publishes three of the four families only as variable fonts, and lv_font_conv would silently take
-  the default instance — Playfair Regular where the table asks for Playfair Bold. The six text faces
-  carry ASCII + Latin-1 + `S_DATA_PUNCT`, because headlines arrive over the network and cannot be
-  subset; only the masthead face is subset, and only to the Latin alphabet.
+  publishes three of the four Latin families only as variable fonts, and lv_font_conv would silently
+  take the default instance — Playfair Regular where the table asks for Playfair Bold. The six text
+  faces carry ASCII + Latin-1 + `S_DATA_PUNCT`, because headlines arrive over the network and cannot
+  be subset; only the masthead face is subset, and only to the Latin alphabet.
+  **There are thirteen faces, not seven.** Six of them are Korean — Noto Serif KR and Noto Sans KR,
+  one per Latin text face, at the same pixel size, carrying `tools/hangul.py`'s 2,350 KS X 1001
+  syllables plus the jamo and CJK punctuation — and each is reached through the matching Latin face's
+  `lv_font_t.fallback`, which the generator writes into the `.c` because the struct is in flash and
+  cannot be patched at runtime. **No call site names one.** So a Korean headline needs no branch
+  anywhere, keeps its Latin letters and figures in Playfair, and lays out on the primary face's
+  baseline. `--link-fallbacks` re-applies just those pointers over the committed files, which is what
+  to run after regenerating a single face rather than the whole set.
   **All fixed user-visible strings belong in `ui_strings.h`** — that is where the generator reads the
-  glyph set from, and where the simulator's coverage check reads it from.
+  glyph set from, and where the simulator's coverage check reads it from. **A Korean fixed string
+  goes in the `S_KO_*` block of that same header and into `UI_LANG_KO` in `ui_lang.c`**, never as a
+  literal in a page file: the generator scans this one header for the non-Latin characters the Korean
+  faces must carry, and the simulator checks every string in it against every face that could draw
+  it. The board localises twelve words and no more — three badges (two live, and `DEMO`), three
+  standing heads, six column heads — because everything else on the sheet arrives already written in
+  the edition's language. `check_fixed_labels_fit()` fails the build when one of them does not fit its slot;
+  shorten the word, never the column.
 - **Every face is 1 bpp**, including the 112 px masthead. Anti-aliased text goes through the same
   ordered dither as a photograph: a 16 px serif stem is about 1.5 px wide, so half of it is
   anti-aliasing, and dithering that half turns a solid stem into a dotted one. Measured side by side
@@ -407,12 +440,15 @@ agent/                    an example worker that files into the desk, plus the s
   per-wake figure that belongs in `plan.sleep_seconds` — writing it into `wp_rtc_state.sleep_seconds`
   would turn one 120-second targeted wake into this board's local interval permanently, at 720 wakes
   a day, with every log line agreeing.
-- **`sizeof(news_t)` is 32,952 bytes** — measured, not estimated. That is four times `UiTask`'s whole
+- **`sizeof(news_t)` is 32,960 bytes** — measured, not estimated. That is four times `UiTask`'s whole
   8 KB stack, so all three snapshots in `user_app.cpp` — the state, the UI copy and the fetch buffer —
   are file-scope statics, safe only because the single-owner rule holds: `UiTask` is the only caller
-  of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown three times:
+  of two and `NewsTask` of the third. Never put a snapshot on a frame. It has grown four times:
   19,720 to 24,328 when both statements gained a numeric plane beside their printed cells, 24,328 to
-  32,932 when `NEWS_BODY_MAX` went to 4,000, and 32,932 to 32,952 for the `policy` block. The second
+  32,932 when `NEWS_BODY_MAX` went to 4,000, 32,932 to 32,952 for the `policy` block, and 32,952 to
+  32,960 for `lang` — eight bytes of language tag and not a byte more, because `char[8]` aligns to
+  one: it goes in ahead of the four bytes of padding that already stood before `policy`, which are
+  still four bytes of padding. The second
   is the banner forme's bill — a lead across the whole measure runs four legs down most of a 1,600 px
   sheet, which is about four thousand characters of body, and at 2,400 the field truncated the copy
   mid-word and the legs came up short. The third is sixteen bytes of policy and four of tail padding:

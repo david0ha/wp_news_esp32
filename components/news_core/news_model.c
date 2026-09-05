@@ -18,7 +18,9 @@
  *
  * So it is measured here, once, and the build breaks when it moves. That is the
  * point of the assert rather than a defect in it: a capacity that grew wants
- * the four places that quote the old number brought with it.
+ * every place that quotes the old number brought with it, and there are eight
+ * of them — the message below lists them rather than leaving the count to be
+ * remembered, because it was written as "four" and had been wrong for a while.
  *
  * One number serves the host tests, the simulator and the firmware because the
  * layout is the same on x86-64 and on Xtensa. That used to hold for a simple
@@ -29,10 +31,11 @@
  * measurement on each target rather than an argument from the member types, and
  * this assert is what takes it: the firmware build fails here if Xtensa ever
  * disagrees with the host. */
-_Static_assert(sizeof(news_t) == 32952,
-               "sizeof(news_t) moved. Measure it, then update the figure in "
-               "CLAUDE.md, in user_app.cpp and in the design spec — they all "
-               "quote it, and they are all wrong now.");
+_Static_assert(sizeof(news_t) == 32960,
+               "sizeof(news_t) moved. Measure it, then grep the old figure out "
+               "of the tree — CLAUDE.md, docs/news-contract.md, docs/pages.md, "
+               "the deep-sleep spec, power.h, power_policy.c, user_app.cpp and "
+               "main.cpp all quote it, and they are all wrong now.");
 
 /* --- UTF-8-safe copy ------------------------------------------------------ */
 
@@ -145,6 +148,31 @@ size_t news_str_copy_prose(char *dst, size_t dst_size, const char *src)
     }
     dst[out] = '\0';
     return out;
+}
+
+/* --- the language tag ----------------------------------------------------- */
+
+/* A clamp, exactly like every other field's: a payload that names its language
+ * badly still carries a front page, and refusing one over a two-letter field
+ * would leave yesterday's sheet on the glass over a spelling.
+ *
+ * The accepted shape is the BCP-47 PRIMARY subtag and nothing else — two or
+ * three ASCII letters. "ko-KR" is deliberately not accepted rather than
+ * truncated to "ko": the tag chooses a set of fixed strings and a break rule,
+ * and a producer that sent a region has said something this board has no
+ * table for. "en" is the answer to every question it cannot answer, and it is
+ * also what a payload filed before this field existed means. */
+void news_lang_normalise(char *lang)
+{
+    if (!lang) return;
+    size_t n = 0;
+    for (; lang[n]; n++) {
+        char c = lang[n];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c < 'a' || c > 'z') { n = 0; break; }
+        lang[n] = c;
+    }
+    if (n < 2 || n > 3) { lang[0] = 'e'; lang[1] = 'n'; lang[2] = '\0'; }
 }
 
 /* --- chart kind ----------------------------------------------------------- */
@@ -317,6 +345,15 @@ uint32_t news_hash(const news_t *v)
     h_str(&h, v->session);
     h_str(&h, v->as_of);
     h_str(&h, v->generated_at);
+
+    /* The language is not printed anywhere on the sheet and is fingerprinted
+     * anyway, which is the opposite of the rule `policy` gets and for the same
+     * reason: what this asks is whether the PIXELS move. The tag chooses the
+     * eleven fixed strings beside the copy and the rule the copyfitter breaks a
+     * line with, so two payloads that differ only here are two different
+     * sheets. It costs nothing on a board whose desk never changes language,
+     * because a tag that does not move does not move the hash. */
+    h_str(&h, v->lang);
 
     /* The subject is the whole edition, and every field of it is either printed
      * in the nameplate or measured against another one — the last against the

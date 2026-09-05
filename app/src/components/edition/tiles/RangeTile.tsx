@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
+import { useStrings } from '../../../i18n'
 import { colors, fonts, radius, space, tabular, type } from '../../../theme'
 import {
   RANGE_STAT_ROW_H,
@@ -8,6 +9,8 @@ import {
 } from '../../../lib/edition/tiles'
 import { DASH, formatPrice } from '../../../lib/edition/format'
 import { lineHeightOf } from '../metrics'
+import { useEditionFace, useEditionLang, useEditionType } from '../typeRamp'
+import { rangeStatValueStyle } from './range'
 
 // ---------------------------------------------------------------------------------------------
 // THE VERTICAL SUM. This tile's body is fixed furniture — a track box and four numbers, none of
@@ -50,6 +53,36 @@ const STAT_LABEL_LINE = 16
 const STAT_VALUE_LINE = 17
 
 /**
+ * THE GUTTER BETWEEN THE TWO STAT COLUMNS. The size that fits a price inside one is `range.ts`.
+ *
+ * The grid is two 50% cells and had neither. A Korean edition found what that costs: a KRX price
+ * is five digits and two decimals, and `94,100.00` measures 70 pt against the 72 pt cell — so
+ * Open's value and Prev close's value met with two points between them and the row read as one
+ * eighteen-digit number, `94,100.0093,500.00`. Nothing was clipped and nothing was ellipsized,
+ * which is why no clamp caught it: the two numbers were simply touching.
+ *
+ * FOUR POINTS AND A POINT OF SIZE, and both halves are load-bearing at 390 pt — the cell is 72
+ * and the two longest strings that share it are a nine-character price (70 pt at 14, 65 at 13)
+ * and the label `Prev close` (65 pt). A wider gutter ellipsizes the label; the old size
+ * ellipsizes the price. Together they leave about three points at each, which is the whole
+ * budget. Check both when either moves.
+ *
+ * The point of size is spent only where it is needed, which is why it is not here: it follows the
+ * edition's language, like the ramp and the statement grid's label column, and `range.ts` holds
+ * that rule and the test on it. An English edition draws these numbers at the size it always did.
+ * The gutter is charged to both, because two numbers with four points between them is the right
+ * spacing at either size and it costs an English price — six characters in a 68 pt cell — nothing.
+ *
+ * `adjustsFontSizeToFit` was tried here first and is the wrong tool: iOS shrinks to fit the
+ * HEIGHT as well, and the stat grid is a `flex: 1` box whose second wrapped row runs a point
+ * short — so High and Low came out at about 8 pt beside a full-size Open and Prev close. Nothing
+ * about that is visible in a width estimate.
+ *
+ * Neither line height moves at either size, so `RANGE_STAT_ROW_H` and the estimator are untouched.
+ */
+const STAT_GUTTER = space.xs
+
+/**
  * Where today's price sits in the year's range, with the day's four numbers under it.
  *
  * The position mark is `colors.text` on a `surfaceAlt` track — INK, not green or red. A position
@@ -57,30 +90,35 @@ const STAT_VALUE_LINE = 17
  * firmware's rule for a hero figure's range bar, carried over unchanged.
  */
 export function RangeTile({ tile }: { tile: Extract<Tile, { kind: 'range' }> }) {
+  const t = useStrings().today
+  const ty = useEditionType()
   const s = tile.subject
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>Range</Text>
+      <Text style={[ty.headingSm, styles.head]}>{t.heads.range}</Text>
 
-      <Track low={s.wk52Low} high={s.wk52High} at={s.last} caption="52 weeks" />
+      <Track low={s.wk52Low} high={s.wk52High} at={s.last} caption={t.range.weeks52} />
 
       <View style={styles.grid}>
-        <Stat label="Open" value={s.open} />
-        <Stat label="Prev close" value={s.prevClose} />
-        <Stat label="High" value={s.high} />
-        <Stat label="Low" value={s.low} />
+        <Stat label={t.range.open} value={s.open} />
+        <Stat label={t.range.prevClose} value={s.prevClose} />
+        <Stat label={t.range.high} value={s.high} />
+        <Stat label={t.range.low} value={s.low} />
       </View>
     </View>
   )
 }
 
 function Stat({ label, value }: { label: string; value: number | null }) {
+  const ty = useEditionType()
+  const face = useEditionFace()
+  const size = rangeStatValueStyle(useEditionLang())
   return (
     <View style={styles.stat}>
-      <Text style={styles.statLabel} numberOfLines={1}>
+      <Text style={[ty.caption, styles.statLabel]} numberOfLines={1}>
         {label}
       </Text>
-      <Text style={[styles.statValue, tabular]} numberOfLines={1}>
+      <Text style={[face(fonts.semibold), styles.statValue, size, tabular]} numberOfLines={1}>
         {formatPrice(value)}
       </Text>
     </View>
@@ -107,6 +145,8 @@ function Track({
   at: number | null
   caption: string
 }) {
+  const ty = useEditionType()
+  const face = useEditionFace()
   // Without both ends and a position there is no track to draw — the row keeps its height and
   // says what is missing, so the tile does not change shape when a field is absent.
   const drawable = low !== null && high !== null && at !== null && high > low
@@ -114,27 +154,29 @@ function Track({
   return (
     <View style={styles.trackBox}>
       <View style={styles.trackRow}>
-        <Text style={[styles.end, tabular]} numberOfLines={1}>
+        <Text style={[face(fonts.regular), styles.end, tabular]} numberOfLines={1}>
           {formatPrice(low)}
         </Text>
         <View style={styles.track}>
           {drawable ? <View style={[styles.mark, { left: percentLeft(pct) }]} /> : null}
         </View>
-        <Text style={[styles.end, tabular]} numberOfLines={1}>
+        <Text style={[face(fonts.regular), styles.end, tabular]} numberOfLines={1}>
           {formatPrice(high)}
         </Text>
       </View>
-      <Text style={styles.caption} numberOfLines={1}>
+      <Text style={[ty.caption, styles.caption]} numberOfLines={1}>
         {drawable ? caption : `${caption} ${DASH}`}
       </Text>
     </View>
   )
 }
 
+// The faces are gone from this sheet: every one of them arrives in front of these rules from the
+// edition's ramp (`typeRamp.tsx`), because Inter cannot set the Korean this tile's caption and
+// heading carry. What is left here is the geometry, which is the half the estimator agrees with.
 const styles = StyleSheet.create({
   root: { flex: 1 },
   head: {
-    ...type.headingSm,
     height: TILE_HEAD,
   },
   trackBox: {
@@ -165,13 +207,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.text,
   },
   end: {
-    fontFamily: fonts.regular,
     fontSize: 11,
     lineHeight: END_LINE,
     color: colors.textDim,
   },
   caption: {
-    ...type.caption,
     lineHeight: RANGE_CAPTION_LINE,
   },
   grid: {
@@ -188,14 +228,18 @@ const styles = StyleSheet.create({
     width: '50%',
     height: RANGE_STAT_ROW_H,
     justifyContent: 'center',
+    // Charged to both cells, not only the left one, so the two columns stay the same width and
+    // the second row's numbers still line up under the first's.
+    paddingRight: STAT_GUTTER,
   },
   statLabel: {
-    ...type.caption,
     lineHeight: STAT_LABEL_LINE,
   },
+  // No `fontSize`: that one follows the edition's language and arrives from `range.ts` in front of
+  // this rule. The line height does NOT follow it — the estimator sized the row off 17 before
+  // anything rendered, and a ramp that moved it would leave the box measured for the other
+  // language.
   statValue: {
-    fontFamily: fonts.semibold,
-    fontSize: 14,
     lineHeight: STAT_VALUE_LINE,
     color: colors.text,
   },

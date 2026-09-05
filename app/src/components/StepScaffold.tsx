@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Screen } from './Screen'
 import { Button } from './Button'
 import { BackButton } from './BackButton'
+import { useStrings } from '../i18n'
 import { colors, fonts, layout } from '../theme'
 
 /**
@@ -13,7 +14,7 @@ export function StepScaffold({
   progress,
   onBack,
   onSkip,
-  skipLabel = 'SKIP',
+  skipLabel,
   ctaLabel,
   onNext,
   canProceed = true,
@@ -31,6 +32,11 @@ export function StepScaffold({
    * clears the field and advances one step — the user stays in setup — while turn-on and wifi-list
    * hand back a control that leaves setup entirely. "SET UP LATER" says the second thing; SKIP
    * stays the default so the step that already meant it reads unchanged.
+   *
+   * The default is read from the catalogue below rather than written here as a literal, which is
+   * the whole reason it is `?: string` and not `= 'SKIP'`: a default argument cannot read the
+   * language, and an English word baked into this signature would be the one control on the wizard
+   * that never translates.
    */
   skipLabel?: string
   ctaLabel: string
@@ -42,13 +48,18 @@ export function StepScaffold({
   aurora?: boolean
   children: ReactNode
 }) {
+  // The hook runs on every render, not behind the `??`: `useStrings()` is a `useContext` and a
+  // short-circuited one would change the hook order between a caller that passes a label and one
+  // that does not.
+  const s = useStrings()
+  const skipWord = skipLabel ?? s.onboarding.nav.skip
   return (
     <Screen aurora={aurora}>
       <View style={styles.topBar}>
         {onBack ? <BackButton onPress={onBack} /> : <View style={styles.backSpacer} />}
         {onSkip ? (
-          <Pressable accessibilityRole="button" accessibilityLabel={skipLabel} onPress={onSkip} style={styles.skipHit}>
-            <Text style={styles.skip}>{skipLabel}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={skipWord} onPress={onSkip} style={styles.skipHit}>
+            <Text style={styles.skip}>{skipWord}</Text>
           </Pressable>
         ) : null}
       </View>

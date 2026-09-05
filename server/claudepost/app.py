@@ -22,7 +22,8 @@ import threading
 from dataclasses import dataclass
 from typing import Mapping
 
-from . import quotes as Q, schedule as sched, schedulefile, watchlist as wl
+from . import (quotes as Q, schedule as sched, schedulefile,
+               settings as st, watchlist as wl)
 from .auth import Tokens
 from .clock import Clock
 from .editions import EditionStore
@@ -144,6 +145,17 @@ class Desk:
         self.watchlist_path = os.path.join(cfg.data_dir, "watchlist.json")
         self.watchlist: dict | None = None
 
+        #: The fourth operator document, after the schedule, the watchlist and
+        #: the standing directives -- and the third of the four kept as a file
+        #: under the serving root, on `schedule_path`'s reasoning again (the
+        #: directives are rows in the store). Like the schedule rather than the
+        #: watchlist it has a default, because there is no state in which the
+        #: paper has no language.
+        self.settings_path = os.path.join(cfg.data_dir, "settings.json")
+
+        self.settings = dict(st.DEFAULT)
+        self.settings_source = "default"
+
         #: Notified whenever a command is enqueued, so a long poll wakes on the
         #: instruction rather than on its next timeout. The queue is in SQLite
         #: and could be polled, but a poll interval is latency nobody has to pay.
@@ -153,6 +165,7 @@ class Desk:
 
         self._load_schedule()
         self._load_watchlist()
+        self._load_settings()
 
     # -- the periodic pass ------------------------------------------------
     def tick(self, now: float | None = None) -> list[str]:
@@ -291,6 +304,24 @@ class Desk:
         wl.save(self.watchlist_path, doc)
         self.watchlist = doc
 
+    def set_settings(self, doc: dict) -> None:
+        """Write ``doc`` down, then put it in force -- in that order.
+
+        The schedule's ordering argument, for the same reason: the file is
+        what the next desk reads, so a crash between the write and the
+        assignment loses nothing, while the other order would lose the whole
+        edit. A write that fails raises out of here and out of the PUT that
+        called it, leaving the language in force exactly what it was.
+
+        ``doc`` is trusted to have been through
+        :func:`~claudepost.settings.parse_settings` already, which is what
+        makes assigning ``settings_source`` here honest: the file on disk and
+        the dict in memory are the same document.
+        """
+        st.save(self.settings_path, doc)
+        self.settings = doc
+        self.settings_source = "file"
+
     def close(self) -> None:
         """Release the database. Serving state on disk is already durable."""
         self.store.close()
@@ -328,6 +359,25 @@ class Desk:
         LOG.info("watchlist %s (%d items, updated %s)",
                  self.watchlist_path, len(self.watchlist["items"]),
                  _stamp(self.watchlist["updated_at"]))
+
+    def _load_settings(self) -> None:
+        """Read the settings off disk, and say in the log what came back.
+
+        Called once, from the constructor, for :meth:`_load_schedule`'s
+        reason: the desk is the only writer of the file, so nothing re-reads
+        it.
+
+        The line earns its place the way the watchlist's does. ``st.load``
+        answers the default both for a desk nobody has ever told and for a
+        file it refused, with only a ``claudepost.settings`` warning to tell
+        them apart -- so without this, a desk printing English because it
+        silently dropped a hand-edited ``settings.json`` reads in its own log
+        exactly like a desk nobody has ever told. Those are different things
+        to go and fix.
+        """
+        self.settings, self.settings_source = st.load(self.settings_path)
+        LOG.info("settings from %s: lang=%s",
+                 self.settings_source, self.settings["lang"])
 
     def _fire_due_wake(self, t: float) -> bool:
         """Enqueue one ``file_edition`` command per wake instant, at most once.

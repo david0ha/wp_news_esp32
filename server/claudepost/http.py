@@ -49,7 +49,8 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import notes, policy, quotes as Q, schedule as sched, tiles, watchlist as wl
+from . import (notes, policy, quotes as Q, schedule as sched, settings as st,
+               tiles, watchlist as wl)
 from .app import COMMAND_ID_RE, Desk, as_int
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
@@ -745,6 +746,33 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
                                             "source": doc["source"]})
         self._send_json(200, {"ok": True, "watchlist": self.desk.watchlist})
 
+    # -- handlers: the settings ---------------------------------------------
+    def h_get_settings(self, _match, _query) -> None:
+        self._send_json(200, {"ok": True, "source": self.desk.settings_source,
+                              "settings": self.desk.settings})
+
+    def h_put_settings(self, _match, _query) -> None:
+        """Validate the whole document, then put it in force and write it down.
+
+        :meth:`h_put_schedule`'s shape exactly, including the refusal: a
+        document carrying a key this desk does not know is refused whole with
+        ``bad_settings`` and leaves the language in force untouched. That
+        matters more here than the single field suggests -- this is the
+        document a later release adds a setting to, so a phone app one
+        version ahead of the desk has to be told no rather than left
+        believing it changed something.
+
+        Read at ``producer`` scope and written at ``operator``: the agent and
+        the phone both need to know what the paper is written in, but which
+        language it is written in is the owner's own call, not a remote
+        worker's.
+        """
+        doc = st.parse_settings(self._json_body())
+        self.desk.set_settings(doc)
+        self.desk.store.audit("settings", {"lang": doc["lang"]})
+        self._send_json(200, {"ok": True, "source": self.desk.settings_source,
+                              "settings": self.desk.settings})
+
     # -- handlers: quotes ---------------------------------------------------
     def h_quotes(self, _match, query) -> None:
         """Last price, day's change and a sparkline, proxied so the phone
@@ -1013,6 +1041,10 @@ _ROUTES = [
     (re.compile(r"^/api/watchlist\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_get_watchlist),
         "PUT": ("operator", DeskHTTPRequestHandler.h_put_watchlist)}),
+
+    (re.compile(r"^/api/settings\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_settings),
+        "PUT": ("operator", DeskHTTPRequestHandler.h_put_settings)}),
 
     (re.compile(r"^/api/quotes\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_quotes)}),

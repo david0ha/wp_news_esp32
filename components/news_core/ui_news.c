@@ -163,6 +163,28 @@ static bool s_demo;
 static bool s_has_dateline;
 static ui_status_t s_status;
 
+/* The edition's language, read off the snapshot wherever it is wanted.
+ *
+ * There was a resolved copy here and an accessor over it, and both are gone.
+ * The module renderers take `v` at every site that reads the language, so the
+ * copy bought them nothing and cost the one thing worth having: ui_compose.h
+ * promises the layout is a pure function of the snapshot, and news_hash()
+ * promises the same fingerprint means the same pixels — a global that had to be
+ * set by one file before another file drew made both promises depend on call
+ * ordering across a file boundary rather than on an argument.
+ *
+ * What is left is this file's own furniture, which genuinely has no `v` in
+ * scope — refresh_chip() below — and takes it from s_data instead. A NULL
+ * snapshot is English, because a board with no edition has no language: the
+ * setup sheet, the no-data page and everything drawn before the first fetch are
+ * the board talking about itself. ui_lang() returns a pointer to a static
+ * table, never into the snapshot, so nothing here outlives the buffer
+ * ui_news.h's lifetime rule lets the caller replace. */
+static const ui_lang_t *lang_now(void)
+{
+    return ui_lang(s_data ? s_data->lang : NULL);
+}
+
 static const char *const PAGE_TITLES[UI_PAGE_COUNT] = {
     S_PAGE_FRONT, S_PAGE_MARKETS,
 };
@@ -457,7 +479,13 @@ static void build_dateline(lv_obj_t *par)
 
     /* The chip is a filled rectangle with the word reversed out of it, so the
      * fill is created first and the type over it. Both are sized to the word by
-     * refresh_chip(); they are built at the widest state word the board has. */
+     * refresh_chip(), which is also where the word itself comes from.
+     *
+     * The seed below is the English macro rather than a table lookup, and that
+     * is not an oversight: the furniture is built before any snapshot has
+     * arrived, so there is no edition to take a language from yet. The string
+     * never reaches the glass — the chip starts hidden and refresh_chip() sets
+     * the text before it is ever shown. */
     s_chip     = ui_fill(par, SLOT_R_X, UI_DATELINE_Y, SLOT_W, UI_DATELINE_H);
     s_chip_txt = ui_lab_inv(par, SLOT_R_X, y, SLOT_W, UI_F_LABEL,
                             LV_TEXT_ALIGN_CENTER, S_BADGE_OFFLINE);
@@ -482,9 +510,10 @@ static void build_dateline(lv_obj_t *par)
 static void refresh_chip(void)
 {
     const char *text = NULL;
-    if (!s_status.online)           text = S_BADGE_OFFLINE;
-    else if (s_status.stale)        text = S_BADGE_STALE;
-    else if (s_have_data && s_demo) text = S_BADGE_DEMO;
+    const ui_lang_t *L = lang_now();
+    if (!s_status.online)           text = L->badge_offline;
+    else if (s_status.stale)        text = L->badge_stale;
+    else if (s_have_data && s_demo) text = L->badge_demo;
 
     ui_show(s_chip, text != NULL);
     ui_show(s_chip_txt, text != NULL);
@@ -793,6 +822,15 @@ void ui_news_set_data(const news_t *v)
     s_have_data    = (v != NULL);
     s_demo         = v && v->demo;
     s_has_dateline = v && v->dateline[0];
+
+    /* The language needs no line of its own here, and that is the point of not
+     * keeping a copy. `s_data` is the snapshot and `v->lang` is on it, so the
+     * badge below and every fixed string the two pages set take the language of
+     * the edition being drawn by construction. The line this replaces had to
+     * come before refresh_chip() and before the page updates at the foot of the
+     * function, and moving it down would have printed one edition's badge in
+     * the previous edition's language: an ordering rule with nothing but a
+     * comment holding it in place. There is no line to move now. */
 
     /* The desk in the middle of the ruled line and the company on the right of
      * it. Both are upper-cased here rather than in ui_strings.h because both

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native'
 import Svg, { Circle, Defs, Line, LinearGradient, Path, Stop } from 'react-native-svg'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
+import { useStrings } from '../i18n'
 import { colors, type } from '../theme'
 import { type ChartPoint } from '../lib/market/types'
 
@@ -33,6 +34,7 @@ export function PriceChart({
   /** A refetch in flight. With points on screen this dims them instead of blanking. */
   loading?: boolean
 }) {
+  const t = useStrings()
   const [width, setWidth] = useState(0)
   const [scrubIdx, setScrubIdx] = useState<number | null>(null)
   const [fillId] = useState(() => `pricechart-fill-${++chartSeq}`)
@@ -145,7 +147,7 @@ export function PriceChart({
         {loading ? (
           <ActivityIndicator color={colors.accent} />
         ) : (
-          <Text style={styles.empty}>No chart data</Text>
+          <Text style={styles.empty}>{t.marketDetail.noChartData}</Text>
         )}
       </View>
     )

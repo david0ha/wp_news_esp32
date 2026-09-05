@@ -31,6 +31,7 @@ static void fill(device_state_t *st)
     st->demo = false;
     snprintf(st->edition, sizeof(st->edition), "SEMICONDUCTORS");
     snprintf(st->generated_at, sizeof(st->generated_at), "2026-08-14T05:12:00Z");
+    snprintf(st->lang, sizeof(st->lang), "en");
 
     snprintf(st->subject.symbol, sizeof(st->subject.symbol), "SNDK");
     snprintf(st->subject.name, sizeof(st->subject.name), "Sandisk Corp.");
@@ -204,6 +205,12 @@ static void test_state_shape(void)
     check_bool(v, "demo", false);
     check_str(v, "edition", "SEMICONDUCTORS");
     check_str(v, "generatedAt", "2026-08-14T05:12:00Z");
+
+    /* The language the edition is written in. Available rather than used: the
+     * app picks its type ramp from the `lang` on the edition JSON it fetches
+     * from the desk. This is what the BOARD says about the page on the glass,
+     * which is the only place a client can learn it without guessing. */
+    check_str(v, "lang", "en");
 
     /* One company a day. The subject is what the edition is about, and it is
      * the cheapest "did the page change" check the app has. */
@@ -525,6 +532,7 @@ static void fill_worst_case(device_state_t *st)
     FILL_WIDEST(edition, '"');
     FILL_WIDEST(page_title, '\\');
     FILL_WIDEST(generated_at, '\n');
+    FILL_WIDEST(lang, '"');
     FILL_WIDEST(subject.symbol, '"');
     FILL_WIDEST(subject.name, '"');
     FILL_WIDEST(subject.exchange, '"');

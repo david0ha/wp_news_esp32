@@ -5,7 +5,7 @@
 // No currency symbol inside formatPrice/formatDelta: screens prefix via
 // currencySymbol(quote.currency) — never a literal '$'.
 
-import { MONTHS } from '../months'
+import { fill, strings } from '../../i18n'
 
 /** Exported because `lib/edition/format.ts` re-exports these formatters and their dash. */
 export const DASH = '—'
@@ -85,12 +85,13 @@ export function formatRatio(n: number | null | undefined): string {
  * nowMs threads through, so no branch reads the real clock when a test injects one.
  */
 export function relativeTime(epochSec: number, nowMs?: number): string {
+  const ago = strings().format.ago
   if (!Number.isFinite(epochSec)) return DASH
   const diff = Math.floor((nowMs ?? Date.now()) / 1000) - epochSec
-  if (diff < 60) return 'now'
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  if (diff < 7 * 86400) return `${Math.floor(diff / 86400)}d ago`
+  if (diff < 60) return ago.now
+  if (diff < 3600) return fill(ago.minutes, { n: String(Math.floor(diff / 60)) })
+  if (diff < 86400) return fill(ago.hours, { n: String(Math.floor(diff / 3600)) })
+  if (diff < 7 * 86400) return fill(ago.days, { n: String(Math.floor(diff / 86400)) })
   return formatDateShort(epochSec, nowMs)
 }
 
@@ -102,9 +103,16 @@ export function relativeTime(epochSec: number, nowMs?: number): string {
 export function formatDateShort(epochSec: number, nowMs?: number): string {
   if (!Number.isFinite(epochSec)) return DASH
   const d = new Date(epochSec * 1000)
-  const label = `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`
+  const parts = {
+    month: strings().months.short[d.getUTCMonth()],
+    day: String(d.getUTCDate()),
+    year: String(d.getUTCFullYear()),
+  }
   const nowYear = new Date(nowMs ?? Date.now()).getUTCFullYear()
-  return d.getUTCFullYear() === nowYear ? label : `${label}, ${d.getUTCFullYear()}`
+  // Two whole templates rather than one plus a suffix: Korean puts the year in FRONT of the
+  // month, so "add the year on the end when it differs" is an English-only rule.
+  const t = strings().format
+  return fill(d.getUTCFullYear() === nowYear ? t.dateShort : t.dateShortYear, parts)
 }
 
 /**

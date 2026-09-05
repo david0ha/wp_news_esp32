@@ -15,7 +15,29 @@ import {
 } from '../../onboarding/flow'
 import { skipSetup } from '../../onboarding/skip'
 import { esp32 } from '../../lib/esp32'
+import { fill, useStrings } from '../../i18n'
 import { colors } from '../../theme'
+
+// The board's own access point, as it appears in a phone's Wi-Fi list. A brand plus a placeholder
+// for the four characters the board appends: the same string in every language, so it is a literal
+// here and not a catalogue entry.
+const SETUP_AP_NAME = 'Claude Post-XXXX'
+
+/**
+ * Fill a sentence and cut it either side of one remaining placeholder, so the two halves can be
+ * drawn around a styled span.
+ *
+ * Two of this step's three sentences set a network's name in bold inside running copy, and the
+ * name does not sit in the same place in both languages — it leads the Korean sentence and trails
+ * the English one. Building the copy from a prefix and a suffix would therefore work in exactly
+ * one language and leave the other with an empty fragment; keeping the whole sentence in the
+ * catalogue and cutting it here works in both. The quotation marks are deliberately not in the
+ * catalogue: they are typography rather than copy, and they belong with the styling they decorate.
+ */
+function around(template: string, token: string, vars: Record<string, string>): [string, string] {
+  const [before = '', after = ''] = fill(template, vars).split(`{${token}}`)
+  return [before, after]
+}
 
 // Step 1: power the device on and join its setup AP, then probe http://192.168.4.1 over the
 // SoftAP. The default `esp32` client is bound to 192.168.4.1, which is correct here because the
@@ -29,6 +51,7 @@ type Reach = 'checking' | 'found' | 'not-found'
 
 export default function TurnOn() {
   const router = useRouter()
+  const s = useStrings()
   const { setDeviceInfo } = useOnboarding()
   const flow = parseOnboardingFlow(useLocalSearchParams<{ flow?: string }>().flow)
   const [reach, setReach] = useState<Reach>('checking')
@@ -61,32 +84,38 @@ export default function TurnOn() {
     else check()
   }
 
+  const t = s.onboarding.turnOn
   let ctaLabel: string
   let title: string
   let body: ReactNode
   switch (reach) {
     case 'checking':
-      ctaLabel = 'CHECKING…'
-      title = 'Looking for your board'
-      body = <>Looking for Claude Post on its setup Wi-Fi…</>
+      ctaLabel = t.ctaChecking
+      title = t.lookingTitle
+      body = <>{t.lookingBody}</>
       break
-    case 'found':
-      ctaLabel = 'NEXT'
-      title = 'Board found'
+    case 'found': {
+      ctaLabel = s.onboarding.nav.next
+      title = t.foundTitle
+      const [before, after] = around(t.foundBody, 'ssid', { next: s.onboarding.nav.next })
       body = (
         <>
-          Connected to <Text style={heroBold}>‘{apSsid ?? 'the device'}’</Text>. You’re ready — tap
-          NEXT to choose your home Wi-Fi.
+          {before}
+          <Text style={heroBold}>‘{apSsid ?? t.theDevice}’</Text>
+          {after}
         </>
       )
       break
-    case 'not-found':
-      ctaLabel = 'CHECK AGAIN'
-      title = 'Turn on your board'
+    }
+    case 'not-found': {
+      ctaLabel = t.ctaCheckAgain
+      title = t.turnOnTitle
+      const [before, after] = around(t.turnOnBody, 'ap', { again: t.ctaCheckAgain })
       body = (
         <>
-          Power the board with USB-C, then in your phone’s Wi-Fi settings join the network named{' '}
-          <Text style={heroBold}>‘Claude Post-XXXX’</Text>. Come back and tap CHECK AGAIN.
+          {before}
+          <Text style={heroBold}>‘{SETUP_AP_NAME}’</Text>
+          {after}
           {/*
             The exit earns a sentence precisely in this branch, because this is the one that says
             "we cannot see a board" — and the largest reason for that is that there isn't one.
@@ -103,13 +132,14 @@ export default function TurnOn() {
           */}
           {wizardOffersSkip(flow) ? (
             <>
-              {'\n\n'}No board yet? Tap SET UP LATER — the markets, your watchlist and the charts
-              all work without one, and you can set a board up any time from Settings.
+              {'\n\n'}
+              {fill(t.skipNote, { later: s.onboarding.nav.setUpLater })}
             </>
           ) : null}
         </>
       )
       break
+    }
   }
 
   return (
@@ -136,7 +166,7 @@ export default function TurnOn() {
           : undefined
       }
       onSkip={wizardOffersSkip(flow) ? () => void skipSetup(router) : undefined}
-      skipLabel="SET UP LATER"
+      skipLabel={s.onboarding.nav.setUpLater}
       ctaLabel={ctaLabel}
       canProceed={reach !== 'checking'}
       onNext={onNext}
@@ -148,7 +178,7 @@ export default function TurnOn() {
       />
       {reach === 'not-found' ? (
         <Text style={{ color: colors.textFaint, textAlign: 'center', fontSize: 12, paddingBottom: 8 }}>
-          The board reaches http://192.168.4.1 over its own Wi-Fi.
+          {t.apHint}
         </Text>
       ) : null}
     </StepScaffold>

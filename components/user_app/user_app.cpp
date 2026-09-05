@@ -843,7 +843,7 @@ static void handle_press(button_id_t id)
  *
  * On a board that woke from sleep with RTC state this build wrote, the glass
  * holds a real edition and we know its hash. The snapshot itself did not
- * survive — news_t is 32,952 bytes against 8 KB of RTC memory — so the only
+ * survive — news_t is 32,960 bytes against 8 KB of RTC memory — so the only
  * page this task could print is the demo, and spending twenty-five seconds to
  * replace a real, correct, merely stale front page with a story about a company
  * the board invented is strictly worse than doing nothing. Leave it alone.
@@ -1615,6 +1615,7 @@ void user_app_snapshot(device_state_t *out)
     out->demo       = s_data.demo;
     strlcpy(out->edition, s_data.edition, sizeof(out->edition));
     strlcpy(out->generated_at, s_data.generated_at, sizeof(out->generated_at));
+    strlcpy(out->lang, s_data.lang, sizeof(out->lang));
 
     /* The company the edition is about. Cents and basis points cross as they
      * are: the app owns its own decimal separator and its own sign colour, and

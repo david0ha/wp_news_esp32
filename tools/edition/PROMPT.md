@@ -227,9 +227,71 @@ pad it: `--validate` cannot tell filler from copy, but the sheet can, and so can
 restate your own briefs in it either. A page whose lead and whose related-news column carry the same
 sentence twice is a page the reader stops trusting.
 
-Everything is **English and Latin-1 only**. The bundled fonts carry ASCII, Latin-1 and the
-typography in `ui_strings.h` — nothing else. A CJK character, an emoji or a stray symbol renders as
-an empty box, and the render check will fail you for it.
+## The language
+
+The edition is written in the language named by `lang` in `news.json` — `"en"` unless the desk's
+instruction says otherwise. Every reader-facing string is in that language: headlines, decks,
+bodies, kickers, bylines, captions, briefs, dossier labels and values, statement titles and row
+labels, the dateline, the session line and the as-of line. Tickers, exchange codes, tile ids and
+`generated_at` are not prose and stay as they are.
+
+**What the faces can draw is fixed.** Every language draws ASCII, Latin-1 and the typography in
+`ui_strings.h`. Korean (`"ko"`) additionally draws the 2,350 KS X 1001 syllables, the compatibility
+jamo and `、。〈〉《》「」『』` — and nothing else: a syllable outside KS X 1001 fails `--validate`
+with the codepoint named, so respell it. Won is `원`, `억원`, `조원`, never `₩`. An emoji or a stray
+symbol is an empty box in any language, and the render check will fail you for it. Other scripts are
+not drawable yet.
+
+**Korean is twice as wide.** A Hangul syllable is a full em, and so are the compatibility jamo and
+the CJK brackets named above — everything Korean sets on the square body. A Latin glyph is half of
+one. `--validate` therefore counts each of those as two characters against the budgets above, and
+each costs three bytes against the array. The column that falls out:
+
+| field | Korean, in syllables | the array it sits in | what binds |
+|---|---:|---:|---|
+| lead headline | ≤ 36 | 120 B → 39 | width |
+| lead deck | ≤ 59 | 180 B → 59 | both, exactly |
+| lead body | 700–1,100 | 4,000 B → ~1,145 | width, with the array 160 B behind it |
+| secondary headline | ≤ 27 | 120 B → 39 | width |
+| secondary deck | ≤ 29 | 180 B → 59 | width |
+| secondary body | 200–325 | 4,000 B | the floor is the number that matters |
+| kicker | ≤ 9, or 8 with a space in it | 28 B → 9 | bytes |
+| caption | ≤ 36 | 120 B → 39 | width |
+| brief text | ≤ 46 | 140 B → 46 | bytes |
+| figure label / group | ≤ 7 | 24 B → 7 | bytes |
+| figure value | ≤ 7 | 24 B → 7 | both |
+| table column header | ≤ 3 | 12 B → 3 | bytes |
+| table cell | ≤ 4 | 14 B → 4 | bytes |
+
+**The third column is there so you can check the second.** It is the C array from
+`news_model.h` and how many syllables it holds: three bytes each, less one byte the array keeps for
+its terminator, so `(array − 1) ÷ 3`. Every space, digit and Latin letter in the string costs a byte
+of that too, which is the whole of why the kicker row has two numbers — nine syllables is 27 bytes
+and fits exactly, and one space makes it 28 and does not. `D램 가격` is what a kicker looks like
+inside the budget: three syllables, a Latin letter and a space, 8 of measure and 11 bytes.
+
+**The bodies are the one place the arithmetic is not the worst case**, because running prose is not
+all Hangul. The committed Korean fixture's lead body is 1,116 syllables with 544 spaces, figures and
+punctuation between them — 3,894 bytes, or **3.5 bytes for every syllable**. At that rate the
+4,000-byte array holds about 1,145 syllables and not the 1,300 an earlier version of this table
+claimed: 1,300 is 3,900 bytes of Hangul before a single space, and `news_str_copy()` would cut the
+rest off at a character boundary with nothing on the sheet to say so. The ceiling above is 1,100
+because that is what the English 2,200 halves to — the same legs filled with the same measure — and
+it leaves about 160 bytes of the field spare.
+
+The two ceilings fail differently, which is why both are stated. Past 1,100 is copy the legs run out
+of room for, and `ui_fit_text()` cuts it at a word: nobody reads it and nothing looks wrong. Past
+about 1,145 is the array, and that copy vanishes mid-word. The fixture's own lead is 1,116 — sixteen
+over the recommendation and still a hundred bytes short of the field, which is exactly the band this
+number is drawn to keep you inside.
+
+**The last two rows are the ones that bite**, and they bite in bytes rather than in measure: a
+column head lives in twelve bytes and a cell in fourteen, so three syllables and four are all that
+go in — room for `1Q26` and `112,600`, and not much else. That is the right shape anyway. Keep the
+quarters and the figures as they are and put the Korean in the row label, which holds seven, and in
+the title, which holds ten.
+
+Mixed strings count each script at its own weight; `--validate` reports the measure it used.
 
 ## Pictures
 
@@ -301,9 +363,10 @@ paper from here, and validating the schema does not catch a headline four charac
 tools/edition/render-check.sh "$EDITION_DIR/news.json.tmp"
 ```
 
-It runs the real typesetter — the same news_core, the same seven faces, the same compositor, the
-same six-ink quantizer the firmware runs — at the panel's real 1200 × 1600, and leaves both sheets
-as PNGs. Then:
+It runs the real typesetter — the same news_core, the same thirteen faces (seven Latin, and the six
+Korean ones each of them reaches through its fallback, so an edition filed in Korean sets in the
+same run), the same compositor, the same six-ink quantizer the firmware runs — at the panel's real
+1200 × 1600, and leaves both sheets as PNGs. Then:
 
 1. **If it exits non-zero, fix what it named and run it again.** It fails on a missing glyph, a
    rule off its row, ink outside the margin, a module that rendered nothing, a label wider than its

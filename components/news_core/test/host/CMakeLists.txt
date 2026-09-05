@@ -68,17 +68,36 @@ add_test(NAME epd6_transpose COMMAND test_epd6_transpose)
 add_host_test(test_palette test_palette.c ${CORE}/wp_palette.c)
 add_test(NAME palette COMMAND test_palette)
 
+# How a figure is spelled. ui_format.c is the pure tail of the UI — cents and
+# basis points in, the strings the tape and the industry table set out — and the
+# number of characters it produces is a layout decision, so the rules belong
+# somewhere faster and more legible than a 1200x1600 screenshot.
+add_host_test(test_format test_format.c ${CORE}/ui_format.c)
+add_test(NAME format COMMAND test_format)
+
+# Which spelling of the board's own twelve words an edition gets. The rest of
+# the localisation is a question about widths and the simulator asks it; what
+# lands here is the selection and the completeness of the two tables.
+add_host_test(test_lang test_lang.c ${CORE}/ui_lang.c)
+add_test(NAME lang COMMAND test_lang)
+
 # Copyfitting (spec §5) and integer chart scaling (spec §7) are pure and belong
 # here, but they land with the layout work rather than with the data model.
 # Guarded on existence so this build is green before those files are written and
 # picks them up the moment they are, without a second edit to this file.
+# ui_lang.c comes along because ui_fit_script() asks ui_lang() which table an
+# edition gets rather than spelling the "ko" compare a second time. It is pure
+# and header-only in its dependencies, so it costs the link nothing.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_fit.c AND EXISTS ${CORE}/ui_fit.c)
-    add_host_test(test_fit test_fit.c ${CORE}/ui_fit.c)
+    add_host_test(test_fit test_fit.c ${CORE}/ui_fit.c ${CORE}/ui_lang.c)
     add_test(NAME fit COMMAND test_fit)
 endif()
 
+# And ui_format.c because ui_chart_end_labels() spells its two figures with the
+# same ui_money() the industry table spells a price with — one formatter on the
+# sheet, so one formatter in the link.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_scale.c AND EXISTS ${CORE}/ui_chart.c)
-    add_host_test(test_chart_scale test_chart_scale.c ${CORE}/ui_chart.c)
+    add_host_test(test_chart_scale test_chart_scale.c ${CORE}/ui_chart.c ${CORE}/ui_format.c)
     add_test(NAME chart_scale COMMAND test_chart_scale)
 endif()
 

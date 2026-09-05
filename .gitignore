@@ -1,6 +1,14 @@
 # OMC (oh-my-claudecode) local state — not for committing
 .omc/
 
+# Superpowers SDD working state: briefs, reports, review diffs and the ledger for
+# whichever plan is being executed. Per-run scaffolding, not the plan or the spec,
+# which are committed under docs/superpowers/. This was excluded through
+# .git/info/exclude, which lives in one clone and nowhere else, so on any other
+# checkout the whole directory showed up untracked and one `git add -A` would
+# have committed it.
+.superpowers/
+
 # ESP-IDF build artifacts
 build/
 sdkconfig.old

@@ -599,6 +599,81 @@ static void check_series_optimal(void)
     }
 }
 
+/* --- 8. the two figures at the ends --------------------------------------- *
+ *
+ * ui_money() drops the fraction at five integer digits and up, which is what
+ * keeps a Seoul close inside the industry table's 84 px LAST column and is
+ * right everywhere else on the sheet. At the two ends of a chart it has one
+ * failure, and it is not a rounding error: a five-digit series whose whole
+ * span is under a unit — a flat index day, an ordinary payload — rounds BOTH
+ * ends to the same string, and a chart annotated 23,842 at each end says the
+ * axis is broken when the axis is fine.
+ *
+ * The test is on the strings and not on the magnitude, because whether the
+ * dropped fraction costs the reader anything is a fact about the span of this
+ * particular series, and "the two labels came out identical" is exactly that
+ * fact measured. */
+static void check_end_labels(void)
+{
+    char a[24], b[24];
+
+    /* The defect. Five digits, fifteen cents of span: the short form spells
+     * both ends 23,842, so both ends get the long one. Both, never one — a
+     * pair where one end carries a fraction and the other does not is a second
+     * way of saying the axis is broken. */
+    ui_chart_end_labels(2384215, 2384230, a, sizeof a, b, sizeof b);
+    CHECK_STR(a, "23,842.15");
+    CHECK_STR(b, "23,842.30");
+
+    /* Far enough apart to spell differently, so the short form stands and the
+     * chart reads like the table beside it. */
+    ui_chart_end_labels(2384215, 2451900, a, sizeof a, b, sizeof b);
+    CHECK_STR(a, "23,842");
+    CHECK_STR(b, "24,519");
+
+    /* Genuinely equal ends stay equal. A flat series is a true reading and
+     * lengthening it would invent a difference that is not in the data. */
+    ui_chart_end_labels(2384215, 2384215, a, sizeof a, b, sizeof b);
+    CHECK_STR(a, "23,842");
+    CHECK_STR(b, "23,842");
+
+    /* Rounding, not truncation, is what makes the collision possible at all:
+     * these two are a cent either side of the same integer. */
+    ui_chart_end_labels(9679999, 9680001, a, sizeof a, b, sizeof b);
+    CHECK_STR(a, "96,799.99");
+    CHECK_STR(b, "96,800.01");
+
+    /* A four-digit series is untouched, because ui_money() already set its
+     * cents and the two strings differ. This is the price chart the design
+     * document quotes, and it must come out exactly as it did before. */
+    ui_chart_end_labels(97840, 163147, a, sizeof a, b, sizeof b);
+    CHECK_STR(a, "978.40");
+    CHECK_STR(b, "1,631.47");
+
+    ui_chart_end_labels(97840, 97840, a, sizeof a, b, sizeof b);
+    CHECK_STR(a, "978.40");
+    CHECK_STR(b, "978.40");
+
+    /* The sign is part of the string, so a pair straddling zero at this
+     * magnitude is two different strings and is left alone. */
+    ui_chart_end_labels(-2384215, 2384215, a, sizeof a, b, sizeof b);
+    CHECK_STR(a, "-23,842");
+    CHECK_STR(b, "23,842");
+
+    /* Every label the widget can be handed fits the 24-byte buffer it declares,
+     * INT32_MIN included — the figure a broken producer sends. */
+    ui_chart_end_labels(INT32_MIN, INT32_MIN + 1, a, sizeof a, b, sizeof b);
+    CHECK(strlen(a) < sizeof a);
+    CHECK(strlen(b) < sizeof b);
+    CHECK(strcmp(a, b) != 0);
+
+    /* Either buffer may be absent; neither is required for the other. */
+    ui_chart_end_labels(2384215, 2384230, NULL, 0, b, sizeof b);
+    CHECK_STR(b, "23,842.30");
+    ui_chart_end_labels(2384215, 2384230, a, sizeof a, NULL, 0);
+    CHECK_STR(a, "23,842.15");
+}
+
 int main(void)
 {
     check_window_normal();
@@ -623,6 +698,8 @@ int main(void)
     check_series_panel();
     check_series_shape();
     check_series_optimal();
+
+    check_end_labels();
 
     TH_REPORT("chart_scale");
 }

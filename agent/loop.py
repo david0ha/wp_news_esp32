@@ -641,7 +641,8 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         prompt.read_context_dir(cfg.context_dir),
         desk.directives(),
         command.get("text", ""),
-        kind=kind)
+        kind=kind,
+        lang=desk.settings().get("lang", "en"))
     status = run_claude(cfg, text, workdir, agent_env)
     if status != 0:
         desk.finish(cid, False, "claude exited %d" % status)

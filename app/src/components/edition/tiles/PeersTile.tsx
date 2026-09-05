@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors, fonts, space, type } from '../../../theme'
+import { useStrings } from '../../../i18n'
+import { colors, fonts, space } from '../../../theme'
 import {
   TILE_HEAD,
   PEERS_ROW,
@@ -7,6 +8,7 @@ import {
   type Tile,
 } from '../../../lib/edition/tiles'
 import { Change } from '../Change'
+import { useEditionFace, useEditionType } from '../typeRamp'
 
 /**
  * The company against its peers: a symbol and which way it went, and nothing between them.
@@ -25,12 +27,21 @@ import { Change } from '../Change'
  * not a direction.
  */
 export function PeersTile({ tile }: { tile: Extract<Tile, { kind: 'peers' }> }) {
+  const t = useStrings()
+  const ty = useEditionType()
+  const face = useEditionFace()
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>Peers</Text>
+      <Text style={[ty.headingSm, styles.head]}>{t.today.heads.peers}</Text>
       {tile.peers.slice(0, PEERS_SHOWN).map((p) => (
         <View key={p.symbol} style={styles.row}>
-          <Text style={p.isSubject ? styles.symbolSubject : styles.symbol} numberOfLines={1}>
+          <Text
+            style={[
+              face(p.isSubject ? fonts.extrabold : fonts.medium),
+              p.isSubject ? styles.symbolSubject : styles.symbol,
+            ]}
+            numberOfLines={1}
+          >
             {p.symbol}
           </Text>
           <Change pct={p.changePct} style={styles.change} />
@@ -40,10 +51,12 @@ export function PeersTile({ tile }: { tile: Extract<Tile, { kind: 'peers' }> }) 
   )
 }
 
+// The faces come from the edition's ramp in front of these rules — see `typeRamp.tsx`. The
+// subject's emphasis is still weight and still not colour; it is asked for by face rather than
+// by family so it survives a language Inter cannot set.
 const styles = StyleSheet.create({
   root: { flex: 1 },
   head: {
-    ...type.headingSm,
     height: TILE_HEAD,
   },
   row: {
@@ -56,13 +69,11 @@ const styles = StyleSheet.create({
   // change keeps its fixed column so the arrows line up down the tile.
   symbol: {
     flex: 1,
-    fontFamily: fonts.medium,
     fontSize: 13,
     color: colors.textDim,
   },
   symbolSubject: {
     flex: 1,
-    fontFamily: fonts.extrabold,
     fontSize: 13,
     color: colors.text,
   },

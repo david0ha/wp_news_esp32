@@ -137,7 +137,7 @@ static esp_err_t api_info_get(httpd_req_t *req)
 
 static esp_err_t api_state_get(httpd_req_t *req)
 {
-    static device_state_t st;      // 956B — too big for the httpd task's stack
+    static device_state_t st;      // 988B — too big for the httpd task's stack
     user_app_snapshot(&st);
     device_id(st.device_id);       // network identity is owned here, not by user_app
     sta_ip(st.ip, sizeof(st.ip));

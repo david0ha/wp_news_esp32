@@ -1,12 +1,16 @@
 import { Pressable, StyleSheet, TextInput, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useStrings } from '../i18n'
 import { colors, radius, shadow, type } from '../theme'
 
 /** The pill search bar — a lifted white field with a leading glyph and a clear control. */
 export function SearchField({
   value,
   onChangeText,
-  placeholder = 'Search',
+  // Defaulted inside the body rather than in the parameter list: a default expression there is
+  // evaluated per render, but it would still have to call a hook to know the language, and hooks
+  // cannot run in a parameter default.
+  placeholder,
   autoFocus = false,
   onClear,
 }: {
@@ -16,6 +20,7 @@ export function SearchField({
   autoFocus?: boolean
   onClear?: () => void
 }) {
+  const t = useStrings()
   return (
     <View style={styles.bar}>
       <Ionicons name="search" size={18} color={colors.textDim} />
@@ -23,7 +28,7 @@ export function SearchField({
         style={styles.input}
         value={value}
         onChangeText={onChangeText}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t.addTicker.searchPlaceholder}
         placeholderTextColor={colors.textFaint}
         autoFocus={autoFocus}
         autoCapitalize="characters"
@@ -31,7 +36,12 @@ export function SearchField({
         returnKeyType="search"
       />
       {value !== '' && onClear ? (
-        <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={onClear} hitSlop={8}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.addTicker.clearSearch}
+          onPress={onClear}
+          hitSlop={8}
+        >
           <Ionicons name="close-circle" size={18} color={colors.textDim} />
         </Pressable>
       ) : null}

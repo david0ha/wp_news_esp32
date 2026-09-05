@@ -40,6 +40,7 @@
 #include "ui_chart.h"       /* ui_series_t — the pure half; see the colour note */
 #include "ui_compose.h"
 #include "ui_fonts.h"
+#include "ui_format.h"      /* the four pure formatters; no LVGL, host-tested */
 #include "ui_news.h"
 #include "ui_strings.h"
 #include "news_model.h"
@@ -719,13 +720,12 @@ void ui_lab_opaque(lv_obj_t *label);
  * distance this panel is looked at. */
 void ui_track(lv_obj_t *label, int px);
 
-/* ASCII and Latin-1 upper case, into `out`. ui_track() is letterspacing cut for
- * Franklin's CAPS, and applied to lower case it takes a word apart —
+/* ui_upper() — ASCII and Latin-1 upper case, into `out` — is declared in
+ * ui_format.h with the other three pure formatters. ui_track() is letterspacing
+ * cut for Franklin's CAPS, and applied to lower case it takes a word apart —
  * "N a s d a q" beside a correctly tracked "S&P 500" in the same row. Several
  * tracked slots on this sheet take a string the network wrote, so those
- * uppercase it here first. Bytes outside the two ranges pass through unchanged,
- * which keeps a UTF-8 sequence a UTF-8 sequence. */
-void ui_upper(char *out, size_t n, const char *src);
+ * uppercase it first. */
 
 void ui_set(lv_obj_t *label, const char *txt);
 void ui_setf(lv_obj_t *label, const char *fmt, ...) LV_FORMAT_ATTRIBUTE(2, 3);
@@ -765,26 +765,31 @@ void ui_draw_rect_c_abs(lv_layer_t *L, int x1, int y1, int x2, int y2,
 void ui_draw_tri_abs(lv_layer_t *L, int x, int y, int w, int h,
                      bool up, lv_color_t colour);
 
-/* --- text ----------------------------------------------------------------- */
-
-/* 641283 -> "641,283". Grouping matters here: an index level is read from
- * across a room, and an ungrouped five-digit number is genuinely slower to
- * parse. */
-void ui_group_int(char *out, size_t n, int v);
-
-/* The two figures this page prints, from the two integer units the wire sends:
- * 641283 cents -> "6,412.83" and 62 basis points -> "+0.62%". They live here
- * rather than in a snprintf at each call site because the tape, the dossier
- * rail and the peer table print the same two quantities and must not disagree
- * about a decimal or a separator — and because nothing on this board is allowed
- * to reach for a float to do it.
+/* --- text -----------------------------------------------------------------
  *
- * A percentage always carries its sign, the plus included: a column where only
- * the losses are signed reads as a column of typos. The sign is the ASCII '-',
- * not U+2212 — see S_COMPOSED_CHARS in ui_strings.h for why no face here has
- * the typographically correct one. */
-void ui_money(char *out, size_t n, int32_t cents);
-void ui_pct(char *out, size_t n, int32_t bp);
+ * ui_group_int(), ui_money(), ui_pct() and ui_upper() are in ui_format.h,
+ * included at the top of this file so every call site here is unchanged. They
+ * are the four things this header declares that need no LVGL, which is why they
+ * are their own file and their own host test.
+ */
+
+/* --- the language the edition is written in -------------------------------
+ *
+ * There is no accessor here, deliberately, and this note stands where one used
+ * to. The fixed strings the board prints beside the copy follow the payload's
+ * `lang`, and nothing else on the sheet does: everything a reader looks at
+ * arrived already written in that language. So every draw site takes the table
+ * from the snapshot it was handed — ui_lang(v->lang) for the words,
+ * ui_fit_script(v->lang) for the break rule — and the renderers stay a function
+ * of their argument alone, which is what ui_compose.h's purity and
+ * news_hash()'s "same fingerprint, same pixels" both rest on.
+ *
+ * A board with no snapshot has no language, and ui_lang(NULL) is English: the
+ * setup sheet, the no-data page and everything drawn before the first fetch are
+ * the board talking about itself. That is the same reason the masthead and the
+ * no-payload dateline stay English in every edition.
+ *
+ * ui_lang() itself is declared in ui_strings.h, beside the tables. */
 
 /* --- the pages ------------------------------------------------------------
  * Two pages, and KEY0 toggles them. Each is one file and obeys the same

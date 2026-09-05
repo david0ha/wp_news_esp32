@@ -15,6 +15,7 @@ import { TickerRow } from '../../components/TickerRow'
 import { yahoo } from '../../lib/market/yahoo'
 import { marketHumanError, type Quote } from '../../lib/market/types'
 import { getWatchlist, removeFromWatchlist, type WatchItem } from '../../lib/market/watchlist'
+import { fill, useStrings } from '../../i18n'
 import { colors, fonts, layout, radius, shadow, space, type } from '../../theme'
 
 // Re-poll while focused. The quote cache's 25 s TTL sits below this, so every poll actually
@@ -23,6 +24,7 @@ const POLL_MS = 30_000
 
 export default function Markets() {
   const router = useRouter()
+  const t = useStrings()
 
   // null until the stored watchlist has been read once — distinct from "empty".
   const [items, setItems] = useState<WatchItem[] | null>(null)
@@ -114,10 +116,10 @@ export default function Markets() {
   return (
     <Screen aurora edges={['top']}>
       <View style={styles.header}>
-        <Text style={type.headingLg}>Markets</Text>
+        <Text style={type.headingLg}>{t.markets.title}</Text>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Add ticker"
+          accessibilityLabel={t.markets.addTicker}
           onPress={openAdd}
           style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
         >
@@ -148,11 +150,11 @@ export default function Markets() {
                   renderRightActions={() => (
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={`Remove ${w.symbol}`}
+                      accessibilityLabel={fill(t.markets.removeSymbol, { symbol: w.symbol })}
                       onPress={() => void remove(w.symbol)}
                       style={styles.removeAction}
                     >
-                      <Text style={styles.removeLabel}>Remove</Text>
+                      <Text style={styles.removeLabel}>{t.markets.remove}</Text>
                     </Pressable>
                   )}
                 >
@@ -176,11 +178,9 @@ export default function Markets() {
         {isEmpty ? (
           <View style={styles.empty}>
             <IconBadge name="trending-up" />
-            <Text style={styles.emptyTitle}>Track your first ticker</Text>
-            <Text style={styles.emptyBody}>
-              Search any symbol and it’ll show up here with a live price and chart.
-            </Text>
-            <Button label="Add a ticker" onPress={openAdd} />
+            <Text style={styles.emptyTitle}>{t.markets.emptyTitle}</Text>
+            <Text style={styles.emptyBody}>{t.markets.emptyBody}</Text>
+            <Button label={t.markets.addATicker} onPress={openAdd} />
           </View>
         ) : null}
       </ScrollView>

@@ -1,0 +1,3 @@
+{
+  "NSLocalNetworkUsageDescription": "Claude Post는 같은 Wi-Fi의 ESP32 보드에 연결해 보드를 설정하고 패널에 표시할 내용을 제어합니다."
+}

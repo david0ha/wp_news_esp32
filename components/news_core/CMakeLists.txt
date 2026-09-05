@@ -16,6 +16,8 @@ idf_component_register(
         "news_service.c"
         "device_api_json.c"
         "ui_common.c"
+        "ui_format.c"
+        "ui_lang.c"
         "ui_compose.c"
         "ui_fit.c"
         "ui_chart.c"
@@ -31,6 +33,15 @@ idf_component_register(
         "fonts/ui_font_body_20.c"
         "fonts/ui_font_body_16.c"
         "fonts/ui_font_label_14.c"
+        # The Korean faces. No call site names one; each is reached through the
+        # matching Latin face's `.fallback`, which is why they must be listed
+        # here even though nothing in the tree references them by name.
+        "fonts/ui_font_ko_display_56.c"
+        "fonts/ui_font_ko_display_36.c"
+        "fonts/ui_font_ko_deck_24.c"
+        "fonts/ui_font_ko_body_20.c"
+        "fonts/ui_font_ko_body_16.c"
+        "fonts/ui_font_ko_label_14.c"
         "http_port_esp.c"
         "${CJSON_DIR}/cJSON.c"
     INCLUDE_DIRS "include" "${CJSON_DIR}"
@@ -46,6 +57,6 @@ idf_component_register(
 
 # lv_font_conv emits `#include "lvgl/lvgl.h"` unless LV_LVGL_H_INCLUDE_SIMPLE is
 # defined, and the IDF component exposes the header as plain "lvgl.h". Without
-# this the seven generated faces in fonts/ are the only files in the project
+# this the thirteen generated faces in fonts/ are the only files in the project
 # that fail to compile.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)

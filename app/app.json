@@ -6,6 +6,9 @@
     "version": "1.5.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "locales": {
+      "ko": "./locales/ko.json"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.claudepost.app",
@@ -42,7 +45,9 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-localization",
+      "expo-secure-store"
     ],
     "extra": {
       "router": {},

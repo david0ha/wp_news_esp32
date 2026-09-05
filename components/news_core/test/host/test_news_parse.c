@@ -1291,6 +1291,48 @@ static void test_policy_is_not_fingerprinted(void)
     CHECK_INT(news_hash(&g_a), news_hash(&g_b));
 }
 
+/* --- the edition's language ------------------------------------------------
+ *
+ * `lang` is the opposite of `policy` in the one way that matters here: it
+ * reaches the glass. It chooses the fixed strings printed beside the copy and
+ * the rule the copyfitter breaks a line with, so it IS fingerprinted, and these
+ * tests are as much about that as about the normalisation.
+ *
+ * The normalisation is a clamp and not a rejection for the reason every clamp
+ * in this file is one: a payload that names its language badly still carries a
+ * front page, and blanking the sheet over a two-letter field is the one failure
+ * a reader actually notices. */
+
+static void test_lang_absent_is_en(void)
+{
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"}}", &g_a) == true);
+    CHECK_STR(g_a.lang, "en");
+}
+
+static void test_lang_is_normalised_not_rejected(void)
+{
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"lang\":\"KO\"}", &g_a) == true);
+    CHECK_STR(g_a.lang, "ko");
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"lang\":\"ko-KR\"}", &g_a) == true);
+    CHECK_STR(g_a.lang, "en");           /* a region subtag is not a language tag */
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"lang\":7}", &g_a) == true);
+    CHECK_STR(g_a.lang, "en");
+    CHECK(PARSE("{\"subject\":{\"symbol\":\"S\"},\"lang\":\"\"}", &g_a) == true);
+    CHECK_STR(g_a.lang, "en");
+}
+
+static void test_lang_is_fingerprinted(void)
+{
+    const char *a = "{\"subject\":{\"symbol\":\"S\"},\"stories\":[{\"rank\":0,\"headline\":\"h\",\"body\":\"w\"}],\"lang\":\"en\"}";
+    const char *b = "{\"subject\":{\"symbol\":\"S\"},\"stories\":[{\"rank\":0,\"headline\":\"h\",\"body\":\"w\"}],\"lang\":\"ko\"}";
+    const char *c = "{\"subject\":{\"symbol\":\"S\"},\"stories\":[{\"rank\":0,\"headline\":\"h\",\"body\":\"w\"}]}";
+    CHECK(PARSE(a, &g_a) == true);
+    CHECK(PARSE(b, &g_b) == true);
+    CHECK(news_hash(&g_a) != news_hash(&g_b));      /* the fixed strings differ */
+    CHECK(PARSE(c, &g_b) == true);
+    CHECK_INT(news_hash(&g_a), news_hash(&g_b));    /* absent IS "en" */
+}
+
 /* --- the fingerprint ------------------------------------------------------ */
 
 static void test_hash_is_content_addressed(void)
@@ -1500,6 +1542,9 @@ int main(void)
     test_policy_clamps();
     test_policy_wrong_type();
     test_policy_is_not_fingerprinted();
+    test_lang_absent_is_en();
+    test_lang_is_normalised_not_rejected();
+    test_lang_is_fingerprinted();
     test_hash_is_content_addressed();
     test_hash_separates_adjacent_strings();
     TH_REPORT("news_parse");

@@ -88,7 +88,8 @@ would be the only dithered thing on it.
 
 ## Text is 1 bpp, and stays 1 bpp
 
-Every one of the seven faces is generated with `--bpp 1`, including the 112 px masthead.
+Every one of the thirteen faces is generated with `--bpp 1`, including the 112 px masthead and all
+six Korean ones.
 
 The argument is the panel's, not the font's. LVGL renders anti-aliased text as intermediate RGB565
 values, and the flush callback ordered-dithers them. For a photograph that is correct and necessary.
@@ -100,8 +101,13 @@ grows a ragged stipple along contours that 1 bpp keeps smooth.
 1 bpp also means every text pixel is exactly `WP_RGB_BLACK` or `WP_RGB_WHITE`, so text takes the
 identity path above and cannot pick up a colour fringe at all.
 
-The saving is incidental but large: all seven faces together cost less than one of the two 완성형
-Korean faces this board replaced.
+The saving is incidental but large, and the Korean faces are what makes it load-bearing rather than
+incidental. The seven Latin faces cost 119 KiB between them; the six Korean ones behind them cost
+1.50 MiB, because 2,350 완성형 syllables is ten times the glyph count of Latin-1 and each one is a
+denser drawing. At 4 bpp that bill would be four times over, and the 56 px Korean face would cross
+the 2^20 bytes the 20-bit `bitmap_index` field can address — a limit `gen_fonts.py` now asserts on
+rather than documents. 1 bpp is what keeps a thirteen-face board inside an 8 MB partition with room
+to spare.
 
 ## Chart geometry is drawn with hard pixels
 

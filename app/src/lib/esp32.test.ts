@@ -2,6 +2,7 @@ import { describe, it, expect } from '@jest/globals'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createEsp32Client, humanError, Esp32Error, PAGE_COUNT, SLEEP_SECONDS_MAX, SLEEP_SECONDS_MIN } from './esp32'
+import { setActiveLanguage } from '../i18n'
 import { FB_SIZE, SCREEN_FORMAT } from './screen'
 
 // A fake `fetch` that replays a queue of responses (or throws a queued Error to simulate the
@@ -824,6 +825,21 @@ describe('humanError', () => {
 
   it('names the sleep bounds when the board refused an interval', () => {
     expect(humanError(new Esp32Error('sleep_seconds_invalid'))).toMatch(/60/)
+  })
+
+  it('speaks the app’s language, chosen after this module was imported', () => {
+    // `humanError` reads the catalogue inside the call. Capturing it at module scope would pass
+    // every case above and still answer a Korean phone in English.
+    setActiveLanguage('ko')
+    try {
+      const msg = humanError(new Esp32Error('timeout'))
+      expect(msg).toMatch(/[가-힣]/)
+      expect(msg).toMatch(/절전/)
+      // The numbers inside a sentence are not copy and do not move.
+      expect(humanError(new Esp32Error('sleep_seconds_invalid'))).toMatch(/60/)
+    } finally {
+      setActiveLanguage('en')
+    }
   })
 })
 

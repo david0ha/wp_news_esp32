@@ -15,6 +15,7 @@
 import { isEmptyEdition, parseEdition } from './parse'
 import { tileByteLength } from './photo'
 import { type Edition } from './types'
+import { fill, strings } from '../../i18n'
 
 /** The device's own body cap (`news_service.c`). A payload over it is one the board rejects. */
 export const EDITION_MAX_BYTES = 320 * 1024
@@ -43,23 +44,22 @@ export class EditionError extends Error {
  * common cause is a file being written while it is being served, and it resolves itself.
  */
 export function humanEditionError(e: unknown): string {
+  const m = strings().errors.edition
   if (e instanceof EditionError) {
     switch (e.code) {
       case 'no_url':
-        return 'No edition URL yet. Add one in Settings.'
+        return m.noUrl
       case 'transport':
-        return "Couldn't reach the edition server. Check the connection, then pull to refresh."
+        return m.transport
       case 'http':
-        return e.status === undefined
-          ? 'The edition server answered with an error.'
-          : `The edition server answered ${e.status}.`
+        return e.status === undefined ? m.http : fill(m.httpStatus, { status: String(e.status) })
       case 'too_large':
-        return 'The edition is too large to read here.'
+        return m.tooLarge
       case 'bad_json':
-        return "The edition didn't parse. The desk may be mid-publish; pull to refresh in a minute."
+        return m.badJson
     }
   }
-  return 'Something went wrong reading the edition.'
+  return m.unknown
 }
 
 export type EditionFetch =

@@ -34,6 +34,24 @@
  * ui_mod_create() builds every widget a renderer can ever need and hides it; a
  * placement shows what the day used and hides the rest. On a board that repaints
  * every five minutes for years, object churn is where the heap goes.
+ *
+ * That is why the standing heads below are created carrying an English macro
+ * and set from ui_lang(v->lang) in the renderer. Creation happens once, at
+ * ui_page_front_create(), before any snapshot exists and therefore before there
+ * is a language to take; the string a widget is built with is a placeholder
+ * that every run() overwrites before the module is ever shown.
+ *
+ * ## The language comes from the snapshot, never from a global
+ *
+ * Every renderer here takes `v`, and the edition's language is `v->lang`. There
+ * was an accessor on ui_news.c's copy of it and it read more nicely at each of
+ * these five sites, but it made this file's output a function of the order two
+ * files are called in rather than of its own argument. ui_compose.h promises
+ * the layout is pure and news_hash() promises the same fingerprint means the
+ * same pixels — the board skips a twenty-five-second refresh on that promise —
+ * and both are far easier to keep when the only input is the one in the
+ * signature. ui_lang() is a lookup over a string, so reading it per draw costs
+ * a strcmp and buys the invariant.
  */
 #include "ui_modules.h"
 
@@ -666,13 +684,25 @@ static int story_head(const ui_mod_t *m, const news_t *v, int w, int wt,
     /* The headline, broken the way a copy desk breaks one rather than the way a
      * text engine fills one: ui_fit_balance() tries every legal split and keeps
      * the one whose longest line is shortest, so a two-line head arrives as two
-     * even lines instead of a full line and a stub. */
+     * even lines instead of a full line and a stub.
+     *
+     * BALANCED ONLY WHEN SETTING, and the measure below is unaffected by that.
+     * ui_fit_balance() derives its line count from the UNBALANCED string at
+     * this same `w`, rejects every split that leaves a line wider than `w`, and
+     * inserts exactly that many breaks minus one — so a balanced head sets in
+     * the same number of lines as the raw one, by construction, and when it
+     * declines it leaves `dst` holding the source verbatim. The two spellings
+     * therefore measure the same, which is what lets the measure pass skip the
+     * work: the compositor asks for a module's height eight to twenty times per
+     * render, and three of the four story_head() calls per story pass NULL. */
     const lv_font_t *hf = ui_head_font(wt);
     const int hlh = ui_head_lh(wt);
     const int hmax = wt == 0 ? 4 : 5;
 
-    ui_fit_balance(hf, w, hmax, st->headline, s_head, sizeof s_head);
-    int hl = md_lines(hf, w, s_head);
+    if (g)
+        ui_fit_balance(hf, w, hmax, ui_fit_script(v->lang), st->headline,
+                       s_head, sizeof s_head);
+    int hl = md_lines(hf, w, g ? s_head : st->headline);
     if (hl > hmax) hl = hmax;
     if (hl < 1)    hl = 1;
 
@@ -891,8 +921,8 @@ static void story_run(const ui_mod_t *m, const news_t *v, int w, int wt,
         const int lw = (i == g.legs - 1) ? UI_END_MEASURE(g.leg_w[i])
                                          : g.leg_w[i];
 
-        used += ui_fit_text(g.bf, lw, fit_h, bls, st->body + used,
-                            s_copy[i], sizeof s_copy[i]);
+        used += ui_fit_text(g.bf, lw, fit_h, bls, ui_fit_script(v->lang),
+                            st->body + used, s_copy[i], sizeof s_copy[i]);
 
         md_font(ws->leg[i], g.bf, blh);
         md_text(ws->leg[i], g.leg_x[i], top, g.leg_w[i], leg_h, s_copy[i]);
@@ -1731,7 +1761,7 @@ static void briefs_run(const ui_mod_t *m, const news_t *v, int w,
     ui_w_briefs_t *g = &inst->w.briefs;
     const int h = m->h;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, S_IN_BRIEF);
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang(v->lang)->in_brief);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
     /* How many items the column holds, then the leftover shared out between
@@ -1936,19 +1966,30 @@ static void peers_run(const ui_mod_t *m, const news_t *v, int w,
      * the block ends rather than trailing off. */
     const int pitch = UI_TAB_ROW_H;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, S_PEERS);
+    const ui_lang_t *L = ui_lang(v->lang);
+
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, L->peers);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
-    static const char *const HEAD[UI_PEER_FIELDS] = {
-        S_COL_SYMBOL, S_COL_NAME, S_COL_PE, S_COL_CAP, S_COL_LAST, S_COL_CHG,
+    /* The six field heads in the edition's language, indexed by field. A local
+     * and not a static array of macros: the heads follow the payload now, so
+     * they cannot be decided at compile time, and a static that a renderer
+     * rewrote once per edition would be one table shared by both pages'
+     * instances of this module. It reads out of `L`, which the kicker above has
+     * already resolved from `v->lang` — two lookups in one draw could not
+     * disagree, but one is the honest count. */
+    const char *const head[UI_PEER_FIELDS] = {
+        [PF_SYM] = L->col_symbol, [PF_NAME] = L->col_name, [PF_PE]  = L->col_pe,
+        [PF_CAP] = L->col_cap,    [PF_LAST] = L->col_last, [PF_CHG] = L->col_chg,
     };
+
     const int hy = UI_MOD_KICKER_H + MD_RULE_DY + UI_RULE_HAIR + 6;
     for (int i = 0; i < UI_PEER_FIELDS; i++) {
         if (!keep[i]) { ui_show(g->col[i], false); continue; }
         lv_obj_set_style_text_align(g->col[i],
                                     i <= PF_NAME ? LV_TEXT_ALIGN_LEFT
                                                  : LV_TEXT_ALIGN_RIGHT, 0);
-        md_text(g->col[i], fx[i], hy, fw[i], UI_TAB_HEAD_H, HEAD[i]);
+        md_text(g->col[i], fx[i], hy, fw[i], UI_TAB_HEAD_H, head[i]);
     }
 
     const int top   = MD_PEER_HEAD;
@@ -2920,7 +2961,7 @@ static void thumbs_run(const ui_mod_t *m, const news_t *v, int w,
 
     ui_w_thumbs_t *g = &inst->w.thumbs;
 
-    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, S_INSIDE);
+    md_text(g->head, 0, 0, w, UI_MOD_KICKER_H, ui_lang(v->lang)->inside);
     md_at(g->hair, 0, UI_MOD_KICKER_H + MD_RULE_DY, w, UI_RULE_HAIR);
 
     int ph = m->h - MD_THUMB_HEAD - UI_MOD_CAP_GAP - UI_MOD_CAP_H;

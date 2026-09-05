@@ -3,6 +3,7 @@ import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'r
 import { Ionicons } from '@expo/vector-icons'
 import { Card } from '../Card'
 import { NewsCard } from '../NewsCard'
+import { fill, useStrings } from '../../i18n'
 import { colors, fonts, radius, space, type } from '../../theme'
 import { marketHumanError, type NewsItem } from '../../lib/market/types'
 import { yahoo } from '../../lib/market/yahoo'
@@ -25,6 +26,7 @@ type LoadState =
  * the ghost "Refresh" at the list foot re-fires the fetch past the TTL instead.
  */
 export function NewsSection({ symbol, active }: DetailSectionProps) {
+  const t = useStrings()
   const [state, setState] = useState<LoadState>({ status: 'idle' })
   const seqRef = useRef(0)
   const stateRef = useRef(state)
@@ -82,10 +84,10 @@ export function NewsSection({ symbol, active }: DetailSectionProps) {
             <Ionicons name="newspaper-outline" size={20} color={colors.accent} />
           </View>
           <View style={styles.degradedText}>
-            <Text style={styles.degradedTitle}>News unavailable</Text>
+            <Text style={styles.degradedTitle}>{t.marketDetail.news.unavailable}</Text>
             <Text style={type.caption}>{marketHumanError(state.error)}</Text>
             <Pressable onPress={() => void load(false)} hitSlop={8}>
-              <Text style={styles.ghost}>Try again</Text>
+              <Text style={styles.ghost}>{t.common.tryAgain}</Text>
             </Pressable>
           </View>
         </Card>
@@ -96,7 +98,7 @@ export function NewsSection({ symbol, active }: DetailSectionProps) {
   if (state.items.length === 0) {
     return (
       <View style={styles.section}>
-        <Text style={styles.empty}>No recent headlines for {symbol}.</Text>
+        <Text style={styles.empty}>{fill(t.marketDetail.news.empty, { symbol })}</Text>
       </View>
     )
   }
@@ -120,7 +122,7 @@ export function NewsSection({ symbol, active }: DetailSectionProps) {
           <ActivityIndicator color={colors.accent} size="small" />
         ) : (
           <Pressable onPress={() => void load(true)} hitSlop={8}>
-            <Text style={styles.ghost}>Refresh</Text>
+            <Text style={styles.ghost}>{t.common.refresh}</Text>
           </Pressable>
         )}
       </View>

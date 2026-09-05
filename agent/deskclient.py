@@ -26,6 +26,7 @@ node:22-slim (3.11), so nothing newer than that is used here.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -56,6 +57,19 @@ DESK_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 #: of one wire, not one program, and the desk enforces this limit regardless
 #: -- this constant only saves a 413 round trip for a dossier that ran long.
 MAX_NOTES_BYTES = 262144
+
+#: What :meth:`DeskClient.settings` answers when the desk will not say. One
+#: constant and not a literal at each of the three exits, because all three run
+#: only when something is already wrong: the day this document grows a second
+#: field, a stale copy on one of them is a fallback that silently disagrees
+#: with the other two and nothing exercises the path that would show it. The
+#: desk's own default is ``settings.DEFAULT`` in ``server/claudepost``; this is
+#: the worker's end of the same wire, duplicated for
+#: :data:`MAX_NOTES_BYTES`'s reason.
+#:
+#: Handed out by copy, never by reference -- the answer goes into a prompt
+#: builder that is free to do what it likes with the dict it was given.
+SETTINGS_FALLBACK = {"lang": "en"}
 
 
 class DeskClient:
@@ -301,6 +315,69 @@ class DeskClient:
         """
         status, doc = self._json("GET", "/api/directives")
         return (doc or {}).get("directives", []) if status == 200 else []
+
+    def settings(self) -> dict:
+        """The desk's operator settings, or ``{"lang": "en"}`` when it will not say.
+
+        Today that document holds one field, ``lang`` -- the language the
+        edition is written in, which :func:`prompt.build_prompt` turns into a
+        section of the prompt. It is returned whole rather than as that one
+        field because it is the document a later release adds a setting to,
+        and a client that unpacked it here would have to be changed to carry
+        the next one.
+
+        :meth:`directives`'s stance exactly: an enrichment, not a
+        precondition. A desk that is down, one too old to know the route, and
+        one that answers with an envelope carrying no ``settings`` all file an
+        English page rather than no page -- which is the right failure, because
+        the alternative is a worker that stops filing over a setting the
+        operator has probably never changed.
+
+        It is never a *silent* failure, though, and that is the difference
+        between this and :meth:`directives`. A missing directive is visible in
+        the page it did not shape; a language that fell back is invisible --
+        an operator who set Korean gets a perfectly ordinary English paper, and
+        without the line below the only evidence that this route answered 500
+        is the front page itself. So each way out of here warns exactly once,
+        naming the status or the exception class and nothing more: the request
+        carries the bearer token in a header, and ``self.base`` is allowed to
+        carry credentials.
+
+        The down-desk case is the one that needs catching here rather than in
+        :meth:`_request`, which turns a 4xx into an answer but lets everything
+        below HTTP through. Connection refused, no route to host and a name
+        that does not resolve all arrive as ``URLError`` -- an ``OSError`` --
+        and this is the one method whose contract says they are not fatal.
+
+        ``http.client.HTTPException`` is caught beside it because the two are
+        the same failure to this method and only one of them is an
+        ``OSError``. A response with no status line, a truncated body, a
+        chunked encoding that ends early -- ``BadStatusLine``,
+        ``IncompleteRead``, ``LineTooLong`` -- are what a proxy in front of a
+        desk produces when it is having a bad minute, and every one of them
+        derives from ``Exception`` directly. Leaving them uncaught would make
+        a malformed answer to the one enrichment call the thing that ends the
+        worker, while a desk that is comprehensively down merely files in
+        English.
+        """
+        try:
+            status, doc = self._json("GET", "/api/settings")
+        except (OSError, http.client.HTTPException) as e:
+            LOG.warning("desk settings unreadable (%s) -- filing in English",
+                        type(e).__name__)
+            return dict(SETTINGS_FALLBACK)
+
+        if status != 200:
+            LOG.warning("desk settings unreadable (HTTP %s) -- filing in English",
+                        status)
+            return dict(SETTINGS_FALLBACK)
+
+        settings = doc.get("settings") if isinstance(doc, dict) else None
+        if not isinstance(settings, dict) or not settings:
+            LOG.warning("desk answered 200 with no settings document "
+                        "-- filing in English")
+            return dict(SETTINGS_FALLBACK)
+        return settings
 
 
 def read_token(secrets: str) -> str:

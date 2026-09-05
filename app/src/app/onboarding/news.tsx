@@ -5,6 +5,7 @@ import { IconBadge } from '../../components/IconBadge'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { canProceed, parseOnboardingFlow, progressFor, wizardStepHref } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
+import { useStrings } from '../../i18n'
 import { colors, fonts, radius } from '../../theme'
 
 // Where the board fetches its news snapshot from. Collected BEFORE the Wi-Fi handover so it is
@@ -17,6 +18,7 @@ import { colors, fonts, radius } from '../../theme'
 // otherwise arrive on the far side of a ~45s join.
 export default function News() {
   const router = useRouter()
+  const s = useStrings()
   // Read only to be handed onward. This step's chrome does not depend on why the wizard opened —
   // its SKIP clears the field and advances, and Back always has wifi-list behind it — but the flow
   // param is route-local, so a step that drops it silently ends the chain for every step after it.
@@ -38,25 +40,23 @@ export default function News() {
       progress={progressFor('news')}
       onBack={() => router.back()}
       onSkip={skip}
-      ctaLabel="NEXT"
+      ctaLabel={s.onboarding.nav.next}
       canProceed={canProceed('news', { selectedNetwork: null, password: '', newsUrl })}
       onNext={next}
     >
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <IconBadge name="link" size={44} />
-          <Text style={styles.caption}>
-            Point the board at the JSON your news publishes on this network. Skip this and the
-            board runs on its built-in demo data — you can add the address later from Settings.
-          </Text>
+          <Text style={styles.caption}>{s.onboarding.news.caption}</Text>
         </View>
 
         <View style={styles.field}>
-          <Text style={styles.label}>Snapshot URL (optional)</Text>
+          <Text style={styles.label}>{s.onboarding.news.label}</Text>
           <View style={styles.inputRow}>
             <TextInput
               value={newsUrl}
               onChangeText={setNewsUrl}
+              // An example URL is the same characters in every language; it stays a literal.
               placeholder="http://mymac.local:8123/news.json"
               placeholderTextColor={colors.textFaint}
               autoCapitalize="none"
@@ -71,10 +71,7 @@ export default function News() {
           {showError ? (
             <Text style={styles.error}>{newsUrlErrorMessage(result)}</Text>
           ) : (
-            <Text style={styles.hint}>
-              Plain http on your own LAN is fine — the board and the machine serving this never
-              leave it. Run `python3 tools/mock_news_server.py` on that machine to try it out.
-            </Text>
+            <Text style={styles.hint}>{s.onboarding.news.hint}</Text>
           )}
         </View>
       </ScrollView>

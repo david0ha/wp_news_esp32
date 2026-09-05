@@ -6,12 +6,14 @@ import { BackButton } from '../../components/BackButton'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masonry } from '../../components/edition/Masonry'
 import { EditionUrlProvider } from '../../components/edition/editionUrl'
+import { EditionTypeProvider } from '../../components/edition/typeRamp'
 import { TileDetail } from '../../components/edition/detail/TileDetail'
 import { isDemo } from '../../lib/edition/editionState'
 import { getNewsUrl } from '../../lib/store'
 import { getCurrentEdition, readCachedEdition, type CachedEdition } from '../../lib/edition/store'
 import { COLUMN_GAP, columnWidth, editionKey } from '../../lib/edition/feedLayout'
 import { editionToTiles, findTile, type Tile } from '../../lib/edition/tiles'
+import { useStrings } from '../../i18n'
 import { colors, fonts, layout, space, type } from '../../theme'
 
 // One tile, opened — and the rest of the edition continuing underneath it.
@@ -61,6 +63,7 @@ type Held =
 
 export default function TileDetailRoute() {
   const router = useRouter()
+  const t = useStrings()
   const { width } = useWindowDimensions()
   const params = useLocalSearchParams<{ id: string }>()
   const id = String(params.id ?? '')
@@ -122,7 +125,7 @@ export default function TileDetailRoute() {
       <BackButton
         onPress={() => (router.canGoBack() ? router.back() : router.replace('/edition'))}
       />
-      <Text style={styles.title}>Today</Text>
+      <Text style={styles.title}>{t.tabs.today}</Text>
       <View style={styles.backSpacer} />
     </View>
   )
@@ -146,7 +149,7 @@ export default function TileDetailRoute() {
     return (
       <Screen>
         {header}
-        <ScreenMessage message="This item isn’t in today’s edition." />
+        <ScreenMessage message={t.today.notInEdition} />
       </Screen>
     )
   }
@@ -155,23 +158,28 @@ export default function TileDetailRoute() {
     <Screen>
       {header}
       {/* This page's photographs come from the edition on screen, which may be the one read off
-          disk by a cold deep link rather than the tab's — so the address is this entry's own. */}
+          disk by a cold deep link rather than the tab's — so the address is this entry's own, and
+          so is the language everything below is set in. */}
       <EditionUrlProvider url={cached.url}>
-        <ScrollView contentContainerStyle={styles.scroll}>
-          <TileDetail
-            tile={tile}
-            edition={cached.edition}
-            editionKey={key}
-            photos={photos}
-            width={width}
-          />
-          {rest.length > 0 ? (
-            <View style={styles.more}>
-              <Text style={type.headingSm}>More from this edition</Text>
-              <Masonry tiles={rest} colWidth={colWidth} editionKey={key} onPress={openTile} />
-            </View>
-          ) : null}
-        </ScrollView>
+        <EditionTypeProvider lang={cached.edition.lang}>
+          <ScrollView contentContainerStyle={styles.scroll}>
+            <TileDetail
+              tile={tile}
+              edition={cached.edition}
+              editionKey={key}
+              photos={photos}
+              width={width}
+            />
+            {rest.length > 0 ? (
+              <View style={styles.more}>
+                {/* This heading is the APP's word, not the edition's, so it keeps the app's own
+                    ramp — the tiles under it are the ones the edition's language governs. */}
+                <Text style={type.headingSm}>{t.today.more}</Text>
+                <Masonry tiles={rest} colWidth={colWidth} editionKey={key} onPress={openTile} />
+              </View>
+            ) : null}
+          </ScrollView>
+        </EditionTypeProvider>
       </EditionUrlProvider>
     </Screen>
   )

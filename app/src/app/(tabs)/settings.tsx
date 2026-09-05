@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   KeyboardAvoidingView,
   Platform,
@@ -14,10 +14,26 @@ import { Screen } from '../../components/Screen'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { InfoRow } from '../../components/InfoRow'
+import { SegmentedControl } from '../../components/SegmentedControl'
 import { useDevice } from '../../lib/device'
 import { humanError, type DeviceInfo, type DeviceState } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
-import { clearNewsUrlPending, getDeviceBaseUrl, getNewsUrl, isNewsUrlPending, saveNewsUrl } from '../../lib/store'
+import {
+  clearNewsUrlPending,
+  getDeskBaseUrl,
+  getDeviceBaseUrl,
+  getNewsUrl,
+  isNewsUrlPending,
+  saveDeskBaseUrl,
+  saveNewsUrl,
+} from '../../lib/store'
+import {
+  createDeskClient,
+  deskLanguageView,
+  EDITION_LANGUAGES,
+  humanDeskError,
+} from '../../lib/desk'
+import { clearDeskToken, getDeskToken, saveDeskToken } from '../../lib/deskToken'
 import {
   decideNewsUrlSave,
   settleNewsUrlSync,
@@ -28,11 +44,13 @@ import {
 import { wizardEntryHref } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
 import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
+import { APP_LANGUAGES, fill, useLanguage, useStrings, type AppLanguage } from '../../i18n'
 import { colors, fonts, layout, radius, space, type } from '../../theme'
 
 export default function Settings() {
   const router = useRouter()
   const { client, baseUrl, hasDevice, setBaseUrl, forgetBoard } = useDevice()
+  const s = useStrings()
 
   const [info, setInfo] = useState<DeviceInfo | null>(null)
   const [infoError, setInfoError] = useState(false)
@@ -172,21 +190,21 @@ export default function Settings() {
       const found = await discoverDevice([info?.ip, savedUrl, `http://${DEFAULT_HOST}`])
       if (found) {
         await setBaseUrl(found)
-        setReconnectMsg(`Found your board at ${found.replace(/^https?:\/\//, '')}.`)
+        setReconnectMsg(fill(s.settings.connection.found, { host: found.replace(/^https?:\/\//, '') }))
         loadInfo()
       } else {
-        setReconnectMsg('Couldn’t find the board. Make sure it’s powered on and on this Wi-Fi.')
+        setReconnectMsg(s.settings.connection.notFound)
       }
     } finally {
       setReconnecting(false)
     }
-  }, [info?.ip, setBaseUrl, loadInfo])
+  }, [info?.ip, setBaseUrl, loadInfo, s])
 
   const applyHost = async () => {
     setSaved(false)
     const norm = normalizeBaseUrl(host)
     if (!norm.ok) {
-      setHostError('That doesn’t look like a valid IP address or hostname.')
+      setHostError(s.settings.connection.invalidHost)
       return
     }
     setHostError(null)
@@ -201,12 +219,12 @@ export default function Settings() {
     <Screen edges={['top']}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.titleRow}>
-          <Text style={styles.title}>Settings</Text>
+          <Text style={styles.title}>{s.settings.title}</Text>
         </View>
 
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           {/* Board identity */}
-          <Section title="Board">
+          <Section title={s.settings.sections.board}>
             <Card style={styles.infoCard}>
               {/*
                 `hasDevice === false`, never `!hasDevice`. The third value is `null` — storage has
@@ -223,17 +241,21 @@ export default function Settings() {
                 line has to win rather than merely be reachable.
               */}
               {hasDevice === false ? (
-                <Text style={styles.noBoard}>No board set up on this phone.</Text>
+                <Text style={styles.noBoard}>{s.settings.board.none}</Text>
               ) : infoError ? (
                 <Pressable onPress={loadInfo} accessibilityRole="button" style={styles.infoRetry}>
-                  <Text style={styles.infoRetryText}>Couldn’t reach the board. Tap to retry.</Text>
+                  <Text style={styles.infoRetryText}>{s.settings.board.unreachable}</Text>
                 </Pressable>
               ) : (
                 <>
-                  <InfoRow label="Model" value={info?.model || '—'} />
-                  <InfoRow label="Firmware" value={info?.fw || '—'} />
-                  <InfoRow label="Device ID" value={info?.deviceId || '—'} />
-                  <InfoRow label="IP" value={info?.ip || baseUrl?.replace(/^https?:\/\//, '') || '—'} last />
+                  <InfoRow label={s.settings.board.model} value={info?.model || '—'} />
+                  <InfoRow label={s.settings.board.firmware} value={info?.fw || '—'} />
+                  <InfoRow label={s.settings.board.deviceId} value={info?.deviceId || '—'} />
+                  <InfoRow
+                    label={s.settings.board.ip}
+                    value={info?.ip || baseUrl?.replace(/^https?:\/\//, '') || '—'}
+                    last
+                  />
                 </>
               )}
             </Card>
@@ -257,17 +279,13 @@ export default function Settings() {
             is waiting for the board, the phone's copy is what the user asked for and the board's
             is what they asked to change, so the phone's wins and the note underneath says why.
           */}
-          <Section title="News source">
-            <Text style={styles.help}>
-              The address today’s edition is fetched from — by this phone on the Today tab, and
-              by the board when it has one. Clear it and save to fall back to the built-in demo
-              edition.
-            </Text>
+          <Section title={s.settings.sections.news}>
+            <Text style={styles.help}>{s.settings.news.help}</Text>
             {source ? (
               <Card style={styles.infoCard}>
-                <InfoRow label="Last poll" value={fetchResultLabel(source.lastResult)} />
-                <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
-                <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
+                <InfoRow label={s.settings.news.lastPoll} value={fetchResultLabel(source.lastResult)} />
+                <InfoRow label={s.settings.news.lastSuccess} value={formatAge(source.ageSeconds)} />
+                <InfoRow label={s.settings.news.polls} value={formatInterval(source.pollSeconds)} last />
               </Card>
             ) : null}
             {source && source.lastResult !== 'ok' ? (
@@ -341,11 +359,8 @@ export default function Settings() {
               hand — or tapping "Find board" — is a legitimate way for somebody who skipped setup to
               attach a board that was already provisioned elsewhere, instead of being sent through a
               SoftAP wizard for hardware that is already sitting on this Wi-Fi. */}
-          <Section title="Connection">
-            <Text style={styles.help}>
-              The app finds your board at {DEFAULT_HOST}. If that doesn’t work on your network,
-              enter its IP address or hostname here.
-            </Text>
+          <Section title={s.settings.sections.connection}>
+            <Text style={styles.help}>{fill(s.settings.connection.help, { host: DEFAULT_HOST })}</Text>
             <View style={styles.hostRow}>
               <TextInput
                 value={host}
@@ -354,7 +369,7 @@ export default function Settings() {
                   setHostError(null)
                   setSaved(false)
                 }}
-                placeholder={`192.168.0.42 or ${DEFAULT_HOST}`}
+                placeholder={fill(s.settings.connection.placeholder, { host: DEFAULT_HOST })}
                 placeholderTextColor={colors.textFaint}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -364,18 +379,21 @@ export default function Settings() {
               />
             </View>
             {hostError ? <Text style={styles.error}>{hostError}</Text> : null}
-            {saved ? <Text style={styles.saved}>Saved.</Text> : null}
-            <Button label="Use this address" variant="secondary" onPress={applyHost} />
+            {saved ? <Text style={styles.saved}>{s.settings.connection.saved}</Text> : null}
+            <Button label={s.settings.connection.useThisAddress} variant="secondary" onPress={applyHost} />
 
-            <Text style={styles.help}>
-              Rejoined your home Wi-Fi? Find the board automatically on this network.
-            </Text>
+            <Text style={styles.help}>{s.settings.connection.findHelp}</Text>
             {reconnectMsg ? <Text style={styles.saved}>{reconnectMsg}</Text> : null}
-            <Button label="Find board" variant="secondary" loading={reconnecting} onPress={reconnect} />
+            <Button
+              label={s.settings.connection.findBoard}
+              variant="secondary"
+              loading={reconnecting}
+              onPress={reconnect}
+            />
           </Section>
 
           {/* Re-enter the wizard, or disown the board on file */}
-          <Section title="Setup">
+          <Section title={s.settings.sections.setup}>
             {/*
               A `push`, and nothing cleared on the way in. `reonboard()` did the opposite: it
               dropped the saved URL and the onboarding flag *before* the wizard opened, so a user
@@ -392,12 +410,12 @@ export default function Settings() {
               to forget, and an unknown is offered the harmless half of the pair.
             */}
             <Button
-              label={hasDevice ? 'Set up a different board' : 'Set up my board'}
+              label={hasDevice ? s.settings.setup.setUpDifferent : s.actions.setUpMyBoard}
               variant={hasDevice ? 'ghost' : 'primary'}
               onPress={() => router.push(wizardEntryHref('setup'))}
             />
             {hasDevice ? (
-              <Button label="Forget this board" variant="ghost" onPress={forget} />
+              <Button label={s.settings.setup.forget} variant="ghost" onPress={forget} />
             ) : null}
             {/*
               Shown only when the removal itself failed. The rest of the screen has already agreed
@@ -405,13 +423,33 @@ export default function Settings() {
               still on disk and the next cold launch will read it back. Saying nothing here would
               make that look like the app undoing a deliberate act on its own.
             */}
-            {forgetFailed ? (
-              <Text style={styles.help}>
-                Forgotten for now, but it couldn’t be removed from this phone’s storage — it may
-                come back the next time you open the app.
-              </Text>
-            ) : null}
+            {forgetFailed ? <Text style={styles.help}>{s.settings.setup.forgetFailed}</Text> : null}
           </Section>
+
+          {/*
+            The app's own language, and nothing else's. It sits below everything about the board
+            because it changes nothing about one — a phone with no hardware still has a language,
+            and somebody who came here to fix a connection should not meet a language picker first.
+            The help line under it says what this does NOT cover, because "App language" beside an
+            edition written in Korean is otherwise a fair thing to misread: the edition's language
+            travels with the edition, and the desk sets it.
+
+            The Desk section below is the other half of that sentence, and the two are adjacent on
+            purpose: "App language" and "Edition language" are only telling apart if a reader can
+            see both at once.
+          */}
+          <Section title={s.settings.sections.language}>
+            <Text style={styles.help}>{s.settings.language.help}</Text>
+            <LanguagePicker />
+          </Section>
+
+          {/*
+            The desk. Last, because it is the only section on this screen that reaches past the LAN
+            and the only one most owners never touch: a phone that just reads the paper needs an
+            edition URL and no credential at all. What is here is what an OWNER can do that nobody
+            else can — say what language their newspaper is written in.
+          */}
+          <DeskSection />
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
@@ -424,6 +462,299 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <Text style={styles.sectionTitle}>{title}</Text>
       {children}
     </View>
+  )
+}
+
+/**
+ * System / English / 한국어, on the segmented track the panel selector and the options chain
+ * already use. Three segments and not a list of rows because the choice is small, closed and
+ * mutually exclusive — the shape iOS itself uses for exactly this — and because the track shows
+ * all three answers at once, which matters more here than anywhere else on the screen: somebody
+ * looking for this control may not read the two words above it.
+ *
+ * `system` leads, because it is the default and the answer most people want; the other two are
+ * offered as **endonyms**, each written in its own language. "Korean" would be the wrong word for
+ * the one reader who most needs to find it.
+ *
+ * The write is fire-and-forget by design. `set` fills the in-memory cache before it awaits the
+ * disk, so the app is already redrawing in the new language while the write lands, and there is
+ * nothing useful to say if it does not: the cost of a failed write is one re-tap on the next
+ * launch, and a spinner or an error line on a control whose effect is visible everywhere at once
+ * would be describing a failure the user cannot see and does not have to act on.
+ */
+function LanguagePicker() {
+  const s = useStrings()
+  const { choice, set } = useLanguage()
+  const labels: Record<AppLanguage, string> = {
+    system: s.settings.language.system,
+    en: s.settings.language.english,
+    ko: s.settings.language.korean,
+  }
+  return (
+    <SegmentedControl
+      segments={APP_LANGUAGES.map((l) => labels[l])}
+      selectedIndex={APP_LANGUAGES.indexOf(choice)}
+      onChange={(i) => void set(APP_LANGUAGES[i])}
+    />
+  )
+}
+
+/** A sentence and the voice it is said in — the three this screen already draws. */
+type Toned = { tone: 'ok' | 'info' | 'error'; message: string }
+
+/**
+ * The desk: its address, an operator token, and the language the NEWSPAPER is written in.
+ *
+ * This is the app's first authenticated call to anything (`lib/desk.ts`). Everything else the app
+ * does with a desk goes through the open device plane — `/news.json` and its tiles, no credential —
+ * so the token here is not "the app's login". It is the operator's own, pasted in by the person who
+ * runs the desk, and it buys exactly one thing today: `PUT /api/settings`.
+ *
+ * THE TOKEN IS NEVER DRAWN BACK. It goes to the keychain (`deskToken.ts`), the field is emptied on
+ * save, and the section then says only that one is held. A screen that refilled the field with the
+ * secret would put it in every screenshot and every shoulder's view for the sake of confirming
+ * something the sentence already confirms. Replacing it means typing a new one; there is a Forget
+ * for the phone that is being handed on.
+ *
+ * The address is not a secret and is prefilled, like every other address on this screen.
+ */
+function DeskSection() {
+  const s = useStrings()
+  // What is SAVED, both of them. The drafts beside them are what is being typed.
+  const [address, setAddress] = useState<string | null>(null)
+  const [addressDraft, setAddressDraft] = useState('')
+  const [addressMsg, setAddressMsg] = useState<Toned | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  const [tokenDraft, setTokenDraft] = useState('')
+  const [tokenMsg, setTokenMsg] = useState<Toned | null>(null)
+  // What the desk says it is set to — `null` until it has answered, and again if it stops
+  // answering. Never a guessed default: see `desk.ts`'s `settingsOf`.
+  const [lang, setLang] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [langMsg, setLangMsg] = useState<Toned | null>(null)
+  // Storage has answered about both. Until it has, `address` and `token` being null means "not
+  // read yet" rather than "not saved", and the note under the selector must not read it as the
+  // second — see `deskLanguageView`.
+  const [loaded, setLoaded] = useState(false)
+
+  // Whether this section is still on screen, for the one handler that awaits the NETWORK. The
+  // effects below have their own `active` flags; a handler has no cleanup to hang one on, and
+  // `chooseLanguage` can be waiting out a fifteen-second deadline when the tab is torn down.
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+
+  // Read both once, on mount rather than on focus. Neither changes behind this screen's back —
+  // this is the only place in the app that writes either — so re-reading on every focus would be
+  // two storage reads to learn what the component already holds, and would fight the drafts.
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const [saved, held] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+      if (!active) return
+      setAddress(saved)
+      setAddressDraft(saved ?? '')
+      setToken(held)
+      setLoaded(true)
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // Ask the desk what it is set to, whenever there is an address and a token to ask with. Both
+  // arms matter: losing either (a forgotten token) has to clear the language too, or the selector
+  // would go on showing a live answer next to a control that can no longer change it.
+  useEffect(() => {
+    if (!address || !token) {
+      setLang(null)
+      // And nothing is in flight any more. This arm is where "Forget token" lands: its own read
+      // was abandoned by the cleanup below, whose `active` flag is false by then, so the `finally`
+      // that would have cleared this is skipped and only here can do it.
+      setBusy(false)
+      return
+    }
+    let active = true
+    setBusy(true)
+    setLangMsg(null)
+    void (async () => {
+      try {
+        const settings = await createDeskClient({ baseUrl: address, token }).getSettings()
+        if (active) setLang(settings.lang)
+      } catch (e) {
+        if (!active) return
+        setLang(null)
+        setLangMsg({ tone: 'error', message: humanDeskError(e) })
+      } finally {
+        if (active) setBusy(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [address, token])
+
+  const applyAddress = async () => {
+    setAddressMsg(null)
+    if (!(await saveDeskBaseUrl(addressDraft))) {
+      setAddressMsg({ tone: 'error', message: s.settings.desk.addressInvalid })
+      return
+    }
+    // Read back rather than trusting the draft: the store normalizes (it drops a trailing slash
+    // and any path), and the field should show what will actually be called.
+    const saved = await getDeskBaseUrl()
+    setAddress(saved)
+    setAddressDraft(saved ?? '')
+    setAddressMsg({ tone: 'ok', message: s.settings.desk.addressSaved })
+  }
+
+  // THE EMPTY FIELD IS ITS OWN ANSWER. The Save button is disabled while the field is blank, but
+  // the field also submits on return — so pressing it on an empty box is the easiest way into this
+  // handler and it used to end at "this phone's keychain wouldn't store the token", an alarming
+  // sentence about a component nothing had asked. It is a no-op and says so, and it deliberately
+  // does NOT clear the saved token: forgetting one is a button of its own, and an accidental
+  // return should never be the way somebody loses the credential that is working.
+  const applyToken = async () => {
+    setTokenMsg(null)
+    const typed = tokenDraft.trim()
+    const outcome = await saveDeskToken(typed)
+    if (outcome === 'empty') {
+      setTokenMsg({ tone: 'info', message: s.settings.desk.tokenEmpty })
+      return
+    }
+    if (outcome === 'refused') {
+      setTokenMsg({ tone: 'error', message: s.settings.desk.tokenNotSaved })
+      return
+    }
+    setToken(typed)
+    setTokenDraft('')
+    setTokenMsg({ tone: 'ok', message: s.settings.desk.tokenSaved })
+  }
+
+  const forgetToken = async () => {
+    await clearDeskToken()
+    setToken(null)
+    setTokenDraft('')
+    setTokenMsg(null)
+    setLangMsg(null)
+  }
+
+  // Write the language, then draw WHAT THE DESK PUT IN FORCE rather than what was asked for. A
+  // failure leaves the selector where it was, which is the truth: the desk did not change.
+  //
+  // Every write here is guarded by `alive`, because this is the one thing on the screen that can
+  // still be waiting when the section is gone: a desk behind a cold tunnel has fifteen seconds to
+  // answer, and the tab can be left in one.
+  const chooseLanguage = async (next: string) => {
+    if (!address || !token || next === lang) return
+    setBusy(true)
+    setLangMsg(null)
+    try {
+      const settings = await createDeskClient({ baseUrl: address, token }).putSettings({
+        lang: next,
+      })
+      if (!alive.current) return
+      setLang(settings.lang)
+      setLangMsg({ tone: 'ok', message: s.settings.desk.languageSaved })
+    } catch (e) {
+      if (alive.current) setLangMsg({ tone: 'error', message: humanDeskError(e) })
+    } finally {
+      if (alive.current) setBusy(false)
+    }
+  }
+
+  const view = deskLanguageView({ address, token, lang, busy, loaded })
+  const note =
+    view.note === 'needs_setup'
+      ? s.settings.desk.needsSetup
+      : view.note === 'unsupported'
+        ? fill(s.settings.desk.unsupported, { lang: lang ?? '' })
+        : null
+
+  return (
+    <Section title={s.settings.sections.desk}>
+      <Text style={styles.help}>{s.settings.desk.help}</Text>
+
+      <View style={styles.field}>
+        <View style={styles.hostRow}>
+          <TextInput
+            value={addressDraft}
+            onChangeText={(t) => {
+              setAddressDraft(t)
+              setAddressMsg(null)
+            }}
+            // The shape of an address, not a sentence: the same characters in every language, so
+            // it is a literal here rather than a catalogue entry that can be mistranslated.
+            placeholder="https://…"
+            placeholderTextColor={colors.textFaint}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            style={styles.hostInput}
+            onSubmitEditing={applyAddress}
+          />
+        </View>
+        {addressMsg ? <Text style={TONE[addressMsg.tone]}>{addressMsg.message}</Text> : null}
+        <Button
+          label={s.settings.desk.saveAddress}
+          variant="secondary"
+          disabled={!addressDraft.trim() || addressDraft.trim() === (address ?? '')}
+          onPress={applyAddress}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <View style={styles.hostRow}>
+          <TextInput
+            value={tokenDraft}
+            onChangeText={(t) => {
+              setTokenDraft(t)
+              setTokenMsg(null)
+            }}
+            placeholder={s.settings.desk.tokenPlaceholder}
+            placeholderTextColor={colors.textFaint}
+            // A credential: masked, and deliberately invisible to the platform's password
+            // manager. `textContentType="none"` with autofill off is what keeps iOS from
+            // treating this as a login field — there is no account here to save a password
+            // against, and its offer to do so would file the desk's token under a domain the
+            // app never authenticates to.
+            secureTextEntry
+            textContentType="none"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.hostInput}
+            onSubmitEditing={applyToken}
+          />
+        </View>
+        {tokenMsg ? <Text style={TONE[tokenMsg.tone]}>{tokenMsg.message}</Text> : null}
+        {token && !tokenMsg ? <Text style={styles.help}>{s.settings.desk.tokenHeld}</Text> : null}
+        <Button
+          label={s.settings.desk.saveToken}
+          variant="secondary"
+          disabled={!tokenDraft.trim()}
+          onPress={applyToken}
+        />
+        {token ? (
+          <Button label={s.settings.desk.forgetToken} variant="ghost" onPress={forgetToken} />
+        ) : null}
+      </View>
+
+      <Text style={styles.deskLabel}>{s.settings.desk.editionLanguage}</Text>
+      <Text style={styles.help}>{s.settings.desk.editionHelp}</Text>
+      <SegmentedControl
+        segments={[s.settings.language.english, s.settings.language.korean]}
+        selectedIndex={view.selectedIndex}
+        disabled={view.disabled}
+        onChange={(i) => void chooseLanguage(EDITION_LANGUAGES[i])}
+      />
+      {note ? <Text style={styles.help}>{note}</Text> : null}
+      {langMsg ? <Text style={TONE[langMsg.tone]}>{langMsg.message}</Text> : null}
+    </Section>
   )
 }
 
@@ -458,6 +789,7 @@ function NewsUrlEditor({
   hasBoard: boolean | null
   onSave: (value: string) => Promise<NewsUrlSaveDecision>
 }) {
+  const s = useStrings()
   const [draft, setDraft] = useState(initial)
   const [saving, setSaving] = useState(false)
   const [outcome, setOutcome] = useState<NewsUrlSaveDecision | null>(null)
@@ -475,8 +807,6 @@ function NewsUrlEditor({
     setOutcome(decision)
   }
 
-  const toneStyle = { ok: styles.saved, info: styles.help, error: styles.error } as const
-
   return (
     <View style={styles.field}>
       <View style={styles.hostRow}>
@@ -486,6 +816,9 @@ function NewsUrlEditor({
             setDraft(t)
             setOutcome(null)
           }}
+          // A URL, not copy: an example address is the same characters in every language, so it
+          // stays a literal here rather than becoming a catalogue entry that can only be
+          // mistranslated.
           placeholder="http://mymac.local:8123/news.json"
           placeholderTextColor={colors.textFaint}
           autoCapitalize="none"
@@ -496,16 +829,14 @@ function NewsUrlEditor({
         />
       </View>
       {localError ? <Text style={styles.error}>{localError}</Text> : null}
-      {outcome ? <Text style={toneStyle[outcome.tone]}>{outcome.message}</Text> : null}
+      {outcome ? <Text style={TONE[outcome.tone]}>{outcome.message}</Text> : null}
       {pending && !outcome && !dirty ? (
         <Text style={styles.help}>
-          {hasBoard === false
-            ? 'Today reads from this address. A board you set up later will get it too.'
-            : 'Not yet on the board — it will be sent the next time this app reaches it.'}
+          {hasBoard === false ? s.settings.news.pendingNoBoard : s.settings.news.pendingWithBoard}
         </Text>
       ) : null}
       <Button
-        label={dirty && !draft.trim() ? 'Clear and use demo data' : 'Save address'}
+        label={dirty && !draft.trim() ? s.settings.news.clearAndDemo : s.settings.news.saveAddress}
         variant="secondary"
         disabled={!result.ok || !dirty}
         loading={saving}
@@ -565,6 +896,14 @@ const styles = StyleSheet.create({
     color: colors.textFaint,
     lineHeight: 18,
   },
+  // A label for a control inside a section, one step down from `sectionTitle`. The Desk section is
+  // the only one with two subjects under one heading — the desk itself, and what it writes in — so
+  // it is the only one that needs one.
+  deskLabel: {
+    fontFamily: fonts.semibold,
+    fontSize: 14,
+    color: colors.text,
+  },
   field: {
     gap: 8,
   },
@@ -591,3 +930,9 @@ const styles = StyleSheet.create({
     color: colors.up,
   },
 })
+
+// The three tones a settings row can report in, as the style each draws in. One table for the
+// file: the desk section and the news-URL editor both report the same three outcomes, and two
+// copies would mean adding a fourth tone twice with nothing to make the second edit happen.
+// Below `styles` because it reads them, and read at render time either way.
+const TONE = { ok: styles.saved, info: styles.help, error: styles.error } as const

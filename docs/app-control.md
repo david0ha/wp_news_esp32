@@ -65,6 +65,7 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
     "valid": true, "demo": false,
     "edition": "SEMICONDUCTORS",
     "generatedAt": "2026-08-14T05:12:00Z",
+    "lang": "en",
 
     "subject": {
       "symbol": "SNDK", "name": "Sandisk Corp.",
@@ -112,10 +113,10 @@ URL in `source.url`, which the phone can fetch as easily as the board can.
 }
 ```
 
-That document is 1,378 bytes without the indentation shown here. The buffer is
+That document is 1,390 bytes without the indentation shown here. The buffer is
 `DEVICE_API_STATE_BUF_SZ`, 5120, and `test_api_json` builds the worst case — every string at its
 maximum length, every array at capacity, every character one the escaper expands to six — and asserts
-it fits, printing the margin (currently **4,280 of 5,120**). The margin is checked rather than
+it fits, printing the margin (currently **4,304 of 5,120**). The margin is checked rather than
 assumed because the overflow path returns `-1` and an **empty body**, so the symptom of being one
 byte over is "the app shows nothing" with no error anywhere.
 
@@ -457,8 +458,42 @@ a change there too.
 Everything above is the LAN-only channel to the board itself. When a
 [desk server](desk-server.md) is in the picture, the phone has a second
 channel — straight to it, the same `Authorization: Bearer` control plane a
-worker speaks. There is no client for it in `app/` yet; this section is what
-the app will call and against which token.
+worker speaks. This section is what the app calls and against which token.
+
+**The app's first authenticated call is `GET/PUT /api/settings`**, from
+Settings' Desk section — the desk's address, an operator token, and the
+language the *newspaper* is written in. `app/src/lib/desk.ts` is the whole
+client: two calls, one header, and four error codes (`unauthorized`,
+`transport`, `http`, `bad_json`), with 401 and 403 folded into the first
+because to whoever is holding the phone both mean "this token cannot do that".
+
+Two things about the token, and they are the reason this is a separate client
+from `esp32.ts` rather than a base URL passed to it:
+
+- **It is the operator's own, pasted in.** There is no login and nothing is
+  issued to the app. A `producer` token gets a 403 on the write, and the
+  sentence says so rather than reporting a generic failure — the likeliest
+  cause of one is a producer token pasted where an operator's was meant.
+- **It is kept in the phone's keychain**, via `expo-secure-store`
+  (`app/src/lib/deskToken.ts`), and nowhere else: not in AsyncStorage beside
+  the addresses, not in a log, and not in the message of anything the client
+  throws, because an error sentence is drawn on screen and pasted into bug
+  reports. The desk *address* is ordinary state and does live in AsyncStorage,
+  under `claudepost.deskBaseUrl`.
+
+**A scheme-less desk address is assumed to be `https://`**, which is the
+opposite of the board's, and the token is the reason. `normalizeBaseUrl`
+defaults to `http://` because that is what the board speaks on the LAN, and
+`app.json`'s `usesCleartextTraffic` lets Android make that call — so applying
+the same default to a desk would put an operator token on the wire in the
+clear with the platform allowing it. `saveDeskBaseUrl` therefore prepends
+`https://` to a bare name and leaves the three shapes that can only be local —
+an IPv4 literal, `localhost`, and a `.local` name — on `http://`. A scheme the
+operator typed is never overridden in either direction.
+
+Everything else the app does with a desk is still unauthenticated: the Today
+tab reads `/news.json` and `/tiles/<id>.bin` off the open device plane, so a
+phone that only reads the paper never holds a credential at all.
 
 **These are the routes a phone client uses, not the desk's whole surface.**
 The drafts family — opening one, uploading a payload and its tiles, proofing,
@@ -490,6 +525,7 @@ rules.
 | `GET /api/directives` | the standing rules in force — adding one is `operator` |
 | `GET /api/schedule` · `GET /api/schedule/next` | the schedule, and what it does next — editing it is `operator` |
 | `GET /api/watchlist` | the vault's grades, reasons and thesis notes — editing it is `operator` |
+| `GET /api/settings` | the desk's own preferences — today, the language the edition is written in. Changing it is `operator` |
 | `GET /api/quotes?symbols=…` | last price, day's change and a sparkline, proxied so the phone never holds the Alpaca key |
 | `GET /api/audit` | the desk's own record of what it has done |
 
@@ -511,6 +547,7 @@ phone would offer:
 | `POST /api/directives` · `DELETE /api/directives/<id>` | add or remove a standing rule |
 | `PUT /api/schedule` | change when the desk may publish |
 | `PUT /api/watchlist` | rewrite the vault's document |
+| `PUT /api/settings` | set the language the edition is written in — `{"lang": "ko"}`, and an unknown key is refused whole with `bad_settings` |
 | `POST /api/publish` · `POST /api/hold` | force the staged edition up, or hold the wall |
 
 A `producer` token that can enqueue but never promote or publish is

@@ -13,6 +13,7 @@ bearer token written to a log file that outlives it.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
@@ -53,6 +54,13 @@ class StubOpener:
     An answer is ``(status, body)``; a status of 400 or more is raised as the
     ``HTTPError`` urllib would raise, because that path -- catching it and
     reading the body out of the exception -- is the one worth testing.
+
+    An answer may also be an exception instance, which is raised as it stands.
+    That is how a desk that is not answering *at all* is spelled -- connection
+    refused, no route to host, DNS that does not resolve -- and it is a
+    different branch from a 500: ``DeskClient._request()`` catches
+    ``HTTPError`` and nothing else, so a ``URLError`` comes out of whichever
+    method asked.
     """
 
     def __init__(self, *answers) -> None:
@@ -61,7 +69,10 @@ class StubOpener:
 
     def __call__(self, req, timeout=None):
         self.requests.append(req)
-        status, body = self.answers.pop(0) if self.answers else (204, b"")
+        answer = self.answers.pop(0) if self.answers else (204, b"")
+        if isinstance(answer, BaseException):
+            raise answer
+        status, body = answer
         if status >= 400:
             raise urllib.error.HTTPError(req.full_url, status, "err", {},
                                          io.BytesIO(body))
@@ -241,6 +252,57 @@ class RequestTest(unittest.TestCase):
         # that cannot list them is not a reason to refuse to file.
         desk, _ = client((500, b"boom"))
         self.assertEqual(desk.directives(), [])
+
+    def test_settings_come_back_as_the_desk_set_them(self):
+        desk, opener = client((200, json.dumps(
+            {"ok": True, "source": "file", "settings": {"lang": "ko"}}).encode()))
+        # Silently, which is the half that makes the warning below worth
+        # anything: a line on every call is a line nobody reads.
+        with self.assertNoLogs("worker.desk", level="WARNING"):
+            self.assertEqual(desk.settings(), {"lang": "ko"})
+        self.assertEqual(opener.requests[0].full_url, "http://desk:8080/api/settings")
+
+    def test_a_desk_that_will_not_say_means_english_and_says_so(self):
+        """Every way this read can fail: an English paper, and a line about it.
+
+        The same stance as directives(): the language is an enrichment, not a
+        precondition. A desk too old to know the route, one that answered with
+        an envelope carrying no settings, and one that is simply down all file
+        an English page rather than no page.
+
+        The warning is the half that is not optional. An operator who set
+        Korean and got an English paper has one place to look, and a fallback
+        that left no trace would make tomorrow's front page the only evidence
+        that this route answered 500. What the line may carry is the status or
+        the exception class and nothing else: the request holds the bearer
+        token, and the base URL is allowed to carry credentials.
+
+        The third and fourth answers are the ones `_request()` does not catch.
+        It catches `HTTPError` only, so a desk that is not answering at all
+        raises `URLError` out of `settings()` itself -- which is what the
+        docstring there describes and therefore what it has to do.
+
+        `IncompleteRead` is the fourth, and it is a different class of thing
+        rather than another spelling of the third: `http.client`'s exceptions
+        derive from `Exception` and not from `OSError`, so an `except OSError`
+        alone lets a proxy that truncated its answer take the whole worker
+        down -- over the one call on this client whose entire contract is that
+        failing is survivable.
+        """
+        for answer, names in (
+                ((404, b'{"ok":false,"error":"not_found"}'), "404"),
+                ((500, b"boom"), "500"),
+                (urllib.error.URLError("connection refused"), "URLError"),
+                (http.client.IncompleteRead(b"{\"ok\":tr"), "IncompleteRead"),
+                ((200, b'{"ok":true}'), None),
+                ((200, b""), None)):
+            desk, _ = client(answer)
+            with self.assertLogs("worker.desk", level="WARNING") as caught:
+                self.assertEqual(desk.settings(), {"lang": "en"}, answer)
+            self.assertEqual(len(caught.output), 1, answer)
+            self.assertNotIn(TOKEN, caught.output[0])
+            if names:
+                self.assertIn(names, caught.output[0])
 
 
 class ErrorTest(unittest.TestCase):

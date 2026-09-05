@@ -9,7 +9,7 @@
  * rather than *performing* it, it belongs next door with a test.
  *
  * Waking from deep sleep is not resuming, it is booting. RAM is gone, PSRAM is
- * gone, the 960,000-byte framebuffer is gone. `sizeof(news_t)` is 32,952 bytes
+ * gone, the 960,000-byte framebuffer is gone. `sizeof(news_t)` is 32,960 bytes
  * against 8 KB of RTC slow memory, so the snapshot cannot survive and no
  * packing will make it. What survives is the glass — Spectra 6 is bistable, so
  * the last edition hangs there drawing nothing — plus the hundred-odd bytes of

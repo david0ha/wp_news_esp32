@@ -32,7 +32,17 @@ function isValidIpv4(host: string): boolean {
 
 // A host shaped like four dotted numeric labels (e.g. 999.1.1.1) is meant to be an IPv4 — if it
 // isn't a *valid* one, reject it rather than letting it slip through as a hostname.
-const DOTTED_NUMERIC_RE = /^\d{1,3}(\.\d{1,3}){3}$/
+//
+// Exported because `store.ts`'s `deskScheme` asks the same question of the same input, one call
+// before handing it to `normalizeBaseUrl` — and the day this is widened (an unbracketed IPv6
+// literal, say) a second copy over there would keep the old grammar and decide that an address
+// this file accepts is a public name worth defaulting to https.
+export const DOTTED_NUMERIC_RE = /^\d{1,3}(\.\d{1,3}){3}$/
+
+// The scheme half of a URL: a letter, then letters, digits and `+.-`, then `://`. Exported for
+// `deskScheme`, which only needs to know whether the operator typed one at all; the capture
+// groups are for the parse below.
+export const SCHEME_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/(.*)$/s
 
 export interface NormalizeResult {
   ok: boolean
@@ -57,7 +67,7 @@ export function normalizeBaseUrl(input: string): NormalizeResult {
   // an out-of-range IPv4 or port should report bad_host/bad_port, not a generic parse failure).
   let scheme = 'http'
   let rest = raw
-  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/(.*)$/s.exec(raw)
+  const schemeMatch = SCHEME_RE.exec(raw)
   if (schemeMatch) {
     scheme = schemeMatch[1].toLowerCase()
     if (scheme !== 'http' && scheme !== 'https') return { ok: false, error: 'bad_scheme' }

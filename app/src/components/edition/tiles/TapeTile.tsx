@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { Sparkline } from '../../Sparkline'
-import { colors, fonts, type } from '../../../theme'
+import { useStrings } from '../../../i18n'
+import { colors, fonts } from '../../../theme'
 import {
   TILE_HEAD,
   TAPE_ROW,
@@ -10,6 +11,7 @@ import {
 import { changeTone } from '../../../lib/edition/format'
 import { Change } from '../Change'
 import { toneGraphicsColor } from '../tone'
+import { useEditionFace, useEditionType } from '../typeRamp'
 import { TAPE_CHANGE_W, TAPE_GAP, TAPE_SYMBOL_SIZE, tapeSparkWidth } from './tape'
 
 /**
@@ -33,13 +35,16 @@ export function TapeTile({
   /** The tile's OUTER width. `tape.ts` subtracts the padding, as `ChartTile` does with its own. */
   width: number
 }) {
+  const t = useStrings()
+  const ty = useEditionType()
+  const face = useEditionFace()
   const sparkW = tapeSparkWidth(width)
   return (
     <View style={styles.root}>
-      <Text style={styles.head}>The tape</Text>
+      <Text style={[ty.headingSm, styles.head]}>{t.today.heads.tape}</Text>
       {tile.indices.slice(0, TAPE_SHOWN).map((ix) => (
         <View key={ix.symbol} style={styles.row}>
-          <Text style={styles.symbol} numberOfLines={1}>
+          <Text style={[face(fonts.medium), styles.symbol]} numberOfLines={1}>
             {ix.symbol}
           </Text>
           {sparkW > 0 ? (
@@ -57,10 +62,11 @@ export function TapeTile({
   )
 }
 
+// The faces come from the edition's ramp in front of these rules (`typeRamp.tsx`); what is left
+// here is the geometry the row arithmetic in `tape.ts` agrees with.
 const styles = StyleSheet.create({
   root: { flex: 1 },
   head: {
-    ...type.headingSm,
     height: TILE_HEAD,
   },
   row: {
@@ -75,7 +81,6 @@ const styles = StyleSheet.create({
   // instead of absorbing it.
   symbol: {
     flex: 1,
-    fontFamily: fonts.medium,
     fontSize: TAPE_SYMBOL_SIZE,
     color: colors.textDim,
   },

@@ -250,7 +250,8 @@ class DevicePlaneTest(DeskTestCase):
         # `find agent/standalone/public -type f` made executable. Every one of
         # these is a real file or a real endpoint somewhere in this system, and
         # none of them is on this plane.
-        for path in ("/", "/index.html", "/schedule.json", "/desk.sqlite",
+        for path in ("/", "/index.html", "/schedule.json", "/settings.json",
+                     "/desk.sqlite",
                      "/data/desk.sqlite", "/editions", "/editions/",
                      "/log/2026-08-19.json", "/tiles/", "/tiles/pic",
                      "/tiles/pic.bin.bak",
@@ -1146,6 +1147,75 @@ class WatchlistTest(DeskTestCase):
         event = doc["events"][0]
         self.assertEqual(event["event"], "watchlist")
         self.assertEqual(event["detail"], {"items": 1, "source": "vault"})
+
+
+class SettingsTest(DeskTestCase):
+    """`/api/settings`: the language the paper prints in, read by everybody
+    and written by the operator alone."""
+
+    def test_settings_default_to_english_and_an_operator_can_change_them(self):
+        status, doc = self.api("GET", "/api/settings", scope="producer")
+        self.assertEqual((status, doc["settings"]), (200, {"lang": "en"}))
+        status, doc = self.api("PUT", "/api/settings", {"lang": "ko"})
+        self.assertEqual((status, doc["settings"], doc["source"]), (200, {"lang": "ko"}, "file"))
+        status, _ = self.api("PUT", "/api/settings", {"lang": "ko"}, scope="producer")
+        self.assertEqual(status, 403)
+        status, doc = self.api("PUT", "/api/settings", {"lang": "ko", "x": 1})
+        self.assertEqual((status, doc["error"]), (400, "bad_settings"))
+        status, doc = self.api("GET", "/api/settings", scope="producer")
+        self.assertEqual(doc["settings"], {"lang": "ko"})       # the bad PUT changed nothing
+
+    def test_a_language_the_board_cannot_print_is_refused_by_name(self):
+        # `ja` is a well-formed BCP-47 primary subtag and the firmware has no
+        # Japanese faces, so a desk that took it would commission a Japanese
+        # paper and print a sheet of tofu boxes -- no error on the desk, none
+        # in the worker, none on the board. The 400 has to carry the set,
+        # because "bad_settings" alone leaves the caller guessing at a
+        # two-letter string.
+        status, doc = self.api("PUT", "/api/settings", {"lang": "ja"})
+        self.assertEqual((status, doc["error"]), (400, "bad_settings"))
+        self.assertIn("en, ko", doc["detail"])
+        status, doc = self.api("GET", "/api/settings", scope="producer")
+        self.assertEqual(doc["settings"], {"lang": "en"})       # nothing changed
+
+    def test_an_edited_setting_survives_a_restart(self):
+        # The point of the file, and the same one the schedule's own restart
+        # test makes: the desk that comes up tomorrow is the one that was told
+        # what to do today. A language held only in memory would revert to
+        # English on every `docker compose up`, silently, and the symptom
+        # would be a paper in the wrong language the morning after.
+        status, body = self.api("PUT", "/api/settings", {"lang": "ko"})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["source"], "file")
+
+        path = os.path.join(self.cfg.data_dir, "settings.json")
+        self.assertTrue(os.path.exists(path), path)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertEqual(second.settings_source, "file")
+        self.assertEqual(second.settings, {"lang": "ko"})
+
+    def test_a_boot_says_in_the_log_which_language_it_came_up_on(self):
+        # The same argument `_load_watchlist` makes: a desk that came up
+        # having silently dropped a hand-edited settings file reads, without
+        # this line, exactly like a desk nobody has ever told.
+        with self.assertLogs("claudepost.app", level="INFO") as caught:
+            Desk(self.cfg, clock=self.clock, gates=self.gates).close()
+        lines = [l for l in caught.output if "settings" in l]
+        self.assertEqual(len(lines), 1, caught.output)
+        self.assertIn("default", lines[0])
+        self.assertIn("en", lines[0])
+
+    def test_changing_it_is_audited(self):
+        status, _ = self.api("PUT", "/api/settings", {"lang": "ko"})
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+        event = doc["events"][0]
+        self.assertEqual(event["event"], "settings")
+        self.assertEqual(event["detail"], {"lang": "ko"})
 
 
 class StubQuoteService:

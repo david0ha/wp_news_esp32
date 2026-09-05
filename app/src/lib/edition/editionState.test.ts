@@ -385,7 +385,7 @@ describe('the spec’s error-handling table, the row that crosses two modules', 
     expect(m.state.cached.edition).toEqual(edition('SNDK'))
     expect(m.state.cached.fetchedAt).toBe(1000) // NOT confirmed: the freshness line keeps ageing
     expect(m.state.error).toBe(
-      "The edition didn't parse. The desk may be mid-publish; pull to refresh in a minute.",
+      'The edition didn’t parse. The desk may be mid-publish; pull to refresh in a minute.',
     )
   })
 })

@@ -51,6 +51,7 @@ can serve a fourth path. `server/test/test_http.py` asserts it.
 | Directives | `GET/POST /api/directives` · `DELETE /api/directives/<id>` |
 | Schedule | `GET/PUT /api/schedule` · `GET /api/schedule/next` |
 | Watchlist | `GET/PUT /api/watchlist` |
+| Settings | `GET/PUT /api/settings` |
 | Quotes | `GET /api/quotes?symbols=…` |
 | Operations | `GET /api/state` · `POST /api/publish` · `POST /api/hold` · `GET /api/audit` |
 

@@ -61,6 +61,7 @@
 #define DEV_PAGE_MAXLEN      32
 #define DEV_EDITION_MAXLEN   32
 #define DEV_TIME_MAXLEN      24
+#define DEV_LANG_MAXLEN       8   /* == NEWS_LANG_MAX */
 #define DEV_URL_MAXLEN      129   /* == PROV_URL_MAX_LEN + 1 */
 #define DEV_RESULT_MAXLEN    16
 
@@ -140,6 +141,15 @@ typedef struct {
     bool demo;                          /* rendered from the built-in sample */
     char edition[DEV_EDITION_MAXLEN];
     char generated_at[DEV_TIME_MAXLEN];
+
+    /* The language the edition on the glass is written in, already normalised
+     * by the parser. Available rather than used: the app picks its type ramp
+     * from the `lang` on the edition JSON it fetches from the desk, and nothing
+     * reads this field today. It is here because this document is what a client
+     * asks the BOARD about the page actually on the glass, and a client that
+     * had to infer the language of that page from a document it fetched
+     * somewhere else would be guessing. */
+    char lang[DEV_LANG_MAXLEN];
 
     dev_subject_t subject;
 

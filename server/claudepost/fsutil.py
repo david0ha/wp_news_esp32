@@ -22,6 +22,7 @@ state this module exists to prevent.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 
@@ -54,6 +55,27 @@ def atomic_write(path: str, data: bytes) -> None:
             pass
         raise
     fsync_dir(directory)
+
+
+def json_bytes(doc: object) -> bytes:
+    """A document exactly as an operator-editable file holds it.
+
+    Four options -- the indent, ``ensure_ascii``, the trailing newline, the
+    encoding -- and together they are a format contract rather than four
+    independent tastes. Every document under the data root a human is expected
+    to open is written this way: the schedule, the watchlist, the settings. A
+    fourth that spelled one of them differently would still parse, so nothing
+    would fail; what would happen is that somebody diffing two of them sees a
+    file reformatted from top to bottom and looks for a change that is not
+    there.
+
+    Indented and newline-terminated rather than compact for the reason all
+    three give in their own ``save``: every byte of these files exists to be
+    read, by whoever is working out why the paper came out the way it did.
+    ``ensure_ascii`` off because a watchlist can hold a Korean company name and
+    ``\\uc0bc\\uc131`` is not a name anyone can edit.
+    """
+    return (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 
 def read_bytes(path: str) -> bytes | None:

@@ -32,7 +32,7 @@ That is also why the badge order in `ui_news.c` is `OFFLINE`, then `STALE`, then
 the obvious one: a configured board whose server is unreachable would otherwise badge itself `DEMO`
 — true, and useless.
 
-The scratch is not on the stack, because `sizeof(news_t)` is **32,952 bytes** — measured, against
+The scratch is not on the stack, because `sizeof(news_t)` is **32,960 bytes** — measured, against
 `NewsTask`'s 16 KB and `UiTask`'s 8 KB. That is a hard constraint rather than a preference: an
 automatic `news_t` overflows either stack before it is even filled in. An allocation failure is a
 rejection like any other, which keeps the rule true on that path too.
@@ -394,6 +394,7 @@ plus the terminator.
 | `session` | string | 48 | the tape's left end, caps |
 | `as_of` | string | 24 | the tape's right end, caps |
 | `generated_at` | string | 24 | **not drawn, but fingerprinted** — moving it every poll reprints the sheet every poll, see [above](#the-one-field-that-is-not-free-generated_at). Reaches the companion app as `generatedAt`. `as_of` is the line a reader gets, and nothing on the sheet prints a clock |
+| `lang` | string | 8 | the language the copy is written in, a BCP-47 primary subtag (`en`, `ko`). Absent or malformed means `en`. **Fingerprinted**: it chooses the fixed strings beside the copy. Reaches the companion app as `lang` |
 | `subject` | object | one | the whole edition. See below |
 | `stories[]` | array of story | 5 | the lead and up to four more |
 | `figures[]` | array of figure | 28 | the dossier rail |
@@ -404,6 +405,46 @@ plus the terminator.
 | `indices[]` | array of quote | 5 | the tape, one line of small caps |
 | `thumbs[]` | array of photo | 2 | the small pictures at the foot |
 | `policy` | object | one | **not drawn.** How often to come back. The only block here that is not about the paper — see below |
+
+### The language
+
+`lang` is the only thing on the wire that says what language the copy is in, and three separate
+things follow from it. It is a BCP-47 primary subtag — two or three lowercase letters — and absent,
+malformed and the wrong type all mean `en`, the same clamp every other field gets. So a payload that
+adds `"lang": "en"` to an edition that had none fingerprints identically, and one that adds
+`"lang": "ko"` reprints the sheet, which is correct: the fixed strings beside the copy change.
+
+**What the faces can draw.** Every language draws ASCII, Latin-1 and the typography in
+`ui_strings.h`'s `S_DATA_PUNCT`. `ko` additionally draws the 2,350 KS X 1001 완성형 syllables, the
+Hangul compatibility jamo (U+3131–U+318E) and the CJK punctuation the faces carry (U+3001, U+3002,
+U+3008–U+300F) — and nothing beyond that in any language. A Hangul syllable outside KS X 1001 has no
+glyph, so `--validate` names its codepoint and asks for a respelling rather than letting the panel
+set a tofu box in 56 px type. Any other tag keeps the Latin-1 rule: a French edition is `fr` and
+draws with the faces the board already has.
+
+**How much fits.** The editorial budgets are widths in disguise — they were written for a Latin
+glyph, which averages half an em, and a Hangul syllable is a full one. So `--validate` counts a
+syllable as **two** characters against every character budget and every body floor, while the byte
+capacities are checked exactly as before. See
+[the editorial budget](#the-editorial-budget-is-a-character-count-and-it-is-tighter), below. A
+syllable is three bytes, which is why on the short fields that are cut rather than ellipsized — a
+kicker, a figure value, a table cell — it is the array that runs out first and not the measure.
+[`tools/edition/PROMPT.md`](../tools/edition/PROMPT.md) carries the Korean column that falls out, so
+a producer never does this arithmetic.
+
+**Which fixed strings the board prints beside the copy.** Eleven strings are all the board supplies
+on a page that has an edition: the two live badges (`STALE`, `OFFLINE`), the three module heads
+(`THE INDUSTRY`, `INSIDE`, `IN BRIEF`) and the six column heads of the industry table (`SYMBOL`,
+`NAME`, `P/E`, `MKT CAP`, `LAST`, `CHG`). Those follow `lang`. Everything else a reader sees —
+dateline, session, as-of, kickers, statement titles and row labels — arrived in the payload already
+written in that language, which is why the list is that short.
+
+Three things deliberately do not follow it. The **masthead** and the A2 running head stay
+"The Claude Post" in every language: a blackletter nameplate is the paper's brand rather than copy,
+and no Korean blackletter exists. The dateline a board **composes from its own clock** when no
+payload has arrived stays English, and so does the setup sheet — a board with no edition has no
+language to take. And the built-in demo snapshot carries no `lang`, so it is `en` and its `DEMO`
+badge prints in English.
 
 ## Two kinds of number, and only two
 
@@ -1062,21 +1103,22 @@ with **no ellipsis to show for it**. These are the array sizes, so the usable pa
 |---|--:|--:|
 | headline | 120 | 119 |
 | deck | 180 | 179 |
-| body | 2400 | 2399 |
+| body | 4000 | 3999 |
 | byline | 40 | 39 |
 | caption | 120 | 119 |
-| kicker | 24 | 23 |
+| kicker | 28 | 27 |
 | brief text | 140 | 139 |
-| figure label | 20 | 19 |
-| figure value | 16 | 15 |
+| figure label | 24 | 23 |
+| figure value | 24 | 23 |
 | table column header | 12 | 11 |
 | table cell | 14 | 13 |
 | symbol | 8 | 7 |
 
-**They are bytes, not characters, and an em dash costs three of them.** A sixteen-character figure
-value made of em dashes does not fit a sixteen-byte field; it stops partway through, with nothing on
-the sheet to say it was cut. This is the opposite of a headline, where an overshoot at least prints a
-visible `…`. `--validate` reports these in bytes for that reason.
+**They are bytes, not characters, and an em dash costs three of them.** A fourteen-character figure
+value made of em dashes does not fit the twenty-four-byte field its budget sits inside; it stops
+partway through, with nothing on the sheet to say it was cut. This is the opposite of a headline,
+where an overshoot at least prints a visible `…`. `--validate` reports these in bytes for that
+reason.
 
 A client implementing this wire has to respect the table above; it is what `news_parse.c` enforces.
 
@@ -1113,10 +1155,13 @@ line that does not exist. **Write bodies long rather than short.** A short body 
 the column, which is the one thing that reads as broken, and the compositor stretches an elastic
 module to fill its band — it can only stretch copy that exists.
 
-Everything must be **English and Latin-1**. The bundled faces carry ASCII, Latin-1 and the
-typography in `ui_strings.h`'s `S_DATA_PUNCT` — nothing else, because headlines arrive over the
-network and cannot be subset. A CJK character or an emoji is a tofu box on the largest type on the
-page. `--validate` (below) catches it before the panel does.
+**Both tables above are counted in Latin glyphs, and a Korean edition is not.** A Hangul syllable
+sets a full em where a Latin glyph averages half of one, and costs three bytes rather than one, so
+`--validate` weighs it as two characters against the character budgets and as three bytes against
+the arrays. What the faces can draw at all, and the Korean numbers that fall out of that weighting,
+are in [The language](#the-language) above. A character no face carries — an emoji, a CJK ideograph,
+a syllable outside KS X 1001 — is a tofu box on the largest type on the page, and `--validate`
+(below) catches it before the panel does.
 
 ## What is a rejection and what is a clamp
 

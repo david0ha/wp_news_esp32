@@ -6,6 +6,8 @@
 //
 // Nothing in lib/market imports React or anything from components/.
 
+import { strings } from '../../i18n'
+
 export interface Quote {
   symbol: string
   name: string // meta shortName/longName, '' when absent
@@ -126,23 +128,24 @@ export class MarketError extends Error {
  * failing is a normal outcome, and the chart, watchlist and news keep working without it.
  */
 export function marketHumanError(e: unknown): string {
+  const m = strings().errors.market
   if (e instanceof MarketError) {
     switch (e.code) {
       case 'transport':
-        return "Couldn't reach Yahoo Finance. Check your connection."
+        return m.transport
       case 'http':
-        return 'Yahoo Finance answered with an error. Try again in a moment.'
+        return m.http
       case 'rate_limited':
-        return 'Yahoo is rate-limiting requests. Try again in a minute.'
+        return m.rateLimited
       case 'crumb':
-        return 'Yahoo is limiting detailed data right now. Prices and news still work.'
+        return m.crumb
       case 'parse':
-        return "Yahoo answered with something this app doesn't understand."
+        return m.parse
       case 'not_found':
-        return 'No data for that symbol.'
+        return m.notFound
     }
   }
-  return 'Something went wrong talking to Yahoo Finance.'
+  return m.unknown
 }
 
 // ---------------------------------------------------------------------------

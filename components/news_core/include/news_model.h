@@ -153,6 +153,8 @@ extern "C" {
                                      * here, and so does the minus sign        */
 #define NEWS_GROUP_MAX      24      /* budget 16, T = 3                        */
 
+#define NEWS_LANG_MAX        8      /* "en", "ko": a BCP-47 primary subtag     */
+
 /* --- pieces --------------------------------------------------------------- */
 
 typedef enum { CHART_NONE = 0, CHART_LINE, CHART_CANDLE, CHART_BAR } chart_kind_t;
@@ -471,11 +473,18 @@ typedef struct {
     news_quote_t  indices[NEWS_INDEX_MAX];   int index_count;
     news_photo_t  thumbs[NEWS_THUMBS_MAX];   int thumb_count;
 
+    /* The language the edition is written in, normalised: always a two- or
+     * three-letter lowercase tag, "en" when the wire said nothing usable. It
+     * decides the fixed strings beside the copy and the copyfitter's break
+     * rule, so news_hash() feeds it. */
+    char lang[NEWS_LANG_MAX];
+
     /* Last, and outside every count above, because it is the one member of this
-     * struct that no page reads. It is also the only member wider than four
-     * bytes, so it goes at the end where its eight-byte alignment costs four
-     * bytes of tail padding instead of splitting the struct somewhere a reader
-     * would have to think about. */
+     * struct that no page reads. It is also the only member ALIGNED wider than
+     * four bytes — `lang` above is eight bytes of char and aligns to one — so
+     * it goes at the end where its eight-byte alignment costs four bytes of
+     * tail padding instead of splitting the struct somewhere a reader would
+     * have to think about. */
     news_policy_t policy;
 } news_t;
 
@@ -497,6 +506,10 @@ size_t news_str_copy(char *dst, size_t dst_size, const char *src);
  * headline set at 56 px needs and the one every face on the board carries.
  * Symbols, tile ids and timestamps go through news_str_copy() instead. */
 size_t news_str_copy_prose(char *dst, size_t dst_size, const char *src);
+
+/* Normalise a language tag in place: ASCII-lowercase, and anything that is not
+ * two or three letters becomes "en". A clamp, not a rejection. */
+void news_lang_normalise(char *lang);
 
 /* Parse a wire chart word ("line", "candle", "bar", "none"). Case-insensitive;
  * anything unknown is CHART_NONE, because a chart drawn with the wrong geometry

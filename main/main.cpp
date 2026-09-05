@@ -342,7 +342,7 @@ extern "C" void app_main(void)
 	if (wake == POWER_WAKE_TIMER && rtc_valid && in.sleep_enabled &&
 	    in.battery_present && !in.usb_console && in.url_configured) {
 
-		// news_t is 32,952 bytes — four times the main task's whole stack — so
+		// news_t is 32,960 bytes — four times the main task's whole stack — so
 		// it goes to PSRAM and is freed before the full path could want the
 		// room.
 		//

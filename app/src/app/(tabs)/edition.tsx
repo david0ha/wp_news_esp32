@@ -7,6 +7,7 @@ import { Masthead } from '../../components/edition/Masthead'
 import { ChipRow } from '../../components/edition/ChipRow'
 import { Masonry } from '../../components/edition/Masonry'
 import { EditionUrlProvider } from '../../components/edition/editionUrl'
+import { EditionTypeProvider } from '../../components/edition/typeRamp'
 import { PhotoTile } from '../../components/edition/tiles/PhotoTile'
 import { isDemo } from '../../lib/edition/editionState'
 import { useEdition } from '../../lib/edition/useEdition'
@@ -108,59 +109,64 @@ export default function EditionScreen() {
 
   return (
     <Screen edges={['top']}>
-      {/* Where this edition came from, named once for the photographs three levels down. */}
+      {/* Where this edition came from, named once for the photographs three levels down — and
+          what language it is in, named once for the face everything below is set in. The second
+          is the EDITION's language and not the reader's: a Korean edition on an English phone is
+          still Korean, and Inter cannot set it. See `typeRamp.tsx`. */}
       <EditionUrlProvider url={state.cached.url}>
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          refreshControl={
-            <RefreshControl
-              refreshing={state.refreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.accent}
+        <EditionTypeProvider lang={state.cached.edition.lang}>
+          <ScrollView
+            contentContainerStyle={styles.scroll}
+            refreshControl={
+              <RefreshControl
+                refreshing={state.refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.accent}
+              />
+            }
+          >
+            <Masthead
+              edition={state.cached.edition}
+              demo={isDemo(state.cached)}
+              freshness={freshnessLabel(state.cached.fetchedAt, Date.now())}
+              error={state.error}
+              onRetry={onRefresh}
+              onPressSymbol={() => {
+                // Guarded here as well as in the masthead, which only offers the press when
+                // there is a symbol: `/market/` with nothing after it matches no route and this
+                // app has no `+not-found`, so the push would be a dead screen rather than a no-op.
+                const symbol = state.cached.edition.subject.symbol
+                if (symbol === '') return
+                router.push(`/market/${encodeURIComponent(symbol)}`)
+              }}
             />
-          }
-        >
-          <Masthead
-            edition={state.cached.edition}
-            demo={isDemo(state.cached)}
-            freshness={freshnessLabel(state.cached.fetchedAt, Date.now())}
-            error={state.error}
-            onRetry={onRefresh}
-            onPressSymbol={() => {
-              // Guarded here as well as in the masthead, which only offers the press when there is
-              // a symbol: `/market/` with nothing after it matches no route and this app has no
-              // `+not-found`, so the push would be a dead screen rather than a no-op.
-              const symbol = state.cached.edition.subject.symbol
-              if (symbol === '') return
-              router.push(`/market/${encodeURIComponent(symbol)}`)
-            }}
-          />
 
-          {/* The band: the lead photograph, too wide for a column, run across the page instead. It
-              is a `PhotoTile` at full width — same fetch, same decode, same silent failure — inside
-              a frame that owns the radius, because `PhotoTile` sets none of its own. */}
-          {band !== null ? (
-            <View style={styles.band}>
-              <View style={styles.bandFrame}>
-                <PhotoTile
-                  // Keyed by the edition, like every tile in the masonry: the lead band is 1140x320
-                  // under the same id every edition, so without this the reused mount keeps
-                  // yesterday's photograph under today's headline.
-                  key={`${key}:band`}
-                  tile={{ kind: 'photo', id: 'band', photo: band }}
-                  width={contentWidth}
-                  height={photoBoxHeight(band, contentWidth)}
-                />
+            {/* The band: the lead photograph, too wide for a column, run across the page
+                instead. It is a `PhotoTile` at full width — same fetch, same decode, same silent
+                failure — inside a frame that owns the radius, because `PhotoTile` sets none. */}
+            {band !== null ? (
+              <View style={styles.band}>
+                <View style={styles.bandFrame}>
+                  <PhotoTile
+                    // Keyed by the edition, like every tile in the masonry: the lead band is
+                    // 1140x320 under the same id every edition, so without this the reused mount
+                    // keeps yesterday's photograph under today's headline.
+                    key={`${key}:band`}
+                    tile={{ kind: 'photo', id: 'band', photo: band }}
+                    width={contentWidth}
+                    height={photoBoxHeight(band, contentWidth)}
+                  />
+                </View>
               </View>
+            ) : null}
+
+            <ChipRow chips={chips} selected={active} onSelect={setChip} />
+
+            <View style={styles.grid}>
+              <Masonry tiles={tiles} colWidth={colWidth} editionKey={key} onPress={openTile} />
             </View>
-          ) : null}
-
-          <ChipRow chips={chips} selected={active} onSelect={setChip} />
-
-          <View style={styles.grid}>
-            <Masonry tiles={tiles} colWidth={colWidth} editionKey={key} onPress={openTile} />
-          </View>
-        </ScrollView>
+          </ScrollView>
+        </EditionTypeProvider>
       </EditionUrlProvider>
     </Screen>
   )
