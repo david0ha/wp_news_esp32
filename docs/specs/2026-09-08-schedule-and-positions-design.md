@@ -303,8 +303,28 @@ The defence is structural, not a sentence in a prompt:
    event book. `loop.py`'s `seed_watchlist()` gains a sibling `seed_positions()` that runs **only
    for `calendar`**. The process that writes the newspaper never has the file.
 2. **The edition validator refuses a payload carrying position fields** — `strike_cents`,
-   `entry_price_cents`, `contracts`, a `positions` key at any depth. The same way the simulator
-   fails the build on a yellow pixel that can reach paper.
+   `entry_price_cents`, `contracts`, `legs`, `position_id`, a `positions` key at any depth. The
+   same way the simulator fails the build on a yellow pixel that can reach paper.
+
+   **Known and stated: this is a blacklist, and it is currently the only wall of its kind.**
+   `news.json` has no closed key set anywhere — not in `editions.put_payload`, not in
+   `mock_news_server.validate_payload()` (which checks named fields and never enumerates
+   permitted ones), and not on the device, where `news_parse()` ignores unknown keys by design.
+   Global Constraint 3's "unknown keys refused whole" is the *document* validators' posture and
+   has never applied to the wire. So the next leak will not be spelled `strike_cents`; it will be
+   a `cost_basis` or a `my_position` an agent invents in a figure label, and this guard passes it.
+
+   The stronger fix is a whitelist, and it belongs in `validate_payload()` rather than here,
+   because that function is the module that owns the wire contract — `news_parse.c` and
+   `docs/news-contract.md` mirror it, and a second copy on the desk is exactly the drift this
+   repository keeps getting caught by. It is out of scope for this design because it changes what
+   every producer may file, which is a compatibility decision rather than a security one.
+   **Follow-up:** add the closed set to `validate_payload()` as a *problem*, so the producer's own
+   gate refuses it minutes before a PUT, and keep this blacklist as the redundant second wall — it
+   runs earlier and survives a stubbed gate.
+
+   What carries the weight meanwhile is rule 1, not this: the newspaper's producer never has the
+   file, so it does not know the strikes to leak.
 3. **A host test asserts the device plane cannot reach the new stores.** Not "does not today" —
    cannot.
 4. `positions.json` and `calendar.json` are 0600 in the data directory. The repository ships

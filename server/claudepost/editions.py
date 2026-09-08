@@ -97,6 +97,26 @@ FINGERPRINT_HEX = 16
 #: carry six megabytes of render log.
 MAX_META_OUTPUT = 2000
 
+#: The field names that belong to the owner's book and may never appear in an
+#: edition, at any depth. ``/news.json`` is served with **no authorization at
+#: all** -- it has to be, because the board polls it over the open internet --
+#: so a producer that reasons about a position and then quotes one of its
+#: numbers into a story has published the owner's holdings to whoever asks.
+#:
+#: The three spellings that carry money or size are ``positions.py``'s
+#: (``strike_cents``, ``entry_price_cents``, ``contracts``); ``positions`` and
+#: ``legs`` are the containers they arrive in; ``position_id`` is
+#: ``calendar.py``'s reference to one, which is not itself a number about the
+#: owner but is the join that turns a public event into a private one.
+#:
+#: This is a blacklist and a blacklist is the weaker instrument -- see the note
+#: on :func:`_refuse_position_fields`. It is a wall across the one door a
+#: payload comes through, not a claim that every possible leak is named here.
+FORBIDDEN_PAYLOAD_KEYS = frozenset((
+    "strike_cents", "entry_price_cents", "contracts",
+    "positions", "position_id", "legs",
+))
+
 #: Why an edition did not go up, or did. Each carries its own keyword and none
 #: contains another's, because the HTTP layer hands these to a person and the
 #: tests match on the word.
@@ -234,6 +254,12 @@ class EditionStore:
         The payload is parsed here and not merely stored, because a document
         that is not a JSON object fails gate 1 anyway and a render is minutes:
         refusing it now is the same answer, arrived at for nothing.
+
+        Parsing it also makes this the one door every edition comes through,
+        which is what :func:`_refuse_position_fields` needs. A draft's
+        ``news.json`` is written here and nowhere else, and
+        :meth:`_build_edition` copies the stored bytes verbatim, so a payload
+        refused here cannot reach an edition directory by another route.
         """
         draft_dir = self._require_draft(draft_id)
         tiles.check_payload_size(data)
@@ -242,9 +268,19 @@ class EditionStore:
             doc = json.loads(data)
         except (ValueError, UnicodeDecodeError) as exc:
             raise BadRequest("bad_json", f"payload is not JSON: {exc}") from None
+        except RecursionError:
+            # CPython's decoder recurses per nesting level, and deep nesting
+            # raises this rather than a ValueError -- so without this clause a
+            # payload of ten thousand open brackets is a 500 on a route whose
+            # every other refusal is a 400. Its own message is not quoted: a
+            # RecursionError's text is about the interpreter's stack, which
+            # tells the producer nothing about the document it sent.
+            raise BadRequest("bad_json",
+                             "payload is nested too deeply to parse") from None
         if not isinstance(doc, dict):
             raise BadRequest("bad_json",
                              f"payload is a JSON {type(doc).__name__}, not an object")
+        _refuse_position_fields(doc)
 
         with self._lock:
             atomic_write(os.path.join(draft_dir, PAYLOAD_NAME), data)
@@ -1084,6 +1120,47 @@ class EditionStore:
         except OSError:
             return
         fsync_dir(self.root)
+
+
+def _refuse_position_fields(doc: object) -> None:
+    """Refuse a payload naming one of :data:`FORBIDDEN_PAYLOAD_KEYS`, at any depth.
+
+    **Keys only, never values.** A story about a company that sells contracts
+    is an ordinary story, and a check that read the prose would refuse it; a
+    story object that *carries* a ``contracts`` field is the owner's book
+    leaking into a document served without a token. The whole document is
+    walked because the shallow version of this check -- the top-level keys, or
+    the top level of each story -- misses exactly the case that will happen: a
+    figure three deep inside a story, annotated by an agent that had the
+    positions in front of it.
+
+    Iterative rather than recursive on purpose. The payload cap is 300 KB,
+    which is room for a nesting depth in the tens of thousands, and a
+    ``RecursionError`` is not a ``DeskError``: it would leave the caller a 500
+    where this function's entire job is to give a 400.
+
+    A blacklist is the weaker instrument and this one is deliberate rather than
+    ideal. The stronger fix is a whitelist of the keys an edition may carry --
+    the wire contract is a closed set and ``tools/mock_news_server.py`` already
+    knows every field in it -- which would refuse a field nobody has thought of
+    yet, where this refuses only the six that are named. That belongs in the
+    validator that owns the contract, not here; until it exists, this is the
+    wall.
+    """
+    stack = [doc]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in FORBIDDEN_PAYLOAD_KEYS:
+                    raise BadRequest(
+                        "position_field",
+                        f"the payload carries {key!r}, which names the owner's "
+                        f"positions. /news.json is served with no authorization, "
+                        f"so nothing about what is held may reach an edition")
+                stack.append(value)
+        elif isinstance(node, list):
+            stack.extend(node)
 
 
 def _valid(pattern: re.Pattern, name: object) -> bool:
