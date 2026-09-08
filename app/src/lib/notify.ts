@@ -738,15 +738,25 @@ export function decideRelease(
   step: ReleaseStep | null,
 ): ReleaseDecision {
   const m = strings().settings.notify
+  // AN OUTCOME SPEAKS ONLY ABOUT THE CONTROL IT BELONGS TO. This is the third time in three rounds
+  // that something owned by one control was written as though it were owned by the section, and it
+  // is the only line in this function that is not obviously about `control`: an answer from the
+  // ADDRESS button used to clear a warning the TOKEN button had raised, so the token's next tap
+  // stopped being the acknowledged second one and went back to the network.
+  //
+  // Spending an acknowledgement is safe — re-asking always gets a real answer — so unlike the last
+  // two this one was not a way to orphan anything. It is here because the shape is the defect, and
+  // the parameter that makes it right was already in the signature.
+  const spent = warned === control ? null : warned
   if (step === null) {
     // The deliberate second tap of the control that was warned about. It proceeds, and it says so.
     return { proceed: true, tone: 'error', message: m.releasedNot, warned: control }
   }
   switch (step.step) {
     case 'nothing':
-      return { proceed: true, tone: null, message: null, warned: null }
+      return { proceed: true, tone: null, message: null, warned: spent }
     case 'released':
-      return { proceed: true, tone: 'info', message: m.released, warned: null }
+      return { proceed: true, tone: 'info', message: m.released, warned: spent }
     case 'unsure':
       return {
         proceed: false,

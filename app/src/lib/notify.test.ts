@@ -772,7 +772,9 @@ describe('the warning belongs to the control, not to the section', () => {
     const released = decideRelease('address', first.warned, { step: 'released' })
     expect(released).toMatchObject({ proceed: true, tone: 'info' })
     expect(released.message).toBe(strings().settings.notify.released)
-    expect(released.warned).toBe(null)
+    // And the token button's own acknowledgement is untouched by the address button's answer —
+    // see the test below, which is the same rule from the other side.
+    expect(released.warned).toBe('token')
   })
 
   it('a warning about one control still stops that control, having warned once', () => {
@@ -790,10 +792,29 @@ describe('the warning belongs to the control, not to the section', () => {
     expect(decision).toEqual({ proceed: true, tone: null, message: null, warned: null })
   })
 
-  it('clears the warning on any answer the desk actually gave', () => {
-    // A desk that answered is a desk that can be asked again, so an old warning has expired.
+  it('clears its OWN acknowledgement on any answer the desk actually gave', () => {
+    // The control asked again and got a real answer, so its acknowledgement is spent.
     expect(decideRelease('token', 'token', { step: 'released' }).warned).toBe(null)
     expect(decideRelease('token', 'token', { step: 'nothing' }).warned).toBe(null)
+  })
+
+  it('does not spend the OTHER control’s acknowledgement', () => {
+    // The third instance of one shape: an outcome that belongs to one control written as though it
+    // belonged to the section. Warn the token button, then let the address button succeed — the
+    // token's next tap must still be the acknowledged second tap rather than a fresh question.
+    const warnedA = decideRelease('token', null, {
+      step: 'unsure',
+      error: new DeskError('transport', 'x'),
+    })
+    expect(warnedA.warned).toBe('token')
+
+    for (const answered of [{ step: 'released' } as const, { step: 'nothing' } as const]) {
+      const b = decideRelease('address', warnedA.warned, answered)
+      expect(b.warned).toBe('token')
+      expect(shouldAttemptRelease('token', b.warned)).toBe(false)
+      // And B still says its own piece correctly — scoping the flag must not mute the message.
+      expect(b.proceed).toBe(true)
+    }
   })
 
   it('never puts the push token in what it says', () => {
