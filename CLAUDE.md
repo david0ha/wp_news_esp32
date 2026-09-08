@@ -102,11 +102,14 @@ cmake -S components/news_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 
 # 2) provisioning pure logic, and the reference producer against its committed
 #    fixture — then the producer's language gate: that a Hangul syllable counts
-#    two against a budget, and that one outside KS X 1001 is a validator failure
+#    two against a budget, and that one outside KS X 1001 is a validator failure;
+#    then the event book's brief, every worked example in it put through the
+#    desk's own parse_calendar
 sh components/provisioning/test/run.sh
 python3 tools/mock_news_server.py --check
 python3 tools/test_mock_etag.py
 python3 tools/test_validate_lang.py
+python3 tools/test_calendar_brief.py
 
 # 3) the real UI at the real resolution in six inks -> BMP/PNG, plus the layout,
 #    glyph and colour assertions
@@ -281,11 +284,14 @@ sim/                      desktop simulator — renders the real UI to 1200x1600
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 tools/
   mock_news_server.py     the contract from a fixed payload — the reference producer
-  edition/                the shared producer contract: PROMPT.md and the typesetting gate
+  edition/                the two producer contracts — PROMPT.md for the newspaper,
+                          CALENDAR.md for the event book — and the typesetting gate
   make_tile.py            a photograph -> a 4bpp tile the board blits verbatim
   gen_fonts.py            regenerates components/news_core/fonts/
   flash.sh                find the board and flash it
-server/                   the desk: command queue, directives, gates, editions, notes, watchlist, quotes, and the URL the board polls
+server/                   the desk: command queue, directives, gates, editions, notes, watchlist,
+                          quotes, the owner's positions, the event book, the economic calendar,
+                          the phones it pushes to, and the URL the board polls
 agent/                    an example worker that files into the desk, plus the standalone no-server producer
 ```
 
@@ -463,6 +469,35 @@ agent/                    an example worker that files into the desk, plus the s
   8 KB of RTC retention RAM, which is the only memory that survives a deep sleep. Four times too
   small again — which is why what crosses a wake is a 32-bit `news_hash()` and an ETag rather than
   the snapshot they describe, and why a wake that needs the snapshot back has to fetch it.
+- **Every event in the book carries its source, and the reasoning may not add a date.** A computed
+  event is `source: "computed"` and may only be one of the four kinds a machine actually knows —
+  `econ`, `earnings`, `dividend`, `expiry`. Everything else carries the `https://` URL it was found
+  at, which the phone shows on the row. A date with neither does not go on the wall. And `affects`
+  is required and non-empty: an event whose reasoning reaches no position the owner holds is a
+  generic calendar entry, and a generic calendar is a thing the phone can already draw for itself.
+  This is the desk's `lang` rule — narrow, absolute, everything else follows from it — and like that
+  one it lives in exactly one place: `server/claudepost/calendar.py`'s validator. Not in
+  `tools/edition/CALENDAR.md`, not on the phone. A brief is advice and a validator is a wall, and
+  the reason to know which is which is that the thing writing the book is a model under instruction
+  to keep working until ten events clear the floor. [docs/desk-server.md](docs/desk-server.md) has
+  the long version of all four documents.
+  **Three of those four clauses are exact and the fourth cannot be.** "The reasoning may not
+  introduce a date of its own" is a claim about prose, so `_DATE_IN_PROSE` *approximates* it: an ISO
+  date or a `M월 D일` inside a reason is refused, a date referred to in words ("발표 다음 날") passes.
+  It is documented as a heuristic in the module and asserted as one in both directions by its tests,
+  rather than dressed up as a check — a reader who thinks all four are exact will trust the wrong
+  one. It binds `reason` and `reason_short` and nothing else, deliberately: a `title` or a
+  `push.body` describes *this* event, whose date is in `at` and has a source behind it.
+  **The positions and the book must never reach `news.json`**, which is served with no authorization
+  at all. Two things keep them out and only one is load-bearing. `agent/loop.py` seeds the positions
+  **only** for a `calendar` command, so the process that writes the newspaper never holds the file
+  and does not know the strikes to leak — that is the wall. Behind it, `editions.py`'s
+  `FORBIDDEN_PAYLOAD_KEYS` refuses a payload naming `strike_cents`, `entry_price_cents`,
+  `contracts`, `legs`, `position_id` or `positions` at any depth. Say plainly what that second one
+  is: a **blacklist, with no whitelist anywhere behind it** — not in `editions.put_payload()`, not
+  in `mock_news_server.py`'s `validate_payload()`, and not on the device, where `news_parse()`
+  ignores unknown keys by design. So the next leak is not spelled `strike_cents`; it is a
+  `cost_basis` an agent invents in a figure label, and this guard passes it.
 - **`sdkconfig` holds per-developer values and is gitignored — never commit it.** Wi-Fi passwords live
   in NVS via the portal, never in Kconfig.
 - **Nothing personal belongs in this repository.** No home paths, no real hostnames, no vault paths,
@@ -483,10 +518,11 @@ agent/                    an example worker that files into the desk, plus the s
 - [docs/specs/2026-08-15-single-company-broadsheet-design.md](docs/specs/2026-08-15-single-company-broadsheet-design.md) — **the current design**: one company an edition, the guillotine compositor, and why the measure decides the layout
 - [docs/specs/2026-08-14-front-page-design.md](docs/specs/2026-08-14-front-page-design.md) — what this was built from. Its geometry, colour policy, chart and photo rules still hold; its data model and band table are superseded
 - [docs/specs/2026-08-17-deep-sleep-design.md](docs/specs/2026-08-17-deep-sleep-design.md) — the wake path that never powers the panel: what crosses a sleep, the failure table, and how a board stays reachable. Its dated note at the top says what the desk's cadence superseded; the task-by-task plan it was built from is [docs/superpowers/plans/2026-08-17-deep-sleep.md](docs/superpowers/plans/2026-08-17-deep-sleep.md)
+- [docs/specs/2026-09-08-schedule-and-positions-design.md](docs/specs/2026-09-08-schedule-and-positions-design.md) — the schedule and what you hold: the positions, the event book researched against them, the economic calendar and the push before a date. Entirely desk, agent and phone — the board is not touched
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/hosting-cloudflare.md](docs/hosting-cloudflare.md) — serving the edition from a domain instead of a Mac on the LAN: what must be published, what must not, and what changes on the device once the URL is `https://`
-- [docs/desk-server.md](docs/desk-server.md) — the desk server behind the URL the board polls: `server/` serves it and owns every gate, `agent/` files the editions and holds the credentials
+- [docs/desk-server.md](docs/desk-server.md) — the desk server behind the URL the board polls: `server/` serves it and owns every gate, `agent/` files the editions and holds the credentials. Also the four documents the board never sees — the positions, the event book, the economic calendar and the phones — and what must never happen to them
 - [docs/pages.md](docs/pages.md) — A1 and A2, the grid, the bands, the font decision
 - [docs/epaper-13in3.md](docs/epaper-13in3.md) — the dual-UC8179 driver, the refresh policy, the self-test
 - [docs/graphics.md](docs/graphics.md) — six-ink rendering: the two palettes, the dither, the halftone

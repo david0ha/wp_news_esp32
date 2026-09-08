@@ -40,23 +40,41 @@ and the idle tick in `user_app.cpp` deliberately does *not* refresh. So a page
 going stale at 3 a.m. does not light the wall either. The badge rides out with
 the next refresh that had a reason.
 
-**2. The desk holds tokens, and now a few opinions too — but never the
-standing voice.** It answers the internet, so what it can be made to leak
-matters: `~/.claudepost`, mounted read-only, holds bearer tokens and an
-Alpaca key and nothing else of the owner's. `/data` used to hold only the
-editions it had typeset and the schedule it was told to keep; it now also
-holds the worker's own research notes on each one and, once an operator has
-PUT one, the watchlist — grades, reasons and a thesis note on a handful of
+**2. The desk holds tokens, a few opinions, and now what the owner actually
+owns — but never the standing voice.** It answers the internet, so what it can
+be made to leak matters: `~/.claudepost`, mounted read-only, holds bearer
+tokens and an Alpaca key and nothing else of the owner's. `/data` used to hold
+only the editions it had typeset and the schedule it was told to keep; it went
+on to hold the worker's own research notes on each one and, once an operator
+has PUT one, the watchlist — grades, reasons and a thesis note on a handful of
 tickers. That is real content to lose, and the watchlist section below is
 explicit about why its schema caps what can be put in it rather than
-pretending the document holds nothing. What still never reaches the desk is
-the *standing* voice: a house style, a rotation, a list of things that must
-never print — what makes every page sound like the same person's — lives
-wherever the *worker's* `AGENT_CONTEXT_DIR` points, a directory this
-container never sees; see [`agent/README.md`](../agent/README.md). So a
-compromised desk loses bearer tokens, a schedule, a handful of tickers'
-grades and the research behind recent editions — never the opinions that
-shape every page it prints.
+pretending the document holds nothing.
+
+**Three more documents are a different kind of thing and are stored as one.**
+`positions.json` is what the owner holds: symbol, strike, expiry, contract
+count and entry price. `calendar.json` is a book of dated events reasoning
+about those positions in sentences somebody could act on. `push.json` holds a
+token per phone, which is not an identifier but a *capability* — whoever has
+one can put a line of text on the owner's lock screen from anywhere, with no
+further credential. All three are written `0600`, and none of them reaches
+`/api/state`, the audit log or a log line as anything but a count: the audit
+log is served to any `producer` token, so a symbol, a strike, a reason or a
+token in a `detail` would put on the weaker route exactly what the stronger
+one guards.
+
+What still never reaches the desk is the *standing* voice: a house style, a
+rotation, a list of things that must never print — what makes every page sound
+like the same person's — lives wherever the *worker's* `AGENT_CONTEXT_DIR`
+points, a directory this container never sees; see
+[`agent/README.md`](../agent/README.md). So a compromised desk now loses
+bearer tokens, a schedule, a handful of tickers' grades, the research behind
+recent editions, **the owner's book of positions and the ability to notify
+their phone** — never the opinions that shape every page it prints. That list
+grew deliberately and the owner chose it, because an agent cannot reason about
+a position it has not been told about. What makes it survivable is that the
+process which writes the newspaper is a different one and never receives the
+file; see "What must never happen" below.
 
 **3. This repository is public and the owner's editorial voice is not.** The
 contract belongs in the open — [`tools/edition/PROMPT.md`](../tools/edition/PROMPT.md)
@@ -249,7 +267,7 @@ whole deliverable there.
 
 | Root | Where | Holds |
 |---|---|---|
-| **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json`, `settings.json` |
+| **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json`, `settings.json`, and `0600`: `positions.json`, `calendar.json`, `push.json` |
 | **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` |
 
 **Secrets are not in the repository, the image, or any synced directory.**
@@ -512,6 +530,423 @@ rather than per request, so a phone pulling to refresh does not spend the
 upstream's rate limit — see `quotes.py`'s module docstring for the full
 argument.
 
+## What the owner holds
+
+The paper answers *what happened*. Four documents past this point answer *what
+is about to happen, and what it does to your money*, and they only make sense
+together: the positions the owner actually holds, an event book researched
+against them, an economic calendar that supplies the dates a machine knows
+exactly, and a push that arrives before the date rather than after it. The
+design is
+[2026-09-08-schedule-and-positions-design.md](specs/2026-09-08-schedule-and-positions-design.md);
+this is what the desk does about it. **None of it reaches the board.** A sheet
+of paper is not an alarm clock, and no firmware, no wire field and no route on
+the device plane changed for any of it.
+
+`GET /api/positions` and `PUT /api/positions` carry
+[`positions.py`](../server/claudepost/positions.py)'s document: the stock and
+option positions the owner typed, with strike, expiry, contract count and
+entry price.
+
+```json
+{ "updated_at": "2026-09-08T05:00:00Z",
+  "positions": [
+    { "id": "p_1f05f8", "symbol": "AAAA", "kind": "option",
+      "strategy": "long_call", "opened_at": "2026-08-19", "note": "",
+      "legs": [ { "right": "call", "side": "long", "strike_cents": 42000,
+                  "expiry": "2026-11-21", "contracts": 2,
+                  "entry_price_cents": 1180 } ] },
+    { "id": "p_3e3267", "symbol": "BBBB", "kind": "stock",
+      "quantity": 40, "entry_price_cents": 158300,
+      "opened_at": "2026-07-02", "note": "" } ] }
+```
+
+**This is deliberately not an extension of the watchlist**, and the reason is
+the one the watchlist's own section gives. That schema is a privacy boundary
+in the opposite direction: a watchlist item may never carry an entry price
+because the watchlist is the pool the newspaper votes from, and everything in
+it is printable material. A position is the other kind of object — it exists
+to be reasoned about and must never be printed. One document meaning both
+things would quietly delete a reasoned boundary rather than replace it.
+
+**The scopes are not symmetric and that asymmetry is the point.** `GET` is
+`producer`, because the agent cannot reason about what the owner holds without
+being told it. `PUT` is `operator`, and this is the one scope in the feature
+that is not negotiable: everything downstream — which events are researched,
+which reasons are written, what the phone is told before a date — is reasoning
+*about this document*, so an agent that could rewrite it could arrange for the
+reasoning to be about a position the owner does not have. The owner says what
+they hold; nothing else does.
+
+**A spread is one position with several legs, never two positions.** A 400/420
+call vertical has a max loss, a break-even and a decay profile that neither leg
+has alone, and two rows in a table cannot be reasoned about that way without
+the reader doing the joining. `derive_strategy(legs)` is pure and host-tested;
+it names `long_call`, `long_put`, `short_call`, `short_put`, `vertical`,
+`calendar`, `straddle`, `strangle`, and falls back to `custom` rather than
+guessing. **Two names are deliberately absent and the desk cannot supply
+either:** `covered_call` needs the stock position beside the option one, which
+a function handed only legs never sees, and `cash_secured_put` is a claim about
+collateral in an account the desk cannot see — a lone short put is `short_put`.
+Both are display decisions made with the whole book in hand, so the phone makes
+them. A stored name the data cannot support is worse than no name, because the
+reader stops reading the legs.
+
+**An `id` is derived, not counted** — a truncated hash over what makes a
+position that position: its symbol, its kind, the sign of a stock's quantity or
+each option leg's right, side, strike and expiry, and the day it was opened.
+What is left *out* is the working part: entry price, note and **size** are not
+material, so correcting a mistyped average or buying ten more shares is an edit
+of that position rather than a silent fork into a second one. That is
+load-bearing rather than tidy, because the event book's `affects[].position_id`
+points at these ids and a book naming an id nobody holds is refused whole. Size
+in the hash would throw away a morning's research the moment the owner added to
+a holding.
+
+Validation follows the watchlist's posture exactly: unknown keys refused whole
+with `400 bad_positions`, every list and string capped — 64 positions, 4 legs
+each, a 500-character note, an expiry within three years, 128 KB serialised —
+and the aggregate weighed in the form `save()` writes, so a document a `PUT`
+accepted can never be refused by the next boot's `load()`. A refusal leaves the
+book in force untouched. Money is integer cents throughout, like everything
+else on this system's wires. Two fields are **output only and are accepted and
+ignored** rather than refused: `id` and `strategy` are both re-derived on every
+write, and refusing a body that carried one would 400 the whole book on the
+ordinary path, because every client GETs this document, edits a row and PUTs it
+back. `updated_at` is stamped from the desk's own clock and never read from the
+body. The expiry horizon is judged against that same clock, and it is bounded
+**above and not below** — that is the whole care in the rule. An upper bound
+moves outward as today does, so a document accepted today is still accepted
+next year; a lower bound would do the opposite, and the day an option expired
+`load()` would start refusing the file the `PUT` had accepted, silently, which
+is the one failure this module has no way to report.
+
+The repository ships
+[`server/positions.example.json`](../server/positions.example.json) and nothing
+else. `<data>/positions.json` is `0600` — this is the standing rule that
+nothing personal belongs in this repository, applied to the most personal file
+the system has yet held.
+
+## The event book
+
+`GET /api/calendar` and `PUT /api/calendar` carry
+[`calendar.py`](../server/claudepost/calendar.py)'s document: ranked events
+that are about to happen, each annotated against a position. Both verbs are
+`producer` — where the positions beside them are producer/operator — and the
+difference is the shape of the feature. **The agent files this.** It is the
+output of a research run rather than a statement about the owner's money, and
+what a producer may put here is bounded by a validator instead of by a scope.
+
+```json
+{ "generated_at": "2026-09-08T05:00:00Z", "lang": "ko", "target": 10,
+  "events": [
+    { "id": "e_91c2", "at": "2026-09-08T12:30:00Z", "precision": "exact",
+      "title": "미국 8월 소비자물가지수", "kind": "econ",
+      "source": "https://www.investing.com/economic-calendar/",
+      "symbols": ["AAAA"],
+      "affects": [ { "position_id": "p_1f05f8", "direction": "against",
+                     "reason": "…", "reason_short": "…" } ],
+      "rank": 1,
+      "push": { "title": "오늘 밤 미국 CPI가 나와요", "body": "…" } } ],
+  "shortfall": null }
+```
+
+**The rule this module exists to enforce** is the working rule in
+[CLAUDE.md](../CLAUDE.md): every event carries its source, `source: "computed"`
+is available only to the four kinds a machine actually knows (`econ`,
+`earnings`, `dividend`, `expiry`), everything else carries the `https://` URL
+it was found at, and the reasoning may only point at an event that already
+exists. It is a validator and not a note in a brief, because a brief is advice.
+
+Two things about that rule are worth knowing at this level. **It runs in one
+direction only:** a researched kind claiming `computed` is refused, but a
+*computed* kind carrying a URL is allowed on purpose — an earnings date found
+on the company's own IR page is more authoritative than one inferred from a
+feed, and a rule that refused it would push the agent to launder a sourced date
+as `computed` to get it accepted. And **the fourth clause is a heuristic**:
+`_DATE_IN_PROSE` refuses an ISO date or a `M월 D일` inside a `reason` or a
+`reason_short`, and lets a date referred to in words through. It binds those
+two fields and nothing else, because a `title` or a `push.body` describes
+*this* event, whose date is in `at` and has a source behind it.
+
+`affects` is required and non-empty. That is the design's floor made
+enforceable rather than advisory — "a source *and* a stated mechanism reaching
+a position" is exactly `source` plus this — and it is the half a model under
+pressure to reach ten would drop first.
+
+**`target` is a filing goal, not a display cap.** It is how many events the
+agent works until it has, and the number `shortfall` is measured against when
+fewer clear the floor; the phone shows the whole book. Nothing in the desk ever
+truncates to it, and a docstring that said otherwise was corrected rather than
+implemented. `MAX_EVENTS` is forty for the same reason: a book truncated to
+today's setting would have to be re-researched the moment the owner raised it.
+
+`at` is always UTC and the phone renders in its own zone and groups by its own
+day, so no timezone travels on this wire. `precision` is
+`exact | session | day` and **governs the other two fields, so the wire cannot
+carry a precision it contradicts**: a `session` event must say `bmo` or `amc`,
+an `exact` or `day` one must not, and a `day` event's instant must be
+`00:00:00Z` — a time of day on it is a time somebody will eventually render.
+Inventing a time for a date-only event is how a reader misses the one that
+mattered: they looked in the morning and it happened in the evening.
+
+A refusal is `400 bad_calendar` naming the field, and the book in force is
+untouched. `parse_calendar` is handed the ids the desk currently holds and the
+desk's own clock, so a book accepted here cannot be refused by the next boot's
+`load()`. The window is seven days back and 400 days forward.
+
+**Editing the positions prunes the book rather than keeping or discarding it.**
+`PUT /api/positions` drops exactly the reasoning that became false, drops an
+event only when it has none left, and clears the book entirely — file included
+— when nothing survives. The alternative that looks simpler is to leave the
+book and let the next boot refuse it, which serves dangling `position_id`s the
+phone cannot draw for however many hours lie in between; the alternative that
+looks safer is to discard the whole book, which throws away nine true
+statements because a tenth stopped being about anything. An events-empty book
+is not a smaller book, it is a claim that nothing is coming with no `shortfall`
+behind it, which is why the file goes too — a file the desk will not read is a
+file whose mtime lies about when research last ran.
+
+`GET /api/state` carries `count`, `generatedAt` and the `shortfall` sentence
+itself; the audit line carries the event count and *whether* there was a
+shortfall, never what it said, because a shortfall may name a holding.
+
+## The economic calendar
+
+`GET /api/econ?from=&to=` answers with investing.com's calendar for that
+window, cached — the first tier's exact-time macro releases, which have to
+arrive with a time rather than a day because a print at 12:30 UTC and one at
+21:00 UTC are different events to somebody holding a position through one of
+them. `producer` scope and read-only: this is the desk going outside on
+somebody's behalf, exactly as `/api/quotes` is, and the same two callers want
+it.
+
+It runs **inside the desk** rather than beside it as a second service. The
+sibling project this is ported from separated it because an ESP32 cannot scrape
+HTML; here the desk is already the thing that goes outside, already caches and
+already holds the tokens, so a second container is a second thing to keep alive
+for no gain.
+
+```json
+{ "ok": true,
+  "events": [ { "date": "2026-09-08 12:30:00", "country": "USD",
+                "event": "Core CPI (MoM)", "estimate": "0.3%",
+                "actual": "", "previous": "0.2%", "impact": "High" } ],
+  "health": { "ok": true, "error": null, "fetchedAt": 1757308800.0,
+              "windows": 1, "parsed": 42, "skipped": 0 } }
+```
+
+`date` is `YYYY-MM-DD HH:MM:SS` in UTC, because the upstream is asked for GMT
+by id — that one field is what keeps a timezone off this system's wires. The
+three figures stay strings with their units attached (`"0.3%"`, `"254K"`),
+because that is what the page publishes and parsing them into numbers would
+mean inventing a unit field and getting it wrong for one release in fifty.
+`impact` is investing.com's own word and stays that: the event book's `rank` is
+a different quantity — effect on *these* positions, where an FOMC meeting can
+outrank a company's own product launch — and conflating the two would delete
+the distinction the feature exists to draw.
+
+Neither date is defaulted. A missing or malformed one is `400`, naming the
+field: a window this route guessed at would be a calendar the caller did not
+ask for, and the dates are the only caller-supplied material that reaches the
+upstream request at all.
+
+**Three things about a scraper, stated because it will break.** It is a regex
+over HTML and investing.com owes this desk nothing. So the parse is isolated
+against a committed fixture (`server/test/fixtures/investing_rows.html`) and a
+break is a failing test rather than a blank screen; `health()` reports `parsed`
+beside `skipped`, so a break that takes half the rows shows as half the rows
+skipped rather than as a quiet week; and `health` travels with the *answer*
+rather than only in `/api/state`, because a failed fetch re-serves the last
+good copy of that window and the rows cannot say how old they are. Making the
+screen that is showing them fetch a second document to find out is how a
+week-old schedule gets presented as current.
+
+**A failure keeps the last good window.** Blank reads as "nothing is happening
+this week", which is a false statement about the owner's money, where stale
+reads as a schedule nobody has refreshed. The one case that raises `502` is a
+failure with nothing to fall back on. A window is cached for an hour and a
+failure for five minutes, so an outage costs one upstream call every five
+minutes and the calendar returns on its own. `cloudscraper` and `requests` are
+tried before `urllib` and fallen through on any exception, so the stdlib path
+works with zero new dependencies; `ECON_TOTAL_BUDGET` (40 s) is checked before
+each attempt after the first, because three transports at 25 s each is a 75-second
+worst case on a route a phone screen calls, and cloudflared lets go at 90.
+
+## The phones, and the alert that arrives before the date
+
+`GET /api/push/devices`, `POST /api/push/devices` and
+`DELETE /api/push/devices/<token>` carry
+[`push.py`](../server/claudepost/push.py)'s document. **All three are
+`operator`, the read included**, and that is the only document on this desk
+where even a read is: a push token is a capability to interrupt the owner, not
+a fact about them.
+
+```json
+{ "devices": [ { "token": "ExponentPushToken[…]", "platform": "ios",
+                 "tz": "Asia/Seoul",
+                 "prefs": { "earnings": true, "expiry": true,
+                            "dividend": true, "econ": true,
+                            "researched": true },
+                 "lead": { "earnings": ["P1D"], "expiry": ["P7D", "P1D"],
+                           "dividend": ["P1D"], "econ": ["PT3H"],
+                           "researched": ["P1D"] },
+                 "quiet": { "from": "23:00", "to": "07:00" },
+                 "last_seen": "2026-09-08T05:00:00Z" } ] }
+```
+
+**Five switches, not eight, and not four.** The four computed kinds each get
+their own; the book's other four — `corporate`, `legal`, `index`, `other` —
+share `researched`. The rule is that a kind with no switch is a kind the owner
+cannot turn off *and also one that can never fire*, and an earlier draft
+applied only its first half: it gave switches to the computed kinds alone,
+which left the researched half of the book unable to notify at all. A book that
+ranks by effect on the positions puts a court date or an analyst day at rank 1
+often enough that ranking it first and never mentioning it is a design arguing
+with itself. They share one switch rather than getting four because the owner's
+question is "tell me about things somebody had to go and find", not "tell me
+about index rebalancing but not litigation". `push.pref_for()` is the only
+place that mapping lives.
+
+`POST` takes **one device**, not the whole document, because that is what a
+phone knows — its own token, its zone, its switches — but what is *validated*
+is the whole merged document, since the device cap, the aggregate byte cap and
+the duplicate-token rule are properties of the list. Re-registering replaces
+the entry carrying the same token rather than adding a second one, which is
+what makes it idempotent for an app that registers on every launch. There is no
+top-level `updated_at` on this document and stamping one would write a file
+`load()` then silently refuses; each device carries its own `last_seen`
+instead. `DELETE` answers `404` for a token nobody registered rather than a
+cheerful `200`: the caller already holds every authority the desk has, so
+"there was nothing to forget" is the answer that tells an operator their delete
+did not do what they thought. Both handlers hold `Desk.push_lock` across the
+read *and* the write — this is the desk's one read-modify-write document, and
+without the lock two phones registering in the same instant both merge into the
+same pre-merge list, the second write erases the first, and the phone that lost
+was told `200` and simply never rings.
+
+The lead durations are a **table, not a parser** — `PT1H`, `PT3H`, `PT12H`,
+`P1D`, `P2D`, `P7D`, stored longest first, which is the order they fire. A
+general duration parser is a few hundred lines of surface area and a fresh set
+of edge cases for a feature that needs six values.
+
+**Both switch maps come back complete whatever arrived**, so a phone never has
+to reason about the difference between "off" and "not mentioned". An absent
+`prefs` switch is **on**: a device that has never said otherwise wants the
+events it went to the trouble of registering for. An absent `lead` is the
+default — expiry twice (`P7D`, `P1D`), because it is the one event with nothing
+to react to afterwards; econ three hours out, because a day's notice of a
+number nobody can act on is noise; everything else the evening before. But a
+`lead` that *names* a kind with an empty list gets nothing. Those two absences
+are deliberately different and the app depends on it: an app that clears every
+lead has to be able to say so without the desk restoring them on the way in.
+
+### The tick
+
+`Desk.tick()` gains `_fire_due_alerts(t)` beside `_fire_due_wake(t)`, in the
+same shape and under the same rule — **idempotent**, because this runs every
+few seconds forever and a scheduler that fired once per tick would put the same
+notification on the owner's lock screen twelve times a minute. The idempotency
+is a delivery ledger keyed `(token, event_id, lead)` in `desk.sqlite`, not
+anything held in memory, so a restart between two ticks cannot re-deliver what
+the last one sent. Rows are kept sixty days — well past the point where they
+can suppress anything; what they buy is the answer to "was I told about that",
+asked weeks later by somebody who thinks they were not.
+
+[`alerts.py`](../server/claudepost/alerts.py) is the pure half: `due()` takes
+`now` and answers from it, with no clock, no database and no socket, for the
+reason `tick()` itself is a function of an injected clock — the interesting
+instants are exactly the ones a test must step over rather than wait for.
+
+**Two rules pull in opposite directions and the module is the shape of holding
+both.** A lead that passed while the desk was *down* must still fire; a restart
+is not a reason to miss the owner's expiry. A lead whose *event has already
+happened* must not; nobody needs telling about yesterday. What separates them is
+not how late the desk is, it is whether the thing being announced is still ahead
+of the owner.
+
+**Quiet hours defer, they never drop**, and that promise is kept in two places
+because it can be broken in two ways: `due()` holds an alert whose *lead
+instant* fell inside the window, and `defer_for_quiet()` holds one the desk's
+own lateness carried into it. The past-event rule then has exactly one
+exception — an event that happened *inside* the owner's quiet window is one they
+asked not to be woken for, so it is delivered when the window ends and its copy
+says it has already happened. Without that exception the deferral would silently
+swallow a whole half of the day: a 21:30 UTC print is 06:30 in Seoul and inside
+nobody's window, but a 07:00 UTC one is 16:00.
+
+**The desk writes almost no prose.** `title` and `body` come from the agent's
+`push` block, written with the event by the only thing that understands it, and
+fall back to the event's own title and the first `reason_short` — all of it
+already in the owner's language. The one sentence this desk owns is the
+already-happened marker, a two-entry table keyed by the book's `lang`. A desk
+that composed notification copy would be a desk that had picked a language, and
+it has not.
+
+One POST per tick, capped at Expo's own ceiling on a request rather than at a
+number of this desk's own, and sent soonest event first so a cut takes the
+least urgent. What does not fit is owed, and the next tick is five seconds
+away. Nothing is recorded for a send that failed, so a network blip costs a
+delay rather than a notification; a `DeviceNotRegistered` receipt is the one
+verdict that removes a token, because a phone that uninstalled the app must not
+accumulate failures forever, and every other Expo error is about this attempt.
+
+Every exception in this pass is caught, which is the one thing about it that is
+not ordinary: the publish and the housekeeping both run after it, so a
+scheduler that died on a push failure would stop putting the newspaper on the
+wall — and the failure it would die on is a network, which is to say a Tuesday.
+Log lines carry an exception's *type* and never its text, the same redaction by
+omission `econ.py` states: there is no key to substitute for here, but what
+this path holds in its hands is a list of push tokens, and a message assembled
+by a library out of something it was handed is exactly where one appears.
+`GET /api/state` reports the device count and the longest failure streak — one
+number, because a per-phone breakdown would answer "is push working" by naming
+the phones.
+
+## What must never happen
+
+`GET /news.json` is served with **no authorization** — it has to be, the board
+polls it. So the one catastrophic outcome of this feature is an agent that
+reads the owner's option positions and files them into an edition, published at
+a public URL.
+
+The defence is structural rather than a sentence in a prompt, and the two
+halves are not equally strong.
+
+**1. Two command kinds, two briefs, and the newspaper's producer never holds
+the file.** `edition` produces the newspaper from `PROMPT.md`; `calendar`
+produces the event book from `CALENDAR.md`. `loop.py` seeds the positions only
+on the second, so the process that writes a page does not know the strikes to
+leak. That is the wall. The worker carries the same rule a second time at the
+point it files: a `calendar` run that wrote a `news.json` is *refused* before
+its book is even read, and the page is left on disk as evidence rather than
+uploaded, because that turn is the one turn in the system holding the owner's
+positions.
+
+**2. The edition validator refuses a payload carrying position fields** —
+`strike_cents`, `entry_price_cents`, `contracts`, `legs`, `position_id`, or a
+`positions` key at any depth, keys only and never values, walked iteratively
+because a `RecursionError` is a 500 where this check's whole job is to give a
+400.
+
+**Known and stated: that second one is a blacklist, and it is currently the
+only wall of its kind on the wire.** `news.json` has no closed key set anywhere
+— not in `editions.put_payload`, not in `mock_news_server.validate_payload()`,
+which checks named fields and never enumerates permitted ones, and not on the
+device, where `news_parse()` ignores unknown keys by design. So the next leak
+will not be spelled `strike_cents`; it will be a `cost_basis` or a
+`my_position` an agent invents in a figure label, and this guard passes it. The
+stronger fix is a whitelist and it belongs in `validate_payload()`, which owns
+the contract `news_parse.c` and [news-contract.md](news-contract.md) mirror —
+it is a *follow-up* rather than part of this, because it changes what every
+producer may file, which is a compatibility decision. What carries the weight
+meanwhile is rule 1, not this.
+
+A host test asserts the device plane cannot reach any of these stores — not
+"does not today", cannot: the unauthenticated sweep is a curated sample path
+per route, asserted to cover every route in `_ROUTES`, so adding a route means
+adding a sample and the test says so when you forget.
+
 ## The `policy` block
 
 One optional top-level object on the wire, documented in full in
@@ -672,7 +1107,7 @@ on it is set larger than a deck, a photograph that halftoned to mush.
 
 Two revisions, then it reports the failure with the validator's own words.
 
-**`kind` decides where the turn's `notes.md` goes, and one of the three kinds
+**`kind` decides where the turn's `notes.md` goes, and one of the four kinds
 decides it from the disk rather than from itself.** `"file_edition"` always
 takes the draft path above, and if the run left a `notes.md` in its workdir it
 rides beside the draft (`PUT .../notes.md`) — the dossier behind the page,
@@ -686,6 +1121,22 @@ the note follows the draft; no `news.json` means it was a look and the note
 follows the command. A turn that left no `notes.md` files nothing — that is
 the ordinary case, not a gap, the same way an edition with no photograph is
 still a complete one.
+
+**`"calendar"` is the fourth, and it is the exception to the paragraph above:
+it decides alone.** It is the other job — an event book about what the owner
+holds, read on a phone and printed nowhere — so it reads `CALENDAR.md` instead
+of `PROMPT.md`, it is seeded with the positions, yesterday's book (so the
+reasoning can be revised rather than rewritten) and a fresh economic window, it
+`PUT`s `calendar.json`, and it never opens a draft. Its note goes on the
+command for the same reason a research turn's does. Trusting the disk here the
+way `custom` does would mean a run that wrote a `news.json` got its page filed
+— and on this one path that file would be an edition written by the one turn
+holding the owner's option positions, published at a URL with no authorization
+on it. So the disk is consulted and the answer is a refusal: the page is left
+where it lies as evidence, and nothing is uploaded. The seeding is the same
+rule from the other side, and it runs **before** the turn, so a desk that
+cannot say what the owner holds fails the command at the start rather than
+after forty-five minutes of research against nothing.
 
 ## Cloudflare
 
