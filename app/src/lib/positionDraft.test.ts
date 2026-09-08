@@ -423,9 +423,13 @@ function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
     putSettings: async () => ({ lang: 'en' }),
     positions: async () => book([held]),
     putPositions: async (doc) => doc,
-    // Nothing in this file reads the event book; it is here because `DeskClient` is one interface
-    // and a fake that implemented half of it would stop compiling every time the desk grew a route.
+    // Nothing in this file reads the event book or the registered phones; they are here because
+    // `DeskClient` is one interface and a fake that implemented half of it would stop compiling
+    // every time the desk grew a route.
     calendar: async () => null,
+    pushDevices: async () => ({ devices: [] }),
+    registerPushDevice: async () => ({ devices: [] }),
+    forgetPushDevice: async () => undefined,
     ...over,
   }
 }

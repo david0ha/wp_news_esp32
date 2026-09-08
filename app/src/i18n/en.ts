@@ -46,6 +46,7 @@ export const en = {
       setup: 'Setup',
       language: 'App language',
       desk: 'Desk',
+      notifications: 'Notifications',
     },
     board: {
       none: 'No board set up on this phone.',
@@ -125,6 +126,59 @@ export const en = {
       needsSetup: 'Add the desk’s address and an operator token to change this.',
       unsupported: 'The desk is set to a language this app doesn’t offer ({lang}). Choosing one above replaces it.',
       languageSaved: 'The desk will write the next edition in this language.',
+    },
+    // Notifications. The desk sends them; this section registers the phone that receives them and
+    // edits the preferences the desk reads. Its own block, below the desk's, because every
+    // sentence here is about a desk that has already been given an address and a token.
+    notify: {
+      help: 'Your desk tells this phone about a date in the schedule before it arrives. It sends to the phones registered here and to no others, and nothing is sent until you turn this on.',
+      master: 'Tell me before it happens',
+      registered: 'This phone is registered with the desk.',
+      saved: 'Saved to the desk.',
+      needsDesk: 'Add the desk’s address and an operator token above to turn this on.',
+      unsupported: 'This phone can’t be sent notifications.',
+      blocked: 'This phone doesn’t allow notifications for Claude Post. Turn them on in the phone’s own settings, then come back.',
+      openSettings: 'Open phone settings',
+      tokenFailed: 'The phone allowed notifications, but no push token could be issued. Check the connection and try again.',
+      // Both name which half failed, because the two are fixed in completely different places and
+      // "notifications didn't turn on" sends somebody to the wrong one.
+      deskFailed: 'The phone allowed notifications; the desk wouldn’t register it. {detail}',
+      // Not the same failure: this phone is still registered and the desk is still sending what it
+      // was sending before, so the switch stays on and only the change was lost.
+      changeFailed: 'The desk wouldn’t take that change, and is still sending what it was. {detail}',
+      forgetFailed: 'The desk wasn’t told to stop, so it may keep sending. Try again. {detail}',
+      // The five switches. `researched` is one switch over four of the book's kinds — corporate
+      // actions, court dates, index changes and everything else — so it is named by where the
+      // date came from rather than by what it is.
+      kinds: {
+        earnings: 'Earnings',
+        expiry: 'Option expiries',
+        dividend: 'Dividends',
+        econ: 'Economic releases',
+        researched: 'Dates found by research',
+      },
+      leadLabel: 'How far ahead',
+      // A kind can be on with nothing chosen, and it is a real setting rather than a mistake — but
+      // it looks exactly like a broken switch, so it says so.
+      noLead: 'On, but nothing is chosen above — nothing will be sent for these.',
+      leads: {
+        P7D: '1 week',
+        P2D: '2 days',
+        P1D: '1 day',
+        PT12H: '12 hours',
+        PT3H: '3 hours',
+        PT1H: '1 hour',
+      },
+      quiet: {
+        label: 'Quiet hours',
+        help: 'Nothing arrives between these two times. A date that falls inside them is still told about — it arrives once the window ends, marked as already past.',
+        from: 'From',
+        to: 'To',
+        save: 'Save quiet hours',
+        saved: 'Saved.',
+        shape: 'Enter a 24-hour time, like 22:00.',
+        same: 'Both times are the same, which could mean no quiet hours or every hour. Set them apart.',
+      },
     },
   },
 

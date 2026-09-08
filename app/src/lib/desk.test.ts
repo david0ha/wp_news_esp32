@@ -256,3 +256,117 @@ describe('deskLanguageView — what the Settings selector draws', () => {
       .toEqual({ selectedIndex: -1, disabled: true, note: 'needs_setup' })
   })
 })
+
+// The house placeholder, and the only push token in this repository. A token is a capability to
+// write on somebody's lock screen, so a plausible-looking fixture is one nobody could tell from a
+// real one in a paste.
+const PUSH = 'ExponentPushToken[0000000000AAAAAAAAAA]'
+
+const pushBody = (devices: unknown[]) => JSON.stringify({ ok: true, push: { devices } })
+
+const oneDevice = {
+  token: PUSH,
+  platform: 'ios',
+  tz: 'Asia/Seoul',
+  prefs: { earnings: true, expiry: true, dividend: true, econ: false, researched: true },
+  lead: { earnings: ['P1D'], expiry: ['P7D', 'P1D'], dividend: ['P1D'], econ: [], researched: ['P1D'] },
+  last_seen: '2026-09-08T05:00:00Z',
+}
+
+describe('deskClient.pushDevices', () => {
+  it('GETs the household at operator scope', async () => {
+    const { client: c, calls } = client([{ text: pushBody([oneDevice]) }])
+    const doc = await c.pushDevices()
+    expect(calls[0].url).toBe('https://desk.example.dev/api/push/devices')
+    expect(calls[0].init?.method).toBe('GET')
+    expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(doc.devices).toHaveLength(1)
+    expect(doc.devices[0].token).toBe(PUSH)
+  })
+
+  it('reads a desk that has never been registered with as an empty household', async () => {
+    // `h_get_push_devices` serves `self.desk.push_devices` straight, and that is `None` until a
+    // phone has registered. It is not a failure and not a state with a sentence: a desk with no
+    // file and a desk with an empty list both send to nobody, and the next act on either is the
+    // same POST.
+    const { client: c } = client([{ text: JSON.stringify({ ok: true, push: null }) }])
+    expect(await c.pushDevices()).toEqual({ devices: [] })
+  })
+
+  it('drops an entry it cannot read rather than refusing the household', async () => {
+    // The list may hold another phone entirely — an Android, a release ahead of this one. Refusing
+    // the document over somebody else's entry would take this phone's own switch down with it.
+    const { client: c } = client([{ text: pushBody([{ token: 42 }, oneDevice]) }])
+    expect((await c.pushDevices()).devices).toHaveLength(1)
+  })
+
+  it('refuses a body that is not this document at all', async () => {
+    const { client: c } = client([{ text: JSON.stringify({ ok: true, push: { devices: 'no' } }) }])
+    await expect(c.pushDevices()).rejects.toMatchObject({ code: 'bad_json' })
+  })
+
+  it('turns a 403 into the unauthorized code, like every other route', async () => {
+    const { client: c } = client([{ status: 403, text: '{"ok":false,"error":"forbidden"}' }])
+    await expect(c.pushDevices()).rejects.toMatchObject({ code: 'unauthorized', status: 403 })
+  })
+})
+
+describe('deskClient.registerPushDevice', () => {
+  it('POSTs the one device it was given, and nothing else', async () => {
+    const { client: c, calls } = client([{ text: pushBody([oneDevice]) }])
+    await c.registerPushDevice({
+      token: PUSH,
+      platform: 'ios',
+      tz: 'Asia/Seoul',
+      prefs: { econ: true },
+      lead: { econ: ['PT3H'] },
+    })
+    expect(calls[0].init?.method).toBe('POST')
+    // As bytes: `push._no_extra_keys` refuses the whole document over one key it does not know,
+    // and `last_seen` — which a GET carries and the desk stamps itself — is the one a client that
+    // echoed a read straight back would send.
+    expect(calls[0].init?.body).toBe(
+      '{"token":"ExponentPushToken[0000000000AAAAAAAAAA]","platform":"ios","tz":"Asia/Seoul","prefs":{"econ":true},"lead":{"econ":["PT3H"]}}',
+    )
+  })
+
+  it('surfaces the desk’s own reason for refusing a preference', async () => {
+    const { client: c } = client([
+      {
+        status: 400,
+        text: '{"ok":false,"error":"bad_push","detail":"push.devices[0].lead.econ[0]: no"}',
+      },
+    ])
+    await expect(
+      c.registerPushDevice({ token: PUSH, platform: 'ios', tz: 'UTC', prefs: {}, lead: {} }),
+    ).rejects.toMatchObject({
+      code: 'http',
+      error: 'bad_push',
+      detail: 'push.devices[0].lead.econ[0]: no',
+    })
+  })
+})
+
+describe('deskClient.forgetPushDevice', () => {
+  it('DELETEs the token, percent-encoded into the path', async () => {
+    const { client: c, calls } = client([{ text: pushBody([]) }])
+    await c.forgetPushDevice(PUSH)
+    expect(calls[0].init?.method).toBe('DELETE')
+    expect(calls[0].url).toBe(
+      'https://desk.example.dev/api/push/devices/ExponentPushToken%5B0000000000AAAAAAAAAA%5D',
+    )
+  })
+
+  it('takes a 404 as the answer it wanted', async () => {
+    // "No such device" is exactly the state the owner asked for by turning the switch off. Reading
+    // it as a failure would leave the switch reporting on — which is a promise that the desk is
+    // still sending, when it is not.
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"not_found"}' }])
+    await expect(c.forgetPushDevice(PUSH)).resolves.toBeUndefined()
+  })
+
+  it('does not swallow a refusal that is not a 404', async () => {
+    const { client: c } = client([{ status: 401, text: '{"ok":false,"error":"unauthorized"}' }])
+    await expect(c.forgetPushDevice(PUSH)).rejects.toMatchObject({ code: 'unauthorized' })
+  })
+})

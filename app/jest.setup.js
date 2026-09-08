@@ -30,3 +30,37 @@ jest.mock('expo-secure-store', () => {
 jest.mock('expo-localization', () => ({
   getLocales: () => [{ languageTag: 'en-US', languageCode: 'en' }],
 }))
+
+// expo-notifications talks to APNs and FCM through a native module, and there is neither under
+// Jest. The stand-in answers the two questions `notify.ts`'s wrappers ask and REFUSES to issue a
+// push token, which is the honest answer for a machine that has no device to issue one for.
+//
+// Nothing in this suite exercises delivery, and nothing in it could: every test of the
+// notification flow drives `turnOnNotifications` with its own fakes, so what is asserted is which
+// call was made and what the switch did with the answer — never that a notification arrived.
+jest.mock('expo-notifications', () => ({
+  getPermissionsAsync: async () => ({
+    status: 'undetermined',
+    granted: false,
+    canAskAgain: true,
+    expires: 'never',
+  }),
+  requestPermissionsAsync: async () => ({
+    status: 'undetermined',
+    granted: false,
+    canAskAgain: true,
+    expires: 'never',
+  }),
+  getExpoPushTokenAsync: async () => {
+    throw new Error('no device to issue a push token for')
+  },
+  setNotificationChannelAsync: async () => undefined,
+  IosAuthorizationStatus: {
+    NOT_DETERMINED: 0,
+    DENIED: 1,
+    AUTHORIZED: 2,
+    PROVISIONAL: 3,
+    EPHEMERAL: 4,
+  },
+  AndroidImportance: { DEFAULT: 3, HIGH: 4, MAX: 5 },
+}))
