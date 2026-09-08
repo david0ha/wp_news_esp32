@@ -623,3 +623,100 @@ export function scheduleView(input: {
   if (groups.length === 0) return { kind: 'nothing_upcoming', error }
   return { kind: 'book', groups, shortfall: input.doc.shortfall, error }
 }
+
+// ---------------------------------------------------------------------------
+// What the two additive surfaces draw
+// ---------------------------------------------------------------------------
+
+/**
+ * The block at the top of Markets, and a symbol's own slice inside its Calendar section.
+ *
+ * `hidden` is the important arm, and it is the one three of the four outcomes reach. Both of
+ * these surfaces already work today for somebody who has never configured a desk — Markets shows
+ * a watchlist, `CalendarSection` shows Yahoo's dates with its own degraded card — and this
+ * feature is strictly ADDITIVE: it appears when there is a book and is invisible when there is
+ * not. No new empty state, no new spinner, no new error. `/schedule` is where a failure is
+ * reported, because that is where the owner went looking for it.
+ */
+export type UpcomingView =
+  | { kind: 'hidden' }
+  | {
+      kind: 'events'
+      /** Already limited, already in the reader's own days — `ScheduleDayGroup`'s input. */
+      groups: DayGroup[]
+      /** Events actually in `groups`. */
+      count: number
+      /** Events the limit left out, so a surface can say the book is bigger than the block. */
+      more: number
+    }
+
+const HIDDEN: UpcomingView = { kind: 'hidden' }
+
+/**
+ * The next few dates, or nothing.
+ *
+ * WHAT "NEXT" MEANS, since the desk keeps a seven-day PAST window on purpose. The cut is
+ * `groupByDay`'s and nobody else's: the reader's own midnight. So a print that landed at 09:30 is
+ * still at the top of Markets at 13:00 — it is the one thing the owner most wants there that
+ * morning, and the book is not rewritten the instant it fires — and yesterday's is gone before it
+ * can become three days of stale prints. Reusing that cut rather than inventing a second one is
+ * also what makes this block the literal HEAD of `/schedule`'s own list: tapping through lands on
+ * the same events in the same order, which a separate rule could not promise.
+ *
+ * BY TIME, NEVER BY RANK (ruling 21). `rank` is what decided which events the agent FILED and
+ * `target` is what `shortfall` is measured against; neither is a display cap and neither orders
+ * anything a reader sees. The `limit` here is the spec's "next three" and belongs to this block
+ * alone.
+ *
+ * `symbol`, when given, is the symbol detail screen's slice — every event whose `symbols` name
+ * it, so an event naming two companies appears under both. Matched case-insensitively, because a
+ * deep link may arrive as `claudepost://market/aaaa` while the book carries the agent's spelling.
+ *
+ * A FAILED FETCH IS NOT AN ARM OF THIS. `failed` hides the surface only when there is nothing
+ * already to show, which is the case that matters: a phone whose desk is unreachable adds nothing
+ * to either screen. A refresh that fails OVER a book keeps the book, because the failure has
+ * nowhere to be said here and a block that empties itself for no visible reason is worse than one
+ * showing what the desk last actually said.
+ */
+export function upcomingView(input: {
+  /** A desk address and an operator token are both on this phone. `null` while storage has not
+   *  answered — half-known is unknown, and this surface draws nothing either way. */
+  ready: boolean | null
+  /** The book, `null` for a desk that has none, `undefined` for a call not yet made. */
+  doc: CalendarDoc | null | undefined
+  /** The last `calendar()` threw. */
+  failed?: boolean
+  now: Date
+  /** The most events to draw across all days, or every one of them when omitted. */
+  limit?: number
+  /** One symbol's slice, or the whole book when omitted. */
+  symbol?: string
+  /** Omitted in production — see the timezone seam above. */
+  tz?: string
+}): UpcomingView {
+  // The desk gate comes first and is about consent rather than about data: a phone with no desk
+  // must draw no book even with one in hand, because `useEventBook` never asked for it.
+  if (input.ready !== true) return HIDDEN
+  if (input.doc === null || input.doc === undefined) return HIDDEN
+
+  const symbol = input.symbol?.toUpperCase()
+  const wanted =
+    symbol === undefined
+      ? input.doc.events
+      : input.doc.events.filter((e) => e.symbols.some((s) => s.toUpperCase() === symbol))
+
+  const groups = groupByDay(wanted, input.now, input.tz)
+  const total = groups.reduce((n, g) => n + g.events.length, 0)
+  if (total === 0) return HIDDEN
+
+  let budget = input.limit ?? total
+  const kept: DayGroup[] = []
+  for (const group of groups) {
+    if (budget <= 0) break
+    const events = group.events.slice(0, budget)
+    budget -= events.length
+    kept.push({ date: group.date, events })
+  }
+  const count = kept.reduce((n, g) => n + g.events.length, 0)
+  return { kind: 'events', groups: kept, count, more: total - count }
+}

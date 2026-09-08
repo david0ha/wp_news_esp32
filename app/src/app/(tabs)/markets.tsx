@@ -12,6 +12,7 @@ import { Card } from '../../components/Card'
 import { Button } from '../../components/Button'
 import { IconBadge } from '../../components/IconBadge'
 import { TickerRow } from '../../components/TickerRow'
+import { UpcomingBlock } from '../../components/UpcomingBlock'
 import { yahoo } from '../../lib/market/yahoo'
 import { marketHumanError, type Quote } from '../../lib/market/types'
 import { getWatchlist, removeFromWatchlist, type WatchItem } from '../../lib/market/watchlist'
@@ -133,6 +134,12 @@ export default function Markets() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
         }
       >
+        {/* The desk's event book, when there is one. Above the watchlist because a date that is
+            about to move a position outranks a price that is already moving, and above the
+            banner below because that banner is about the quotes under it. It draws NOTHING at
+            all on a phone with no desk, no book, or an unreachable one — see `upcomingView`. */}
+        <UpcomingBlock />
+
         {banner !== null ? (
           <View style={styles.banner}>
             <Text style={styles.bannerText}>{banner}</Text>
@@ -248,7 +255,13 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
   empty: {
-    flex: 1,
+    // Grows to fill an otherwise empty screen — which is what centres it — but never SHRINKS.
+    // `flex: 1` did both, and with the schedule block above it the remaining space went negative:
+    // the icon, the sentence and the "add a ticker" button were compressed past the fold of a
+    // container that `scrollEmpty` had pinned to exactly one viewport, so the only control on the
+    // screen could not be reached or scrolled to.
+    flexGrow: 1,
+    flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
     gap: space.lg,

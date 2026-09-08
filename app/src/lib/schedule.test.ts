@@ -10,8 +10,10 @@ import {
   scheduleView,
   sourceBadge,
   timeLabel,
+  upcomingView,
   type CalendarDoc,
   type CalendarEvent,
+  type UpcomingView,
 } from './schedule'
 import { createDeskClient, DeskError } from './desk'
 import { parsePositionsDoc, type PositionsDoc } from './positions'
@@ -522,6 +524,173 @@ describe('scheduleView', () => {
     // A phone with no desk has not been told anything about a book, so "no schedule filed yet"
     // would be the app inventing a fact about a server it never asked.
     expect(scheduleView({ ready: false, doc: doc(), now, tz: 'Asia/Seoul' }).kind).toBe('needs_desk')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The two additive surfaces
+// ---------------------------------------------------------------------------
+
+describe('upcomingView', () => {
+  // 13:00 on the 8th in Seoul, so "already happened today" and "still to come today" are both
+  // reachable from one instant.
+  const now = new Date('2026-09-08T04:00:00Z')
+  const tz = 'Asia/Seoul'
+
+  const book = (...events: Array<Record<string, unknown>>): CalendarDoc =>
+    doc({ events: events.map((e) => wireEvent(e)) })
+
+  const ids = (view: UpcomingView): string[] =>
+    view.kind === 'events' ? view.groups.flatMap((g) => g.events.map((e) => e.id)) : []
+
+  it('is the head of the same list the schedule screen draws', () => {
+    // The block on Markets and the top of `/schedule` must be the same events in the same order,
+    // or tapping through looks like a different book. Both go through `groupByDay`.
+    const view = upcomingView({
+      ready: true,
+      doc: book(
+        { id: 'e_1', at: '2026-09-08T05:00:00Z' },
+        { id: 'e_2', at: '2026-09-09T01:00:00Z' },
+        { id: 'e_3', at: '2026-09-10T01:00:00Z' },
+      ),
+      now,
+      tz,
+      limit: 2,
+    })
+    expect(view.kind).toBe('events')
+    if (view.kind !== 'events') throw new Error('unreachable')
+    expect(view.groups.map((g) => g.date)).toEqual(['2026-09-08', '2026-09-09'])
+    expect(ids(view)).toEqual(['e_1', 'e_2'])
+    expect(view.count).toBe(2)
+    expect(view.more).toBe(1)
+  })
+
+  it('draws nothing at all until a desk has answered with a book', () => {
+    const filed = book({ id: 'e_1', at: '2026-09-09T01:00:00Z' })
+    // Storage has not answered yet. Half-known is unknown.
+    expect(upcomingView({ ready: null, doc: undefined, now, tz }).kind).toBe('hidden')
+    // No desk on this phone. A book in hand cannot make this surface appear: nothing was asked of
+    // anything, and `useEventBook` never calls `calendar()` in this state at all.
+    expect(upcomingView({ ready: false, doc: filed, now, tz }).kind).toBe('hidden')
+    // A desk that answered and has no book.
+    expect(upcomingView({ ready: true, doc: null, now, tz }).kind).toBe('hidden')
+    // A desk that could not be reached, with nothing already on screen. NOT an error: the
+    // schedule screen is where a failure is reported, because that is where the owner went
+    // looking for it.
+    expect(upcomingView({ ready: true, doc: undefined, failed: true, now, tz }).kind).toBe('hidden')
+  })
+
+  it('keeps a book that a later refresh failed to renew', () => {
+    // The failure has nowhere to be said on these two surfaces, so the choice is between the last
+    // thing the desk actually said and a block that empties itself for no visible reason. A book
+    // that changes twice a day is worth more stale than absent.
+    const view = upcomingView({
+      ready: true,
+      doc: book({ id: 'e_1', at: '2026-09-09T01:00:00Z' }),
+      failed: true,
+      now,
+      tz,
+    })
+    expect(ids(view)).toEqual(['e_1'])
+  })
+
+  it('keeps what already happened today and drops what happened yesterday', () => {
+    // `calendar.py` holds a seven-day past window on purpose, so "next" has to say where it cuts.
+    // It cuts at the reader's own midnight — `groupByDay`'s cut and nobody else's: a print that
+    // landed at 09:30 is the thing the owner most wants at the top of Markets at 13:00, and
+    // yesterday's is three days of stale prints waiting to happen.
+    const view = upcomingView({
+      ready: true,
+      doc: book(
+        { id: 'e_morning', at: '2026-09-08T00:30:00Z' },
+        { id: 'e_yesterday', at: '2026-09-07T12:30:00Z' },
+      ),
+      now,
+      tz,
+      limit: 3,
+    })
+    expect(ids(view)).toEqual(['e_morning'])
+  })
+
+  it('takes the next by time and never by rank', () => {
+    // Ruling 21: `rank` is the agent's filing goal. A block ordered by importance is a block that
+    // disagrees with the screen it opens.
+    const view = upcomingView({
+      ready: true,
+      doc: book(
+        { id: 'e_late_and_ranked_first', at: '2026-09-12T01:00:00Z', rank: 1 },
+        { id: 'e_soon_and_ranked_last', at: '2026-09-09T01:00:00Z', rank: 9 },
+      ),
+      now,
+      tz,
+      limit: 1,
+    })
+    expect(ids(view)).toEqual(['e_soon_and_ranked_last'])
+  })
+
+  it('is one symbol’s slice when a symbol is named, and an event naming two is in both', () => {
+    const filed = book(
+      { id: 'e_a', symbols: ['AAAA'], at: '2026-09-09T01:00:00Z' },
+      { id: 'e_b', symbols: ['BBBB'], at: '2026-09-10T01:00:00Z' },
+      { id: 'e_both', symbols: ['AAAA', 'BBBB'], at: '2026-09-11T01:00:00Z' },
+    )
+    expect(ids(upcomingView({ ready: true, doc: filed, now, tz, symbol: 'AAAA' }))).toEqual([
+      'e_a',
+      'e_both',
+    ])
+    expect(ids(upcomingView({ ready: true, doc: filed, now, tz, symbol: 'BBBB' }))).toEqual([
+      'e_b',
+      'e_both',
+    ])
+  })
+
+  it('matches a symbol however the route spelled it', () => {
+    // `claudepost://market/aaaa` is a legal deep link; the detail screen uppercases it, and the
+    // book's spelling is the agent's. Neither side gets to decide the other's case.
+    const filed = book({ id: 'e_a', symbols: ['AAAA'], at: '2026-09-09T01:00:00Z' })
+    expect(ids(upcomingView({ ready: true, doc: filed, now, tz, symbol: 'aaaa' }))).toEqual(['e_a'])
+  })
+
+  it('hides the slice when nothing in the book names the symbol', () => {
+    // The symbol detail screen has a Yahoo calendar of its own and this part is additive. An
+    // empty state here would be a new sentence on a screen that was complete without one.
+    const filed = book({ id: 'e_a', symbols: ['AAAA'], at: '2026-09-09T01:00:00Z' })
+    expect(upcomingView({ ready: true, doc: filed, now, tz, symbol: 'CCCC' }).kind).toBe('hidden')
+  })
+
+  it('hides rather than saying the book is empty', () => {
+    // Everything filed is behind the reader. `/schedule` says `nothingUpcoming` about exactly
+    // this; Markets says nothing, because it was not asked.
+    const filed = book({ id: 'e_old', at: '2026-09-01T01:00:00Z' })
+    expect(upcomingView({ ready: true, doc: filed, now, tz }).kind).toBe('hidden')
+  })
+
+  it('caps nothing when no limit is given', () => {
+    const view = upcomingView({
+      ready: true,
+      doc: book(
+        { id: 'e_1', at: '2026-09-09T01:00:00Z' },
+        { id: 'e_2', at: '2026-09-10T01:00:00Z' },
+        { id: 'e_3', at: '2026-09-11T01:00:00Z' },
+      ),
+      now,
+      tz,
+    })
+    expect(view.kind === 'events' && view.count).toBe(3)
+    expect(view.kind === 'events' && view.more).toBe(0)
+  })
+
+  it('reads the reader’s own day, not the wire’s', () => {
+    // 2026-09-08T23:00Z is the 9th in Seoul and still the 8th in New York, so the same event is
+    // tomorrow's row in one zone and today's in the other — and in a zone where it is already
+    // yesterday it would be gone. One seam, `partsOf`, decides that for every surface.
+    const filed = book({ id: 'e_1', at: '2026-09-08T23:00:00Z' })
+    const view = (zone: string) =>
+      upcomingView({ ready: true, doc: filed, now: new Date('2026-09-08T04:00:00Z'), tz: zone })
+    const seoul = view('Asia/Seoul')
+    const newYork = view('America/New_York')
+    expect(seoul.kind === 'events' && seoul.groups[0].date).toBe('2026-09-09')
+    expect(newYork.kind === 'events' && newYork.groups[0].date).toBe('2026-09-08')
   })
 })
 

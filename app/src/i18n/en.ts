@@ -555,6 +555,13 @@ export const en = {
     },
     calendar: {
       unavailable: 'Calendar unavailable',
+      /**
+       * The label over this symbol's slice of the desk's event book, which sits ABOVE Yahoo's
+       * dates. It names what makes the two different: Yahoo lists what is scheduled for the
+       * company, the desk lists what the agent researched and reasoned about against what this
+       * owner actually holds.
+       */
+      deskEvents: 'Against your positions',
       upcoming: 'Upcoming',
       empty: 'No scheduled events.',
       pastEarnings: 'Past earnings',
@@ -772,6 +779,13 @@ export const en = {
     countdown: 'Exp D-{n}',
     /** The collapsed row names one position; this says how many more the event reaches. */
     alsoAffects: '+{n} more positions',
+    // The block at the top of Markets: the next few dates, and the way through to the whole book.
+    // It appears only when there IS a book, so none of these is ever an empty state.
+    upcoming: {
+      title: 'Coming up',
+      /** `{n}` is the WHOLE book and not the three shown — the count is the reason to tap. */
+      seeAll: 'See all {n}',
+    },
     /** Fewer than the target cleared the floor. The desk's own sentence goes under this. */
     shortfallLabel: 'Why there aren’t more',
     // Three empties, and they are three different facts. Only the first asks for anything: the
@@ -786,6 +800,7 @@ export const en = {
       expand: 'Show the whole reason',
       collapse: 'Hide the whole reason',
       openSource: 'Open {host}',
+      openSchedule: 'Open the full schedule',
     },
   },
 }

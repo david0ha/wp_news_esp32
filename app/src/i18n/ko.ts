@@ -482,6 +482,7 @@ export const ko: Strings = {
     },
     calendar: {
       unavailable: '일정을 불러올 수 없습니다',
+      deskEvents: '내 포지션 기준',
       upcoming: '예정',
       empty: '예정된 일정이 없습니다.',
       pastEarnings: '지난 실적',
@@ -657,6 +658,10 @@ export const ko: Strings = {
     },
     countdown: '만기 D-{n}',
     alsoAffects: '포지션 {n}개 더',
+    upcoming: {
+      title: '다가오는 일정',
+      seeAll: '전체 {n}건',
+    },
     shortfallLabel: '더 없는 이유',
     empty: {
       needsDesk: '일정은 데스크에서 가져와요. 설정에서 데스크 주소와 오퍼레이터 토큰을 입력해 주세요.',
@@ -667,6 +672,7 @@ export const ko: Strings = {
       expand: '이유 전체 보기',
       collapse: '이유 접기',
       openSource: '{host} 열기',
+      openSchedule: '전체 일정 열기',
     },
   },
 }
