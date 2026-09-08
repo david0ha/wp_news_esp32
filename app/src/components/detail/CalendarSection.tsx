@@ -65,7 +65,10 @@ export function CalendarSection({ symbol, active }: DetailSectionProps) {
   }, [active, state.status, load])
 
   // The desk is asked on the same activation and never before it: four sections mount at once on
-  // this screen, and a tab nobody opened is not a reason to call somebody's server.
+  // this screen, and a tab nobody opened is not a reason to call somebody's server. This fires on
+  // every false→true edge, so tabbing away and back asks again — and `useEventBook`'s store is
+  // what decides whether asking reaches the desk or the copy already in memory, which is why the
+  // throttle is not spelled a second time here.
   const loadDesk = desk.load
   useEffect(() => {
     if (active) void loadDesk()
@@ -85,13 +88,7 @@ export function CalendarSection({ symbol, active }: DetailSectionProps) {
   // Read once per render pass, in the render body, and passed down — so the day headings and the
   // expiry countdowns inside the rows under them agree about what today is (ruling 23). No timer.
   const now = new Date()
-  const book = upcomingView({
-    ready: desk.ready,
-    doc: desk.doc,
-    failed: desk.failed,
-    now,
-    symbol,
-  })
+  const book = upcomingView({ ready: desk.ready, doc: desk.doc, now, symbol })
 
   // Yahoo's half, exactly as it was: a spinner until it settles, the degraded card with its retry
   // when it fails, the two lists when it lands. A plain function rather than a component so its

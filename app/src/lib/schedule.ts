@@ -669,23 +669,25 @@ const HIDDEN: UpcomingView = { kind: 'hidden' }
  * alone.
  *
  * `symbol`, when given, is the symbol detail screen's slice — every event whose `symbols` name
- * it, so an event naming two companies appears under both. Matched case-insensitively, because a
- * deep link may arrive as `claudepost://market/aaaa` while the book carries the agent's spelling.
+ * it, so an event naming two companies appears under both. Matched by EXACT ticker after case
+ * folding, never as a substring: a deep link may arrive as `claudepost://market/aaaa` while the
+ * book carries the agent's spelling, but `AA` and `AAAA` are two companies.
  *
- * A FAILED FETCH IS NOT AN ARM OF THIS. `failed` hides the surface only when there is nothing
- * already to show, which is the case that matters: a phone whose desk is unreachable adds nothing
- * to either screen. A refresh that fails OVER a book keeps the book, because the failure has
- * nowhere to be said here and a block that empties itself for no visible reason is worse than one
- * showing what the desk last actually said.
+ * A FAILED FETCH IS NOT AN ARM OF THIS, and takes no parameter, because `doc`'s three states
+ * already say everything a surface may act on: `undefined` is a call that has not produced a
+ * book — one still out, or one that threw — `null` is a desk that answered and has none, and a
+ * document is a book. `useEventBook` reports a failure by LEAVING THE PREVIOUS `doc` IN PLACE
+ * rather than by raising a flag, so a first fetch that failed hides (nothing to show) and a
+ * refresh that failed over a book keeps the book. A `failed` argument here would have documented
+ * that behaviour without causing any of it.
  */
 export function upcomingView(input: {
   /** A desk address and an operator token are both on this phone. `null` while storage has not
    *  answered — half-known is unknown, and this surface draws nothing either way. */
   ready: boolean | null
-  /** The book, `null` for a desk that has none, `undefined` for a call not yet made. */
+  /** The book; `null` for a desk that has none, `undefined` for a call that has not produced
+   *  one — see the note on failure above. */
   doc: CalendarDoc | null | undefined
-  /** The last `calendar()` threw. */
-  failed?: boolean
   now: Date
   /** The most events to draw across all days, or every one of them when omitted. */
   limit?: number
@@ -718,5 +720,61 @@ export function upcomingView(input: {
     kept.push({ date: group.date, events })
   }
   const count = kept.reduce((n, g) => n + g.events.length, 0)
+  // A limit of zero or less asked for no rows, and `{kind:'events'}` with none of them would draw
+  // a heading and a "See all 6" over an empty card. There is one way for this function to say
+  // "draw nothing" and every road to nothing takes it.
+  if (count === 0) return HIDDEN
   return { kind: 'events', groups: kept, count, more: total - count }
+}
+
+// ---------------------------------------------------------------------------
+// When to ask the desk again
+// ---------------------------------------------------------------------------
+
+/**
+ * How stale the book in memory has to be before a return to a screen quietly re-asks for it.
+ *
+ * The figure and the rule are `editionState.ts`'s `FOCUS_REFRESH_AFTER_MS`, deliberately as a
+ * SECOND constant rather than an import: the edition and the event book are two documents on two
+ * cadences, and one shared number would mean a change to the Today tab's throttle silently
+ * changing this one. Five minutes is already far more often than a book the agent files twice a
+ * day can change.
+ */
+export const BOOK_REFRESH_AFTER_MS = 5 * 60_000
+
+/**
+ * Whether a `load()` should actually reach the desk, or answer from the copy already in memory.
+ *
+ * WITHOUT THIS, EVERY FOCUS IS A FETCH. Both surfaces fire on an edge — Markets on every focus,
+ * the Calendar section on every `active` false→true — so Markets → symbol → Calendar → Info →
+ * Calendar → Markets is four loads and eight bearer-authed requests, for a document that changes
+ * about twice a day. An in-flight guard collapses only the concurrent ones, which is a different
+ * thing and was the whole of what this hook had.
+ *
+ * THE TWO EXEMPTIONS ARE NOT REFRESHES AT ALL, and this is the part worth getting right. A
+ * different desk address, or credentials that have only just appeared, is a FIRST question about
+ * something else — and throttling it would leave an owner who has this moment saved an operator
+ * token in Settings looking at a blank Markets tab for five minutes with nothing to say why.
+ * `cachedReady !== true` covers exactly that transition, because a phone with no token publishes
+ * `ready: false` and never calls the desk at all.
+ *
+ * A SETTLED FAILURE IS THROTTLED LIKE A SETTLED SUCCESS, which is the one arm that looks wrong
+ * and is not. These surfaces show nothing either way, so hammering an unreachable desk on every
+ * focus buys the owner nothing they can see; `/schedule` is where a failure is reported, and it
+ * has a pull-to-refresh that does not come through here.
+ */
+export function bookFetchDue(input: {
+  now: number
+  /** When the last call SETTLED, success or failure. `0` when none ever has. */
+  fetchedAt: number
+  /** The desk address the caller is about to use. */
+  address: string
+  /** The address the copy in memory came from, or `null` when there is no copy. */
+  cachedAddress: string | null
+  /** That copy's `ready` — `true` only once a desk has actually been asked. */
+  cachedReady: boolean | null
+}): boolean {
+  if (input.address !== input.cachedAddress) return true
+  if (input.cachedReady !== true) return true
+  return input.now - input.fetchedAt >= BOOK_REFRESH_AFTER_MS
 }

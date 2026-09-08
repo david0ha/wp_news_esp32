@@ -38,13 +38,14 @@ const NEXT = 3
 export function UpcomingBlock() {
   const t = useStrings()
   const router = useRouter()
-  const { ready, doc, book, failed, load } = useEventBook()
+  const { ready, doc, book, load } = useEventBook()
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
 
   // The whole loop, and `useEdition`'s reason for having only this one: `useFocusEffect` fires on
   // mount as well as on every later return to the tab, so a separate mount effect would be a
-  // second driver for the same event. The book changes about twice a day and the desk is on the
-  // owner's own network, so a focus is the entire cadence — there is no interval here.
+  // second driver for the same event. There is no interval; a focus is the entire cadence, and
+  // what stops a focus from being a fetch is `bookFetchDue` inside the shared store rather than
+  // anything here — every consumer of that store gets the same throttle without arranging one.
   useFocusEffect(
     useCallback(() => {
       void load()
@@ -61,7 +62,7 @@ export function UpcomingBlock() {
   }, [])
 
   const now = new Date()
-  const view = upcomingView({ ready, doc, failed, now, limit: NEXT })
+  const view = upcomingView({ ready, doc, now, limit: NEXT })
   if (view.kind !== 'events') return null
 
   return (

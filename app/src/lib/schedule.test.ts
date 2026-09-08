@@ -9,6 +9,8 @@ import {
   positionLine,
   scheduleView,
   sourceBadge,
+  bookFetchDue,
+  BOOK_REFRESH_AFTER_MS,
   timeLabel,
   upcomingView,
   type CalendarDoc,
@@ -574,24 +576,23 @@ describe('upcomingView', () => {
     expect(upcomingView({ ready: false, doc: filed, now, tz }).kind).toBe('hidden')
     // A desk that answered and has no book.
     expect(upcomingView({ ready: true, doc: null, now, tz }).kind).toBe('hidden')
-    // A desk that could not be reached, with nothing already on screen. NOT an error: the
-    // schedule screen is where a failure is reported, because that is where the owner went
-    // looking for it.
-    expect(upcomingView({ ready: true, doc: undefined, failed: true, now, tz }).kind).toBe('hidden')
+    // A desk that could not be reached, with nothing already on screen — which reaches here as
+    // the SAME `undefined`, because `useEventBook` reports a failure by leaving `doc` alone. NOT
+    // an error: the schedule screen is where a failure is reported, because that is where the
+    // owner went looking for it.
+    expect(upcomingView({ ready: true, doc: undefined, now, tz }).kind).toBe('hidden')
   })
 
-  it('keeps a book that a later refresh failed to renew', () => {
-    // The failure has nowhere to be said on these two surfaces, so the choice is between the last
-    // thing the desk actually said and a block that empties itself for no visible reason. A book
-    // that changes twice a day is worth more stale than absent.
-    const view = upcomingView({
-      ready: true,
-      doc: book({ id: 'e_1', at: '2026-09-09T01:00:00Z' }),
-      failed: true,
-      now,
-      tz,
-    })
-    expect(ids(view)).toEqual(['e_1'])
+  it('reads the three states of `doc` as three different facts, which is the whole failure rule', () => {
+    // There is no `failed` argument and there must not be one: `useEventBook` reports a failure
+    // by LEAVING `doc` ALONE, so the three states already carry it. A first fetch that threw is
+    // still `undefined` and hides; a refresh that threw over a book leaves the book here, and it
+    // draws — the failure has nowhere to be said on these surfaces, so the choice is between the
+    // last thing the desk actually said and a block that empties itself for no visible reason.
+    const filed = book({ id: 'e_1', at: '2026-09-09T01:00:00Z' })
+    expect(upcomingView({ ready: true, doc: undefined, now, tz }).kind).toBe('hidden')
+    expect(upcomingView({ ready: true, doc: null, now, tz }).kind).toBe('hidden')
+    expect(ids(upcomingView({ ready: true, doc: filed, now, tz }))).toEqual(['e_1'])
   })
 
   it('keeps what already happened today and drops what happened yesterday', () => {
@@ -651,6 +652,15 @@ describe('upcomingView', () => {
     expect(ids(upcomingView({ ready: true, doc: filed, now, tz, symbol: 'aaaa' }))).toEqual(['e_a'])
   })
 
+  it('matches a whole ticker and never a prefix of one', () => {
+    // `AA` and `AAAA` are two companies. A substring match would look right in every fixture that
+    // happens to have no prefix collision, and put another company's earnings under this one's
+    // calendar the first time one appeared.
+    const filed = book({ id: 'e_a', symbols: ['AAAA'], at: '2026-09-09T01:00:00Z' })
+    expect(upcomingView({ ready: true, doc: filed, now, tz, symbol: 'AA' }).kind).toBe('hidden')
+    expect(upcomingView({ ready: true, doc: filed, now, tz, symbol: 'AAAAA' }).kind).toBe('hidden')
+  })
+
   it('hides the slice when nothing in the book names the symbol', () => {
     // The symbol detail screen has a Yahoo calendar of its own and this part is additive. An
     // empty state here would be a new sentence on a screen that was complete without one.
@@ -663,6 +673,17 @@ describe('upcomingView', () => {
     // this; Markets says nothing, because it was not asked.
     const filed = book({ id: 'e_old', at: '2026-09-01T01:00:00Z' })
     expect(upcomingView({ ready: true, doc: filed, now, tz }).kind).toBe('hidden')
+  })
+
+  it('hides a limit of zero rather than drawing a heading over no rows', () => {
+    // `{kind:'events'}` with an empty `groups` would be a "See all 3 ›" over an empty card. No
+    // caller passes 0 today, which is the reason to settle it now rather than after one does.
+    const filed = book(
+      { id: 'e_1', at: '2026-09-09T01:00:00Z' },
+      { id: 'e_2', at: '2026-09-10T01:00:00Z' },
+    )
+    expect(upcomingView({ ready: true, doc: filed, now, tz, limit: 0 }).kind).toBe('hidden')
+    expect(upcomingView({ ready: true, doc: filed, now, tz, limit: -1 }).kind).toBe('hidden')
   })
 
   it('caps nothing when no limit is given', () => {
@@ -691,6 +712,60 @@ describe('upcomingView', () => {
     const newYork = view('America/New_York')
     expect(seoul.kind === 'events' && seoul.groups[0].date).toBe('2026-09-09')
     expect(newYork.kind === 'events' && newYork.groups[0].date).toBe('2026-09-08')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// When to ask the desk again
+// ---------------------------------------------------------------------------
+
+describe('bookFetchDue', () => {
+  const now = 1_757_000_000_000
+  const settled = {
+    now,
+    fetchedAt: now - 1_000,
+    address: 'https://desk.example.dev',
+    cachedAddress: 'https://desk.example.dev',
+    cachedReady: true,
+  }
+
+  it('fetches when there is nothing in memory at all', () => {
+    expect(bookFetchDue({ ...settled, fetchedAt: 0, cachedAddress: null, cachedReady: null })).toBe(
+      true,
+    )
+  })
+
+  it('answers from memory inside the window', () => {
+    // The defect this exists for: both surfaces fire on an EDGE, so Markets → symbol → Calendar
+    // → Info → Calendar → Markets was four loads and eight bearer-authed requests for a document
+    // filed twice a day.
+    expect(bookFetchDue({ ...settled, fetchedAt: now - (BOOK_REFRESH_AFTER_MS - 1) })).toBe(false)
+  })
+
+  it('fetches again once the window has passed', () => {
+    expect(bookFetchDue({ ...settled, fetchedAt: now - BOOK_REFRESH_AFTER_MS })).toBe(true)
+  })
+
+  it('fetches at once for a different desk, however fresh the last answer was', () => {
+    // Not a refresh — a first question about something else.
+    expect(
+      bookFetchDue({ ...settled, fetchedAt: now, address: 'https://other.example.dev' }),
+    ).toBe(true)
+  })
+
+  it('fetches at once when credentials have only just appeared', () => {
+    // A phone with no token publishes `ready: false` and calls nothing. Throttling the first call
+    // after a token is saved in Settings would leave Markets blank for five minutes with nothing
+    // on screen to say why.
+    expect(bookFetchDue({ ...settled, fetchedAt: now, cachedReady: false })).toBe(true)
+    expect(bookFetchDue({ ...settled, fetchedAt: now, cachedReady: null })).toBe(true)
+  })
+
+  it('throttles a settled failure exactly like a settled success', () => {
+    // `fetchBook` stamps both arms and moves `ready` to true on either, so an unreachable desk is
+    // asked once per window rather than once per focus. These surfaces show nothing either way;
+    // `/schedule` is where a failure is reported, and its pull-to-refresh does not come here.
+    expect(bookFetchDue({ ...settled, fetchedAt: now - 1 })).toBe(false)
   })
 })
 
