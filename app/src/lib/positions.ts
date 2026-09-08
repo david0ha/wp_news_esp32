@@ -361,8 +361,15 @@ export function strategyLabel(
   const s = t.positions.strategy
 
   if (p.kind === 'stock') {
-    const n = formatCount(Math.abs(p.quantity))
-    return fill(p.quantity < 0 ? s.stockShort : s.stock, { n })
+    // Four templates for two facts, because English agrees its noun with the count and a holding
+    // of exactly one share is a real position: "1 shares" is what this branch exists to avoid.
+    // Korean carries the same string under both halves of each pair, which is the same shape
+    // `confirmationLine` already uses for `contract` / `contracts`.
+    const shares = Math.abs(p.quantity)
+    const one = shares === 1
+    const short = p.quantity < 0
+    const template = short ? (one ? s.stockShortOne : s.stockShort) : one ? s.stockOne : s.stock
+    return fill(template, { n: formatCount(shares) })
   }
 
   const legs = p.legs

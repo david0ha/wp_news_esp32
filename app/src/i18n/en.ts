@@ -751,7 +751,15 @@ export const en = {
       strangle: '{side} {low}/{high} Strangle',
       /** One leg inside the list a shape with no name falls back to. */
       leg: '{side} {strike} {right}',
+      // A stock holding, and the one-share form of each. English needs the singular and Korean
+      // does not — `positionSheet.contract` / `contracts` is the same pair for the same reason —
+      // so the split is carried here rather than built out of fragments at the call site, and the
+      // Korean value under both keys is the one string it has. `{n}` stays in the singular
+      // deliberately: it is grouped by `formatCount`, and the parity test holds both catalogues to
+      // the same placeholders.
+      stockOne: '{n} share',
       stock: '{n} shares',
+      stockShortOne: '{n} share short',
       stockShort: '{n} shares short',
     },
   },
@@ -852,8 +860,15 @@ export const en = {
      * none either, because there is nothing left to count down to.
      */
     countdown: 'Exp D-{n}',
-    /** The collapsed row names one position; this says how many more the event reaches. */
-    alsoAffects: '+{n} more positions',
+    /**
+     * The collapsed row names one position; this says how many more the event reaches.
+     *
+     * The partitive is not a flourish: `{n}` is `affects.length - 1`, so an event that reaches
+     * exactly two positions renders this with a 1 in it, and "+1 more positions" is the reading
+     * this phrasing exists to avoid. Korean needs none of that — `포지션 {n}개 더` counts either
+     * way — which is why the two sentences are shaped differently for once.
+     */
+    alsoAffects: '+{n} more of your positions',
     // The block at the top of Markets: the next few dates, and the way through to the whole book.
     // It appears only when there IS a book, so none of these is ever an empty state.
     upcoming: {

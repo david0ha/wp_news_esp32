@@ -112,7 +112,7 @@ describe('strategyLabel', () => {
       leg({ right: 'put', side: 'short', strikeCents: 38000 }),
       leg({ right: 'call', side: 'short', strikeCents: 44000 }),
     ])
-    expect(strategyLabel(custom, ko, { nowMs: NOW })).toBe('콜 400 롱 · 풋 380 숏 · 콜 440 숏')
+    expect(strategyLabel(custom, ko, { nowMs: NOW })).toBe('400 콜 롱 · 380 풋 숏 · 440 콜 숏')
     expect(strategyLabel(custom, en, { nowMs: NOW })).toBe(
       'Long 400 Call · Short 380 Put · Short 440 Call',
     )
@@ -122,7 +122,7 @@ describe('strategyLabel', () => {
     // A desk that named this `vertical` and sent one leg is a desk this app disagrees with, and
     // the right answer to that is the legs — never a "400/undefined" built out of a missing one.
     const wrong = option('vertical', [leg({ strikeCents: 40000 })])
-    expect(strategyLabel(wrong, ko, { nowMs: NOW })).toBe('콜 400 롱')
+    expect(strategyLabel(wrong, ko, { nowMs: NOW })).toBe('400 콜 롱')
   })
 
   it('names the other five shapes the desk can derive', () => {
@@ -179,6 +179,31 @@ describe('strategyLabel', () => {
     expect(strategyLabel(long, en)).toBe('1,400 shares')
     expect(strategyLabel({ ...long, quantity: -40 }, ko)).toBe('40주 공매도')
     expect(strategyLabel({ ...long, quantity: -40 }, en)).toBe('40 shares short')
+  })
+
+  it('agrees the English noun with the count, both ways round', () => {
+    // One share is a real position — a single share of an expensive listing, or what is left of a
+    // larger one — and "1 shares" is the reading the singular templates exist to prevent. Korean
+    // does not inflect a counted noun, so both halves of each pair are the same string there and
+    // this test is what says that is deliberate rather than a copy-paste.
+    const one: Position = {
+      id: 'p_9ac114',
+      symbol: 'BBBB',
+      openedAt: '2026-07-02',
+      note: '',
+      kind: 'stock',
+      quantity: 1,
+      entryPriceCents: 158300,
+    }
+    expect(strategyLabel(one, en)).toBe('1 share')
+    expect(strategyLabel({ ...one, quantity: 2 }, en)).toBe('2 shares')
+    expect(strategyLabel({ ...one, quantity: -1 }, en)).toBe('1 share short')
+    expect(strategyLabel({ ...one, quantity: -2 }, en)).toBe('2 shares short')
+
+    expect(strategyLabel(one, ko)).toBe('1주')
+    expect(strategyLabel({ ...one, quantity: 2 }, ko)).toBe('2주')
+    expect(strategyLabel({ ...one, quantity: -1 }, ko)).toBe('1주 공매도')
+    expect(strategyLabel({ ...one, quantity: -2 }, ko)).toBe('2주 공매도')
   })
 })
 
@@ -331,7 +356,7 @@ describe('parsePositionsDoc', () => {
     ;(ahead.positions as Record<string, unknown>[])[0].strategy = 'iron_condor'
     const doc = parsePositionsDoc(ahead)
     expect((doc?.positions[0] as OptionPosition).strategy).toBe('custom')
-    expect(strategyLabel(doc!.positions[0], ko, { nowMs: NOW })).toBe('콜 420 롱')
+    expect(strategyLabel(doc!.positions[0], ko, { nowMs: NOW })).toBe('420 콜 롱')
   })
 
   it('does not upper-case a symbol on the way in', () => {
