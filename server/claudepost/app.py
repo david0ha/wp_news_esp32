@@ -717,9 +717,10 @@ class Desk:
 
         **Every exception is caught here**, which is the one thing about this
         method that is not ordinary. A scheduler that died on a push failure
-        would stop publishing the newspaper -- the wake, the publish and the
-        housekeeping all run after this line -- and the failure it would die on
-        is a network, which is to say a Tuesday.
+        would stop publishing the newspaper -- the publish and the housekeeping
+        both run after this line -- and the failure it would die on is a
+        network, which is to say a Tuesday. (The wake runs *before* it, and so
+        is the one thing a push failure could not have cost.)
 
         The log line carries the exception's *type* and not its text, the rule
         :mod:`claudepost.econ` states as redaction by omission. There is no key

@@ -355,12 +355,16 @@ def _stamp(value: object, path: str) -> str:
 # --------------------------------------------------------------------------
 
 def _prefs(value: object, path: str) -> dict:
-    """The four switches, every one of them present in the answer.
+    """Every switch, all of them present in the answer.
+
+    There are five: one per computed kind, and ``researched`` shared by the
+    four kinds somebody had to go and find. :data:`KINDS` is the list and
+    :func:`pref_for` is the only place that mapping lives.
 
     An absent switch is **on**. A device that has never said otherwise wants
     the events it went to the trouble of registering for, and the phone should
     never have to reason about the difference between "off" and "not mentioned"
-    -- so this returns all four regardless of what arrived.
+    -- so this returns every switch regardless of what arrived.
     """
     doc = {} if value is None else _obj(value, path)
     _no_extra_keys(doc, _KIND_KEYS, path)

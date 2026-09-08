@@ -306,9 +306,12 @@ def due(book: Mapping | None, devices: Sequence[Mapping] | None,
     """Every alert owed at ``now``, soonest event first. Pure.
 
     ``book`` is a normalised event book and ``devices`` the list out of a
-    normalised push document -- ``prefs`` and ``lead`` carrying all four kinds,
-    which is what :func:`claudepost.push.parse_devices` guarantees and what
-    lets this read them without asking whether a switch was mentioned.
+    normalised push document -- ``prefs`` and ``lead`` carrying every switch in
+    :data:`claudepost.push.KINDS`, which is what
+    :func:`claudepost.push.parse_devices` guarantees and what lets this read
+    them without asking whether a switch was mentioned. An event's switch is
+    :func:`claudepost.push.pref_for`'s answer, not its kind: the four researched
+    kinds share one.
 
     ``delivered`` is the ledger, as rows or as ``(token, event_id, lead)``
     tuples. It is the whole of the idempotency: an alert already in it is not
