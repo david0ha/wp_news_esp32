@@ -5,6 +5,7 @@ import {
   DeskError,
   EDITION_LANGUAGES,
   humanDeskError,
+  redactPushTokens,
 } from './desk'
 import { setActiveLanguage } from '../i18n'
 
@@ -177,6 +178,36 @@ describe('humanDeskError', () => {
 
   it('has a sentence for anything that is not a DeskError at all', () => {
     expect(humanDeskError(new Error('boom'))).toBeTruthy()
+  })
+
+  it('redacts a push token out of the desk’s own detail', () => {
+    // `/api/push/devices` refuses a token BY QUOTING IT — `push._token`'s message is
+    // `'<the token>' is not an Expo push token` — so the one function in this app whose job is to
+    // pass the desk's words through is also the one place a capability can reach the screen and
+    // the clipboard. The desk redacts what it logs; this redacts what it says.
+    const e = new DeskError(
+      'http',
+      'push responded 400',
+      400,
+      'bad_push',
+      "push.devices[0].token: 'ExponentPushToken[0000000000AAAAAAAAAA]' is not an Expo push token",
+    )
+    const said = humanDeskError(e)
+    expect(said).not.toContain('0000000000AAAAAAAAAA')
+    expect(said).toContain('<redacted>')
+    // The reason still gets through — swallowing the detail would leave "the desk answered 400".
+    expect(said).toContain('is not an Expo push token')
+  })
+
+  it('redacts both spellings, and leaves the shape hint alone', () => {
+    // `ExpoPushToken[...]` has been issued alongside the longer spelling since the beginning, so
+    // a redaction that knew only one would leak the other. The bracketed ellipsis at the end of
+    // the desk's message is a statement of what a token LOOKS like — it carries nothing, and it is
+    // the only useful half of that sentence for somebody who pasted the wrong string.
+    const said = redactPushTokens(
+      "'ExpoPushToken[abc-123_x]' and 'ExponentPushToken[QQQ]' are not ExponentPushToken[...]",
+    )
+    expect(said).toBe("'<redacted>' and '<redacted>' are not ExponentPushToken[...]")
   })
 })
 

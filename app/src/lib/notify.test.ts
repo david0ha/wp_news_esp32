@@ -14,10 +14,13 @@ import {
   notifyView,
   parseNotifyPrefs,
   pushPlatform,
+  releaseThisPhone,
   turnOffNotifications,
   turnOnNotifications,
   validateQuiet,
+  type DeskAnswer,
   type NotifyPrefs,
+  type NotifyStep,
   type PushClient,
   type PushDoc,
 } from './notify'
@@ -32,15 +35,17 @@ const OTHER = 'ExponentPushToken[1111111111BBBBBBBBBB]'
 
 const EMPTY: PushDoc = { devices: [] }
 
-/** A desk that takes everything, and records what it was asked. */
-function fakeDesk(): PushClient & { registered: unknown[]; forgotten: string[] } {
+/** A desk that takes everything, holds whatever it was given, and records what it was asked. */
+function fakeDesk(
+  devices: PushDoc['devices'] = [],
+): PushClient & { registered: unknown[]; forgotten: string[] } {
   const registered: unknown[] = []
   const forgotten: string[] = []
   return {
     registered,
     forgotten,
     async pushDevices() {
-      return EMPTY
+      return { devices }
     },
     async registerPushDevice(body) {
       registered.push(body)
@@ -52,11 +57,43 @@ function fakeDesk(): PushClient & { registered: unknown[]; forgotten: string[] }
   }
 }
 
-/** A desk that refuses everything with the code the screen has to tell apart. */
+/** A desk that refuses everything — including the read that would say what became of a write. */
 function refusingDesk(error: unknown): PushClient {
   return {
     async pushDevices() {
       throw error
+    },
+    async registerPushDevice() {
+      throw error
+    },
+    async forgetPushDevice() {
+      throw error
+    },
+  }
+}
+
+/**
+ * A desk whose WRITES fail and whose READS work, which is the shape of every interesting failure
+ * here: a POST or a DELETE the desk may or may not have committed, over a connection that then
+ * came back. `holding` is what a read finds afterwards.
+ */
+function writeRefusingDesk(error: unknown, holding: NotifyPrefs | null): PushClient {
+  return {
+    async pushDevices() {
+      return holding
+        ? {
+            devices: [
+              {
+                token: TOKEN,
+                platform: 'ios',
+                tz: 'Asia/Seoul',
+                prefs: holding.prefs,
+                lead: holding.lead,
+                quiet: holding.quiet,
+              },
+            ],
+          }
+        : EMPTY
     },
     async registerPushDevice() {
       throw error
@@ -232,13 +269,13 @@ describe('notifyView — what the section draws before anything is touched', () 
     ready: true,
     supported: true,
     permission: 'undetermined' as const,
-    registered: false,
+    desk: 'not_holding' as DeskAnswer,
     busy: false,
   }
 
   it('says nothing at all until storage and the OS have answered', () => {
     const v = notifyView({ ...base, loaded: false })
-    expect(v).toEqual({ on: false, disabled: true, note: null, detail: false })
+    expect(v).toEqual({ on: false, disabled: true, note: null, detail: false, retry: false })
   })
 
   it('cannot be turned on without a desk, and says why', () => {
@@ -253,114 +290,193 @@ describe('notifyView — what the section draws before anything is touched', () 
     expect(v.note).toBe('unsupported')
   })
 
-  it('stands blocked when the phone itself refuses notifications', () => {
-    // Nothing this app does can move a denied permission, so the switch is dead rather than
-    // springing back, and the note names the one place that can change it.
-    const v = notifyView({ ...base, permission: 'denied' })
-    expect(v).toEqual({ on: false, disabled: true, note: 'blocked', detail: false })
+  it('claims nothing — not even "off" — while the desk has not answered', () => {
+    // The switch is inert rather than drawn off. Off is a CLAIM, and on every ordinary open of
+    // this screen it is a claim that is wrong for the length of a round trip and then silently
+    // corrects itself, which teaches the owner not to trust it.
+    const v = notifyView({ ...base, desk: 'unknown' })
+    expect(v).toEqual({ on: false, disabled: true, note: null, detail: false, retry: false })
   })
 
-  it('draws the kinds only once this phone is actually registered', () => {
-    expect(notifyView({ ...base, registered: false }).detail).toBe(false)
-    expect(notifyView({ ...base, permission: 'granted', registered: true })).toEqual({
+  it('a desk that could not be asked is its own state, and never "not registered"', () => {
+    // The whole reason `desk` is not a boolean. Folding this into `not_holding` draws a switch
+    // that says off, with no sentence, over a desk that is still holding the token and sending.
+    const v = notifyView({ ...base, desk: 'unreachable' })
+    expect(v.on).toBe(false)
+    expect(v.disabled).toBe(true)
+    expect(v.note).toBe('unreachable')
+    expect(v.retry).toBe(true)
+  })
+
+  it('draws the kinds only once the desk says it is holding this phone', () => {
+    expect(notifyView({ ...base, desk: 'not_holding' }).detail).toBe(false)
+    expect(notifyView({ ...base, permission: 'granted', desk: 'holding' })).toEqual({
       on: true,
       disabled: false,
       note: null,
       detail: true,
+      retry: false,
     })
   })
 
   it('is dead while a call is out, without losing where it stands', () => {
-    const v = notifyView({ ...base, permission: 'granted', registered: true, busy: true })
+    const v = notifyView({ ...base, permission: 'granted', desk: 'holding', busy: true })
     expect(v.on).toBe(true)
     expect(v.disabled).toBe(true)
   })
 
-  it('is blocked before it is registered — a denied phone is not on', () => {
-    // Both facts arrive from different places and the wrong order would draw a lit switch under
-    // a sentence saying notifications are off in the phone's settings.
-    const v = notifyView({ ...base, permission: 'denied', registered: true })
-    expect(v.on).toBe(false)
-    expect(v.note).toBe('blocked')
+  it('a denied phone the desk is NOT holding gets a dead switch', () => {
+    const v = notifyView({ ...base, permission: 'denied', desk: 'not_holding' })
+    expect(v).toEqual({
+      on: false,
+      disabled: true,
+      note: 'blocked',
+      detail: false,
+      retry: false,
+    })
+  })
+
+  it('a denied phone the desk IS holding can still be turned off', () => {
+    // The state this feature is worst at: iOS throws the pushes away without telling Expo, so
+    // `prune_unregistered` never fires and the desk sends into a hole forever. A dead switch here
+    // blocks the only call that ends it, so the switch is LIVE — one way, off — and the note says
+    // both ways out.
+    const v = notifyView({ ...base, permission: 'denied', desk: 'holding' })
+    expect(v.on).toBe(true)
+    expect(v.disabled).toBe(false)
+    expect(v.note).toBe('blocked_registered')
+    // Still no kind switches: the thing to do here is turn it off or fix the phone, not tune it.
+    expect(v.detail).toBe(false)
+  })
+
+  it('a denied phone the desk is holding is still dead while a call is out', () => {
+    const v = notifyView({ ...base, permission: 'denied', desk: 'holding', busy: true })
+    expect(v.on).toBe(true)
+    expect(v.disabled).toBe(true)
   })
 })
 
 describe('decideNotify — the outcome of touching the switch', () => {
   const t = () => strings().settings.notify
 
-  it('1. granted, token fetched, desk took it → on', () => {
+  it('1. granted, token fetched, desk took it → holding', () => {
     const d = decideNotify({ step: 'on', token: TOKEN, prefs: DEFAULT_PREFS })
-    expect(d.on).toBe(true)
+    expect(d.desk).toBe('holding')
     expect(d.tone).toBe('ok')
     expect(d.message).toBe(t().registered)
   })
 
-  it('2. denied → off, a sentence, and the way to fix it', () => {
+  it('2. denied → says nothing about the desk, and offers the way to fix it', () => {
+    // `desk: null` and not `not_holding`: a permission the owner declined is a fact about the
+    // phone. Writing `not_holding` here would erase what the desk actually last said.
     const d = decideNotify({ step: 'denied' })
-    expect(d.on).toBe(false)
+    expect(d.desk).toBe(null)
     expect(d.tone).toBe('error')
     expect(d.message).toBe(t().blocked)
     expect(d.openSettings).toBe(true)
   })
 
-  it('3. granted but the desk refused → off, and it says which half failed', () => {
+  it('3. granted, and the desk answered that it is not holding this phone', () => {
     const d = decideNotify({ step: 'desk_failed', error: new DeskError('unauthorized', 'x', 401) })
-    expect(d.on).toBe(false)
+    expect(d.desk).toBe('not_holding')
     expect(d.tone).toBe('error')
     // The sentence names the desk as the half that failed, and carries the desk's own reason.
     expect(d.message).toContain(strings().errors.desk.unauthorized)
     expect(d.openSettings).toBe(false)
   })
 
-  it('3b. granted but no push token could be issued → off, and it says so', () => {
+  it('3b. granted but no push token could be issued → nothing said about the desk', () => {
     const d = decideNotify({ step: 'token_failed', error: new Error('offline') })
-    expect(d.on).toBe(false)
+    expect(d.desk).toBe(null)
     expect(d.message).toBe(t().tokenFailed)
   })
 
-  it('4. no desk → off, and the switch is not the thing to fix', () => {
+  it('4. no desk → says nothing about the desk it can no longer see', () => {
     const d = decideNotify({ step: 'no_desk' })
-    expect(d.on).toBe(false)
+    expect(d.desk).toBe(null)
     expect(d.message).toBe(t().needsDesk)
     expect(d.openSettings).toBe(false)
   })
 
-  it('a desk that would not forget the phone leaves the switch ON', () => {
+  it('a desk that would not forget the phone is still HOLDING it', () => {
     // The worst outcome available here is a phone that stops showing alerts while the desk goes
-    // on sending them. A switch that reported off over a failed DELETE would draw exactly that.
+    // on sending them. A decision that reported `not_holding` over a failed DELETE draws exactly
+    // that.
     const d = decideNotify({ step: 'forget_failed', error: new DeskError('transport', 'x') })
-    expect(d.on).toBe(true)
+    expect(d.desk).toBe('holding')
     expect(d.tone).toBe('error')
     expect(d.message).toContain(strings().errors.desk.transport)
   })
 
-  it('a forgotten phone is off and says nothing alarming', () => {
+  it('a refused change leaves the desk holding', () => {
+    const d = decideNotify({
+      step: 'change_failed',
+      error: new DeskError('transport', 'x'),
+      held: DEFAULT_PREFS,
+    })
+    expect(d.desk).toBe('holding')
+    expect(d.tone).toBe('error')
+  })
+
+  it('a write whose fate could not be established is `unreachable`, not either answer', () => {
+    const d = decideNotify({ step: 'unsure', error: new DeskError('transport', 'x') })
+    expect(d.desk).toBe('unreachable')
+    expect(d.tone).toBe('error')
+    expect(d.message).toContain(strings().errors.desk.transport)
+  })
+
+  it('a forgotten phone is not holding, and says nothing alarming', () => {
     const d = decideNotify({ step: 'off' })
-    expect(d.on).toBe(false)
+    expect(d.desk).toBe('not_holding')
     expect(d.tone).toBe(null)
     expect(d.message).toBe(null)
   })
 
-  it('a saved change stays on', () => {
+  it('a saved change stays holding', () => {
     const d = decideNotify({ step: 'saved', prefs: DEFAULT_PREFS })
-    expect(d.on).toBe(true)
+    expect(d.desk).toBe('holding')
     expect(d.tone).toBe('ok')
   })
 
-  it('never puts the push token in anything drawn', () => {
-    const steps = [
-      { step: 'on' as const, token: TOKEN, prefs: DEFAULT_PREFS },
-      { step: 'saved' as const, prefs: DEFAULT_PREFS },
-      { step: 'off' as const },
-      { step: 'denied' as const },
-      { step: 'no_desk' as const },
-      { step: 'unsupported' as const },
-      { step: 'token_failed' as const, error: new Error(TOKEN) },
-      { step: 'desk_failed' as const, error: new Error(TOKEN) },
-      { step: 'change_failed' as const, error: new Error(TOKEN) },
-      { step: 'forget_failed' as const, error: new Error(TOKEN) },
+  it('never puts the push token in anything drawn — including the desk’s own refusal', () => {
+    // THE REAL LEAK, and the reason the first version of this test proved nothing: it passed a
+    // bare `Error`, which `humanDeskError` answers with its `unknown` sentence, so the branch that
+    // quotes the desk was never reached. `push._token` refuses a token BY QUOTING IT, and that
+    // text arrives as `detail` — this is what a phone with a stale or malformed token actually
+    // gets back, and it used to be drawn on screen verbatim.
+    const quoted = new DeskError(
+      'http',
+      'push responded 400',
+      400,
+      'bad_push',
+      `push.devices[0].token: '${TOKEN}' is not an Expo push token (ExponentPushToken[...])`,
+    )
+    const steps: NotifyStep[] = [
+      { step: 'on', token: TOKEN, prefs: DEFAULT_PREFS },
+      { step: 'saved', prefs: DEFAULT_PREFS },
+      { step: 'off' },
+      { step: 'denied' },
+      { step: 'no_desk' },
+      { step: 'unsupported' },
+      { step: 'token_failed', error: quoted },
+      { step: 'desk_failed', error: quoted },
+      { step: 'change_failed', error: quoted, held: DEFAULT_PREFS },
+      { step: 'forget_failed', error: quoted },
+      { step: 'unsure', error: quoted },
     ]
-    for (const s of steps) expect(decideNotify(s).message ?? '').not.toContain('ExponentPushToken')
+    // A REAL token, meaning one with an actual payload between the brackets. The literal
+    // `ExponentPushToken[...]` the desk's own refusal ends with is a statement of the SHAPE a
+    // token has — it carries nothing and is worth keeping, so the assertion is about capabilities
+    // rather than about the substring.
+    const real = /Expo(?:nent)?PushToken\[[A-Za-z0-9_-]+\]/
+    for (const s of steps) {
+      const message = decideNotify(s).message ?? ''
+      expect(message).not.toContain(TOKEN)
+      expect(message).not.toMatch(real)
+    }
+    // And the desk's reason still reaches the reader, redacted rather than swallowed — the point
+    // of quoting `detail` at all is that it is the only thing that says what was wrong.
+    expect(decideNotify({ step: 'desk_failed', error: quoted }).message).toContain('<redacted>')
   })
 })
 
@@ -487,9 +603,28 @@ describe('turnOnNotifications', () => {
     expect(desk.registered).toHaveLength(0)
 
     const refused = await turnOnNotifications(
-      deps({ client: refusingDesk(new DeskError('http', 'x', 400)) }),
+      deps({ client: writeRefusingDesk(new DeskError('http', 'x', 400), null) }),
     )
     expect(refused.step).toBe('desk_failed')
+  })
+
+  it('a POST that landed and lost its answer is ON, not a failure', async () => {
+    // The failure this arm exists for: register over a flaky tunnel, be told it failed, and get
+    // notified anyway — with the switch saying off and no way to tell why. The write throwing says
+    // nothing about whether the desk committed it, so the desk is asked.
+    const step = await turnOnNotifications(
+      deps({ client: writeRefusingDesk(new DeskError('transport', 'x'), DEFAULT_PREFS) }),
+    )
+    expect(step).toEqual({ step: 'on', token: TOKEN, prefs: DEFAULT_PREFS })
+    expect(decideNotify(step).desk).toBe('holding')
+  })
+
+  it('a POST whose fate cannot be established is `unsure`, and claims neither', async () => {
+    const step = await turnOnNotifications(
+      deps({ client: refusingDesk(new DeskError('transport', 'x')) }),
+    )
+    expect(step.step).toBe('unsure')
+    expect(decideNotify(step).desk).toBe('unreachable')
   })
 })
 
@@ -501,18 +636,105 @@ describe('turnOffNotifications', () => {
     expect(desk.forgotten).toEqual([TOKEN])
   })
 
-  it('says so when the desk would not be told, and stays on', async () => {
+  it('says so when the desk would not be told, and stays holding', async () => {
+    const step = await turnOffNotifications({
+      client: writeRefusingDesk(new DeskError('transport', 'x'), DEFAULT_PREFS),
+      token: TOKEN,
+    })
+    expect(step.step).toBe('forget_failed')
+    expect(decideNotify(step).desk).toBe('holding')
+  })
+
+  it('a DELETE that landed and lost its answer is off, not a stuck switch', async () => {
+    const step = await turnOffNotifications({
+      client: writeRefusingDesk(new DeskError('transport', 'x'), null),
+      token: TOKEN,
+    })
+    expect(step).toEqual({ step: 'off' })
+  })
+
+  it('a DELETE whose fate cannot be established is `unsure`', async () => {
     const step = await turnOffNotifications({
       client: refusingDesk(new DeskError('transport', 'x')),
       token: TOKEN,
     })
-    expect(step.step).toBe('forget_failed')
-    expect(decideNotify(step).on).toBe(true)
+    expect(step.step).toBe('unsure')
+    expect(decideNotify(step).desk).toBe('unreachable')
   })
 
   it('is off with nothing to delete when there is no desk or no token', async () => {
     expect(await turnOffNotifications({ client: null, token: TOKEN })).toEqual({ step: 'off' })
     expect(await turnOffNotifications({ client: fakeDesk(), token: null })).toEqual({ step: 'off' })
+  })
+})
+
+describe('releaseThisPhone — before the app loses its way back to the desk', () => {
+  it('takes this phone off the desk’s list', async () => {
+    const desk = fakeDesk([
+      {
+        token: TOKEN,
+        platform: 'ios',
+        tz: 'Asia/Seoul',
+        prefs: {},
+        lead: {},
+        quiet: null,
+      },
+    ])
+    expect(await releaseThisPhone({ client: desk, token: async () => TOKEN })).toEqual({
+      step: 'released',
+    })
+    expect(desk.forgotten).toEqual([TOKEN])
+  })
+
+  it('spends no round trip on Expo for a desk holding nobody', async () => {
+    // The common case for anybody who never turned notifications on, and the household read
+    // already settles it: a desk with no phones is not holding this one.
+    let asked = 0
+    const desk = fakeDesk()
+    const step = await releaseThisPhone({
+      client: desk,
+      token: async () => {
+        asked++
+        return TOKEN
+      },
+    })
+    expect(step).toEqual({ step: 'nothing' })
+    expect(asked).toBe(0)
+    expect(desk.forgotten).toHaveLength(0)
+  })
+
+  it('leaves another phone in the household alone', async () => {
+    const desk = fakeDesk([
+      { token: OTHER, platform: 'android', tz: 'UTC', prefs: {}, lead: {}, quiet: null },
+    ])
+    expect(await releaseThisPhone({ client: desk, token: async () => TOKEN })).toEqual({
+      step: 'nothing',
+    })
+    expect(desk.forgotten).toHaveLength(0)
+  })
+
+  it('is `nothing` when there is no desk to ask', async () => {
+    expect(await releaseThisPhone({ client: null, token: async () => TOKEN })).toEqual({
+      step: 'nothing',
+    })
+  })
+
+  it('is `unsure` when it cannot establish that the desk let go', async () => {
+    // The caller must NOT proceed on this. Past it, the desk keeps the token and the app can no
+    // longer authenticate to the desk that has it — there is no way back from inside the product.
+    const step = await releaseThisPhone({
+      client: refusingDesk(new DeskError('transport', 'x')),
+      token: async () => TOKEN,
+    })
+    expect(step.step).toBe('unsure')
+  })
+
+  it('is `unsure` when the DELETE itself fails, rather than claiming release', async () => {
+    const step = await releaseThisPhone({
+      client: writeRefusingDesk(new DeskError('transport', 'x'), DEFAULT_PREFS),
+      token: async () => TOKEN,
+    })
+    expect(step.step).toBe('unsure')
   })
 })
 
@@ -544,20 +766,60 @@ describe('applyNotifyPrefs', () => {
     expect(desk.registered).toHaveLength(2)
   })
 
-  it('a refused change is its own outcome, and leaves the switch ON', async () => {
-    // NOT `desk_failed`. That arm is a registration that did not happen, and its switch is off.
-    // Here the phone is registered and the desk is still sending what it held a moment ago, so a
-    // switch drawn off would tell the owner notifications had stopped while they went on arriving.
+  it('a refused change is its own outcome, and leaves the desk HOLDING', async () => {
+    // NOT `desk_failed`. That arm is a registration that did not happen, and it draws the switch
+    // off. Here the phone is registered and the desk is still sending what it held a moment ago,
+    // so a switch drawn off would tell the owner notifications had stopped while they arrived.
     const step = await applyNotifyPrefs({
-      client: refusingDesk(new DeskError('http', 'x', 400, 'bad_push', 'lead.econ[0]: no')),
+      client: writeRefusingDesk(
+        new DeskError('http', 'x', 400, 'bad_push', 'lead.econ[0]: no'),
+        DEFAULT_PREFS,
+      ),
       token: TOKEN,
       platform: 'ios',
       tz: 'Asia/Seoul',
       prefs: changed,
     })
     expect(step.step).toBe('change_failed')
-    expect(decideNotify(step).on).toBe(true)
+    expect(decideNotify(step).desk).toBe('holding')
     expect(decideNotify(step).tone).toBe('error')
+  })
+
+  it('a refused change carries what the desk turned out to actually hold', async () => {
+    // A POST whose answer was lost may well have landed, and then the desk is on the NEW document
+    // while the screen has reverted to the old one — the two disagreeing silently until something
+    // else writes. The read settles it, and `held` is what the switches are redrawn from.
+    const step = await applyNotifyPrefs({
+      client: writeRefusingDesk(new DeskError('transport', 'x'), changed),
+      token: TOKEN,
+      platform: 'ios',
+      tz: 'Asia/Seoul',
+      prefs: changed,
+    })
+    expect(step).toMatchObject({ step: 'change_failed', held: changed })
+  })
+
+  it('a change against a desk that turns out not to hold this phone is the bigger fact', async () => {
+    const step = await applyNotifyPrefs({
+      client: writeRefusingDesk(new DeskError('transport', 'x'), null),
+      token: TOKEN,
+      platform: 'ios',
+      tz: 'Asia/Seoul',
+      prefs: changed,
+    })
+    expect(step.step).toBe('desk_failed')
+    expect(decideNotify(step).desk).toBe('not_holding')
+  })
+
+  it('a change whose fate cannot be established is `unsure`', async () => {
+    const step = await applyNotifyPrefs({
+      client: refusingDesk(new DeskError('transport', 'x')),
+      token: TOKEN,
+      platform: 'ios',
+      tz: 'Asia/Seoul',
+      prefs: changed,
+    })
+    expect(step.step).toBe('unsure')
   })
 })
 

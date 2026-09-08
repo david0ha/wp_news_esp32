@@ -138,6 +138,15 @@ export const en = {
       needsDesk: 'Add the desk’s address and an operator token above to turn this on.',
       unsupported: 'This phone can’t be sent notifications.',
       blocked: 'This phone doesn’t allow notifications for Claude Post. Turn them on in the phone’s own settings, then come back.',
+      // The same fact over a phone the desk IS holding, and a different sentence because there is
+      // now something to lose by doing nothing: the desk keeps sending into a hole. Two ways out,
+      // and it names both.
+      blockedRegistered:
+        'This phone doesn’t allow notifications for Claude Post, so the desk’s alerts are being thrown away. Turn them on in the phone’s own settings — or turn this off, to stop the desk sending them.',
+      // Said when the app could not find out where it stands, which is not the same as being off.
+      unreachable:
+        'This phone couldn’t ask the desk whether it’s registered, so it can’t say whether alerts are being sent. Check the address and token above.',
+      retry: 'Ask the desk again',
       openSettings: 'Open phone settings',
       tokenFailed: 'The phone allowed notifications, but no push token could be issued. Check the connection and try again.',
       // Both name which half failed, because the two are fixed in completely different places and
@@ -147,6 +156,14 @@ export const en = {
       // was sending before, so the switch stays on and only the change was lost.
       changeFailed: 'The desk wouldn’t take that change, and is still sending what it was. {detail}',
       forgetFailed: 'The desk wasn’t told to stop, so it may keep sending. Try again. {detail}',
+      // Neither "it worked" nor "it didn't" — the honest third answer, for a write that went out
+      // to a desk that then couldn't be asked what became of it.
+      unsure:
+        'The desk didn’t answer, so this phone can’t tell whether that took effect. Try again once the desk is reachable. {detail}',
+      // Said by the Desk section above, before it cuts this phone off from the desk holding it.
+      released: 'This phone was taken off the desk’s list first, so it won’t go on being sent alerts.',
+      releaseUnsure:
+        'This phone couldn’t be taken off the desk’s list, so that desk may keep sending to it — and once this changes, the app can’t reach that desk to stop it. Tap again to go ahead anyway. {detail}',
       // The five switches. `researched` is one switch over four of the book's kinds — corporate
       // actions, court dates, index changes and everything else — so it is named by where the
       // date came from rather than by what it is.
@@ -175,7 +192,6 @@ export const en = {
         from: 'From',
         to: 'To',
         save: 'Save quiet hours',
-        saved: 'Saved.',
         shape: 'Enter a 24-hour time, like 22:00.',
         same: 'Both times are the same, which could mean no quiet hours or every hour. Set them apart.',
       },

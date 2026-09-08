@@ -118,6 +118,24 @@ export class DeskError extends Error {
 }
 
 /**
+ * Every spelling of an Expo push token, wherever one turns up in prose.
+ *
+ * `push.py` holds this rule on the desk and calls it `_redact`; this is the same rule read from the
+ * other end, and it is needed for the same reason. A push token is a capability, and the desk's own
+ * refusals QUOTE what they refused — `push._token`'s message is `'<the token>' is not an Expo push
+ * token`, which arrives in `detail` and would otherwise be drawn on screen and pasted into a bug
+ * report. The desk redacts what it logs; this redacts what it says.
+ *
+ * The pattern is `push.TOKEN_RE`'s, both spellings, unanchored so it finds one inside a sentence.
+ */
+const PUSH_TOKEN = /Expo(?:nent)?PushToken\[[A-Za-z0-9_-]*\]/g
+
+/** `<redacted>`, the same word the desk writes, so a bug report reads alike from both ends. */
+export function redactPushTokens(text: string): string {
+  return text.replace(PUSH_TOKEN, '<redacted>')
+}
+
+/**
  * One sentence per failure, in the language the app is drawn in.
  *
  * The `http` arm is the only one that quotes the desk. `detail` is prose the desk wrote for
@@ -125,6 +143,12 @@ export class DeskError extends Error {
  * desk will not take — it is the only thing that says what was wrong with it. Passing it through
  * inside a catalogue sentence is better than swallowing it: the alternative is "the desk answered
  * 400", which sends the operator to read a server log they may not be able to reach.
+ *
+ * It goes through `redactPushTokens` on the way, and that is not belt-and-braces: `/api/push/devices`
+ * refuses a token BY QUOTING IT, so the one sentence in this app that exists to pass the desk's own
+ * words through is also the one place a capability can reach the screen. The redaction lives here
+ * rather than at the notification call site because `detail` is the desk's prose on every route,
+ * and nothing drawn anywhere in this app ever needs to show a push token.
  */
 export function humanDeskError(e: unknown): string {
   const m = strings().errors.desk
@@ -135,7 +159,7 @@ export function humanDeskError(e: unknown): string {
       case 'transport':
         return m.transport
       case 'http':
-        if (e.detail) return fill(m.refused, { detail: e.detail })
+        if (e.detail) return fill(m.refused, { detail: redactPushTokens(e.detail) })
         return e.status === undefined ? m.http : fill(m.httpStatus, { status: String(e.status) })
       case 'bad_json':
         return m.badJson

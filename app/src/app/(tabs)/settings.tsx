@@ -23,6 +23,7 @@ import { humanError, type DeviceInfo, type DeviceState } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
 import {
   clearNewsUrlPending,
+  deskScheme,
   getDeskBaseUrl,
   getDeviceBaseUrl,
   getNewsUrl,
@@ -51,13 +52,16 @@ import {
   PUSH_KINDS,
   pushPlatform,
   readPermission,
+  releaseThisPhone,
   turnOffNotifications,
   turnOnNotifications,
   validateQuiet,
+  type DeskAnswer,
   type Lead,
   type NotifyPrefs,
   type NotifyStep,
   type PermissionState,
+  type ReleaseStep,
 } from '../../lib/notify'
 import {
   decideNewsUrlSave,
@@ -614,6 +618,11 @@ function DeskSection({
   const [lang, setLang] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [langMsg, setLangMsg] = useState<Toned | null>(null)
+  // The owner has been told this phone could not be taken off the desk's list, and the next tap of
+  // either control goes ahead regardless. It is deliberately NOT reset by anything: once somebody
+  // has read that sentence they have the fact, and re-asking an unreachable desk on every tap only
+  // makes the button feel broken.
+  const [askedTwice, setAskedTwice] = useState(false)
 
   // Whether this section is still on screen, for the one handler that awaits the NETWORK. The
   // effects below have their own `active` flags; a handler has no cleanup to hang one on, and
@@ -666,9 +675,64 @@ function DeskSection({
     }
   }, [address, token])
 
+  /**
+   * TAKE THIS PHONE OFF THE DESK'S LIST BEFORE CUTTING THE APP OFF FROM THAT DESK.
+   *
+   * Both controls below sever the phone from the desk it is registered with — forgetting the token
+   * removes the credential, changing the address points the app somewhere else — and both do it in
+   * the direction that cannot be undone. The desk goes on holding the push token and goes on
+   * sending; the app can no longer authenticate to it; the DELETE that would stop it is unreachable
+   * from every screen the app has. There is no recovery inside the product, so the fix is to make
+   * the orphan impossible rather than survivable, and that means going first rather than warning
+   * afterwards.
+   *
+   * Answers whether the caller may proceed. A `released` or a `nothing` is a yes. An `unsure` is a
+   * no THE FIRST TIME: it says what could not be established and what a second tap will do, and the
+   * second tap goes ahead — because the owner may be forgetting the token of a desk that no longer
+   * exists, and an app that refused outright would trap them with a credential they cannot remove.
+   * The choice is theirs; being told is not optional.
+   */
+  const releaseFirst = async (): Promise<ReleaseStep> => {
+    // The second tap. The owner has read what could not be established and has decided; asking the
+    // same unreachable desk again before honouring that would be theatre.
+    if (askedTwice) return { step: 'nothing' }
+    const step = await releaseThisPhone({
+      client: address && token ? createDeskClient({ baseUrl: address, token }) : null,
+      token: fetchPushToken,
+    })
+    if (step.step === 'unsure') setAskedTwice(true)
+    return step
+  }
+
   const applyAddress = async () => {
     setAddressMsg(null)
-    if (!(await saveDeskBaseUrl(addressDraft))) {
+    setTokenMsg(null)
+    // Normalised HERE rather than by letting `saveDeskBaseUrl` do it, because the address must not
+    // be written until the old desk has let this phone go — a save that landed and a release that
+    // did not would leave storage pointing at the new desk while the app's state still described
+    // the old one. `deskScheme` then `normalizeBaseUrl` is exactly what the store does.
+    const norm = normalizeBaseUrl(deskScheme(addressDraft))
+    if (!norm.ok || !norm.value) {
+      setAddressMsg({ tone: 'error', message: s.settings.desk.addressInvalid })
+      return
+    }
+    const next = norm.value
+    // Only a CHANGE of desk orphans anything. Re-saving the address already in force is a no-op
+    // and must not cost this phone its registration.
+    if (next !== address) {
+      const release = await releaseFirst()
+      if (release.step === 'unsure') {
+        setTokenMsg({
+          tone: 'error',
+          message: fill(s.settings.notify.releaseUnsure, { detail: humanDeskError(release.error) }),
+        })
+        return
+      }
+      if (release.step === 'released') {
+        setTokenMsg({ tone: 'info', message: s.settings.notify.released })
+      }
+    }
+    if (!(await saveDeskBaseUrl(next))) {
       setAddressMsg({ tone: 'error', message: s.settings.desk.addressInvalid })
       return
     }
@@ -703,11 +767,27 @@ function DeskSection({
     setTokenMsg({ tone: 'ok', message: s.settings.desk.tokenSaved })
   }
 
+  // Forgetting the token is the other way to orphan a registration, and the worse one: it removes
+  // the only credential that could ever delete the device, so the desk is left sending to a phone
+  // the app can no longer speak for. The release goes first, and an `unsure` stops the first tap.
   const forgetToken = async () => {
+    setTokenMsg(null)
+    const release = await releaseFirst()
+    if (release.step === 'unsure') {
+      setTokenMsg({
+        tone: 'error',
+        message: fill(s.settings.notify.releaseUnsure, { detail: humanDeskError(release.error) }),
+      })
+      return
+    }
     await clearDeskToken()
     onToken(null)
     setTokenDraft('')
-    setTokenMsg(null)
+    setTokenMsg(
+      release.step === 'released'
+        ? { tone: 'info', message: s.settings.notify.released }
+        : null,
+    )
     setLangMsg(null)
   }
 
@@ -867,8 +947,19 @@ function NotifySection({
   const [permission, setPermission] = useState<PermissionState | null>(null)
   // The Expo push token for this install. In memory, for this screen's life. See above.
   const [pushToken, setPushToken] = useState<string | null>(null)
-  // What the desk holds for this phone, or `null` for a phone it is not holding.
+  /**
+   * WHAT THE DESK HAS SAID, and the `prefs` beside it are only meaningful when it says `holding`.
+   *
+   * Two fields rather than `prefs === null`, which is the whole of this round's worst finding: a
+   * single nullable document cannot tell "the desk does not hold this phone" from "the desk could
+   * not be asked", so the discovery `catch` wrote the first when it meant the second — a switch
+   * drawn OFF, with no sentence, over a desk still sending.
+   */
+  const [desk, setDesk] = useState<DeskAnswer>('unknown')
   const [prefs, setPrefs] = useState<NotifyPrefs | null>(null)
+  // Bumped by the retry button, to ask the desk again without leaving the screen. This is a
+  // persistent tab: it mounts once, so without this an `unreachable` sticks for the session.
+  const [asks, setAsks] = useState(0)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<Toned | null>(null)
   const [offerSettings, setOfferSettings] = useState(false)
@@ -917,34 +1008,48 @@ function NotifySection({
     }
   }, [])
 
-  // Whether the DESK is holding this phone, which is the only thing that decides where the switch
-  // stands. It can only be asked once permission is granted — a token cannot be issued without it —
-  // so a phone that has never allowed notifications draws as off without a single call.
-  //
-  // Every failure here is silent and reads as "not registered". That is the honest draw: what
-  // failed is the app's attempt to find out, and the alternative is an error sentence about a
-  // desk the owner has not asked anything of yet.
+  /**
+   * Whether the DESK is holding this phone — the only thing that decides where the switch stands.
+   *
+   * IT RUNS WHATEVER THE PERMISSION IS, and that is deliberate rather than thorough. A phone that
+   * registered and then revoked notifications in the OS is the state this feature is worst at: iOS
+   * throws every push away without telling Expo, so nothing ever prunes the device and the desk
+   * sends forever. The only way out is the DELETE, the DELETE needs the push token, and the token
+   * is reachable — APNs registration is not gated on the alert permission, and neither is FCM's.
+   * Skipping the read for a denied phone was what made that state permanent.
+   *
+   * A FAILURE HERE IS `unreachable` AND NOT `not_holding`. They were the same value until this
+   * round, and the difference is the difference between a switch that says "I could not find out"
+   * and one that says "you are not registered" to somebody whose phone is buzzing.
+   */
   useEffect(() => {
-    if (!client || permission !== 'granted') {
+    if (!client) {
+      setDesk('unknown')
       setPrefs(null)
       return
     }
     let active = true
+    setDesk('unknown')
     void (async () => {
       try {
         const mine = await fetchPushToken()
         const doc = await client.pushDevices()
         if (!active) return
+        const held = findRegistration(doc, mine)
         setPushToken(mine)
-        setPrefs(findRegistration(doc, mine))
+        setPrefs(held)
+        setDesk(held ? 'holding' : 'not_holding')
       } catch {
-        if (active) setPrefs(null)
+        // Not logged: the thrown message can be the desk quoting the token back at us.
+        if (!active) return
+        setPrefs(null)
+        setDesk('unreachable')
       }
     })()
     return () => {
       active = false
     }
-  }, [client, permission])
+  }, [client, asks])
 
   // The fields follow whatever window is actually IN FORCE, so opening the section on a phone with
   // quiet hours set shows those hours rather than the defaults.
@@ -960,10 +1065,21 @@ function NotifySection({
     }
   }, [prefs?.quiet?.from, prefs?.quiet?.to])
 
-  // One place where an outcome becomes what the screen holds. Every handler ends here, so there is
-  // no arm of this feature whose reporting lives in a branch of JSX.
+  /**
+   * One place where an outcome becomes what the screen holds. Every handler ends here, so there is
+   * no arm of this feature whose reporting lives in a branch of JSX.
+   *
+   * `decision.desk` IS THE SWITCH. The screen used to keep its own reckoning of where the switch
+   * stood and let `decideNotify` return a `boolean on` that nothing read — so the tests asserted
+   * one thing and the product did another, and the two had already drifted. Now there is one
+   * answer: the decision says what the step established about the desk, `null` means it
+   * established nothing, and the last thing the desk actually said stands.
+   */
   const settle = useCallback((step: NotifyStep) => {
     const decision = decideNotify(step)
+    if (decision.desk !== null) setDesk(decision.desk)
+    // The documents that travel with the answer. `change_failed` carries what the desk turned out
+    // to be holding, which may not be either the old document or the new one.
     if (step.step === 'on') {
       setPushToken(step.token)
       setPrefs(step.prefs)
@@ -972,11 +1088,11 @@ function NotifySection({
       setPrefs(null)
     } else if (step.step === 'saved') {
       setPrefs(step.prefs)
+    } else if (step.step === 'change_failed') {
+      setPrefs(step.held)
     } else if (step.step === 'denied') {
       setPermission('denied')
     }
-    // `change_failed` and `forget_failed` deliberately touch nothing: the desk is holding what it
-    // was holding, and the screen has to go on saying so.
     setMsg(decision.tone && decision.message ? { tone: decision.tone, message: decision.message } : null)
     setOfferSettings(decision.openSettings)
   }, [])
@@ -1014,6 +1130,9 @@ function NotifySection({
     const step = await applyNotifyPrefs({ client, token: pushToken, platform, tz, prefs: next })
     if (!alive.current) return
     setBusy(false)
+    // Back to the old document first, then `settle` — which overwrites it again from `held` on a
+    // `change_failed`, because a POST whose answer was lost may well have landed and the desk's
+    // own answer beats both guesses.
     if (step.step !== 'saved') setPrefs(previous)
     settle(step)
   }
@@ -1023,7 +1142,7 @@ function NotifySection({
     ready: Boolean(address) && Boolean(token),
     supported: platform !== null,
     permission,
-    registered: prefs !== null,
+    desk,
     busy,
   })
   const note =
@@ -1033,7 +1152,11 @@ function NotifySection({
         ? t.unsupported
         : view.note === 'blocked'
           ? t.blocked
-          : null
+          : view.note === 'blocked_registered'
+            ? t.blockedRegistered
+            : view.note === 'unreachable'
+              ? t.unreachable
+              : null
 
   const saveQuiet = async () => {
     setQuietMsg(null)
@@ -1096,6 +1219,14 @@ function NotifySection({
           variant="ghost"
           onPress={() => void Linking.openSettings()}
         />
+      ) : null}
+      {/*
+        Offered only where asking again IS the remedy — a desk that did not answer. Settings is a
+        persistent tab and mounts once, so without a control the owner cannot get the section to
+        try again without restarting the app, and an `unreachable` would stand for the session.
+      */}
+      {view.retry ? (
+        <Button label={t.retry} variant="ghost" onPress={() => setAsks((n) => n + 1)} />
       ) : null}
 
       {view.detail && prefs ? (

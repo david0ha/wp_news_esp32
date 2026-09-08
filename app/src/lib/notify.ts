@@ -268,7 +268,44 @@ export function deviceZone(resolved: string | undefined): string {
 // What the section draws
 // ---------------------------------------------------------------------------
 
-export type NotifyNote = 'needs_desk' | 'unsupported' | 'blocked' | null
+/**
+ * WHAT THE DESK HAS SAID ABOUT THIS PHONE — four answers, and the third is the one this feature
+ * kept getting wrong.
+ *
+ * It started life as `registered: boolean`, and a boolean cannot hold "the desk did not answer".
+ * Everything that could not reach the desk therefore had to pick one of the two, and the reassuring
+ * pick — not registered, switch off — is the dangerous one: the desk goes on holding the token and
+ * goes on sending, and the owner is looking at a switch that says it is off. That is the one
+ * failure in this feature nobody can diagnose from inside the app, and it arrived by a `catch` that
+ * meant "could not ask" writing down "is not holding".
+ *
+ * So: `unknown` is before the asking, `unreachable` is after an asking that failed, and neither of
+ * them is `not_holding`. Nothing may collapse the two ends into the middle.
+ */
+export type DeskAnswer =
+  /** Not asked yet — no permission, no desk, or the call is still out. Nothing is claimed. */
+  | 'unknown'
+  /** The desk answered and holds this phone's token. */
+  | 'holding'
+  /** The desk answered and does not hold it. */
+  | 'not_holding'
+  /** The desk was asked and could not say. THIS IS NOT `not_holding`. */
+  | 'unreachable'
+
+export type NotifyNote =
+  | 'needs_desk'
+  | 'unsupported'
+  /** Notifications are off in the phone's own settings, and the desk is not holding this phone. */
+  | 'blocked'
+  /**
+   * The same, over a phone the desk IS holding — a different sentence because it is a different
+   * situation. iOS drops these pushes without telling Expo, so nothing prunes the device and the
+   * desk sends into a hole forever. The owner has two ways out and the note names both.
+   */
+  | 'blocked_registered'
+  /** The desk could not be asked, so this section cannot say where it stands. */
+  | 'unreachable'
+  | null
 
 export interface NotifyView {
   /** Where the master switch stands. */
@@ -279,22 +316,26 @@ export interface NotifyView {
   note: NotifyNote
   /** The kinds, their lead times and quiet hours are drawn. */
   detail: boolean
+  /** Offer the button that asks the desk again. Only where asking again is the remedy. */
+  retry: boolean
 }
 
 /**
- * The master switch and what stands under it, from the four facts that decide it.
+ * The master switch and what stands under it, from the five facts that decide it.
  *
  * The order of the arms is the whole function. `loaded` first, because every sentence below is a
  * claim about a phone that has not answered yet — the same rule the Board card's "No board set up
- * on this phone." follows. Then the two facts nothing on this screen can change: a build that
- * cannot hold a push token, and a phone whose own settings refuse notifications. Then the desk,
- * which the section above CAN fix. `registered` is last because it is the only one that is a
- * statement about the desk's document rather than about this phone.
+ * on this phone." follows. Then the build, then the desk's ADDRESS, because without one there is
+ * nothing to ask and no state to be in. Only then what the desk said, and only then the phone's own
+ * permission — which is last because what it means depends entirely on the answer above it.
  *
- * A DENIED PHONE GETS A DEAD SWITCH, not one that springs back. Nothing this app does can move a
- * denied permission — iOS gives one prompt and it is spent — so a live switch there is an offer to
- * do something that cannot happen, and the second tap teaches the owner the app is broken. The
- * note names the one place that can change it, and the section draws the button that opens it.
+ * `permission === 'denied'` MUST STILL ALLOW TURNING IT OFF. A phone that registered and then
+ * revoked notifications in the OS is the worst standing state this feature has: iOS discards every
+ * push silently, Expo never answers `DeviceNotRegistered`, `prune_unregistered` never fires, and
+ * the entry sits on the desk being sent to forever. A dead switch there blocks the only call that
+ * can end it. So a denied phone the desk is holding gets a LIVE switch that can only go one way,
+ * and a denied phone the desk is not holding gets the dead one — because turning it on is the thing
+ * that genuinely cannot happen.
  */
 export function notifyView(input: {
   /** Storage and the OS have both answered. */
@@ -304,23 +345,34 @@ export function notifyView(input: {
   /** This build can be issued a push token. */
   supported: boolean
   permission: PermissionState | null
-  /** The desk holds this phone's token. */
-  registered: boolean
+  /** What the desk has said about this phone. Never a boolean — see `DeskAnswer`. */
+  desk: DeskAnswer
   /** A call is out. */
   busy: boolean
 }): NotifyView {
-  if (!input.loaded) return { on: false, disabled: true, note: null, detail: false }
-  if (!input.supported) return { on: false, disabled: true, note: 'unsupported', detail: false }
+  const dead = { on: false, disabled: true, detail: false, retry: false }
+  if (!input.loaded) return { ...dead, note: null }
+  if (!input.supported) return { ...dead, note: 'unsupported' }
+  if (!input.ready) return { ...dead, note: 'needs_desk' }
+  // Nothing is known about the desk yet, so nothing is said about it. The switch is inert rather
+  // than drawn off: off is a claim, and on an ordinary open of this screen it is a claim that is
+  // wrong for the length of a round trip and then silently corrects itself.
+  if (input.desk === 'unknown') return { ...dead, note: null }
+  if (input.desk === 'unreachable') return { ...dead, note: 'unreachable', retry: true }
+
+  const holding = input.desk === 'holding'
   if (input.permission === 'denied') {
-    return { on: false, disabled: true, note: 'blocked', detail: false }
+    return {
+      on: holding,
+      // Live only when there is something to turn OFF. Turning it on is what a denied phone
+      // genuinely cannot do.
+      disabled: !holding || input.busy,
+      note: holding ? 'blocked_registered' : 'blocked',
+      detail: false,
+      retry: false,
+    }
   }
-  if (!input.ready) return { on: false, disabled: true, note: 'needs_desk', detail: false }
-  return {
-    on: input.registered,
-    disabled: input.busy,
-    note: null,
-    detail: input.registered,
-  }
+  return { on: holding, disabled: input.busy, note: null, detail: holding, retry: false }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,27 +393,47 @@ export type NotifyStep =
   | { step: 'denied' }
   /** Allowed, but Expo would not issue a token. Half one of two, and the half that can be retried. */
   | { step: 'token_failed'; error: unknown }
-  /** Allowed, token in hand, and the desk refused the REGISTRATION. Half two. */
+  /**
+   * The write failed AND a read afterwards established that the desk is not holding this phone.
+   * The second half is what makes this arm safe to draw as off — see `settleWrite`.
+   */
   | { step: 'desk_failed'; error: unknown }
   /**
    * The desk refused a preference CHANGE, which is a different fact about the same call: the phone
-   * is still registered and the desk is still holding — and sending on — whatever it held before.
-   * Sharing `desk_failed`'s arm would draw a registered phone's switch as off, and the owner would
-   * be told notifications are off while they went on arriving.
+   * is still registered and the desk is still holding — and sending on — something. `held` is what
+   * the desk turned out to actually have, so the switches can be redrawn as the truth rather than
+   * as the caller's guess: a POST whose answer was lost may well have landed.
    */
-  | { step: 'change_failed'; error: unknown }
+  | { step: 'change_failed'; error: unknown; held: NotifyPrefs }
   /** Registered. The token is here for the caller to hold in state — never for a sentence. */
   | { step: 'on'; token: string; prefs: NotifyPrefs }
   /** The desk no longer holds this phone. */
   | { step: 'off' }
-  /** The desk was not told to stop, and therefore has not stopped. */
+  /** The desk was not told to stop, and a read afterwards confirmed it is still holding. */
   | { step: 'forget_failed'; error: unknown }
   /** A preference change the desk took. */
   | { step: 'saved'; prefs: NotifyPrefs }
+  /**
+   * A WRITE WENT OUT AND THE DESK CANNOT BE ASKED WHAT BECAME OF IT.
+   *
+   * The arm this feature was missing, and the reason it was missing is worth keeping: every failed
+   * write used to conclude the write had not happened, which is not a thing a client can know. A
+   * POST the desk committed and answered over a tunnel that dropped is indistinguishable, from
+   * here, from one it never received — and the two have opposite consequences, because the first
+   * means the desk is now sending. So this says so, and says nothing else.
+   */
+  | { step: 'unsure'; error: unknown }
 
 export interface NotifyDecision {
-  /** Where the master switch stands afterwards. */
-  on: boolean
+  /**
+   * What this step establishes about the desk, or `null` when it establishes nothing.
+   *
+   * LOAD-BEARING: `settle` applies it and `notifyView` reads it, so this is the value that puts the
+   * switch where it goes. It was a `boolean on` that the screen ignored in favour of its own
+   * reckoning, which is worse than having no field at all — the tests asserted a property the
+   * product did not read, and the two had already drifted apart by the time anybody looked.
+   */
+  desk: DeskAnswer | null
   /** The voice the sentence is said in, or none at all. */
   tone: 'ok' | 'info' | 'error' | null
   message: string | null
@@ -370,17 +442,23 @@ export interface NotifyDecision {
 }
 
 /**
- * What a touch of the switch came to.
+ * What a touch of the switch came to, and what it establishes about the desk.
  *
- * TWO ARMS ARE THE POINT OF THIS FUNCTION, and both of them are failures that a switch springing
- * back would draw as the same shrug:
+ * THE ARMS THAT ARE THE POINT OF THIS FUNCTION are the ones where a switch that simply sprang back
+ * would draw two opposite situations as the same shrug:
  *
- *   - `desk_failed` — the phone said yes and the desk said no. The owner is told which half
- *     failed, with the desk's own reason, because "notifications didn't turn on" sends somebody to
- *     the phone's settings to fix a token that is perfectly fine.
- *   - `forget_failed` — the switch STAYS ON. The desk still holds this phone and will still send
- *     to it, and a switch reporting off over that is the one state in this feature with no way out:
- *     alerts keep arriving from a feature the owner has been shown is off.
+ *   - `desk_failed` — the phone said yes and the desk said no, AND a read afterwards confirmed the
+ *     desk is not holding this phone. Only that second half makes `not_holding` safe to write down.
+ *   - `change_failed` and `forget_failed` — `holding`. The desk still has this phone and is still
+ *     sending to it, and a switch reporting off over either is the one state in this feature with
+ *     no way out: alerts keep arriving from something the owner has been shown is off.
+ *   - `unsure` — `unreachable`, which is neither. Nothing is claimed, because nothing is known.
+ *
+ * Three arms establish NOTHING about the desk and say so with `desk: null`. `denied` is about the
+ * phone; `unsupported` about the build; `token_failed` never sent anything. Writing `not_holding`
+ * for any of them would be this function inventing a fact about a document it never read — and for
+ * `no_desk`, which can only be reached with the address gone, it would overwrite the last thing the
+ * desk actually said with a guess.
  */
 export function decideNotify(step: NotifyStep): NotifyDecision {
   // The catalogue is read inside the call, like every other sentence table in `lib/`: this module
@@ -388,45 +466,50 @@ export function decideNotify(step: NotifyStep): NotifyDecision {
   const m = strings().settings.notify
   switch (step.step) {
     case 'on':
-      return { on: true, tone: 'ok', message: m.registered, openSettings: false }
+      return { desk: 'holding', tone: 'ok', message: m.registered, openSettings: false }
     case 'saved':
-      return { on: true, tone: 'ok', message: m.saved, openSettings: false }
+      return { desk: 'holding', tone: 'ok', message: m.saved, openSettings: false }
     case 'off':
       // Nothing to say. The switch moving is the whole of the news, and a green "turned off" under
       // it would be the app congratulating somebody for leaving.
-      return { on: false, tone: null, message: null, openSettings: false }
+      return { desk: 'not_holding', tone: null, message: null, openSettings: false }
     case 'no_desk':
-      return { on: false, tone: 'info', message: m.needsDesk, openSettings: false }
+      return { desk: null, tone: 'info', message: m.needsDesk, openSettings: false }
     case 'unsupported':
-      return { on: false, tone: 'info', message: m.unsupported, openSettings: false }
+      return { desk: null, tone: 'info', message: m.unsupported, openSettings: false }
     case 'denied':
-      return { on: false, tone: 'error', message: m.blocked, openSettings: true }
+      return { desk: null, tone: 'error', message: m.blocked, openSettings: true }
     case 'token_failed':
       // Deliberately NOT `humanDeskError`: nothing here reached the desk. Expo's own message is
       // the one thing that could go in the sentence and it is a library's prose about a token,
       // which is exactly the string this feature must not draw.
-      return { on: false, tone: 'error', message: m.tokenFailed, openSettings: false }
+      return { desk: null, tone: 'error', message: m.tokenFailed, openSettings: false }
     case 'desk_failed':
       return {
-        on: false,
+        desk: 'not_holding',
         tone: 'error',
         message: fill(m.deskFailed, { detail: humanDeskError(step.error) }),
         openSettings: false,
       }
     case 'change_failed':
-      // ON, because the phone is still registered. Only the change was refused, and the desk is
-      // still sending exactly what it was sending a moment ago.
       return {
-        on: true,
+        desk: 'holding',
         tone: 'error',
         message: fill(m.changeFailed, { detail: humanDeskError(step.error) }),
         openSettings: false,
       }
     case 'forget_failed':
       return {
-        on: true,
+        desk: 'holding',
         tone: 'error',
         message: fill(m.forgetFailed, { detail: humanDeskError(step.error) }),
+        openSettings: false,
+      }
+    case 'unsure':
+      return {
+        desk: 'unreachable',
+        tone: 'error',
+        message: fill(m.unsure, { detail: humanDeskError(step.error) }),
         openSettings: false,
       }
   }
@@ -435,6 +518,30 @@ export function decideNotify(step: NotifyStep): NotifyDecision {
 // ---------------------------------------------------------------------------
 // Doing it
 // ---------------------------------------------------------------------------
+
+/**
+ * What the desk ACTUALLY holds for this phone — the read that turns a failed write into a fact.
+ *
+ * A write that throws says nothing about whether it happened. A POST the desk committed, answered,
+ * and whose answer was lost on the way back through a tunnel is indistinguishable from a POST the
+ * desk never received; a DELETE is the same. The two have opposite consequences — one leaves the
+ * desk sending — so the honest move after any failed write is to go and look.
+ *
+ * Three answers and not two, which is the same shape as `DeskAnswer` and for the same reason:
+ * `undefined` is "the desk could not be asked", and it must never be read as `null`.
+ */
+async function heldByDesk(
+  client: PushClient,
+  token: string,
+): Promise<NotifyPrefs | null | undefined> {
+  try {
+    return findRegistration(await client.pushDevices(), token)
+  } catch {
+    // Not logged, and not rethrown. The caller already has the write's own error, which is the one
+    // worth showing; this read failing only means the caller cannot improve on it.
+    return undefined
+  }
+}
 
 export interface EnableDeps {
   /** The desk, or `null` when this phone holds no address and no operator token. */
@@ -493,6 +600,12 @@ export async function turnOnNotifications(deps: EnableDeps): Promise<NotifyStep>
   try {
     await deps.client.registerPushDevice(deviceBody(token, deps.platform, deps.tz, deps.prefs))
   } catch (error) {
+    // The POST failed, which is not the same as the REGISTRATION failing. Go and look before
+    // telling the owner nothing was registered: a request the desk committed and answered over a
+    // connection that dropped leaves them told the switch is off while the alerts arrive.
+    const held = await heldByDesk(deps.client, token)
+    if (held) return { step: 'on', token, prefs: held }
+    if (held === undefined) return { step: 'unsure', error }
     return { step: 'desk_failed', error }
   }
   return { step: 'on', token, prefs: deps.prefs }
@@ -517,9 +630,55 @@ export async function turnOffNotifications(deps: {
   try {
     await deps.client.forgetPushDevice(deps.token)
   } catch (error) {
+    // The same look as `turnOnNotifications`, in the direction that matters more: if the DELETE
+    // landed and only its answer was lost, saying it failed leaves a switch stuck on over a desk
+    // that has already stopped — and the owner's next act is to tap it again, at a desk that will
+    // answer 404, which this client reads as success anyway.
+    const held = await heldByDesk(deps.client, deps.token)
+    if (held === null) return { step: 'off' }
+    if (held === undefined) return { step: 'unsure', error }
     return { step: 'forget_failed', error }
   }
   return { step: 'off' }
+}
+
+/**
+ * Take this phone off the desk's list before the app loses its ability to reach that desk.
+ *
+ * The one operation here that is not driven by the switch, and it exists because the switch is not
+ * the only way to sever the phone from the desk: forgetting the operator token or pointing the app
+ * at a different desk does it too, and does it in the direction that cannot be undone. The desk
+ * goes on holding the token and goes on sending; the app can no longer authenticate to the desk
+ * that has it, so the DELETE that would stop it is unreachable from any screen. `Settings` calls
+ * this BEFORE either act rather than warning about it afterwards, because afterwards is too late.
+ *
+ * THE HOUSEHOLD IS READ FIRST and the Expo token fetched only if it is non-empty. A desk holding no
+ * phones cannot be holding this one, and that is the common case for somebody who never turned
+ * notifications on — no reason to spend a round trip to Expo on it.
+ */
+export type ReleaseStep =
+  /** There was nothing registered to take off — or no desk to take it off. */
+  | { step: 'nothing' }
+  /** The desk no longer holds this phone. */
+  | { step: 'released' }
+  /** It could not be established that the desk has let go. The caller must not proceed silently. */
+  | { step: 'unsure'; error: unknown }
+
+export async function releaseThisPhone(deps: {
+  client: PushClient | null
+  token: () => Promise<string>
+}): Promise<ReleaseStep> {
+  if (!deps.client) return { step: 'nothing' }
+  try {
+    const doc = await deps.client.pushDevices()
+    if (doc.devices.length === 0) return { step: 'nothing' }
+    const mine = await deps.token()
+    if (findRegistration(doc, mine) === null) return { step: 'nothing' }
+    await deps.client.forgetPushDevice(mine)
+    return { step: 'released' }
+  } catch (error) {
+    return { step: 'unsure', error }
+  }
 }
 
 /**
@@ -544,7 +703,16 @@ export async function applyNotifyPrefs(deps: {
       deviceBody(deps.token, deps.platform, deps.tz, deps.prefs),
     )
   } catch (error) {
-    return { step: 'change_failed', error }
+    // And once more, for the case that is easiest to get wrong because it looks harmless: a chip
+    // tap whose POST landed and whose answer was lost leaves the desk on the NEW document while
+    // the screen reverts to the old one, and the two then disagree silently until something else
+    // writes. So the answer carries what the desk turned out to actually hold, and the switches
+    // are redrawn from that rather than from the caller's guess.
+    const held = await heldByDesk(deps.client, deps.token)
+    if (held === undefined) return { step: 'unsure', error }
+    // The desk is not holding this phone at all, which is a bigger fact than a refused change.
+    if (held === null) return { step: 'desk_failed', error }
+    return { step: 'change_failed', error, held }
   }
   return { step: 'saved', prefs: deps.prefs }
 }
