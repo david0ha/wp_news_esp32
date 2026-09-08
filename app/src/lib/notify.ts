@@ -682,6 +682,82 @@ export async function releaseThisPhone(deps: {
 }
 
 /**
+ * WHICH control is severing the phone from the desk. Two of them do it and they are not
+ * interchangeable: "Forget token" removes the credential, "Save address" points the app elsewhere.
+ */
+export type ReleaseControl = 'token' | 'address'
+
+/**
+ * Whether to go and ask the desk at all, before the caller spends up to three round trips on it.
+ *
+ * A STANDING WARNING BELONGS TO ONE CONTROL AND NOT TO THE SECTION. This was a boolean shared by
+ * both, never reset, in a tab that mounts once — so a warning raised by a failed "Forget token"
+ * was silently spent by a later "Save address": no read, no DELETE, no message, and the address
+ * overwritten. That is the orphan the warning exists to prevent, created by the warning itself,
+ * and made unrecoverable in the same act because the DELETE needs the address that was just
+ * replaced. The owner had been warned once, about a different control, before the network came
+ * back.
+ *
+ * The caller resets `warned` whenever the desk's address or token changes, for the same reason
+ * from the other direction: a failure to reach one desk says nothing about the next.
+ */
+export function shouldAttemptRelease(
+  control: ReleaseControl,
+  warned: ReleaseControl | null,
+): boolean {
+  return warned !== control
+}
+
+export interface ReleaseDecision {
+  /** The caller may go ahead with the act that severs this phone from the desk. */
+  proceed: boolean
+  tone: 'ok' | 'info' | 'error' | null
+  message: string | null
+  /** The control a warning now stands for, or `null` to clear it. Always assigned, never merged. */
+  warned: ReleaseControl | null
+}
+
+/**
+ * What the caller does, and what it says, in ONE place.
+ *
+ * One function rather than a branch inside each of the two handlers, because the bug this replaces
+ * was precisely a case that fell through both of them: `nothing` matched neither the `unsure` arm
+ * nor the `released` arm, so the address was saved under a cheerful green "Saved." with not a word
+ * about the notifications it had just orphaned. Two callers re-deriving the same four outcomes is
+ * two chances to miss one, and this feature has now missed one twice.
+ *
+ * NO ARM IS SILENT WHEN SOMETHING WAS SEVERED. The acknowledged second tap goes ahead — the owner
+ * may well be forgetting the token of a desk that no longer exists, and refusing outright would
+ * trap them with a credential they cannot remove — but it says what it is going ahead with, at the
+ * moment it does it, rather than relying on a sentence they read before the last network change.
+ */
+export function decideRelease(
+  control: ReleaseControl,
+  warned: ReleaseControl | null,
+  /** The attempt's outcome, or `null` when `shouldAttemptRelease` said not to make one. */
+  step: ReleaseStep | null,
+): ReleaseDecision {
+  const m = strings().settings.notify
+  if (step === null) {
+    // The deliberate second tap of the control that was warned about. It proceeds, and it says so.
+    return { proceed: true, tone: 'error', message: m.releasedNot, warned: control }
+  }
+  switch (step.step) {
+    case 'nothing':
+      return { proceed: true, tone: null, message: null, warned: null }
+    case 'released':
+      return { proceed: true, tone: 'info', message: m.released, warned: null }
+    case 'unsure':
+      return {
+        proceed: false,
+        tone: 'error',
+        message: fill(m.releaseUnsure, { detail: humanDeskError(step.error) }),
+        warned: control,
+      }
+  }
+}
+
+/**
  * Put a changed preference document in force. One POST per change and no batching.
  *
  * The desk replaces the entry carrying this token rather than appending, so this is the same call
@@ -776,10 +852,40 @@ export async function fetchPushToken(): Promise<string> {
     })
   }
   const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined
-  const token = await Notifications.getExpoPushTokenAsync(
-    projectId ? { projectId } : undefined,
+  const token = await deadline(
+    Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined),
+    PUSH_TOKEN_TIMEOUT_MS,
   )
   return token.data
+}
+
+/**
+ * The one unbounded leg in this feature, bounded.
+ *
+ * `getExpoPushTokenAsync` reaches Expo's servers and carries no timeout of its own, and it sits in
+ * the middle of `releaseThisPhone` — between a desk read and a desk delete, both of which are
+ * capped at `DESK_TIMEOUT_MS`. So it was the one call that could hold a destructive button open
+ * indefinitely, on a phone with a captive portal or a half-open connection.
+ *
+ * Fifteen seconds, matching the desk's own deadline, which puts a worst-case release at
+ * 15 + 15 + 15 = forty-five: long, and finite, and now behind a spinner.
+ */
+const PUSH_TOKEN_TIMEOUT_MS = 15_000
+
+/**
+ * Stop waiting after `ms`. NOT a cancellation — there is nothing to cancel here, since the call
+ * takes no `AbortSignal` — so the original promise is left to settle on its own, with a `catch`
+ * attached so a late rejection cannot surface as an unhandled one long after the caller gave up.
+ * What the deadline buys is the caller's attention back, which is the whole of what a screen needs.
+ */
+function deadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  work.catch(() => undefined)
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('timed out waiting for a push token')), ms),
+    ),
+  ])
 }
 
 /**

@@ -11,10 +11,12 @@ import {
   deviceBody,
   deviceZone,
   findRegistration,
+  decideRelease,
   notifyView,
   parseNotifyPrefs,
   pushPlatform,
   releaseThisPhone,
+  shouldAttemptRelease,
   turnOffNotifications,
   turnOnNotifications,
   validateQuiet,
@@ -23,6 +25,7 @@ import {
   type NotifyStep,
   type PushClient,
   type PushDoc,
+  type ReleaseStep,
 } from './notify'
 import { DeskError } from './desk'
 import { setActiveLanguage, strings } from '../i18n'
@@ -735,6 +738,75 @@ describe('releaseThisPhone — before the app loses its way back to the desk', (
       token: async () => TOKEN,
     })
     expect(step.step).toBe('unsure')
+  })
+})
+
+describe('the warning belongs to the control, not to the section', () => {
+  const unsure: ReleaseStep = { step: 'unsure', error: new DeskError('transport', 'x') }
+
+  it('does not re-ask the control it has already warned about', () => {
+    // The deliberate second tap. The owner has read the sentence and decided; re-asking the same
+    // unreachable desk before honouring that would make the button feel broken.
+    expect(shouldAttemptRelease('token', 'token')).toBe(false)
+    expect(shouldAttemptRelease('address', 'address')).toBe(false)
+  })
+
+  it('THE WALK: a warning about Forget token does not silently spend Save address', () => {
+    // Step by step, because this is the orphan the warning itself created and it was invisible.
+    //
+    // 1. Registered with desk A, tunnel down. The owner taps Forget token; the release cannot be
+    //    established, so they are warned and the token is correctly NOT cleared.
+    const first = decideRelease('token', null, unsure)
+    expect(first.proceed).toBe(false)
+    expect(first.warned).toBe('token')
+
+    // 2. They stop. The network comes back.
+    // 3. Later they tap Save address to point at desk B. THIS MUST STILL ASK. Under the shared
+    //    boolean it did not: no read, no DELETE, no round trip at all — against a desk that was
+    //    now reachable and would have answered.
+    expect(shouldAttemptRelease('address', first.warned)).toBe(true)
+
+    // 4. And whatever the answer, it is said. The silent arm was `nothing`, which matched neither
+    //    branch of either caller, so the address was saved under a green "Saved." with not a word
+    //    about the registration it had just orphaned beyond recovery.
+    const released = decideRelease('address', first.warned, { step: 'released' })
+    expect(released).toMatchObject({ proceed: true, tone: 'info' })
+    expect(released.message).toBe(strings().settings.notify.released)
+    expect(released.warned).toBe(null)
+  })
+
+  it('a warning about one control still stops that control, having warned once', () => {
+    const decision = decideRelease('address', 'address', null)
+    // It goes ahead — the owner may be leaving a desk that no longer exists, and refusing outright
+    // would trap them with a credential they cannot remove.
+    expect(decision.proceed).toBe(true)
+    // But it says so AT THE MOMENT it does it, rather than resting on a sentence read earlier.
+    expect(decision.tone).toBe('error')
+    expect(decision.message).toBe(strings().settings.notify.releasedNot)
+  })
+
+  it('says nothing when there was nothing registered to take off', () => {
+    const decision = decideRelease('token', null, { step: 'nothing' })
+    expect(decision).toEqual({ proceed: true, tone: null, message: null, warned: null })
+  })
+
+  it('clears the warning on any answer the desk actually gave', () => {
+    // A desk that answered is a desk that can be asked again, so an old warning has expired.
+    expect(decideRelease('token', 'token', { step: 'released' }).warned).toBe(null)
+    expect(decideRelease('token', 'token', { step: 'nothing' }).warned).toBe(null)
+  })
+
+  it('never puts the push token in what it says', () => {
+    const quoted = new DeskError(
+      'http',
+      'push responded 400',
+      400,
+      'bad_push',
+      `push.devices[0].token: '${TOKEN}' is not an Expo push token`,
+    )
+    const said = decideRelease('token', null, { step: 'unsure', error: quoted }).message ?? ''
+    expect(said).not.toContain(TOKEN)
+    expect(said).toContain('<redacted>')
   })
 })
 

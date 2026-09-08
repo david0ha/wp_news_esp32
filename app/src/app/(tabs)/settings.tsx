@@ -42,6 +42,7 @@ import {
   applyNotifyPrefs,
   askPermission,
   decideNotify,
+  decideRelease,
   DEFAULT_PREFS,
   DEFAULT_QUIET,
   fetchPushToken,
@@ -53,6 +54,7 @@ import {
   pushPlatform,
   readPermission,
   releaseThisPhone,
+  shouldAttemptRelease,
   turnOffNotifications,
   turnOnNotifications,
   validateQuiet,
@@ -61,7 +63,7 @@ import {
   type NotifyPrefs,
   type NotifyStep,
   type PermissionState,
-  type ReleaseStep,
+  type ReleaseControl,
 } from '../../lib/notify'
 import {
   decideNewsUrlSave,
@@ -618,11 +620,27 @@ function DeskSection({
   const [lang, setLang] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [langMsg, setLangMsg] = useState<Toned | null>(null)
-  // The owner has been told this phone could not be taken off the desk's list, and the next tap of
-  // either control goes ahead regardless. It is deliberately NOT reset by anything: once somebody
-  // has read that sentence they have the fact, and re-asking an unreachable desk on every tap only
-  // makes the button feel broken.
-  const [askedTwice, setAskedTwice] = useState(false)
+  /**
+   * WHICH control has already reported that this phone could not be taken off the desk's list.
+   *
+   * Per control, and cleared whenever the desk changes. It was a bare boolean shared by both, never
+   * reset, in a tab that mounts once — so a warning raised by a failed "Forget token" was spent by
+   * a later "Save address": no read, no DELETE, no message, address overwritten, and the desk left
+   * holding a token nothing could ever delete because the DELETE needs the address that had just
+   * been replaced. A warning belongs to the act it was raised about.
+   */
+  const [warned, setWarned] = useState<ReleaseControl | null>(null)
+
+  // A failure to reach one desk says nothing about the next, in either direction: a new address is
+  // a different desk, and a new operator token may authenticate where the old one could not.
+  useEffect(() => {
+    setWarned(null)
+  }, [address, token])
+
+  // Which of the two severing controls is working, so the other can be held and the pressed one can
+  // spin. A release is up to three round trips — a desk read, an Expo token and a desk delete — and
+  // both of these buttons sat live and silent through all of it.
+  const [working, setWorking] = useState<ReleaseControl | null>(null)
 
   // Whether this section is still on screen, for the one handler that awaits the NETWORK. The
   // effects below have their own `active` flags; a handler has no cleanup to hang one on, and
@@ -692,19 +710,33 @@ function DeskSection({
    * exists, and an app that refused outright would trap them with a credential they cannot remove.
    * The choice is theirs; being told is not optional.
    */
-  const releaseFirst = async (): Promise<ReleaseStep> => {
-    // The second tap. The owner has read what could not be established and has decided; asking the
-    // same unreachable desk again before honouring that would be theatre.
-    if (askedTwice) return { step: 'nothing' }
-    const step = await releaseThisPhone({
-      client: address && token ? createDeskClient({ baseUrl: address, token }) : null,
-      token: fetchPushToken,
-    })
-    if (step.step === 'unsure') setAskedTwice(true)
-    return step
+  const releaseFirst = async (control: ReleaseControl): Promise<boolean> => {
+    // Whether to spend the round trips at all. The second tap of the control that was already
+    // warned about does not re-ask — the owner has read the sentence and decided — but a tap of
+    // the OTHER control does, because it was never warned about and the network may have come back
+    // since. `decideRelease` then says what happened, in one place for both callers.
+    const step = shouldAttemptRelease(control, warned)
+      ? await releaseThisPhone({
+          client: address && token ? createDeskClient({ baseUrl: address, token }) : null,
+          token: fetchPushToken,
+        })
+      : null
+    if (!alive.current) return false
+    const decision = decideRelease(control, warned, step)
+    setWarned(decision.warned)
+    setTokenMsg(
+      decision.tone && decision.message
+        ? { tone: decision.tone, message: decision.message }
+        : null,
+    )
+    return decision.proceed
   }
 
   const applyAddress = async () => {
+    // The buttons are disabled while a release is out, but both fields also submit on return, so
+    // the guard is on the handler and not only on the control. This is the answer to "can a second
+    // tap reach anything during the busy window": it cannot.
+    if (working) return
     setAddressMsg(null)
     setTokenMsg(null)
     // Normalised HERE rather than by letting `saveDeskBaseUrl` do it, because the address must not
@@ -720,17 +752,11 @@ function DeskSection({
     // Only a CHANGE of desk orphans anything. Re-saving the address already in force is a no-op
     // and must not cost this phone its registration.
     if (next !== address) {
-      const release = await releaseFirst()
-      if (release.step === 'unsure') {
-        setTokenMsg({
-          tone: 'error',
-          message: fill(s.settings.notify.releaseUnsure, { detail: humanDeskError(release.error) }),
-        })
-        return
-      }
-      if (release.step === 'released') {
-        setTokenMsg({ tone: 'info', message: s.settings.notify.released })
-      }
+      setWorking('address')
+      const proceed = await releaseFirst('address')
+      if (!alive.current) return
+      setWorking(null)
+      if (!proceed) return
     }
     if (!(await saveDeskBaseUrl(next))) {
       setAddressMsg({ tone: 'error', message: s.settings.desk.addressInvalid })
@@ -751,6 +777,9 @@ function DeskSection({
   // does NOT clear the saved token: forgetting one is a button of its own, and an accidental
   // return should never be the way somebody loses the credential that is working.
   const applyToken = async () => {
+    // Saving a token severs nothing, so it needs no release — but it must not land in the middle of
+    // one, because the client the release is using was built from the token it would replace.
+    if (working) return
     setTokenMsg(null)
     const typed = tokenDraft.trim()
     const outcome = await saveDeskToken(typed)
@@ -771,23 +800,16 @@ function DeskSection({
   // the only credential that could ever delete the device, so the desk is left sending to a phone
   // the app can no longer speak for. The release goes first, and an `unsure` stops the first tap.
   const forgetToken = async () => {
+    if (working) return
     setTokenMsg(null)
-    const release = await releaseFirst()
-    if (release.step === 'unsure') {
-      setTokenMsg({
-        tone: 'error',
-        message: fill(s.settings.notify.releaseUnsure, { detail: humanDeskError(release.error) }),
-      })
-      return
-    }
+    setWorking('token')
+    const proceed = await releaseFirst('token')
+    if (!alive.current) return
+    setWorking(null)
+    if (!proceed) return
     await clearDeskToken()
     onToken(null)
     setTokenDraft('')
-    setTokenMsg(
-      release.step === 'released'
-        ? { tone: 'info', message: s.settings.notify.released }
-        : null,
-    )
     setLangMsg(null)
   }
 
@@ -847,10 +869,21 @@ function DeskSection({
           />
         </View>
         {addressMsg ? <Text style={TONE[addressMsg.tone]}>{addressMsg.message}</Text> : null}
+        {/*
+          `loading` on the one that was pressed, `disabled` on both while either is out. A release
+          is a desk read, an Expo token and a desk delete — up to forty-five seconds against a dead
+          desk — and these two buttons used to sit live and silent through all of it, one of them
+          destructive.
+        */}
         <Button
           label={s.settings.desk.saveAddress}
           variant="secondary"
-          disabled={!addressDraft.trim() || addressDraft.trim() === (address ?? '')}
+          disabled={
+            !addressDraft.trim() ||
+            addressDraft.trim() === (address ?? '') ||
+            working !== null
+          }
+          loading={working === 'address'}
           onPress={applyAddress}
         />
       </View>
@@ -884,11 +917,17 @@ function DeskSection({
         <Button
           label={s.settings.desk.saveToken}
           variant="secondary"
-          disabled={!tokenDraft.trim()}
+          disabled={!tokenDraft.trim() || working !== null}
           onPress={applyToken}
         />
         {token ? (
-          <Button label={s.settings.desk.forgetToken} variant="ghost" onPress={forgetToken} />
+          <Button
+            label={s.settings.desk.forgetToken}
+            variant="ghost"
+            disabled={working !== null}
+            loading={working === 'token'}
+            onPress={forgetToken}
+          />
         ) : null}
       </View>
 

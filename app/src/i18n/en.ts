@@ -164,6 +164,11 @@ export const en = {
       released: 'This phone was taken off the desk’s list first, so it won’t go on being sent alerts.',
       releaseUnsure:
         'This phone couldn’t be taken off the desk’s list, so that desk may keep sending to it — and once this changes, the app can’t reach that desk to stop it. Tap again to go ahead anyway. {detail}',
+      // Said AT THE MOMENT the owner goes ahead, not before it. The warning above was read at some
+      // earlier point, possibly about a different control and a different network; this is the
+      // sentence that belongs to the act itself.
+      releasedNot:
+        'Went ahead without taking this phone off that desk’s list. If it was still registered, that desk may keep sending and the app can no longer reach it to stop.',
       // The five switches. `researched` is one switch over four of the book's kinds — corporate
       // actions, court dates, index changes and everything else — so it is named by where the
       // date came from rather than by what it is.
