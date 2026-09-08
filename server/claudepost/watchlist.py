@@ -156,7 +156,21 @@ def _bad(path: str, why: str) -> NoReturn:
 
 def _no_extra_keys(doc: dict, allowed: frozenset[str], path: str) -> None:
     """Refuse keys nobody reads. This is the privacy boundary: a stop level,
-    an entry price, a P&L figure has no key here to hide behind."""
+    an entry price, a P&L figure has no key here to hide behind.
+
+    That is still exactly true of *this* document and is not softening. What it
+    is no longer true of is the desk, and the difference matters to whoever
+    reads this next: the owner's actual holdings -- strikes, expiries, entry
+    prices -- do live on this machine now, in
+    :mod:`~claudepost.positions`, under an explicit decision recorded in
+    ``docs/specs/2026-09-08-schedule-and-positions-design.md``.
+
+    They live *there* rather than here on purpose. A watchlist item is the pool
+    the newspaper votes from, so everything in it is printable material; a
+    position exists to be reasoned about and must never be printed. Widening
+    this schema to hold one would have made a single document mean both things
+    and would have deleted this boundary rather than replaced it.
+    """
     extra = sorted(set(doc) - allowed)
     if extra:
         _bad(path, f"unknown key(s) {', '.join(repr(k) for k in extra)}")

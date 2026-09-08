@@ -1,0 +1,32 @@
+{
+  "updated_at": "2026-09-08T05:00:00Z",
+  "positions": [
+    {
+      "id": "p_1f05f8",
+      "symbol": "AAAA",
+      "kind": "option",
+      "opened_at": "2026-08-19",
+      "note": "",
+      "legs": [
+        {
+          "right": "call",
+          "side": "long",
+          "strike_cents": 42000,
+          "expiry": "2026-11-21",
+          "contracts": 2,
+          "entry_price_cents": 1180
+        }
+      ],
+      "strategy": "long_call"
+    },
+    {
+      "id": "p_3e3267",
+      "symbol": "BBBB",
+      "kind": "stock",
+      "opened_at": "2026-07-02",
+      "note": "",
+      "quantity": 40,
+      "entry_price_cents": 158300
+    }
+  ]
+}

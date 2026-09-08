@@ -215,7 +215,9 @@ def derive_strategy(legs: list[dict]) -> str:
         one = legs[0]
         if one["side"] == "long":
             return "long_call" if one["right"] == "call" else "long_put"
-        return "short_call" if one["right"] == "call" else "cash_secured_put"
+        # Never `cash_secured_put` -- see Ruling 1. Whether a short put is
+        # secured is a fact about an account the desk cannot see.
+        return "short_call" if one["right"] == "call" else "short_put"
 
     if len(legs) == 2:
         a, b = legs
