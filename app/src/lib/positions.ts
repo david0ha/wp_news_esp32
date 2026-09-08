@@ -241,13 +241,14 @@ function legBody(leg: OptionLeg): Record<string, unknown> {
  *
  * Three omissions, each of them a refusal on the other side rather than tidiness:
  *
- * `strategy` is **refused by name** in a body. It is derived on every write, so a supplied one is
- * a claim about legs that could contradict them; the desk writes it to the file and strips it
- * again on load rather than trusting its own writing. A client that echoed back what it read
- * would be refused whole with `bad_positions`.
- *
- * `id` is accepted and then ignored — `_position` overwrites it from the hash material. Sending it
- * would put a field in the body that looks authoritative and decides nothing.
+ * `strategy` and `id` are both **accepted and then ignored** — `_POSITION_KEYS` lists them so a
+ * client that GETs this document and PUTs it straight back is not refused whole, and `_position`
+ * re-derives each anyway, the strategy from the legs and the id from the hash material. Sending
+ * either would put a field in the body that looks authoritative and decides nothing, and a
+ * supplied `strategy` is worse than useless: it is a claim about legs that could contradict them.
+ * Ruling 14 settled this — an earlier desk refused `strategy` by name and stripped it again on
+ * load, and the round trip a phone actually makes was the thing that broke. Do not add a strip
+ * back; there is nothing to strip.
  *
  * `legs` on a stock and `quantity` / `entry_price_cents` on an option are each refused, naming the
  * field: a document written against the wrong half of the schema. The union type is what keeps

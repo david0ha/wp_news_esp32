@@ -163,6 +163,34 @@ describe('the date input', () => {
   it('puts the horizon three years out', () => {
     expect(expiryHorizon(NOW)).toBe('2029-09-08')
   })
+
+  it('clamps a leap day to the 28th, the way the desk does', () => {
+    // 29 February plus three whole years is not a date. `Date.UTC(y + 3, 1, 29)` rolls forward to
+    // 1 March; `positions.py`'s `today.replace(...)` raises and falls back to `day=28`. The two
+    // disagreed, so on one day every four years an expiry of 2031-03-01 passed validation here and
+    // the confirm step and then came back 400 from the desk — a refusal the owner had been told
+    // would not come. The desk's answer is the one that counts.
+    const leapDay = Date.UTC(2028, 1, 29)
+    expect(expiryHorizon(leapDay)).toBe('2031-02-28')
+    // The 28th of a non-leap February is unremarkable and must not be clamped by accident.
+    expect(expiryHorizon(Date.UTC(2027, 1, 28))).toBe('2030-02-28')
+    // …and a leap day three years before another leap year is still not one: 2031 is not a leap
+    // year, and neither is any year three from 2028.
+    expect(expiryHorizon(Date.UTC(2024, 1, 29))).toBe('2027-02-28')
+  })
+
+  it('refuses on the far side of the leap-day horizon and accepts on the near side', () => {
+    // Both sides of the exact boundary the desk enforces, through the validator the sheet calls.
+    const leapDay = Date.UTC(2028, 1, 29)
+    const at = (expiry: string) => {
+      const base = callDraft()
+      return validateDraft({ ...base, legs: [{ ...base.legs[0], expiry }] }, en, leapDay)
+    }
+    expect(at('2031-02-28').ok).toBe(true)
+    const far = at('2031-03-01')
+    expect(far.ok).toBe(false)
+    expect(far.ok === false && far.errors['legs[0].expiry']).toBeDefined()
+  })
 })
 
 // ---------------------------------------------------------------------------

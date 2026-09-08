@@ -28,7 +28,9 @@ import { colors, fonts, space, tabular, type } from '../theme'
  *
  * The badge is the design's §2 made visible. A computed date carries none, because it is not in
  * question; a researched one carries the domain it was read at and opens it. A reader can always
- * tell the two kinds apart without being told which is which.
+ * tell the two kinds apart without being told which is which — unconditionally, which is what the
+ * third arm is for: a researched date whose host could not be named still draws the mark, and
+ * draws it as a mark rather than as a link.
  *
  * Closed, the row shows the FIRST position the event reaches and one sentence about it. Opened,
  * it shows every one of them and the whole paragraph — Toss's *한 화면, 한 기능*, and the reason
@@ -109,7 +111,23 @@ export function ScheduleRow({
           <Text style={styles.more}>{fill(t.schedule.alsoAffects, { n: String(hidden) })}</Text>
         ) : null}
 
-        {badge !== null ? (
+        {badge === null ? null : badge.host === '' ? (
+          // A researched date whose host `sourceBadge` could not name — a malformed source, or one
+          // carrying credentials, which is why `evil.test` is not printed as the authority of
+          // `https://user:pass@evil.test/`. The MARK still draws, because it is the only thing on
+          // the row that says a human read for this date and §8 promises a reader can always tell
+          // the two kinds apart. What it must not do is offer a link: `fill(openSource, {host:''})`
+          // announces a bare "Open" to a screen reader, and an unnamed link is also one this app
+          // has decided it cannot vouch for — if we cannot say where it goes, we do not offer to
+          // go there. So: not pressable — and NOT silent either. `accessible` collapses the icon
+          // into one element carrying the label, so a screen reader hears what the mark means
+          // instead of the icon font's private-use glyph, and §8's promise holds for a reader who
+          // cannot see the mark: silence here is indistinguishable from a computed date, which
+          // carries no badge at all. A label on a fact, with no role, because this is not a link.
+          <View style={styles.badge} accessible accessibilityLabel={t.schedule.a11y.researched}>
+            <Ionicons name="link-outline" size={13} color={colors.accent} />
+          </View>
+        ) : (
           <Pressable
             accessibilityRole="link"
             accessibilityLabel={fill(t.schedule.a11y.openSource, { host: badge.host })}
@@ -126,7 +144,7 @@ export function ScheduleRow({
               {badge.host}
             </Text>
           </Pressable>
-        ) : null}
+        )}
       </View>
     </Pressable>
   )

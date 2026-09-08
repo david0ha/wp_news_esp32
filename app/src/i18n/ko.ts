@@ -762,6 +762,8 @@ export const ko: Strings = {
       expand: '이유 전체 보기',
       collapse: '이유 접기',
       openSource: '{host} 열기',
+      // `settings.notify.kinds.researched`와 같은 말. 한 가지 개념에는 한 가지 어휘.
+      researched: '조사로 찾은 일정',
       openSchedule: '전체 일정 열기',
     },
   },

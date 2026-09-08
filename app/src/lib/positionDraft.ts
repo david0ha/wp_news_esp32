@@ -261,12 +261,27 @@ function isoUTC(ms: number): string {
  *
  * ISO dates compare correctly as strings, which is why nothing here parses the owner's expiry into
  * a `Date` to compare it.
+ *
+ * 29 FEBRUARY IS THE WHOLE REASON THIS IS NOT ONE LINE, and the bug it caused is the kind only a
+ * duplicated constant produces. The same day three years on does not exist, and the two sides
+ * disagreed about what to do instead: `Date.UTC(y + 3, 1, 29)` rolls over to 1 March, while
+ * `positions.py`'s `today.replace(...)` raises and falls back to `day=28`. So on one day every
+ * four years the phone accepted an expiry of 2031-03-01 through `validateDraft` AND through the
+ * confirm step, and the desk answered 400 — a refusal the owner had already been told would not
+ * come. The desk's answer is the one that counts, because the desk is the one that refuses; 28
+ * February is the conventional clamp and the horizon is a bound, not a date anybody reads.
+ *
+ * The overflow test is general rather than a check for February: `Date.UTC` rolls the month
+ * forward only when the day-of-month does not exist in the target month, and 29 February is the
+ * only way three whole years can produce that.
  */
 export function expiryHorizon(todayMs: number): string {
   const d = new Date(todayMs)
-  return isoUTC(
-    Date.UTC(d.getUTCFullYear() + MAX_EXPIRY_YEARS, d.getUTCMonth(), d.getUTCDate()),
-  )
+  const year = d.getUTCFullYear() + MAX_EXPIRY_YEARS
+  const month = d.getUTCMonth()
+  const rolled = new Date(Date.UTC(year, month, d.getUTCDate()))
+  if (rolled.getUTCMonth() !== month) return isoUTC(Date.UTC(year, month, 28))
+  return isoUTC(rolled.getTime())
 }
 
 // ---------------------------------------------------------------------------

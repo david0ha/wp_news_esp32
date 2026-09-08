@@ -246,8 +246,21 @@ and it is left out above to keep the example about precision; `affects` is *not*
 never trimmed, because an example the validator would refuse teaches you to file one.
 
 The sessions are New York's and its offset moves twice a year, which is why a `session` event's
-instant is not pinned to a fixed clock time — it only has to be real, because the phone groups the
-day by it.
+instant is not pinned to a fixed clock time. But it is not free either, and this is the one rule
+here that is easy to break without noticing:
+
+> **A `session` event's `at` must fall on the trading day the session belongs to, in UTC.**
+
+The phone does not convert a `session` or a `day` event into the reader's zone, because neither
+renders a clock — the heading and the left rail have to describe the same thing, and a row reading
+`장 마감 후` under tomorrow's heading contradicts itself. So the date part of `at` *is* the day the
+event is filed under, verbatim, for every reader in the world.
+
+For a New York close (`amc`, roughly 20:00–21:00Z) and for an Asian close this is free: the instant
+already lands on the right UTC date. It costs attention in exactly one place — a pre-open print in
+Asia, where the local morning is the previous day in UTC. Stamp that one on its own trading day,
+not on the UTC date its clock time happens to fall on. Nothing in this book does that today, which
+is why the rule is written here rather than checked by the validator.
 
 ## Ranking is by effect on the positions in front of you
 

@@ -284,6 +284,63 @@ describe('groupByDay', () => {
     expect(g.map((d) => d.date)).toEqual(['2026-09-08', '2026-09-09'])
     expect(g[0].events.map((e) => e.id)).toEqual(['e_dawn'])
   })
+
+  it('files a day-precision event on the date the wire names, west of UTC', () => {
+    // THE SEVERE ONE. `CALENDAR.md` pins a day event's `at` to exactly 00:00:00Z, so the wire is
+    // encoding a DATE. Read as an instant in New York it is 19:00 the evening before, so an expiry
+    // on 21 Nov drew under "Today" on the 20th and then vanished on the 21st — the day it actually
+    // expires — because `key < today` dropped it. The desk's alert still fired.
+    const expiry = event({
+      id: 'e_expiry',
+      at: '2026-11-21T00:00:00Z',
+      precision: 'day',
+      title: 'AAAA 420 콜 만기',
+    })
+    const ny = 'America/New_York'
+    // The evening before, New York time: filed on the 21st, not under "today".
+    expect(groupByDay([expiry], new Date('2026-11-20T22:00:00Z'), ny).map((g) => g.date)).toEqual([
+      '2026-11-21',
+    ])
+    // The day itself, mid-afternoon in New York: still there, still the 21st.
+    expect(groupByDay([expiry], new Date('2026-11-21T19:00:00Z'), ny).map((g) => g.date)).toEqual([
+      '2026-11-21',
+    ])
+    // And only the day after is it behind the reader.
+    expect(groupByDay([expiry], new Date('2026-11-22T19:00:00Z'), ny)).toEqual([])
+  })
+
+  it('files a session event on the market’s trading day, not the reader’s', () => {
+    // A US after-close print at 20:30Z is 05:30 the next morning in Seoul. Grouped locally it
+    // filed under the 10th, labelled 장 마감 후 — telling a Seoul reader "after the close on the
+    // 10th" about something that happened after the close on the 9th, the two halves of one row
+    // disagreeing. The spec's §8 mockup files it under the US date.
+    const amc = event({
+      id: 'e_amc',
+      at: '2026-09-09T20:30:00Z',
+      precision: 'session',
+      session: 'amc',
+    })
+    expect(
+      groupByDay([amc], new Date('2026-09-08T04:00:00Z'), 'Asia/Seoul').map((g) => g.date),
+    ).toEqual(['2026-09-09'])
+    expect(timeLabel(amc, ko, 'Asia/Seoul')).toBe('장 마감 후')
+    // And in New York, where the reader's day and the market's already agree.
+    expect(
+      groupByDay([amc], new Date('2026-09-08T12:00:00Z'), 'America/New_York').map((g) => g.date),
+    ).toEqual(['2026-09-09'])
+  })
+
+  it('still reads an exact event in the reader’s own zone', () => {
+    // Per-precision, not a blanket "stop converting": an event that renders a clock is grouped by
+    // the day that clock belongs to, or the heading and the rail disagree the other way.
+    const cpi = event({ id: 'e_cpi', at: '2026-09-08T23:00:00Z', precision: 'exact' })
+    expect(
+      groupByDay([cpi], new Date('2026-09-08T04:00:00Z'), 'Asia/Seoul').map((g) => g.date),
+    ).toEqual(['2026-09-09'])
+    expect(
+      groupByDay([cpi], new Date('2026-09-08T04:00:00Z'), 'America/New_York').map((g) => g.date),
+    ).toEqual(['2026-09-08'])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -307,11 +364,34 @@ describe('sourceBadge', () => {
     )
   })
 
-  it('draws nothing for a source this app would not open', () => {
-    // Anything that is not an https URL is not a page — and a badge that opened something else
-    // would be the phone acting on a string the desk merely stored.
-    expect(sourceBadge(event({ source: 'javascript:alert(1)' }))).toBeNull()
-    expect(sourceBadge(event({ source: 'investor.example-co.test' }))).toBeNull()
+  it('carries no url for a source this app would not open, but still badges it', () => {
+    // The guard moved from WHETHER there is a badge to WHAT the badge links to, and that is the
+    // point rather than a relaxation: a badge that opened `javascript:` would be the phone acting
+    // on a string the desk merely stored, but no badge at all would render a date a human read
+    // for as one a machine computed — the one thing §8 says the row may never do. So: badged, and
+    // inert. The desk files only `computed` or an `https://` URL, so each of these is a researched
+    // date that reached the phone malformed.
+    for (const source of ['javascript:alert(1)', 'investor.example-co.test', 'http://plain.test/']) {
+      expect(sourceBadge(event({ source }))).toEqual({ host: '', url: '' })
+    }
+  })
+
+  it('badges a host it cannot read, rather than letting it pass for a computed date', () => {
+    // An IDN is entirely plausible in a Korean book, and under the old ASCII-only class it matched
+    // nothing and silently lost its badge. Credentials still buy no domain — `evil.test` must not
+    // be printed as the authority of `https://user:pass@evil.test/` — but the row still says a
+    // human read for this date.
+    expect(sourceBadge(event({ source: 'https://한국거래소.kr/notice/1' }))).toEqual({
+      host: '한국거래소.kr',
+      url: 'https://한국거래소.kr/notice/1',
+    })
+    expect(sourceBadge(event({ source: 'https://ir.example_co.test/q3' }))?.host).toBe(
+      'ir.example_co.test',
+    )
+    expect(sourceBadge(event({ source: 'https://user:pass@evil.test/' }))).toEqual({
+      host: '',
+      url: 'https://user:pass@evil.test/',
+    })
   })
 })
 

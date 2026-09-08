@@ -243,10 +243,11 @@ export function parseCalendarDoc(v: unknown): CalendarDoc | null {
 // passes an IANA name and gets `Intl` instead, so the same grouping and the same formatting the
 // device runs are what the assertions exercise.
 //
-// Keeping `Intl` off the production path is deliberate rather than incidental — the app uses it
-// nowhere else, and a formatter constructed per row on a list is the kind of cost that does not
-// show up until somebody has forty events and an older phone. The local getters need no ICU data
-// at all.
+// Keeping `Intl` off THIS path is deliberate rather than incidental: a formatter constructed per
+// row on a list is the kind of cost that does not show up until somebody has forty events and an
+// older phone, and the local getters need no ICU data at all. The app does use `Intl` in
+// production elsewhere — `notify.ts`'s `phoneZone`, once, to name the device's zone for the desk —
+// so this is a rule about a hot loop and not a rule about the API.
 // ---------------------------------------------------------------------------
 
 interface DateParts {
@@ -296,6 +297,50 @@ function pad2(n: number): string {
 /** `YYYY-MM-DD` in the zone the parts were read in. Ordering these as strings orders the days. */
 function dateKey(p: DateParts): string {
   return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`
+}
+
+/**
+ * The day an event belongs to, as a `YYYY-MM-DD` key, or `null` when `at` is not a stamp.
+ *
+ * THE RULE IS THE SAME ONE `timeLabel` FOLLOWS, and it is worth stating as one sentence: **the
+ * heading and the rail always describe the same clock.**
+ *
+ * An `exact` event renders a clock in the reader's own zone, so it is grouped by the reader's own
+ * day — an event at 23:00Z is tomorrow in Seoul, and filing it under today puts it above a heading
+ * that says 오늘.
+ *
+ * A `day` or `session` event renders NO clock, and its day is the date part of `at` exactly as the
+ * desk sent it. Converting one is a category error rather than an off-by-one:
+ *
+ *   - `CALENDAR.md` pins a `day` event's `at` to exactly `00:00:00Z`, so **the wire is encoding a
+ *     date, not an instant**. Read as an instant in New York it is 19:00 the evening BEFORE, so an
+ *     option expiry on 21 Nov drew under "Today" on the 20th and then — on the 21st, the day it
+ *     actually expires — fell to `key < today` and vanished from every surface at once, while the
+ *     desk's alert (which works off `at` directly) still pushed about it. Every reader west of
+ *     UTC, every day-precision event.
+ *   - `bmo` / `amc` are statements about a MARKET's trading day, not the reader's. A US after-close
+ *     print at 20:30Z filed under the next Korean day, labelled 장 마감 후, tells a Seoul reader
+ *     "after the close on the 10th" about something that happened after the close on the 9th — the
+ *     two halves of one row disagreeing. The spec's §8 mockup files it under the US date.
+ *
+ * This is deliberately NOT a `partsOf` call and does not break the seam rule above: there is no
+ * instant-to-calendar conversion here to route through it. The date is lifted off the wire.
+ *
+ * WHAT IT ASKS OF THE DESK, which is worth knowing when reading a session row: `at` must fall on
+ * the trading day the session belongs to. That is free for a US open or close and for an Asian
+ * close, and needs care for an Asian OPEN — 09:00 in Seoul is 00:00Z the same day, but a pre-open
+ * print stamped 23:00Z would name the day before.
+ */
+function eventDayKey(
+  event: Pick<CalendarEvent, 'at' | 'precision'>,
+  tz?: string,
+): string | null {
+  const wire = /^(\d{4}-\d{2}-\d{2})T/.exec(event.at)
+  if (wire === null) return null
+  if (event.precision !== 'exact') return wire[1]
+  const at = new Date(event.at)
+  if (Number.isNaN(at.getTime())) return null
+  return dateKey(partsOf(at, tz))
 }
 
 /** The parts of a `YYYY-MM-DD` key, as numbers. */
@@ -400,8 +445,10 @@ export interface DayGroup {
  * The book as the screen draws it: by local day, in time order, with what is already behind the
  * reader dropped.
  *
- * **By local day.** An event at 23:00Z is tomorrow in Seoul, and filing it under today puts it
- * above a heading that says 오늘.
+ * **By the day the row is about**, which is `eventDayKey`'s whole subject: the reader's own day
+ * for an event that renders a clock, and the wire's date for one that does not. Read that note
+ * before changing anything here — it is where a day-precision event used to disappear on the day
+ * it happened.
  *
  * **In time order, not by rank.** `rank` decided which events the agent filed; it says nothing
  * about when they happen, and a schedule sorted by importance is a schedule nobody can read
@@ -417,9 +464,8 @@ export function groupByDay(events: CalendarEvent[], now: Date, tz?: string): Day
   const today = dateKey(partsOf(now, tz))
   const byDate = new Map<string, CalendarEvent[]>()
   for (const event of events) {
-    const at = new Date(event.at)
-    if (Number.isNaN(at.getTime())) continue
-    const key = dateKey(partsOf(at, tz))
+    const key = eventDayKey(event, tz)
+    if (key === null) continue
     if (key < today) continue
     const bucket = byDate.get(key)
     if (bucket === undefined) byDate.set(key, [event])
@@ -442,23 +488,43 @@ export function groupByDay(events: CalendarEvent[], now: Date, tz?: string): Day
 // ---------------------------------------------------------------------------
 
 /**
- * An `https://` source and the domain to print beside it, or `null` for a date that needs neither.
+ * The source badge: `null` for a computed date, and for every other source a badge — with the
+ * domain to print beside it when one can be read off, and an empty `host` when it cannot.
  *
- * The authority is matched rather than parsed: `www.` comes off because it is not part of the
- * name anybody checks, a port comes off with it, and anything carrying credentials or a scheme
- * this app would not open matches nothing and draws no badge. A row with no badge still renders —
- * losing the link costs less than opening a string the desk merely stored.
+ * **EVERY NON-COMPUTED SOURCE GETS A BADGE, and that is the invariant rather than a fallback.**
+ * §8's promise is that a reader can always see which kind of date they are looking at, and the
+ * only thing that distinguishes the two kinds on the row is this badge — so returning `null`
+ * because a host could not be parsed does not degrade the row, it makes a researched date
+ * indistinguishable from a computed one, which is the one thing this may not do. A lone link icon
+ * still says "somebody read for this"; a missing icon says something false.
+ *
+ * The host class is what a HOST may contain rather than what ASCII allows, because the desk
+ * accepts any `https://` and a Korean book will legitimately carry an IDN — `한국거래소.kr` matched
+ * nothing under `[a-zA-Z0-9.-]+` and silently lost its badge. Excluded instead are the delimiters
+ * (`/?#`), whitespace, `:` and `@`: the last two are what keep `https://user:pass@evil.test/` from
+ * printing `evil.test`, which takes the empty-host arm — badged, because it is still a researched
+ * date, with no domain claimed for it. `www.` comes off because it is not part of the name anybody
+ * checks, and a port comes off with it.
+ *
+ * **THE SAFETY IS IN `url`, NOT IN WHETHER A BADGE EXISTS**, and moving it there is what lets the
+ * invariant above be absolute. A source that is not an `https://` URL cannot be a page this app
+ * opens — `javascript:alert(1)` least of all — so it comes back with an EMPTY `url` and the row's
+ * tap does nothing (`Linking.openURL('')` rejects, and the row already swallows a refused open on
+ * purpose). It still comes back badged: the desk only ever files `computed` or an `https://` URL,
+ * so anything else is a date a human read for that reached the phone malformed, and hiding the one
+ * mark that says so would tell the reader something false to protect them from a link they cannot
+ * follow anyway.
  */
-const HTTPS_HOST = /^https:\/\/([a-zA-Z0-9.\-]+)(?::\d+)?(?:[/?#]|$)/
+const HTTPS_HOST = /^https:\/\/([^\s/?#@:]+)(?::\d+)?(?:[/?#]|$)/u
 
 export function sourceBadge(
   event: Pick<CalendarEvent, 'source'>,
 ): { host: string; url: string } | null {
   if (event.source === COMPUTED) return null
+  if (!event.source.startsWith('https://')) return { host: '', url: '' }
   const m = HTTPS_HOST.exec(event.source)
-  if (m === null) return null
-  const host = m[1].replace(/^www\./i, '')
-  return host === '' ? null : { host, url: event.source }
+  const host = m === null ? '' : m[1].replace(/^www\./i, '')
+  return { host, url: event.source }
 }
 
 /**

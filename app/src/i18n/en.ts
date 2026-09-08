@@ -890,6 +890,18 @@ export const en = {
       expand: 'Show the whole reason',
       collapse: 'Hide the whole reason',
       openSource: 'Open {host}',
+      /**
+       * The badge on a researched date whose host could not be read — a malformed source, or one
+       * carrying credentials, where `sourceBadge` refuses to name an authority it cannot vouch
+       * for. The mark is drawn but is not a link, so this labels a fact rather than an action.
+       *
+       * Named by WHERE THE DATE CAME FROM, in the vocabulary `settings.notify.kinds.researched`
+       * already settled for exactly this concept — singular here because it labels one row's
+       * badge rather than a switch over a whole kind. §8's promise is that a reader can always
+       * tell a researched date from a computed one; without this, a VoiceOver user got silence,
+       * which is indistinguishable from the computed date that carries no badge at all.
+       */
+      researched: 'Date found by research',
       openSchedule: 'Open the full schedule',
     },
   },
