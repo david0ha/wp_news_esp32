@@ -154,6 +154,35 @@ class ReasoningDateTest(unittest.TestCase):
                 reason_short="만기 74일, IV 32%에서 21%로")])))
         self.assertEqual(len(out["events"][0]["affects"]), 1)
 
+    def test_an_english_date_in_a_reason_is_refused_too(self):
+        """`lang` may be `en`, and the reason this clause exists -- a wrong
+        date in a sentence about the owner's own money -- does not know which
+        language it is in. Every form a model actually writes one in."""
+        for prose in ("The print on November 21 takes the extrinsic out.",
+                      "Nov. 21 is when the extrinsic goes.",
+                      "The print on 21 November takes the extrinsic out.",
+                      "Filed 11/21/2026, a week before expiry.",
+                      "Filed 2026/11/21, a week before expiry."):
+            with self.subTest(prose=prose):
+                with self.assertRaises(BadRequest) as caught:
+                    self.parse(book(event(affects=[aff(reason=prose)])))
+                self.assertIn("reason", caught.exception.message)
+
+    def test_english_prose_that_is_not_a_date_passes(self):
+        """The other half, and the half that decides whether widening was
+        worth doing: a month with no day is the contract's name, a bare
+        figure is a figure, and a reference in words is what the clause is
+        for. Refusing any of these would push the agent to write worse
+        English to get its book accepted."""
+        for prose in ("The November contract loses its extrinsic first.",
+                      "It may 다음 날 fall 21% on a 74-day view.",
+                      "The day after the print is when vega bites.",
+                      "A 3/4 delta position with 21 days to run."):
+            with self.subTest(prose=prose):
+                out = self.parse(book(event(affects=[
+                    aff(reason=prose, reason_short=prose[:60])])))
+                self.assertEqual(len(out["events"][0]["affects"]), 1)
+
 
 class PrecisionTest(unittest.TestCase):
     def parse(self, doc):
@@ -315,8 +344,90 @@ class PruneTest(unittest.TestCase):
         self.assertEqual(len(doc["events"]), 1)
         self.assertEqual(len(doc["events"][0]["affects"]), 1)
 
+    def test_it_only_drops_what_it_can_prove(self):
+        """It runs in two places -- after a positions edit, on a document this
+        module produced, and inside `load`, on JSON nobody has checked yet.
+        `prune_to_window` states the discipline the second one needs and this
+        one holds to it: an entry it cannot read is left for the refusal that
+        names the field, and an `affects` that is empty or is not a list is a
+        malformed event rather than an event with nothing left."""
+        raw = book({"id": "e_bad", "affects": ["not an entry",
+                                               {"position_id": 7}]},
+                   {"id": "e_none", "affects": []},
+                   {"id": "e_nolist", "affects": "p_1f05f8"})
+        pruned, events, affects = C.prune_to_positions(raw, frozenset())
+        self.assertEqual((events, affects), (0, 0))
+        self.assertEqual(pruned["events"], raw["events"])
+
+
+class WindowTest(unittest.TestCase):
+    """What happens to the book when nobody edits anything and time passes.
+
+    `PruneTest`'s argument, applied to the other thing that moves underneath a
+    filed book: the clock. An edition of the book does not stop being true
+    because the first of its ten events is now nine days old, and refusing it
+    whole for that is how a week of agent silence plus one restart turns a book
+    with nine live events into no book at all -- silently, every alert in it
+    stopped, `GET /api/calendar` answering `null`.
+    """
+
+    LATER = NOW + datetime.timedelta(days=9)
+
+    def parse(self, doc):
+        return C.parse_calendar(doc, known_position_ids=KNOWN, now=NOW)
+
+    def test_nothing_moves_while_every_event_is_still_in_the_window(self):
+        doc = self.parse(book(event(), event(id="e_aa02", rank=2)))
+        pruned, dropped = C.prune_to_window(doc, NOW)
+        self.assertEqual(dropped, 0)
+        self.assertEqual(pruned["events"], doc["events"])
+
+    def test_an_event_the_clock_carried_out_of_the_window_is_dropped(self):
+        doc = self.parse(book(event(), event(id="e_aa02", rank=2,
+                                             at="2026-10-08T12:30:00Z")))
+        pruned, dropped = C.prune_to_window(doc, self.LATER)
+        self.assertEqual(dropped, 1)
+        self.assertEqual([one["id"] for one in pruned["events"]], ["e_aa02"])
+
+    def test_it_only_drops_what_it_can_prove(self):
+        """It runs before the validator, on a document nobody has checked, so
+        an event it cannot read is left exactly where it is for the refusal
+        that names the field. This drops what the clock falsified, never what
+        is malformed."""
+        raw = book({"id": "e_junk"}, {"id": "e_bad", "at": "yesterday"},
+                   "not an event at all")
+        pruned, dropped = C.prune_to_window(raw, self.LATER)
+        self.assertEqual(dropped, 0)
+        self.assertEqual(pruned["events"], raw["events"])
+
+    def test_the_original_is_left_alone(self):
+        doc = self.parse(book(event()))
+        C.prune_to_window(doc, self.LATER)
+        self.assertEqual(len(doc["events"]), 1)
+
+    def test_what_survives_is_something_parse_would_accept(self):
+        doc = self.parse(book(event(), event(id="e_aa02", rank=2,
+                                             at="2026-10-08T12:30:00Z")))
+        pruned, _ = C.prune_to_window(doc, self.LATER)
+        self.assertTrue(C.parse_calendar(pruned, known_position_ids=KNOWN,
+                                         now=self.LATER)["events"])
+
 
 class FileTest(unittest.TestCase):
+    """`load`, which answers with the book *and* what it cost to hold it.
+
+    Two things move underneath a filed book and this function answers for both:
+    the clock, and the positions it argues about. Neither may turn a stale book
+    into no book, and a `Dropped` that is all zeroes is what says the book on
+    disk is the book in memory.
+
+    Every call passes `now`: the window is measured from an injected instant
+    everywhere else in this module, and a test that let the wall clock in would
+    be asserting on today's date rather than on the fixture's.
+    """
+
+    LATER = NOW + datetime.timedelta(days=9)
+
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.path = os.path.join(self.dir, "calendar.json")
@@ -324,23 +435,78 @@ class FileTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
 
+    def saved(self, *events, **over):
+        doc = C.parse_calendar(book(*events, **over),
+                               known_position_ids=KNOWN, now=NOW)
+        C.save(self.path, {**doc, "generated_at": "2026-09-08T05:00:00Z"})
+        return doc
+
     def test_nobody_has_filed_a_book_yet(self):
-        self.assertIsNone(C.load(self.path, known_position_ids=KNOWN))
+        self.assertEqual(C.load(self.path, known_position_ids=KNOWN, now=NOW),
+                         (None, C.Dropped()))
 
     def test_a_saved_book_loads_back_identically(self):
-        doc = C.parse_calendar(book(event()), known_position_ids=KNOWN, now=NOW)
-        C.save(self.path, {**doc, "generated_at": "2026-09-08T05:00:00Z"})
-        back = C.load(self.path, known_position_ids=KNOWN)
-        self.assertEqual(back["events"], doc["events"])
+        doc = self.saved(event())
+        back, dropped = C.load(self.path, known_position_ids=KNOWN, now=NOW)
+        self.assertEqual((back["events"], dropped),
+                         (doc["events"], C.Dropped()))
         self.assertEqual(back["generated_at"], "2026-09-08T05:00:00Z")
 
-    def test_a_book_about_a_position_the_owner_closed_is_refused_on_load(self):
-        """It should be. The reasoning in it is about a holding that no longer
-        exists, and None puts the phone back on "no book yet" rather than on a
-        book arguing about a position that was sold."""
-        doc = C.parse_calendar(book(event()), known_position_ids=KNOWN, now=NOW)
-        C.save(self.path, {**doc, "generated_at": "2026-09-08T05:00:00Z"})
-        self.assertIsNone(C.load(self.path, known_position_ids=frozenset()))
+    def test_one_aged_event_does_not_cost_the_desk_the_other_one(self):
+        """The defect: a boot must not be able to turn a stale book into no
+        book. Nine live events and one that has passed is nine live events."""
+        self.saved(event(), event(id="e_aa02", rank=2,
+                                  at="2026-10-08T12:30:00Z"))
+        back, dropped = C.load(self.path, known_position_ids=KNOWN,
+                               now=self.LATER)
+        self.assertEqual([one["id"] for one in back["events"]], ["e_aa02"])
+        self.assertEqual(dropped, C.Dropped(aged=1))
+
+    def test_a_book_that_has_aged_out_whole_is_no_book_and_says_how_many(self):
+        """Nothing survived, so there is no book -- `set_positions` reaches
+        the same answer from the other direction. What the count is for is the
+        log line and `/api/state`: "the ten events in it have all happened" and
+        "nobody has ever filed one" are both no book, and a desk that reported
+        them identically would be the silence this whole defect was."""
+        self.saved(event())
+        self.assertEqual(C.load(self.path, known_position_ids=KNOWN,
+                                now=self.LATER), (None, C.Dropped(aged=1)))
+
+    def test_a_book_about_a_position_the_owner_closed_loses_that_event_only(self):
+        """It used to lose the whole book, and that was the same defect the
+        window had: one event stops being about anything and nine true
+        statements go with it. `set_positions` prunes at the moment the
+        position closes, so reaching here needs `positions.json` edited from
+        outside the desk -- a smaller probability than the window's, not a
+        smaller cost."""
+        self.saved(event(), event(id="e_aa02", rank=2,
+                                  affects=[aff(position_id="p_3e3267")]))
+        back, dropped = C.load(self.path,
+                               known_position_ids={"p_3e3267"}, now=NOW)
+        self.assertEqual([one["id"] for one in back["events"]], ["e_aa02"])
+        # `reasons` counts the entry inside the event that went, too -- it is
+        # `prune_to_positions`' own second number. See `Dropped`.
+        self.assertEqual(dropped, C.Dropped(orphaned=1, reasons=1))
+
+    def test_an_event_keeps_the_reasoning_that_is_still_true(self):
+        both = event(affects=[aff(position_id="p_1f05f8"),
+                              aff(position_id="p_3e3267")])
+        self.saved(both)
+        back, dropped = C.load(self.path,
+                               known_position_ids={"p_1f05f8"}, now=NOW)
+        self.assertEqual([one["position_id"]
+                          for one in back["events"][0]["affects"]],
+                         ["p_1f05f8"])
+        self.assertEqual(dropped, C.Dropped(reasons=1))
+
+    def test_a_book_only_about_closed_positions_is_no_book_and_says_which(self):
+        """No book either way, and the count says why -- the same courtesy the
+        aged case gets, and for the same reason: "nobody ever filed one" wants
+        a different reaction from "everything it argued about is gone"."""
+        self.saved(event())
+        self.assertEqual(C.load(self.path, known_position_ids=frozenset(),
+                                now=NOW), (None, C.Dropped(orphaned=1,
+                                                           reasons=1)))
 
     def test_the_file_is_not_world_readable(self):
         """Every reason in it is a sentence about what the owner holds."""
@@ -351,8 +517,18 @@ class FileTest(unittest.TestCase):
     def test_a_file_that_will_not_parse_is_left_where_it_is(self):
         with open(self.path, "w") as f:
             f.write("{not json")
-        self.assertIsNone(C.load(self.path, known_position_ids=KNOWN))
+        self.assertEqual(C.load(self.path, known_position_ids=KNOWN, now=NOW),
+                         (None, C.Dropped()))
         self.assertTrue(os.path.exists(self.path))
+
+    def test_an_aged_book_is_left_on_disk_as_it_was_filed(self):
+        """`load` is a read. Rewriting the file to match what was kept would
+        move an mtime that says when research last ran, on every boot, to say
+        something else -- and the next filing overwrites it whole anyway."""
+        self.saved(event())
+        before = open(self.path, "rb").read()
+        C.load(self.path, known_position_ids=KNOWN, now=self.LATER)
+        self.assertEqual(open(self.path, "rb").read(), before)
 
 
 if __name__ == "__main__":

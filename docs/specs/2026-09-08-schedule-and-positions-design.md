@@ -341,9 +341,31 @@ The defence is structural, not a sentence in a prompt:
    file, so it does not know the strikes to leak.
 3. **A host test asserts the device plane cannot reach the new stores.** Not "does not today" —
    cannot.
-4. `positions.json` and `calendar.json` are 0600 in the data directory. The repository ships
-   `positions.example.json` and nothing else. This is the standing rule (*nothing personal
-   belongs in this repository*) applied to the most personal file the system has yet held.
+4. **Three documents are 0600 in the data directory** — `positions.json`, `calendar.json` and
+   `push.json`, the third because a push token is a permission to reach the owner's lock screen.
+   The repository ships `positions.example.json` and nothing else. This is the standing rule
+   (*nothing personal belongs in this repository*) applied to the most personal files the system
+   has yet held.
+5. **What the producer writes about its own run is evidence, and lives at ordinary mode on
+   purpose.** This is the clause the first draft of §6 was missing, and the whole-branch review
+   found it: `notes.md` on the desk and the daily brief in `AGENT_CONTEXT_DIR` are written at the
+   process umask, and `CALENDAR.md` explicitly invites the agent to name a position it could not
+   reach in the first of them. That is not an oversight to close by widening rule 4 — a note
+   nobody can read is not evidence — but the boundary has to be *stated* or it gets enforced in
+   one place and assumed in another, which is exactly what happened: the agent wrote the
+   shortfall sentence whole into the brief and redacted the same string from the command result
+   three lines later, with a comment calling it sensitive.
+
+   The rule, in one line each:
+
+   - **What the owner told the desk** — positions, devices, the book reasoning about them — lives
+     in the three 0600 files and is copied nowhere.
+   - **What the producer wrote about its own run** — notes, briefs, a command result — is
+     evidence, lives durably at ordinary mode, and is producer-scoped rather than secret.
+   - **An audit row is neither.** It records what the desk *did*, and it outlives both: nothing
+     chmods `desk.sqlite` and nothing reaps the audit table, so a strike written there is
+     permanent in a way the file it came from is not. That, and not "the weaker route", is why
+     the positions audit line carries a count.
 
 ---
 
@@ -481,6 +503,18 @@ because a stale front page badged STALE beats an empty one.* The same rule, thre
 - **A position references a symbol Yahoo will not answer for**: the position stays, its events
   come from what is available, and the screen says which source is missing. Losing the owner's
   typed position because a data source had a bad day is not acceptable.
+- **Nobody files anything for a week, and then the desk restarts**: the book is pruned, never
+  voided. `PUT /api/calendar` refuses an event outside the seven-days-back window, or one naming a
+  position the desk does not hold — the agent filing it can still fix that — but `calendar.load`
+  **drops** either, because a boot that refused the whole book over its oldest date left the desk
+  with no book, no alert for any of the live events in it, and `GET /api/calendar` answering
+  exactly what a desk that never had one answers. Both dimensions, because they are one failure
+  with two causes: the clock moves on its own, and `positions.json` can be edited around the desk.
+  Same shape as the positions prune in §5: drop what stopped being true, keep what did not, clear
+  the book only when nothing survives, and go on refusing anything *malformed* — that is not the
+  world moving. `/api/state`'s `calendar.aged` and `calendar.orphaned` separate "every date in it
+  has passed" and "everything it argued about is closed" from "nobody has ever filed one", which
+  are otherwise the same `count: 0`.
 
 ---
 
@@ -514,6 +548,22 @@ because a stale front page badged STALE beats an empty one.* The same rule, thre
    must require the mechanism to be stated explicitly enough that the owner can disagree with it.
 4. **Position data on the desk.** The owner chose this deliberately, so that the agent can reason
    about entry and size. §6 is what makes it survivable.
+5. **The notification path is outside everything above, by design.** §6 is about `/news.json` and
+   the three documents on disk; risk 4 is about the desk. Neither covers the one route this feature
+   uses on an ordinary day: `push.body` is written by the agent to name the holding — "AAAA 420
+   콜은…" — and is POSTed in cleartext to `exp.host`, forwarded to APNs or FCM, and drawn on a lock
+   screen. That is two third parties and one unlocked display, per alert, as the *normal* case
+   rather than a failure.
+
+   Stated rather than solved, because the alternatives are all worse for the thing the feature is
+   for. A body that named no position would be an alert the owner cannot act on without opening the
+   app, which is most of the value gone; end-to-end encryption is not something Expo's push service
+   offers. What is available and worth doing later: keeping the *reason* out of the body and only
+   the event and the position in it, and letting the owner choose a body that names nothing. Neither
+   is in this design.
+
+   Found by the whole-branch review rather than while writing this section, which is the useful
+   part: §6 and risk 4 both read as complete, and both are about data at rest.
 
 ---
 

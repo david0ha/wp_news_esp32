@@ -804,9 +804,21 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         horizon a ``PUT`` is judged against is the one this desk keeps rather
         than the wall's.
 
-        The audit line carries the count and nothing else. That log is read at
-        ``producer`` scope, and a symbol or a strike in it would put on the
-        weaker route exactly what this one guards.
+        The audit line carries the count and nothing else, and the reason is
+        not the scope: ``GET /api/audit`` and ``GET /api/positions`` are both
+        ``producer``, so a strike in that log reaches no token the book itself
+        does not. What it reaches is a different *place*. This document is one
+        file, 0600, rewritten whole by every edit and empty the moment the
+        owner closes everything; an audit row is a copy of it in the database,
+        which nothing chmods and nothing reaps, and which keeps what it was
+        told after the position, the file and the owner's interest in it are
+        all gone. A log that recorded the strikes would be the one place on
+        this desk where what the owner holds outlives their holding it.
+
+        Which is also what an audit row is *for*: it says what the desk did --
+        a document was accepted, and it had this many entries -- and never
+        carries the document, because the document has a route of its own and
+        this is not it.
         """
         desk = self.desk
         doc = pos.parse_positions(self._json_body(), today=desk.utc_now().date())
@@ -840,12 +852,22 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
         ``now`` is the desk's clock for the same reason ``today`` is in
         :meth:`h_put_positions`: the window an event is judged against must be
-        the one this desk keeps, or a book accepted here is refused by
-        :func:`~claudepost.calendar.load` on the next boot.
+        the one this desk keeps, or an event accepted here is one
+        :func:`~claudepost.calendar.load` drops on the next boot. Which is the
+        other half of the window rule -- a ``PUT`` refuses an event outside it
+        and a load drops one, because the agent filing has a mistake it can
+        still fix and the desk reading its own file a week later has nobody to
+        tell and a book to lose. :func:`~claudepost.calendar.prune_to_window`
+        argues it.
 
-        The audit line carries counts and a boolean. ``shortfall`` is a
-        sentence the agent wrote about what it could not cover and may name a
-        holding, so what is recorded is *that there was one*, not what it said.
+        The audit line carries counts and a boolean, on :meth:`h_put_positions`'
+        argument and not on a claim that the sentence is private -- it is not.
+        ``shortfall`` is the agent's prose about its own run, served whole by
+        the route above this one and again by ``/api/state``, and the worker
+        writes it in full into its brief and its note. What the audit records
+        is that a book arrived, how many events it carried and whether it came
+        up short; the sentence itself is a copy of a document, and a row that
+        outlives every book it describes is the wrong place to keep one.
         """
         desk = self.desk
         doc = cal.parse_calendar(self._json_body(),
@@ -863,8 +885,13 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
         ``producer``, and read-only because there is nothing here to write:
         this is the desk going outside on somebody's behalf, the way
-        :meth:`h_quotes` is, and the same two callers want it -- the agent
-        building the book's first tier, and the phone's own schedule screen.
+        :meth:`h_quotes` is. One caller wants it -- the agent, seeding a
+        ``calendar`` turn with the window it is going to build the book's first
+        tier from (``deskclient.econ``, called by ``loop.seed_econ``). The
+        phone is not a caller and is not expected to become one: it reads the
+        *book*, where these rows arrive ranked and annotated against a
+        position, which is the whole difference between this feature and the
+        generic calendar it replaces.
 
         Neither date is defaulted. ``events`` refuses anything that is not
         ``YYYY-MM-DD``, naming the field, which is also what a missing one
@@ -874,9 +901,11 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
         ``health`` travels with the answer rather than only in
         ``/api/state``. A failed fetch re-serves the last good copy of this
-        window, so the rows themselves cannot say how old they are, and making
-        the screen that is *showing* them fetch a second document to find out
-        is how a week-old schedule gets presented as current.
+        window, so the rows themselves cannot say how old they are, and the
+        caller that is about to *reason* from them is the one that needs to
+        know -- a research turn that files last week's economic calendar as
+        this week's first tier has done its worst work confidently. A second
+        request to find that out is one the caller has to remember to make.
         """
         source = self.desk.econ
         events = source.events(_query_str(query, "from"), _query_str(query, "to"))

@@ -39,6 +39,7 @@ import shutil
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import loop
 
@@ -913,14 +914,17 @@ class HandleCalendarTest(unittest.TestCase):
         # on -- the same place a research turn's does.
         self.assertEqual(desk.notes_calls,
                          [{"text": note, "draft": None, "command": cid}])
-        # The result names the count and says *that* there was a shortfall,
-        # never what it said: a shortfall may name a holding, which is the
-        # desk's own argument for what its audit line records.
+        # The result is the answer to the instruction, so it carries the
+        # count *and* the sentence. The shortfall is the agent's own prose
+        # about its own run -- the desk serves it whole at `GET /api/calendar`
+        # and again in `/api/state`, and this same turn has already written it
+        # in full to the note two lines above. Withholding it here bought
+        # nothing and cost the operator the one sentence saying what the book
+        # is missing.
         (finished_cid, ok, result), = desk.finished
         self.assertEqual((finished_cid, ok), (cid, True))
         self.assertIn("2 event(s)", result)
-        self.assertIn("shortfall", result)
-        self.assertNotIn("여섯 개였어요", result)
+        self.assertIn("여섯 개였어요", result)
 
     def test_a_calendar_run_files_no_edition(self):
         # A calendar command that produced a news.json is a bug, and the loop
@@ -971,17 +975,23 @@ class HandleCalendarTest(unittest.TestCase):
             return 0
 
         self.patch_run_claude(fake_run_claude)
-        loop.handle(cfg, self.NoDraftDesk(), {"id": "f" * 32, "kind": "calendar",
-                                              "text": "the book"}, {})
+        desk = self.NoDraftDesk()
+        loop.handle(cfg, desk, {"id": "f" * 32, "kind": "calendar",
+                                "text": "the book"}, {})
         day = time.strftime("%Y-%m-%d")
         with open(os.path.join(context, "briefs", day + ".md"),
                   encoding="utf-8") as f:
             text = f.read()
         self.assertIn("calendar", text)
         self.assertIn("**Book:** 1 event(s)", text)
-        # Whole, here: this is the operator's own directory, which is the one
-        # place the sentence is not something to keep out.
         self.assertIn("여섯 개였어요", text)
+        # And the same sentence, unaltered, in the other thing this run
+        # records. Both are asserted here on purpose: the two used to disagree
+        # about whether the shortfall could be written down at all, and a rule
+        # enforced in one place and assumed in the next is the one that gets
+        # got wrong later.
+        (_, _, result), = desk.finished
+        self.assertIn("여섯 개였어요", result)
 
 
 class AuthRouteTest(unittest.TestCase):
@@ -1159,6 +1169,28 @@ class ArgvTest(unittest.TestCase):
         cfg = loop.Settings.from_env({"CLAUDEPOST_USE_API_KEY": "1"})
         env = loop.child_env(cfg, "/work", {"ANTHROPIC_API_KEY": "k"}, home=home)
         self.assertEqual(env.get("ANTHROPIC_API_KEY"), "k")
+
+    def test_the_desk_token_never_reaches_the_child_from_the_environment(self):
+        # `load_agent_env` pops CLAUDEPOST_TOKEN out of `agent.env`, which is
+        # the documented place to keep it. It is not the only place it can be:
+        # `child_env` starts from `os.environ`, and `run-host.sh` exports every
+        # KEY=value in `$REPO/agent/.env`, so an operator who kept the token
+        # there -- or who exported it in the shell they started the loop from
+        # -- has it in the process environment and it would go straight back
+        # into the child. The child is a model with a shell and the token is
+        # `GET /api/positions`: the owner's strikes, sizes and entry prices.
+        cfg = loop.Settings.from_env({})
+        with mock.patch.dict(os.environ, {"CLAUDEPOST_TOKEN": "producer-tok"}):
+            env = loop.child_env(cfg, "/work", {})
+        self.assertNotIn("CLAUDEPOST_TOKEN", env)
+        self.assertNotIn("producer-tok", "".join(env.values()))
+
+    def test_the_desk_token_never_reaches_the_child_from_agent_env_either(self):
+        """Belt and braces on purpose: `load_agent_env` already strips this
+        one, and this door is the last one either way."""
+        cfg = loop.Settings.from_env({})
+        env = loop.child_env(cfg, "/work", {"CLAUDEPOST_TOKEN": "producer-tok"})
+        self.assertNotIn("CLAUDEPOST_TOKEN", env)
 
     def test_the_repository_is_substituted_into_the_allowlist(self):
         cfg = loop.Settings.from_env({

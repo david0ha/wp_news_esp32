@@ -351,6 +351,13 @@ def claude_argv(cfg: Settings, workdir: str, kind: str = "file_edition") -> list
 def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = None) -> dict:
     """The child's environment: the parent's, the caller's, and the policy.
 
+    Two credentials are taken out here and they are taken out for two different
+    reasons -- the desk token because the child must not have it at all, the
+    metered API key because the subscription should pay when it can. What they
+    share is *where*: this is the last door either of them passes through, and
+    a policy that holds only in the wrapper is a policy a bare
+    ``python3 loop.py`` does not have.
+
     ``DISABLE_OMC`` lives here and not in ``run-host.sh``: it is the other half
     of the keep-the-operator's-setup-out policy whose first half is
     ``--strict-mcp-config`` in :func:`claude_argv`, and a wrapper-only switch
@@ -363,6 +370,21 @@ def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = N
     env["EDITION_DIR"] = workdir
     if not cfg.keep_plugins:
         env["DISABLE_OMC"] = "1"
+    # The desk token comes out, always. `load_agent_env` already strips it from
+    # `agent.env`, which is the documented place to keep it -- but this dict
+    # starts from `os.environ`, and `run-host.sh` exports every `KEY=value` in
+    # `$REPO/agent/.env`, so an operator who kept the token in the *other* file
+    # has it in the process environment and it would go straight back into the
+    # child. Same argument as the key below and the same sentence: this is the
+    # last door, so the policy holds here or it does not hold. What it now
+    # guards is larger than it was -- a producer token reads
+    # `GET /api/positions`, which is the owner's strikes, sizes and entry
+    # prices, where before this branch it read editions.
+    if env.pop("CLAUDEPOST_TOKEN", None) is not None:
+        LOG.warning("CLAUDEPOST_TOKEN was in this process's environment; "
+                    "keeping it out of the child. The worker reads it from "
+                    "%s and the child has no use for it.",
+                    os.path.join(cfg.secrets, "agent.env"))
     # The metered key comes out when the subscription can pay instead.
     # run-host.sh unsets it from its own environment, but agent.env -- the file
     # a container operator is told to keep, and the file run-host.sh advertises
@@ -822,9 +844,16 @@ def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str,
     produced -- there is no ``edition_id`` on this path and the model's own
     ``notes.md`` says what it looked at rather than what it filed -- and the
     count over a week is the only place a book quietly shrinking from ten to
-    four is visible at all. The sentence goes in whole: this is the operator's
-    own directory, which is the one place the shortfall is not something to
-    keep out of a log.
+    four is visible at all.
+
+    The sentence goes in whole, and so does it everywhere else it goes: it is
+    the producer's own prose about its own run, which is the same material as
+    the note beside it, and the desk serves it whole at ``GET /api/calendar``
+    and in ``/api/state``. It is not what :func:`~claudepost.positions.save`
+    is 0600 for -- that is the owner's holdings, which live in one file and are
+    copied nowhere. The one place this text is deliberately not repeated is the
+    desk's audit log, and that is a statement about what an audit row is rather
+    than about this sentence.
     """
     if not (cfg.context_dir and cfg.write_briefs):
         return
@@ -967,12 +996,21 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         file_notes(desk, workdir, command=cid)
         write_brief(cfg, time.strftime("%Y-%m-%d"), command, {"state": "filed"},
                     read_notes(workdir) or "", book=book)
-        # The count and *whether* there was a shortfall, never the sentence:
-        # a shortfall says what could not be covered and may name a holding,
-        # which is the desk's own argument for what its audit line records.
+        # The count and the shortfall *sentence*, which is the operator's
+        # answer to "how did the book go" and is no use as a boolean -- "there
+        # was a shortfall" is the half of the news that cannot be acted on.
+        #
+        # An earlier version withheld it, on the grounds that a shortfall may
+        # name a holding. It buys nothing, and the two lines above are why: the
+        # same turn has just filed the model's whole dossier as a note, and the
+        # desk serves this sentence in full at `GET /api/calendar` and again in
+        # `/api/state` -- the same response that carries this result. What is
+        # kept out of the desk's *audit* line is kept out for a different
+        # reason, one about what an audit row is (see `h_put_calendar`), and
+        # borrowing that reason here made a rule out of a coincidence.
+        shortfall = book.get("shortfall")
         desk.finish(cid, True, "the book: %d event(s)%s" % (
-            len(book["events"]),
-            ", with a shortfall noted" if book.get("shortfall") else ""))
+            len(book["events"]), ". %s" % shortfall if shortfall else ""))
         return
 
     if kind == "custom" and not os.path.exists(os.path.join(workdir, "news.json")):

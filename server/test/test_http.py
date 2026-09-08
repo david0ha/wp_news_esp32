@@ -1451,9 +1451,9 @@ class CalendarTest(DeskTestCase):
 
     def test_an_event_is_judged_against_the_desks_clock(self):
         # The book's window is seven days back and four hundred on, measured
-        # from `Desk.utc_now()` rather than the wall -- which is what stops a
-        # book this desk accepted from being refused by `calendar.load` on the
-        # next boot, and what makes this assertion the same one next year.
+        # from `Desk.utc_now()` rather than the wall -- which is what stops an
+        # event this desk accepted from being dropped by `calendar.load` a
+        # moment later, and what makes this assertion the same one next year.
         status, body = self.api("PUT", "/api/calendar",
                                 event_book(an_event(at="2025-01-01T12:30:00Z",
                                                     affects=[])),
@@ -1472,6 +1472,93 @@ class CalendarTest(DeskTestCase):
         self.addCleanup(second.close)
         self.assertIsNotNone(second.calendar)
         self.assertEqual(len(second.calendar["events"]), 1)
+
+    def test_one_aged_event_does_not_void_the_book_at_the_next_boot(self):
+        """The history this desk has actually had: a week with no agent, then
+        a restart. The first event in the book has passed; the nine behind it
+        have not, and they are the ones every pending alert is for.
+        """
+        [pid] = self.hold(option())
+        soon = an_event(affects=[aff(position_id=pid)])
+        later = an_event(id="e_aa02", rank=2, at="2026-11-08T12:30:00Z",
+                         affects=[aff(position_id=pid)])
+        status, _ = self.api("PUT", "/api/calendar", event_book(soon, later),
+                             scope="producer")
+        self.assertEqual(status, 200)
+
+        self.clock.advance(40 * 86400)          # `soon` is now three weeks past
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNotNone(second.calendar, "the book was voided whole")
+        self.assertEqual([one["id"] for one in second.calendar["events"]],
+                         ["e_aa02"])
+        # And the two cases are told apart where anybody looks: nine events
+        # with one aged out is not a desk that never had a book.
+        self.assertEqual(second.state()["calendar"]["count"], 1)
+        self.assertEqual(second.state()["calendar"]["aged"], 1)
+        self.assertEqual(second.state()["calendar"]["orphaned"], 0)
+
+    def test_a_book_that_has_aged_out_whole_says_so_rather_than_nothing(self):
+        """No book either way -- every event in it has happened -- but the
+        count is what stops that reading as "nobody ever filed one"."""
+        [pid] = self.hold(option())
+        status, _ = self.api("PUT", "/api/calendar",
+                             event_book(an_event(affects=[aff(position_id=pid)])),
+                             scope="producer")
+        self.assertEqual(status, 200)
+
+        self.clock.advance(40 * 86400)
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNone(second.calendar)
+        self.assertEqual(second.state()["calendar"],
+                         {"count": 0, "aged": 1, "orphaned": 0,
+                          "generatedAt": None, "shortfall": None})
+
+    def test_a_position_edited_from_outside_the_desk_costs_only_its_events(self):
+        """The other thing that moves underneath a filed book, closed the same
+        way. `set_positions` prunes at the moment the owner closes something,
+        so the only route to a book naming a position the desk does not hold
+        is somebody editing `positions.json` while the desk is not running --
+        rarer than the window's case, and exactly as expensive when it lands.
+        """
+        first, second_id = self.hold(option(), stock())
+        keeps = an_event(affects=[aff(position_id=first)])
+        goes = an_event(id="e_aa02", rank=2,
+                        affects=[aff(position_id=second_id)])
+        status, _ = self.api("PUT", "/api/calendar", event_book(keeps, goes),
+                             scope="producer")
+        self.assertEqual(status, 200)
+
+        # The desk is not running. Somebody edits the file the phone writes.
+        doc = P.parse_positions(position_book(option()),
+                                today=self.desk.utc_now().date())
+        doc["updated_at"] = utc_stamp(self.clock.now())
+        P.save(os.path.join(self.cfg.data_dir, "positions.json"), doc)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNotNone(second.calendar, "the book was voided whole")
+        self.assertEqual([one["id"] for one in second.calendar["events"]],
+                         ["e_91c2"])
+        self.assertEqual(second.state()["calendar"],
+                         {"count": 1, "aged": 0, "orphaned": 1,
+                          "generatedAt": utc_stamp(self.START),
+                          "shortfall": None})
+
+    def test_a_filing_agent_is_still_told_its_event_is_out_of_window(self):
+        """`load` drops what the clock falsified; a PUT refuses it. The desk
+        reading its own file has no one to tell and something to lose, and the
+        agent filing has both the other way round -- an event nine days past is
+        a mistake it can still fix."""
+        [pid] = self.hold(option())
+        status, body = self.api(
+            "PUT", "/api/calendar",
+            event_book(an_event(at="2026-01-02T12:30:00Z",
+                                affects=[aff(position_id=pid)])),
+            scope="producer")
+        self.assertEqual(status, 400, body)
+        self.assertIn("window", body["detail"])
 
     def test_a_book_whose_positions_are_gone_is_not_loaded_on_the_next_boot(self):
         """`calendar.load`'s own rule, reached through the desk.
@@ -1533,7 +1620,8 @@ class CalendarTest(DeskTestCase):
     def test_the_state_document_carries_the_count_the_stamp_and_the_shortfall(self):
         status, doc = self.api("GET", "/api/state", scope="producer")
         self.assertEqual(doc["calendar"],
-                         {"count": 0, "generatedAt": None, "shortfall": None})
+                         {"count": 0, "aged": 0, "orphaned": 0,
+                          "generatedAt": None, "shortfall": None})
 
         [pid] = self.hold(option())
         book = event_book(an_event(affects=[aff(position_id=pid)]),

@@ -664,10 +664,17 @@ direction only:** a researched kind claiming `computed` is refused, but a
 on the company's own IR page is more authoritative than one inferred from a
 feed, and a rule that refused it would push the agent to launder a sourced date
 as `computed` to get it accepted. And **the fourth clause is a heuristic**:
-`_DATE_IN_PROSE` refuses an ISO date or a `M월 D일` inside a `reason` or a
-`reason_short`, and lets a date referred to in words through. It binds those
-two fields and nothing else, because a `title` or a `push.body` describes
-*this* event, whose date is in `at` and has a source behind it.
+`_DATE_IN_PROSE` refuses an ISO date, a `M월 D일`, an English month and day
+(`November 12`, `Nov. 12`, `12 November`) or a slash date carrying its year
+inside a `reason` or a `reason_short`, and lets a date referred to in words
+through. Both languages, because `lang` is a free tag and a wrong date in a
+sentence about the owner's own money is wrong in either — a clause that caught
+`11월 12일` and passed "on November 12" would be a wall across half a doorway.
+What it deliberately does not catch is listed at the constant: a month with no
+day, a bare ordinal, and a two-part `11/21`, each of which is something else
+often enough that refusing it would only teach the agent to write worse prose.
+It binds those two fields and nothing else, because a `title` or a `push.body`
+describes *this* event, whose date is in `at` and has a source behind it.
 
 `affects` is required and non-empty. That is the design's floor made
 enforceable rather than advisory — "a source *and* a stated mechanism reaching
@@ -692,24 +699,53 @@ mattered: they looked in the morning and it happened in the evening.
 
 A refusal is `400 bad_calendar` naming the field, and the book in force is
 untouched. `parse_calendar` is handed the ids the desk currently holds and the
-desk's own clock, so a book accepted here cannot be refused by the next boot's
-`load()`. The window is seven days back and 400 days forward.
+desk's own clock, so a book accepted here is judged against the same window the
+next boot's `load()` will judge it against. The window is seven days back and
+400 days forward.
+
+**A boot may not turn a stale book into no book, and two different things used
+to let it.** A PUT refuses an event outside that window, or one naming a
+position the desk does not hold — the agent filing has made a mistake it can
+still fix — but `load()` **drops** either, because the desk reading its own file
+a week later has nobody to tell and a book to lose. A ten-event book whose first
+date is now nine days old is nine live events, and refusing it whole left the
+desk with no book at all, no alert for any of the nine, and one log line about
+it: `GET /api/calendar` answered `null`, which is what a desk that never had a
+book answers. The positions dimension is the same failure by the other route,
+and is reachable when `positions.json` is edited from outside the desk — rarer,
+and exactly as expensive. What stays a refusal is anything *malformed*: that is
+not the world moving, it is a file that was never right, and both prunes remove
+only what they can prove while leaving everything else to the validator.
+
+If *nothing* survives there is no book, on the same reasoning as the prune
+below. `/api/state` carries `calendar.aged` and `calendar.orphaned` so that
+"the dates in it have all passed", "everything it argued about is closed" and
+"nobody has ever filed one" are three different answers rather than one
+`count: 0`.
 
 **Editing the positions prunes the book rather than keeping or discarding it.**
 `PUT /api/positions` drops exactly the reasoning that became false, drops an
 event only when it has none left, and clears the book entirely — file included
 — when nothing survives. The alternative that looks simpler is to leave the
-book and let the next boot refuse it, which serves dangling `position_id`s the
-phone cannot draw for however many hours lie in between; the alternative that
-looks safer is to discard the whole book, which throws away nine true
-statements because a tenth stopped being about anything. An events-empty book
+book and let the next boot deal with it, which serves dangling `position_id`s
+the phone cannot draw for however many hours lie in between; the alternative
+that looks safer is to discard the whole book, which throws away nine true
+statements because a tenth stopped being about anything. This is the same
+`prune_to_positions` the loader runs, and it is still needed here: pruning at
+the edit is what keeps the book in *memory* honest until the next boot. An events-empty book
 is not a smaller book, it is a claim that nothing is coming with no `shortfall`
 behind it, which is why the file goes too — a file the desk will not read is a
 file whose mtime lies about when research last ran.
 
-`GET /api/state` carries `count`, `generatedAt` and the `shortfall` sentence
-itself; the audit line carries the event count and *whether* there was a
-shortfall, never what it said, because a shortfall may name a holding.
+`GET /api/state` carries `count`, `aged`, `orphaned`, `generatedAt` and the
+`shortfall` sentence itself. The audit line carries the event count and *whether* there was
+a shortfall — not because the sentence is private, it is not: it is the agent's
+prose about its own run, served whole by `GET /api/calendar` and by `/api/state`
+and written in full into the worker's brief and the command's result. It is
+because an audit row says what the desk *did* and outlives every book it
+describes, in a database nothing chmods and nothing reaps. The same argument,
+and not a scope argument, is why `PUT /api/positions` audits a count and never a
+strike: `GET /api/audit` and `GET /api/positions` are both `producer`.
 
 ## The economic calendar
 
@@ -718,8 +754,11 @@ window, cached — the first tier's exact-time macro releases, which have to
 arrive with a time rather than a day because a print at 12:30 UTC and one at
 21:00 UTC are different events to somebody holding a position through one of
 them. `producer` scope and read-only: this is the desk going outside on
-somebody's behalf, exactly as `/api/quotes` is, and the same two callers want
-it.
+somebody's behalf, exactly as `/api/quotes` is. The agent is its one caller —
+`loop.seed_econ` seeds a `calendar` turn with the window it will build the
+first tier from. The phone does not call it and is not meant to: it reads the
+*book*, where these rows arrive ranked and annotated against a position, which
+is the difference between this feature and the generic calendar it replaces.
 
 It runs **inside the desk** rather than beside it as a second service. The
 sibling project this is ported from separated it because an ESP32 cannot scrape
@@ -913,15 +952,38 @@ a public URL.
 The defence is structural rather than a sentence in a prompt, and the two
 halves are not equally strong.
 
-**1. Two command kinds, two briefs, and the newspaper's producer never holds
-the file.** `edition` produces the newspaper from `PROMPT.md`; `calendar`
-produces the event book from `CALENDAR.md`. `loop.py` seeds the positions only
-on the second, so the process that writes a page does not know the strikes to
-leak. That is the wall. The worker carries the same rule a second time at the
-point it files: a `calendar` run that wrote a `news.json` is *refused* before
-its book is even read, and the page is left on disk as evidence rather than
-uploaded, because that turn is the one turn in the system holding the owner's
-positions.
+**1. Two command kinds, two briefs, and the newspaper's producer is never
+handed the file.** `edition` produces the newspaper from `PROMPT.md`;
+`calendar` produces the event book from `CALENDAR.md`. `loop.py` seeds the
+positions only on the second, so the process that writes a page is not given
+the strikes it could leak. That is the wall. The worker carries the same rule a
+second time at the point it files: a `calendar` run that wrote a `news.json` is
+*refused* before its book is even read, and the page is left on disk as
+evidence rather than uploaded, because that turn is the one turn in the system
+holding the owner's positions.
+
+**Said precisely, because the loose version of that sentence is wrong.** What
+the split governs is the *workdir*. It does not govern the credential: there is
+one producer token, `GET /api/positions` is producer scope, and anything
+holding that token can read the whole book over HTTP whichever brief it was
+given. What keeps it away from an edition child is that the token is dropped
+twice on its way there — `deskclient.load_agent_env` strips `CLAUDEPOST_TOKEN`
+out of `agent.env`, and `loop.child_env` strips it again out of the process
+environment, which is the door that matters because `run-host.sh` exports every
+`KEY=value` in `$REPO/agent/.env` and an operator who kept the token there has
+it in the environment. Alongside that, `DEFAULT_TOOLS` gives the child
+`Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` and exactly two `Bash` prefixes,
+both fixed paths (`tools/make_tile.py`, `tools/mock_news_server.py`), so there
+is no general shell to curl with.
+
+**And not overstated: this is not a sandbox.** `Read` is not restricted to the
+workdir and `WebFetch` reaches the network, so a model that went looking could
+read `~/.claudepost/agent.env` (or the mounted secrets in a container) and ask
+the desk itself. Nothing here prevents that. The honest claim is that the
+newspaper's producer is not *handed* the positions or the credential that
+fetches them — not that it could not obtain them. The fix that would close it
+is a scope narrower than `producer` for the token an edition run would use, or
+a `Read` confined to the edition directory; neither is in this design.
 
 **2. The edition validator refuses a payload carrying position fields** —
 `strike_cents`, `entry_price_cents`, `contracts`, `legs`, `position_id`, or a

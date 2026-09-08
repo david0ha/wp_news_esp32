@@ -18,12 +18,20 @@ the reader trusts both, and is wrong about one. So:
 
 Three of those four clauses are exact and are checked exactly. The fourth --
 "the reasoning may not introduce a date" -- cannot be, because a reason is
-prose. :data:`_DATE_IN_PROSE` approximates it: a reason carrying an ISO date or
-a Korean ``M월 D일`` is refused, while a reason that refers to a date in
-*words* ("발표 다음 날") passes. That is a heuristic and is documented as one
+prose. :data:`_DATE_IN_PROSE` approximates it: a reason carrying an ISO date, a
+Korean ``M월 D일``, an English ``November 12`` or a slash date with its year is
+refused, while a reason that refers to a date in *words* ("발표 다음 날", "the
+day after the print") passes. That is a heuristic and is documented as one
 rather than dressed up, but it is worth having: a wrong date in a sentence
 about the owner's own money is the worst output this system can produce, and a
 sentence is exactly where a model puts one.
+
+**It covers both of the languages the book can be written in**, which is a
+thing to keep true rather than a thing that happened: ``lang`` is a free tag
+and an English book is as renderable as a Korean one, so a clause that caught
+``11월 12일`` and let "on November 12" through would have been a wall across
+half a doorway. :data:`_DATE_IN_PROSE` names what it deliberately does not
+catch, and why each one costs less than the false refusal would.
 
 **Precision is a field, not a formatting choice.** An event known only to the
 day must render as ``9월 15일`` and never as ``09:30`` -- inventing a time is
@@ -42,7 +50,7 @@ import json
 import logging
 import os
 import re
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 from .errors import BadRequest
 from .fsutil import atomic_write, json_bytes
@@ -106,12 +114,44 @@ POSITION_ID_RE = re.compile(r"^p_[0-9a-f]{6}\Z")
 LANG_RE = re.compile(r"^[a-z]{2,3}\Z")
 _STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 
+#: The month names an English reason would spell a day with, long and short.
+#: Two ways this can misfire, both named rather than engineered around: ``may``
+#: is also a modal, though an English modal is not followed by a bare one- or
+#: two-digit number, and the alternative is a rule that covers eleven months;
+#: and the ``.`` that makes ``Nov.`` an abbreviation also makes "…in November.
+#: 12 of the legs…" look like a date. Both cost a refusal that names the field
+#: and can be reworded, which is the cheap side of this trade.
+_MONTH_NAMES = ("january|february|march|april|may|june|july|august|september|"
+                "october|november|december|"
+                "jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec")
+
 #: A date asserted inside prose. See the module docstring: this is the
 #: approximate half of the source rule, and approximating it is deliberate.
-#: ``2026-11-12`` and ``11월 12일`` are both a specific calendar day the book
-#: cannot show a source for; "발표 다음 날" is a reference to a date that IS in
-#: the book, and passes.
-_DATE_IN_PROSE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}\s*월\s*\d{1,2}\s*일")
+#: ``2026-11-12``, ``11월 12일`` and ``November 12`` are each a specific
+#: calendar day the book cannot show a source for; "발표 다음 날" and "the day
+#: after the print" are references to a date that IS in the book, and pass.
+#:
+#: **Both languages, because the failure is in neither of them.** ``lang`` may
+#: be ``en`` -- `LANG_RE` takes any tag and the phone renders whatever arrives
+#: -- and a wrong date in a sentence about the owner's own money is the worst
+#: output this system can produce whichever language it is wrong in. A clause
+#: that covered Korean alone would have been a rule with a hole exactly the
+#: shape of the other half of the product.
+#:
+#: What is deliberately *not* here, because the cost of a false refusal is an
+#: agent rewriting good prose to get its book accepted: a month with no day
+#: ("the November contract" is the contract's name), a bare ordinal ("the 21st
+#: consecutive quarter"), and a two-part slash form (``11/21`` is also a
+#: delta, a ratio and a strike pair). A slash date has to carry its year.
+_DATE_IN_PROSE = re.compile(
+    r"""  \d{4}-\d{2}-\d{2}                       # 2026-11-12
+      | \d{1,2}\s*월\s*\d{1,2}\s*일               # 11월 12일
+      | (?:%(months)s)\.?\s+\d{1,2}\b             # November 12, Nov. 12
+      | \b\d{1,2}\s+(?:%(months)s)\b              # 12 November
+      | \b\d{1,2}[/.]\d{1,2}[/.]\d{4}\b           # 11/21/2026, 21.11.2026
+      | \b\d{4}[/.]\d{1,2}[/.]\d{1,2}\b           # 2026/11/21
+    """ % {"months": _MONTH_NAMES},
+    re.VERBOSE | re.IGNORECASE)
 
 _WIDEST_STAMP = "9999-12-31T23:59:59Z"
 
@@ -455,18 +495,43 @@ def _serialised(doc: dict) -> bytes:
     return json_bytes(doc)
 
 
-def prune_to_positions(doc: dict, known: frozenset[str] | set[str]
-                       ) -> tuple[dict, int, int]:
+def _orphaned(affect: object, known: frozenset[str]) -> bool:
+    """Whether ``affect`` can be *proved* to name a position nobody holds.
+
+    :func:`prune_to_window`'s discipline, for the same reason: this runs on an
+    unchecked document too. An entry that is not an object, or whose
+    ``position_id`` is not a string, answers ``False`` and goes to the
+    validator, which has a message for it.
+    """
+    if not isinstance(affect, dict):
+        return False
+    position_id = affect.get("position_id")
+    if not isinstance(position_id, str):
+        return False
+    return position_id not in known
+
+
+def prune_to_positions(doc: object, known: frozenset[str] | set[str]
+                       ) -> tuple[object, int, int]:
     """The book with reasoning about vanished positions removed.
 
     Returns ``(book, events_dropped, affects_dropped)``. The book is a new
     document; ``doc`` is left alone.
 
-    Called when the owner edits their positions. The alternative that looks
-    simpler is to leave the book exactly as filed and let :func:`load` refuse
-    it on the next boot -- but that serves a book whose ``affects`` point at
-    positions that no longer exist for however many hours lie between here and
-    that boot, and the phone has nothing sensible to render for one.
+    Called from two places, and the second is why this one is written to
+    survive a document it did not produce. :meth:`~claudepost.app.Desk.set_positions`
+    calls it when the owner edits their holdings, on a book this module
+    validated; :func:`load` calls it on the way in, on JSON nobody has checked.
+
+    The alternative that looks simpler is to leave the book exactly as filed
+    and let :func:`load` refuse it on the next boot -- but that serves a book
+    whose ``affects`` point at positions that no longer exist for however many
+    hours lie between here and that boot, the phone has nothing sensible to
+    render for one, *and* the refusal was itself the bug: a boot that answered
+    ``None`` for a whole book because one of its ten events had stopped being
+    about anything, silently, with every pending alert for the other nine
+    stopping with it. That is the same failure :func:`prune_to_window` was
+    written for, from the other direction.
 
     The alternative that looks safer is to discard the whole book. That throws
     away nine true statements because a tenth stopped being about anything.
@@ -475,7 +540,13 @@ def prune_to_positions(doc: dict, known: frozenset[str] | set[str]
     it has no reasoning left -- which is the same floor :func:`_event` applies
     on the way in, applied again to a book the world moved underneath. What
     survives is every statement that is still true, and what the desk holds in
-    memory is again something :func:`load` would accept.
+    memory is again something :func:`parse_calendar` would accept.
+
+    On unchecked input it drops only what it can prove, exactly as
+    :func:`prune_to_window` does: see :func:`_orphaned`, and note that an
+    ``affects`` which is missing, empty or not a list leaves its event
+    untouched. An event with no reasoning at all is malformed rather than
+    emptied, and the refusal that says so names the field.
 
     Note what does **not** trigger this. :func:`~claudepost.positions._id_material`
     deliberately leaves size, price and note outside the hash, so correcting an
@@ -485,12 +556,18 @@ def prune_to_positions(doc: dict, known: frozenset[str] | set[str]
     stopped being true.
     """
     known = frozenset(known)
+    if not isinstance(doc, dict) or not isinstance(doc.get("events"), list):
+        return doc, 0, 0
+
     events = []
     affects_dropped = 0
-    for event in doc.get("events", []):
-        kept = [one for one in event["affects"]
-                if one["position_id"] in known]
-        affects_dropped += len(event["affects"]) - len(kept)
+    for event in doc["events"]:
+        affects = event.get("affects") if isinstance(event, dict) else None
+        if not isinstance(affects, list) or not affects:
+            events.append(event)       # malformed; the validator's business
+            continue
+        kept = [one for one in affects if not _orphaned(one, known)]
+        affects_dropped += len(affects) - len(kept)
         if kept:
             events.append({**event, "affects": kept})
 
@@ -499,52 +576,180 @@ def prune_to_positions(doc: dict, known: frozenset[str] | set[str]
             affects_dropped)
 
 
-def load(path: str, *, known_position_ids: frozenset[str] | set[str],
-         now: datetime.datetime | None = None) -> dict | None:
-    """The book at ``path``, or ``None``. Never raises.
+def _outside_window(event: object, now: datetime.datetime) -> bool:
+    """Whether ``event`` can be *proved* to sit outside the book's window.
 
-    ``known_position_ids`` is asked for again here rather than skipped on the
-    way out, and it is the one thing about this function worth knowing: a book
-    whose positions the owner has since closed is refused on the next boot. It
-    should be -- the reasoning in it is about holdings that no longer exist --
-    and answering ``None`` puts the phone back on "no book yet" rather than on
-    a book that argues about a position the owner sold.
+    Everything it cannot read answers ``False`` and is left for the validator,
+    which is the whole discipline of :func:`prune_to_window`: it runs on a
+    document nobody has checked yet.
+    """
+    if not isinstance(event, dict):
+        return False
+    at = event.get("at")
+    if not isinstance(at, str) or not _STAMP_RE.match(at):
+        return False
+    try:
+        when = datetime.datetime.strptime(
+            at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return False
+    return not now - PAST_WINDOW <= when <= now + FUTURE_WINDOW
+
+
+def prune_to_window(doc: object, now: datetime.datetime) -> tuple[object, int]:
+    """The book with the events time has carried out of its window removed.
+
+    Returns ``(document, dropped)``. ``doc`` is left alone.
+
+    :func:`prune_to_positions`' argument, applied to the other thing that moves
+    underneath a filed book. The positions move because the owner edits them;
+    the window moves because nobody does anything at all, which is why this one
+    needed finding: a book filed on Monday with ten dates in it is, nine days
+    later, a book whose first date is outside :data:`PAST_WINDOW` -- and
+    :func:`_event` refuses that, so :func:`load` refused the *book*, and a desk
+    that came up from a restart in that state had no book, ran no alert for the
+    nine live events in it, and said so nowhere except one log line.
+
+    So the same answer as the prune beside it: drop exactly what stopped being
+    true and keep every statement that did not. An event that has happened is
+    not a reason to forget the nine that have not.
+
+    Two things about where this runs. It runs **before** the validator rather
+    than after, because the window is one of the things the validator refuses
+    on -- there is no parsed document to prune, only the refusal. So it works
+    on JSON nobody has checked, and it therefore removes only what it can
+    *prove*: an object whose ``at`` is a well-formed instant outside the
+    window. Anything else -- a malformed event, an ``at`` that is not a string,
+    a list entry that is not an object -- is left exactly where it is, for the
+    refusal that names the field. This drops what the clock falsified, never
+    what is malformed.
+
+    And it runs in :func:`load` only, never on a ``PUT``. The desk reading its
+    own file has nobody to tell and a book to lose; an agent filing an event
+    nine days past has made a mistake it can still fix, and being told is the
+    whole value of a validator.
+    """
+    if not isinstance(doc, dict):
+        return doc, 0
+    events = doc.get("events")
+    if not isinstance(events, list):
+        return doc, 0
+
+    kept = [one for one in events if not _outside_window(one, now)]
+    if len(kept) == len(events):
+        return doc, 0
+    return {**doc, "events": kept}, len(events) - len(kept)
+
+
+class Dropped(NamedTuple):
+    """What :func:`load` left behind, by cause.
+
+    Three counts rather than one number, because they are three different
+    pieces of news. ``aged`` and ``orphaned`` are *events* removed -- by the
+    clock carrying them out of the window, and by their reasoning being
+    entirely about positions the desk no longer holds. ``reasons`` counts
+    ``affects`` entries, which is the case where the book keeps its shape and
+    loses some of its argument; it is :func:`prune_to_positions`' own second
+    number and so includes the entries inside events that went whole, which is
+    why ``orphaned`` and ``reasons`` are both 1 for one single-reason event.
+
+    All zeroes means the book in memory is the book on disk. That is the value
+    this type exists for: :func:`load` answers ``None`` for a desk nobody has
+    filed to *and* for a book nothing survived, and a ``Dropped`` beside it is
+    what tells a log line and ``/api/state`` which of those happened.
+    """
+
+    aged: int = 0
+    orphaned: int = 0
+    reasons: int = 0
+
+
+def load(path: str, *, known_position_ids: frozenset[str] | set[str],
+         now: datetime.datetime | None = None) -> tuple[dict | None, Dropped]:
+    """The book at ``path``, and what it cost to hold it. Never raises.
+
+    Returns ``(book, dropped)``: the book with every event still inside its
+    window and still about something the owner holds, or ``None`` when there is
+    no book to have, and a :class:`Dropped` saying what was removed to get
+    there.
+
+    **Two things move underneath a filed book and neither may void it.** The
+    clock moves because nobody does anything at all; the positions move because
+    the owner edits them. Both used to be refusals, which meant a boot could
+    answer ``None`` for a book of ten because one event had stopped being true
+    -- silently, with every pending alert for the other nine stopping too, and
+    ``GET /api/calendar`` answering exactly what it answers for a desk that has
+    never been filed to. So both are prunes here:
+    :func:`prune_to_window` and :func:`prune_to_positions`, in that order, both
+    before the validator sees the document. What remains a refusal is anything
+    *malformed*, which is not the world moving but a file that was never right.
+
+    A ``PUT`` still refuses both, and the asymmetry is the point: an agent
+    filing has a mistake it can still fix, and the desk reading its own file a
+    week later has nobody to tell and a book to lose.
 
     ``now`` is passed through for :func:`parse_calendar`'s reason and one of
     its own: the desk that reads this file has an injected clock, and a loader
-    that consulted the wall clock instead would refuse, on the next boot, a
-    book that same desk accepted a moment ago -- silently, because this
-    function reports everything by answering ``None``.
+    that consulted the wall clock instead would judge the window at a different
+    instant from the ``PUT`` that filled it.
     """
     try:
         with open(path, "rb") as f:
             raw = f.read()
     except OSError:
-        return None                # missing is the ordinary case; not logged
+        return None, Dropped()     # missing is the ordinary case; not logged
 
     if len(raw) > MAX_DOC_BYTES:
         LOG.warning("%s will not parse (%d bytes, over the %d-byte cap)",
                     os.path.basename(path), len(raw), MAX_DOC_BYTES)
-        return None
+        return None, Dropped()
 
     try:
         raw_doc = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         LOG.warning("%s will not parse (%s)", os.path.basename(path), exc)
-        return None
+        return None, Dropped()
+
+    now = (datetime.datetime.now(datetime.timezone.utc) if now is None
+           else now)
+    # The window first, so an event that has both passed *and* lost its
+    # position is counted once, under the cause that came first in time. Two
+    # counts for one event would make `aged + orphaned` a number that means
+    # nothing.
+    pruned, aged = prune_to_window(raw_doc, now)
+    pruned, orphaned, reasons = prune_to_positions(pruned, known_position_ids)
+    dropped = Dropped(aged=aged, orphaned=orphaned, reasons=reasons)
 
     try:
-        doc = parse_calendar(raw_doc, known_position_ids=known_position_ids,
+        doc = parse_calendar(pruned, known_position_ids=known_position_ids,
                              now=now)
     except BadRequest as exc:
         LOG.warning("%s will not parse (%s)",
                     os.path.basename(path), exc.message or str(exc))
-        return None
+        # All zeroes, not what the prunes counted: `Dropped` exists to explain
+        # a book this function made smaller or absent, and this one is neither
+        # -- it was refused, which the warning above says and names the field
+        # for. Counts here would put the wrong cause in `/api/state` for the
+        # one case that already reports itself.
+        return None, Dropped()
+
+    # Nothing survived, so there is no book -- the answer `set_positions`
+    # reaches from the other direction, and for its reason: an events-empty
+    # book is not a smaller book, it is a document claiming nothing is coming
+    # with no `shortfall` sentence behind it. `dropped` travels anyway, so this
+    # is not the same silence as no file at all.
+    #
+    # The `any` because emptiness has two causes and only one of them is this
+    # function's doing. A book *filed* with no events carries a `shortfall`
+    # written about exactly that, which is somebody standing behind it, and
+    # loses nothing here that it did not lose at the PUT.
+    if not doc["events"] and (dropped.aged or dropped.orphaned):
+        return None, dropped
 
     stamp = raw_doc.get("generated_at") if isinstance(raw_doc, dict) else None
     doc["generated_at"] = (stamp if isinstance(stamp, str)
                            and _STAMP_RE.match(stamp) else "")
-    return doc
+    return doc, dropped
 
 
 def save(path: str, doc: dict) -> None:

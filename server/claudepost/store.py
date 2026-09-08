@@ -618,9 +618,13 @@ class Store:
     def audit(self, event: str, detail: dict) -> None:
         """Append to the audit log.
 
-        Never put a credential in ``detail``. This log is served to any
-        ``operator`` token, so it is the least private place in the desk that
-        still looks like a private one.
+        Never put a credential in ``detail``, and never a copy of a document
+        either. ``GET /api/audit`` is served to any ``producer`` token -- the
+        weaker of the two -- so it is the least private place in the desk that
+        still looks like a private one; and this table is the most durable,
+        because nothing chmods the database it lives in and nothing reaps its
+        rows. What a row says outlives the thing it is about. A count is the
+        right size for that; a strike is not.
         """
         with self._write():
             self._db.execute(

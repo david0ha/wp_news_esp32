@@ -182,6 +182,17 @@ class Desk:
         self.calendar_path = os.path.join(cfg.data_dir, "calendar.json")
         self.calendar: dict | None = None
 
+        #: What the last read of that file removed, by cause -- see
+        #: `calendar.Dropped`. All zeroes for a book nobody has filed and for
+        #: one nothing was removed from, which is the whole reason it exists as
+        #: counts rather than a flag: `calendar` is `None` for "nobody filed
+        #: one", for "every date in the one on disk has passed" and for "it was
+        #: all about positions that are gone", and a desk that reported those
+        #: three identically is the defect they count against. Set by
+        #: `_load_calendar` and cleared by anything that replaces the book,
+        #: because it is a fact about a read rather than about the desk.
+        self.calendar_dropped = cal.Dropped()
+
         self.push_path = os.path.join(cfg.data_dir, "push.json")
         self.push_devices: dict | None = None
 
@@ -228,10 +239,11 @@ class Desk:
         self._load_schedule()
         self._load_watchlist()
         self._load_settings()
-        # In this order, and it is not alphabetical: `calendar.load` refuses a
-        # book that reasons about a position the desk does not hold, so it has
-        # to be told what this desk holds first. A calendar loaded before the
-        # positions would be refused whole, every boot, silently.
+        # In this order, and it is not alphabetical: `calendar.load` prunes
+        # away reasoning about positions the desk does not hold, so it has to
+        # be told what this desk holds first. A calendar loaded before the
+        # positions would be pruned against an empty set -- every event
+        # orphaned, no book, every boot, silently.
         self._load_positions()
         self._load_calendar()
         self._load_push_devices()
@@ -346,18 +358,37 @@ class Desk:
                 "count": len(self.watchlist["items"]) if self.watchlist else 0,
             },
             # The four rows this feature is visible on, and every one of them
-            # is a count or a cause rather than a content. That is the whole
-            # design of this block: `/api/state` is read at `producer` scope,
-            # so an agent reads it -- and what the owner holds, what the phone
-            # was told and which phones exist are the three things this
-            # feature exists to keep off a route that does not need them. A
-            # symbol, a strike, a reason or a push token here would hand every
-            # holder of the weaker token the material the stronger one guards.
+            # is a count or a cause rather than a content. Not because this
+            # route is weaker than the ones that serve those documents -- it
+            # is not: `/api/state`, `GET /api/positions` and `GET /api/calendar`
+            # are all `producer`, and the phone that writes the positions holds
+            # the stronger token anyway. It is because a health document is not
+            # a copy of the documents it reports on. Every reader of this one
+            # is asking whether the desk is working, and answering that with a
+            # strike, a reason or a push token would spread it into logs,
+            # screenshots and terminal scrollback that nobody asked to hold it
+            # -- and, for the push token, would put a capability to write on
+            # the owner's lock screen in a status page.
+            #
+            # `shortfall` is the one string here, and it is the exception that
+            # shows what the rule is about: it is the agent's sentence about
+            # its own run rather than a field of the owner's book.
             "positions": {
                 "count": len(self.positions["positions"]) if self.positions else 0,
             },
             "calendar": {
                 "count": len(self.calendar["events"]) if self.calendar else 0,
+                # What the last read of the file removed and why, because
+                # `count` alone cannot say. Ten filed, one passed, nine live
+                # reads as `count: 9` -- the same nine as a book that was
+                # filed with nine -- and a book whose every event has passed
+                # reads as `count: 0`, which is also what a desk nobody ever
+                # filed to reads. These two separate all of it, and separating
+                # it is the difference between a quiet desk and a broken one.
+                # `reasons` stays out: it does not move `count`, and this is a
+                # health document rather than a diff. The log has all three.
+                "aged": self.calendar_dropped.aged,
+                "orphaned": self.calendar_dropped.orphaned,
                 # `or None` for the watchlist's reason: a book written by
                 # something other than this desk's own PUT carries no instant
                 # and `calendar.load` fails that field soft, to `""`. An empty
@@ -478,12 +509,16 @@ class Desk:
         The event book is pruned to match, and neither of the two obvious
         alternatives is what happens here. Leaving it exactly as filed serves a
         book whose ``affects`` name positions that no longer exist for every
-        hour between this PUT and the next boot, where
-        :func:`~claudepost.calendar.load` would refuse it -- and the phone has
-        nothing sensible to draw for one. Discarding the whole book throws away
-        nine true statements because a tenth stopped being about anything. So
+        hour between this PUT and the next boot, and the phone has nothing
+        sensible to draw for one. Discarding the whole book throws away nine
+        true statements because a tenth stopped being about anything. So
         :func:`~claudepost.calendar.prune_to_positions` drops exactly the
         reasoning that became false, and an event only when it has none left.
+
+        The same function runs again inside :func:`~claudepost.calendar.load`,
+        and this is still the place it matters: pruning here is what keeps the
+        book in *memory* honest between now and the next boot, where the loader
+        only ever repairs what somebody edited around the desk.
 
         This costs nothing on an ordinary edit, which is the part worth
         knowing: :func:`~claudepost.positions._id_material` leaves size, price
@@ -526,6 +561,7 @@ class Desk:
         to whoever is working out when research last happened.
         """
         self.calendar = None
+        self.calendar_dropped = cal.Dropped()   # a fact about a read; this is not one
         try:
             os.remove(self.calendar_path)
         except OSError:
@@ -541,6 +577,7 @@ class Desk:
         """
         cal.save(self.calendar_path, doc)
         self.calendar = doc
+        self.calendar_dropped = cal.Dropped()   # this is what the agent just filed
 
     def set_push_devices(self, doc: dict) -> None:
         """Write ``doc`` down, then put it in force -- in that order.
@@ -645,15 +682,32 @@ class Desk:
         the two things the book is validated against -- see
         :meth:`position_ids` for the second and
         :func:`~claudepost.calendar.load` for the first.
+
+        Three outcomes, and the log distinguishes all three because two of them
+        used to be one line. A book, saying what was removed from it on the
+        way; no book because nobody has filed one; and no book because nothing
+        in the one on disk survived -- its dates have passed, or the positions
+        it argued about are gone. That last is a desk with a file it will not
+        use, and a boot that reported it as "none at <path>" was the whole of
+        what a reader got told.
         """
-        self.calendar = cal.load(self.calendar_path,
-                                 known_position_ids=self.position_ids(),
-                                 now=self.utc_now())
+        self.calendar, self.calendar_dropped = cal.load(
+            self.calendar_path, known_position_ids=self.position_ids(),
+            now=self.utc_now())
+        lost = self.calendar_dropped
+        why = ", ".join(
+            "%d %s" % (n, word) for n, word in
+            ((lost.aged, "passed"), (lost.orphaned, "about closed positions"),
+             (lost.reasons, "reason(s) dropped")) if n)
         if self.calendar is None:
-            LOG.info("calendar: none at %s", self.calendar_path)
+            if why:
+                LOG.info("calendar %s: nothing survived the read (%s); no book",
+                         self.calendar_path, why)
+            else:
+                LOG.info("calendar: none at %s", self.calendar_path)
             return
-        LOG.info("calendar %s (%d events, generated %s)", self.calendar_path,
-                 len(self.calendar["events"]),
+        LOG.info("calendar %s (%d events%s, generated %s)", self.calendar_path,
+                 len(self.calendar["events"]), " -- %s" % why if why else "",
                  self.calendar["generated_at"] or "never")
 
     def _load_push_devices(self) -> None:

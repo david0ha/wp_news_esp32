@@ -421,13 +421,16 @@ a book that has stopped doing its job.
 
 **Never introduce a date.** The reasoning may point at an event that is already in the book; it may
 not name a calendar day of its own, because a date needs a source and a sentence carries none. The
-desk enforces this with a deliberate approximation: a `reason` or `reason_short` containing an ISO
-date (`2026-11-12`) or a Korean `M월 D일` (`11월 12일`) is refused by name.
+desk enforces this with a deliberate approximation, and it is the same approximation in either
+language: a `reason` or `reason_short` containing an ISO date (`2026-11-12`), a Korean `M월 D일`
+(`11월 12일`), an English month and day (`November 12`, `Nov. 12`, `12 November`) or a slash date
+carrying its year (`11/21/2026`) is refused by name.
 
-So write the reference in words. **"발표 다음 날", "만기 일주일 전", "결정이 나오고 이틀 뒤"** all
-pass and all say more, because they say the relation the owner cares about instead of a number
-they would have to subtract. If a date genuinely matters, it is an event: file it as one, with its
-source, and point at it.
+So write the reference in words. **"발표 다음 날", "만기 일주일 전", "결정이 나오고 이틀 뒤"** —
+and, in an English book, "the day after the print", "a week before expiry" — all pass and all say
+more, because they say the relation the owner cares about instead of a number they would have to
+subtract. If a date genuinely matters, it is an event: file it as one, with its source, and point
+at it.
 
 **Never write about a position that is not in `positions.json`.** Every `affects[].position_id` is
 an id you were given. An id you invented is refused; an id the owner has since closed takes the

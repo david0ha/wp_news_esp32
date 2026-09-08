@@ -515,10 +515,11 @@ class FiringTest(unittest.TestCase):
     def given(self, *devices, book=None):
         """A book, the phones to tell, and the positions the book is about.
 
-        The positions are not decoration: ``calendar.load`` refuses a book
-        whose reasoning names a position the desk does not hold, so a desk
-        rebuilt on this data directory would come up with no book at all and
-        every assertion about a restart would pass for the wrong reason.
+        The positions are not decoration: ``calendar.load`` prunes away
+        reasoning that names a position the desk does not hold, and every event
+        in these books has exactly one reason -- so a desk rebuilt on this data
+        directory without them would come up with no book at all and every
+        assertion about a restart would pass for the wrong reason.
         """
         self.desk.set_positions(the_positions(self.clock.now()))
         self.desk.set_calendar(book if book is not None
@@ -578,6 +579,34 @@ class FiringTest(unittest.TestCase):
 
         self.assertNotIn("alerts:1", self.desk.tick())
         self.assertEqual(self.sent(self.desk.push_fetch), [])
+
+    def test_an_event_that_has_passed_does_not_stop_the_alerts_behind_it(self):
+        """What the window defect actually cost, in the one place it hurts.
+
+        A book filed in November holding a date that has since passed and one
+        seven weeks out. A restart re-reads the file, and a loader that refused
+        the whole book over the first date would leave this desk with no book,
+        no alert for the second, and nothing to say so until somebody asked why
+        their phone had gone quiet. It takes an agent outage and a restart,
+        which is a fortnight this repository has already had.
+        """
+        self.given(book=a_book(an_event(at=self.EVENT),
+                               an_event(id="e_ea02", rank=2,
+                                        at="2026-12-20T18:00:00Z")))
+        self.desk.tick()                       # the first event's alert goes
+        self.desk.close()
+
+        # Six weeks on: the November date is outside `calendar.PAST_WINDOW`,
+        # the December one is a day away, and its P1D lead has just passed.
+        self.clock.advance(ts("2026-12-19T18:00:01Z") - self.clock.now())
+        self.desk = self.a_desk()
+        self.assertIsNotNone(self.desk.calendar, "the book did not come back")
+        self.assertEqual([one["id"] for one in self.desk.calendar["events"]],
+                         ["e_ea02"])
+
+        self.assertIn("alerts:1", self.desk.tick())
+        [message] = self.sent(self.desk.push_fetch)
+        self.assertEqual(message["to"], TOKEN_A)
 
     # -- failure -----------------------------------------------------------
 
