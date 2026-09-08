@@ -24,9 +24,13 @@ import { colors, fonts, layout, space, type } from '../theme'
  * with the date, the reason and the direction intact, and only the name of the position missing.
  * Failing the whole screen over the decoration would be losing nine dates to protect a label.
  *
- * `now` is captured once per load rather than read per row, so every heading on the screen agrees
- * about which day is 오늘 — a list that read the clock per group could straddle midnight and print
- * two of them.
+ * `now` is read once per RENDER PASS — not per row, and not once per successful load. Once per pass
+ * is what makes every heading and every countdown on the screen agree about which day is 오늘; a
+ * list that read the clock per group could straddle midnight and print two of them. But holding it
+ * in state and refreshing it only on a successful load, which is what this did first, leaves a
+ * screen open across local midnight with a heading that still says 오늘 over yesterday — and the
+ * case that reaches is precisely the one nobody sees, a phone left open all night whose every
+ * refresh has been failing. The day this screen groups by must not be able to lag the device's own.
  *
  * The token is read for the call and gone with the frame, `PositionSheet`'s rule: it lives in the
  * keychain, reaches exactly one header inside `createDeskClient`, and is in no state this
@@ -42,7 +46,6 @@ export default function Schedule() {
   // `undefined` is "not fetched"; `null` is a desk that answered and has no book.
   const [doc, setDoc] = useState<CalendarDoc | null | undefined>(undefined)
   const [book, setBook] = useState<PositionsDoc | null>(null)
-  const [now, setNow] = useState(() => new Date())
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
@@ -72,7 +75,6 @@ export default function Schedule() {
       if (!alive.current) return
       setDoc(calendar)
       setBook(positions)
-      setNow(new Date())
       setError(null)
     } catch (e) {
       if (!alive.current) return
@@ -141,7 +143,9 @@ export default function Schedule() {
     )
   }
 
-  const view = scheduleView({ ready, doc: doc ?? null, now })
+  // Read here and passed down, never captured: see the clock note above.
+  const now = new Date()
+  const view = scheduleView({ ready, doc: doc ?? null, now, error })
 
   return (
     <Screen>
@@ -152,6 +156,15 @@ export default function Schedule() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
         }
       >
+        {/* A refresh that failed over an answer already on screen, said out loud ABOVE it — over
+            every view and not only over a book. The empty ones are where this is least visible and
+            most misleading: a desk with no book, pulled to refresh, now unreachable, redraws
+            byte-identically, and "still no book" is indistinguishable from "I could not reach the
+            desk just now". At the head rather than the foot for the same reason — at the bottom of
+            forty events nobody scrolls to it. Whatever arrived stays under it: it is still the last
+            thing the desk actually said. */}
+        {view.error !== null ? <Text style={styles.error}>{view.error}</Text> : null}
+
         {view.kind === 'book' ? (
           <>
             {view.groups.map((group) => (
@@ -175,10 +188,6 @@ export default function Schedule() {
                 <Text style={type.caption}>{view.shortfall}</Text>
               </Card>
             ) : null}
-
-            {/* A refresh that failed over a book already on screen, said out loud under it. The
-                book stays: it is still the last thing the desk actually said. */}
-            {error !== null ? <Text style={styles.error}>{error}</Text> : null}
           </>
         ) : (
           <ScreenMessage message={t.schedule.empty[EMPTY_KEY[view.kind]]} />

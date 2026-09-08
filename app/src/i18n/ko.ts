@@ -655,10 +655,11 @@ export const ko: Strings = {
       against: '↓ 불리',
       both: '양방향',
     },
+    countdown: '만기 D-{n}',
     alsoAffects: '포지션 {n}개 더',
     shortfallLabel: '더 없는 이유',
     empty: {
-      needsDesk: '일정은 데스크에서 옵니다. 설정에서 주소와 오퍼레이터 토큰을 입력해 주세요.',
+      needsDesk: '일정은 데스크에서 가져와요. 설정에서 데스크 주소와 오퍼레이터 토큰을 입력해 주세요.',
       noBook: '아직 데스크에 올라온 일정이 없어요. 아침에 한 번, 미국 장 마감 뒤에 한 번 조사해서 올려요.',
       nothingUpcoming: '일정이 모두 지나갔어요. 다음 일정은 아침에 올라와요.',
     },

@@ -349,51 +349,85 @@ describe('directionLabel and directionColour', () => {
 })
 
 describe('positionLine', () => {
-  const book = parsePositionsDoc({
-    updated_at: '2026-09-08T05:00:00Z',
-    positions: [
-      {
-        id: 'p_1f05f8',
-        symbol: 'AAAA',
-        kind: 'option',
-        opened_at: '2026-08-19',
-        note: '',
-        strategy: 'long_call',
-        legs: [
-          {
-            right: 'call',
-            side: 'long',
-            strike_cents: 42000,
-            expiry: '2026-11-21',
-            contracts: 2,
-            entry_price_cents: 1180,
-          },
-        ],
-      },
-      {
-        id: 'p_aa11bb',
-        symbol: 'BBBB',
-        kind: 'stock',
-        opened_at: null,
-        note: '',
-        quantity: 300,
-        entry_price_cents: 5400,
-      },
-    ],
-  }) as PositionsDoc
+  const optionOn = (expiries: string[]) => ({
+    id: `p_${expiries.length}f05f8`,
+    symbol: 'AAAA',
+    kind: 'option',
+    opened_at: '2026-08-19',
+    note: '',
+    strategy: expiries.length > 1 ? 'calendar' : 'long_call',
+    legs: expiries.map((expiry) => ({
+      right: 'call',
+      side: 'long',
+      strike_cents: 42000,
+      expiry,
+      contracts: 2,
+      entry_price_cents: 1180,
+    })),
+  })
 
-  const NOW = Date.UTC(2026, 8, 8)
+  const bookOf = (...positions: unknown[]) =>
+    parsePositionsDoc({ updated_at: '2026-09-08T05:00:00Z', positions }) as PositionsDoc
 
-  it('names the company and the shape, the way the position sheet does', () => {
-    expect(positionLine(book, 'p_1f05f8', ko, NOW)).toBe('AAAA 11월 21일 만기 420 콜')
-    expect(positionLine(book, 'p_aa11bb', en, NOW)).toBe('BBBB 300 shares')
+  const stock = {
+    id: 'p_aa11bb',
+    symbol: 'BBBB',
+    kind: 'stock',
+    opened_at: null,
+    note: '',
+    quantity: 300,
+    entry_price_cents: 5400,
+  }
+
+  const book = bookOf(optionOn(['2026-11-21']), stock)
+  // Built from LOCAL parts, so "the reader's own day" is 2026-09-08 whatever zone this runs in.
+  const now = local(2026, 9, 8)
+
+  it('names the company, the shape and how long the option has left', () => {
+    // The countdown is the point of the line: an earnings print eight days before expiry is a
+    // different event from the same print with eight months left.
+    expect(positionLine(book, 'p_1f05f8', ko, now)).toBe('AAAA 11월 21일 만기 420 콜 · 만기 D-74')
+    expect(positionLine(book, 'p_1f05f8', en, now)).toBe('AAAA Nov 21 420 Call · Exp D-74')
+  })
+
+  it('counts down to the nearest expiry when the legs have more than one', () => {
+    // A calendar spread's front leg is what acts first, so it is the one a single number can
+    // honestly name.
+    const spread = bookOf(optionOn(['2026-12-18', '2026-10-16']))
+    expect(positionLine(spread, 'p_2f05f8', en, now)).toContain('Exp D-38')
+  })
+
+  it('counts whole days, and today is D-0', () => {
+    expect(positionLine(bookOf(optionOn(['2026-09-08'])), 'p_1f05f8', en, now)).toContain('D-0')
+    expect(positionLine(bookOf(optionOn(['2026-09-09'])), 'p_1f05f8', en, now)).toContain('D-1')
+  })
+
+  it('never counts down to an expiry that has passed', () => {
+    // `D-0` on a leg that expired last week is false and `D+7` is a countdown running backwards.
+    // The date is already in the name beside it, so nothing is hidden by saying nothing.
+    const gone = positionLine(bookOf(optionOn(['2026-09-07'])), 'p_1f05f8', en, now)
+    expect(gone).toBe('AAAA Sep 7 420 Call')
+    expect(gone).not.toMatch(/D-/)
+  })
+
+  it('gives a stock no countdown, because it has no expiry', () => {
+    expect(positionLine(book, 'p_aa11bb', en, now)).toBe('BBBB 300 shares')
+  })
+
+  it('reads the reader’s own day through the same seam as the rest of the module', () => {
+    // 2026-09-08T23:00Z is already the 9th in Seoul, so an expiry on the 9th is D-0 there and D-1
+    // in New York. One date path, or the row and the heading above it could disagree about today.
+    const instant = new Date('2026-09-08T23:00:00Z')
+    const soon = bookOf(optionOn(['2026-09-09']))
+    expect(positionLine(soon, 'p_1f05f8', en, instant, 'Asia/Seoul')).toContain('D-0')
+    expect(positionLine(soon, 'p_1f05f8', en, instant, 'America/New_York')).toContain('D-1')
   })
 
   it('is empty for a position the book no longer holds, so the event still renders', () => {
     // The desk prunes the book when the positions change, but a phone can hold an answer from
     // before that. Dropping the event would hide a date; dropping the line loses nothing.
-    expect(positionLine(book, 'p_ffffff', ko, NOW)).toBe('')
-    expect(positionLine(null, 'p_1f05f8', ko, NOW)).toBe('')
+    expect(positionLine(book, 'p_ffffff', ko, now)).toBe('')
+    expect(positionLine(null, 'p_1f05f8', ko, now)).toBe('')
   })
 })
 
@@ -446,6 +480,42 @@ describe('scheduleView', () => {
     expect(scheduleView({ ready: true, doc: doc({ events: [] }), now, tz: 'Asia/Seoul' }).kind).toBe(
       'nothing_upcoming',
     )
+  })
+
+  it('carries a failed refresh into every one of the four views', () => {
+    // The one this exists for is `no_book`: a desk with no book, pulled to refresh, now
+    // unreachable. Without the error the screen is byte-identical to the one the owner was already
+    // looking at, and "still no book" reads exactly like "I could not reach the desk just now".
+    const failed = '데스크에 연결하지 못했어요.'
+    const views = [
+      scheduleView({ ready: false, doc: null, now, error: failed, tz: 'Asia/Seoul' }),
+      scheduleView({ ready: true, doc: null, now, error: failed, tz: 'Asia/Seoul' }),
+      scheduleView({
+        ready: true,
+        doc: doc({ events: [wireEvent({ at: '2026-09-01T12:30:00Z' })] }),
+        now,
+        error: failed,
+        tz: 'Asia/Seoul',
+      }),
+      scheduleView({
+        ready: true,
+        doc: doc({ events: [wireEvent({ at: '2026-09-09T12:30:00Z' })] }),
+        now,
+        error: failed,
+        tz: 'Asia/Seoul',
+      }),
+    ]
+    expect(views.map((v) => v.kind)).toEqual([
+      'needs_desk',
+      'no_book',
+      'nothing_upcoming',
+      'book',
+    ])
+    for (const view of views) expect(view.error).toBe(failed)
+  })
+
+  it('carries no error when nothing failed', () => {
+    expect(scheduleView({ ready: true, doc: null, now, tz: 'Asia/Seoul' }).error).toBeNull()
   })
 
   it('says to set the desk up before it says there is no book', () => {

@@ -764,6 +764,12 @@ export const en = {
       against: '↓ Hurts',
       both: 'Both ways',
     },
+    /**
+     * Days to expiry, beside the name of an option position — the number that decides whether an
+     * event reaches it at all. A stock has no expiry and takes none of this; an expired leg takes
+     * none either, because there is nothing left to count down to.
+     */
+    countdown: 'Exp D-{n}',
     /** The collapsed row names one position; this says how many more the event reaches. */
     alsoAffects: '+{n} more positions',
     /** Fewer than the target cleared the floor. The desk's own sentence goes under this. */

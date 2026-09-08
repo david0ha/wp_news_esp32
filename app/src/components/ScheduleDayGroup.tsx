@@ -23,8 +23,9 @@ export function ScheduleDayGroup({
   onToggle,
 }: {
   group: DayGroup
-  /** Passed in rather than read here, so every heading on one screen agrees about what "today"
-   *  is — a group that read the clock itself could straddle midnight mid-list. */
+  /** Passed in rather than read here, so every heading on one screen — and every countdown in
+   *  every row under them — agrees about what "today" is. A group that read the clock itself
+   *  could straddle midnight mid-list and print two 오늘. */
   now: Date
   book: PositionsDoc | null
   /** The ids of the rows that are open. Held by the screen: a row that owned its own state would
@@ -42,6 +43,7 @@ export function ScheduleDayGroup({
             key={event.id}
             event={event}
             book={book}
+            now={now}
             expanded={expanded.has(event.id)}
             onToggle={() => onToggle(event.id)}
             last={i === group.events.length - 1}

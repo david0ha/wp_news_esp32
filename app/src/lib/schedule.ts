@@ -34,7 +34,7 @@
 
 import { fill, type Strings } from '../i18n'
 import { colors } from '../theme'
-import { strategyLabel, type PositionsDoc } from './positions'
+import { strategyLabel, type OptionLeg, type PositionsDoc } from './positions'
 
 // ---------------------------------------------------------------------------
 // The document
@@ -326,6 +326,16 @@ function weekdayOf(date: string): number {
   return new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay()
 }
 
+/** Whole days from one day KEY to another, `shiftDay`'s arithmetic run backwards and for the same
+ *  reason: a day is not 86,400 seconds in every zone, but it is exactly one step in a calendar. */
+function daysBetween(from: string, to: string): number | null {
+  const a = keyParts(from)
+  const b = keyParts(to)
+  if (a === null || b === null) return null
+  const ms = Date.UTC(b.year, b.month - 1, b.day, 12) - Date.UTC(a.year, a.month - 1, a.day, 12)
+  return Math.round(ms / 86_400_000)
+}
+
 // ---------------------------------------------------------------------------
 // The heading and the rail
 // ---------------------------------------------------------------------------
@@ -490,28 +500,64 @@ function stockSharesOf(book: PositionsDoc, symbol: string): number {
 }
 
 /**
- * The position an affect points at, named — `AAAA 11월 21일 만기 420 콜` — or `''` when this
- * phone's copy of the book does not hold it.
+ * The leg that expires first.
+ *
+ * A position may carry four legs and a calendar spread carries two expiries, so one number cannot
+ * name them all — and the honest one to name is the NEAREST, because it is the one that acts
+ * first: it is what decides whether a print lands before or after something in this position
+ * stops existing.
+ */
+function nearestExpiry(legs: OptionLeg[]): string {
+  return legs.reduce((soonest, leg) => (leg.expiry < soonest ? leg.expiry : soonest), legs[0].expiry)
+}
+
+/** Between the name of a position and its countdown. Punctuation, not copy — the same mark in both
+ *  languages, which is why it is here and not in the catalogue. `positions.ts`'s `LEG_JOIN`. */
+const LINE_JOIN = ' · '
+
+/**
+ * The position an affect points at, named and counted down —
+ * `AAAA 11월 21일 만기 420 콜 · 만기 D-74` — or `''` when this phone's copy of the book does not
+ * hold it.
  *
  * Empty rather than absent, and the row draws it or does not: the desk forgets its book whenever
  * the positions change, so a phone can legitimately hold a book from before an edit. Dropping the
  * event over it would hide a date the owner can still act on; dropping the line loses only the
  * name of a position they no longer have.
  *
- * The join is `confirmationLine`'s and for its reason: a space between a ticker and a shape is
- * punctuation in both languages, so a template of nothing but placeholders would be the same
- * string in both catalogues, which the parity test refuses.
+ * **THE COUNTDOWN IS THE POINT OF THE LINE, not decoration on it.** Days-to-expiry is what decides
+ * whether an event matters at all: an earnings print eight days before expiry and the same print
+ * with eight months left are different events against the same position, and this row is where
+ * that has to be visible. It is measured in whole CALENDAR days from the reader's own day to the
+ * expiry day — through the same `partsOf` seam as every other date in this file, because a second
+ * date path is a second answer to what day it is.
+ *
+ * A stock gets none: it has no expiry, and `D-` on something that never runs out would be a
+ * number about nothing. An ALREADY-EXPIRED leg gets none either, and that is a decision rather
+ * than a fallthrough — `D-0` on a leg that expired last week is false, `D+7` is a countdown
+ * running the wrong way, and the date itself is already in the name beside it (`strategyLabel`
+ * prints the expiry), so a reader can still see what happened. There is nothing left to count
+ * down to.
+ *
+ * The join between the ticker and the shape is `confirmationLine`'s and for its reason: a space
+ * there is punctuation in both languages, so a template of nothing but placeholders would be the
+ * same string in both catalogues, which the parity test refuses.
  */
 export function positionLine(
   book: PositionsDoc | null,
   positionId: string,
   t: Strings,
-  nowMs?: number,
+  now: Date,
+  tz?: string,
 ): string {
   if (book === null) return ''
   const p = book.positions.find((one) => one.id === positionId)
   if (p === undefined) return ''
-  return `${p.symbol} ${strategyLabel(p, t, { nowMs, stockShares: stockSharesOf(book, p.symbol) })}`
+  const name = `${p.symbol} ${strategyLabel(p, t, { nowMs: now.getTime(), stockShares: stockSharesOf(book, p.symbol) })}`
+  if (p.kind !== 'option') return name
+  const days = daysBetween(dateKey(partsOf(now, tz)), nearestExpiry(p.legs))
+  if (days === null || days < 0) return name
+  return `${name}${LINE_JOIN}${fill(t.schedule.countdown, { n: String(days) })}`
 }
 
 // ---------------------------------------------------------------------------
@@ -539,12 +585,25 @@ export function positionLine(
  * A failed fetch is deliberately NOT one of these. It is an error with a retry, and drawing it as
  * an empty state would tell somebody their desk has nothing to say when the truth is that nobody
  * asked it successfully.
+ *
+ * WHICH IS WHY `error` RIDES ON EVERY ARM RATHER THAN ON ONE. The failure that matters here is a
+ * failed REFRESH over a screen that already has an answer — and the empty screens are where it is
+ * least visible and most misleading. A desk with no book answers `no_book`; the owner pulls to
+ * refresh; the desk is now unreachable; without this the screen is byte-identical to the one they
+ * were already looking at, and "still no book" is indistinguishable from "I could not reach the
+ * desk just now". Carrying it in the state rather than beside it is what makes the invariant —
+ * every view can say so — a thing a test can hold.
  */
-export type ScheduleView =
+type ScheduleState =
   | { kind: 'needs_desk' }
   | { kind: 'no_book' }
   | { kind: 'nothing_upcoming' }
   | { kind: 'book'; groups: DayGroup[]; shortfall: string | null }
+
+export type ScheduleView = ScheduleState & {
+  /** The last failure, drawn above whatever else the screen shows, or `null`. */
+  error: string | null
+}
 
 export function scheduleView(input: {
   /** A desk address and an operator token are both saved on this phone. */
@@ -552,12 +611,15 @@ export function scheduleView(input: {
   /** What the desk answered, or `null` for a desk that has no book. */
   doc: CalendarDoc | null
   now: Date
+  /** The last call's failure, already turned into a sentence by `humanDeskError`. */
+  error?: string | null
   /** Omitted in production — see the timezone seam above. */
   tz?: string
 }): ScheduleView {
-  if (!input.ready) return { kind: 'needs_desk' }
-  if (input.doc === null) return { kind: 'no_book' }
+  const error = input.error ?? null
+  if (!input.ready) return { kind: 'needs_desk', error }
+  if (input.doc === null) return { kind: 'no_book', error }
   const groups = groupByDay(input.doc.events, input.now, input.tz)
-  if (groups.length === 0) return { kind: 'nothing_upcoming' }
-  return { kind: 'book', groups, shortfall: input.doc.shortfall }
+  if (groups.length === 0) return { kind: 'nothing_upcoming', error }
+  return { kind: 'book', groups, shortfall: input.doc.shortfall, error }
 }

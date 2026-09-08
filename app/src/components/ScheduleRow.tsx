@@ -37,6 +37,7 @@ import { colors, fonts, space, tabular, type } from '../theme'
 export function ScheduleRow({
   event,
   book,
+  now,
   expanded,
   onToggle,
   last = false,
@@ -45,6 +46,9 @@ export function ScheduleRow({
   /** The positions the desk holds, for naming the ones this event reaches. `null` before the book
    *  has arrived — the event still renders, without the name. */
   book: PositionsDoc | null
+  /** The reader's own instant, passed down rather than read here: the countdown on this row and
+   *  the day heading above it must agree about what today is. */
+  now: Date
   expanded: boolean
   onToggle: () => void
   last?: boolean
@@ -80,10 +84,15 @@ export function ScheduleRow({
           </Text>
         </View>
 
-        {shown.map((affect) => {
-          const name = positionLine(book, affect.positionId, t)
+        {shown.map((affect, i) => {
+          const name = positionLine(book, affect.positionId, t, now)
           return (
-            <View key={affect.positionId} style={styles.affect}>
+            // Keyed on the position in the list and not on `position_id`: `calendar.py` bounds
+            // `affects` by length and checks that each id exists, never that they are distinct, so
+            // one event may legitimately reach the SAME position twice — `for` by one mechanism
+            // and `against` by another. Two blocks under one key is a duplicate-key warning and a
+            // reconciliation React is entitled to get wrong.
+            <View key={`${event.id}:${i}`} style={styles.affect}>
               {name !== '' ? (
                 <Text style={styles.position} numberOfLines={1}>
                   {name}
