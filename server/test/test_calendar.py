@@ -103,6 +103,17 @@ class SourceRuleTest(unittest.TestCase):
         self.refuses(book(event(affects=[aff(position_id="ETN")])),
                      "position_id")
 
+    def test_an_event_with_no_reasoning_is_refused(self):
+        """The other half of the floor, and the half a model under pressure to
+        reach ten would drop first. An event with no `affects` is a generic
+        calendar entry, and the phone already has one of those -- it shows two
+        Yahoo dates. Leaving this optional would have made "a source AND a
+        stated mechanism" only half enforced."""
+        self.refuses(book(event(affects=[])), "affects")
+        no_key = event()
+        del no_key["affects"]
+        self.refuses(book(no_key), "affects")
+
 
 class ReasoningDateTest(unittest.TestCase):
     """The approximate clause. See `_DATE_IN_PROSE` and the module docstring:

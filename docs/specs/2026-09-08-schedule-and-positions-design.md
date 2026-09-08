@@ -68,6 +68,20 @@ this position. Only the agent can write it, because it is the only thing in the 
 both that the owner is long a 420 call expiring in November and that a print twelve days before
 expiry takes the extrinsic value out of it whether or not the stock moves.
 
+**Every event must carry at least one.** An event with no reasoning is a generic calendar entry,
+and the phone already has one of those — it shows two Yahoo dates. That is also what makes the
+floor in §4 enforceable rather than advisory: "a source *and* a stated mechanism reaching a
+position" is exactly `source` plus a non-empty `affects`, and `calendar.py` refuses a book
+without both. The watchlist in §3 widens **where the agent looks**, not what qualifies: an event
+about a watched company the owner holds nothing in still has to reach a position they *do* hold —
+through the underlying, a supplier, a customer, a competitor — or it does not go in the book.
+
+**The no-invented-dates clause binds the reasoning, not all prose.** `calendar.py` applies it to
+`reason` and `reason_short` and to nothing else, on purpose. A `title` and a `push.body` describe
+*this* event, whose date is right there in `at`, so "11월 21일 만기가 일주일 남았어요" is
+legitimate copy about a date the book can show a source for. A *reason* is where a model
+introduces a date nothing sourced.
+
 ### Precision is a field, not a formatting choice
 
 `precision: "exact" | "session" | "day"`. An event known only to the day renders as `9월 15일`,
@@ -91,7 +105,7 @@ instead of replacing it.
   "updated_at": "2026-09-08T05:00:00Z",
   "positions": [
     {
-      "id": "p_7f3a",                 // desk-assigned, stable across edits
+      "id": "p_1f05f8",                 // desk-assigned, stable across edits
       "symbol": "ETN",
       "kind": "option",               // "stock" | "option"
       "strategy": "long_call",        // derived from legs; see below
@@ -103,7 +117,7 @@ instead of replacing it.
       "note": ""                      // ≤ 500 chars, the owner's own words
     },
     {
-      "id": "p_2c91", "symbol": "SNDK", "kind": "stock",
+      "id": "p_3e3267", "symbol": "SNDK", "kind": "stock",
       "quantity": 40,                 // signed; negative is short
       "entry_price_cents": 158300,
       "opened_at": "2026-07-02", "note": ""
@@ -117,12 +131,18 @@ agent reasons about it as one object — "your 400/420 call vertical" has a max 
 and a decay profile that neither leg has alone. Two rows in a table cannot be reasoned about that
 way without the reader doing the joining.
 
-`strategyFor(legs)` is a pure function and is host-tested: it names `long_call`, `long_put`,
-`short_call`, `short_put`, `covered_call`, `cash_secured_put`, `vertical`, `calendar`,
-`straddle`, `strangle`, and falls back to `custom` rather than guessing. The app offers the
-common shapes as chips so the owner picks in their own words, and then the app **says the name
-back** — "ETN 11월 21일 만기 420 콜 2계약". Naming a thing back is how you find out you typed the
-wrong strike.
+`derive_strategy(legs)` is a pure function and is host-tested: it names `long_call`, `long_put`,
+`short_call`, `short_put`, `vertical`, `calendar`, `straddle`, `strangle`, and falls back to
+`custom` rather than guessing. The app offers the common shapes as chips so the owner picks in
+their own words, and then the app **says the name back** — "ETN 11월 21일 만기 420 콜 2계약".
+Naming a thing back is how you find out you typed the wrong strike.
+
+**Two names are deliberately absent, and the desk cannot supply either.** `covered_call` needs the
+stock position beside the option one, which a function handed only legs never sees.
+`cash_secured_put` is a claim about collateral sitting in an account the desk cannot see — a lone
+short put is `short_put`. Both are *display* decisions made with the whole book in hand, so the
+app makes them in `strategyLabel`, not the desk. A stored name the data cannot support is worse
+than no name: the reader stops reading the legs.
 
 Validation follows `watchlist.py`'s posture exactly: unknown keys refused whole with a 400, hard
 caps on every list and string, and the aggregate checked against the serialized form `save()`
@@ -154,7 +174,8 @@ the desk is already following.
   "events": [
     {
       "id": "e_91c2",
-      "at": "2026-09-08T21:30:00Z",     // always UTC on the wire
+      "at": "2026-09-08T12:30:00Z",     // always UTC. 08:30 in New York,
+                                       // 21:30 in Seoul -- see the rail note in §8
       "precision": "exact",
       "title": "미국 8월 소비자물가지수",
       "kind": "econ",                   // econ|earnings|dividend|expiry|corporate|legal|index|other
@@ -162,7 +183,7 @@ the desk is already following.
       "symbols": ["ETN"],
       "affects": [
         {
-          "position_id": "p_7f3a",
+          "position_id": "p_1f05f8",
           "direction": "against",        // "for" | "against" | "both"
           "reason": "금리 기대가 흔들리면 전력기기 설비투자 사이클 기대도 같이 움직여요. 만기가 74일 남은 롱 콜은 델타보다 베가가 큰 구간이라, 지수가 빠지면 방향이 맞아도 프리미엄이 먼저 줄어요.",
           "reason_short": "금리 기대가 흔들리면 전력기기 설비투자 기대도 같이 움직여요"

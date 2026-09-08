@@ -327,11 +327,19 @@ def _event(value: object, path: str, known: frozenset[str],
             _bad(f"{path}.symbols[{i}]", f"{text!r} does not look like a ticker")
         symbols.append(text)
 
+    # Non-empty, and this is the floor rather than a shape check. An event with
+    # no reasoning is a generic calendar entry, and the phone already has one of
+    # those -- it shows two Yahoo dates. The design's floor is "a source AND a
+    # stated mechanism reaching a position", which is exactly `source` (checked
+    # above) plus this; leaving `affects` optional would have made half the
+    # floor advisory, and the half that a model under pressure to reach ten
+    # would drop first.
     raw_affects = doc.get("affects")
-    if raw_affects is None:
-        raw_affects = []
-    if not isinstance(raw_affects, list):
-        _bad(f"{path}.affects", f"expected a list, got {raw_affects!r}")
+    if not isinstance(raw_affects, list) or not raw_affects:
+        _bad(f"{path}.affects",
+             "expected at least one entry. An event with no reasoning is a "
+             "generic calendar entry -- say which position this reaches and "
+             "how, or leave it out of the book")
     if len(raw_affects) > MAX_AFFECTS:
         _bad(f"{path}.affects",
              f"{len(raw_affects)} entries, at most {MAX_AFFECTS}")
@@ -445,8 +453,8 @@ def _serialised(doc: dict) -> bytes:
     return json_bytes(doc)
 
 
-def load(path: str, *, known_position_ids: frozenset[str] | set[str]
-         ) -> dict | None:
+def load(path: str, *, known_position_ids: frozenset[str] | set[str],
+         now: datetime.datetime | None = None) -> dict | None:
     """The book at ``path``, or ``None``. Never raises.
 
     ``known_position_ids`` is asked for again here rather than skipped on the
@@ -455,6 +463,12 @@ def load(path: str, *, known_position_ids: frozenset[str] | set[str]
     should be -- the reasoning in it is about holdings that no longer exist --
     and answering ``None`` puts the phone back on "no book yet" rather than on
     a book that argues about a position the owner sold.
+
+    ``now`` is passed through for :func:`parse_calendar`'s reason and one of
+    its own: the desk that reads this file has an injected clock, and a loader
+    that consulted the wall clock instead would refuse, on the next boot, a
+    book that same desk accepted a moment ago -- silently, because this
+    function reports everything by answering ``None``.
     """
     try:
         with open(path, "rb") as f:
@@ -474,7 +488,8 @@ def load(path: str, *, known_position_ids: frozenset[str] | set[str]
         return None
 
     try:
-        doc = parse_calendar(raw_doc, known_position_ids=known_position_ids)
+        doc = parse_calendar(raw_doc, known_position_ids=known_position_ids,
+                             now=now)
     except BadRequest as exc:
         LOG.warning("%s will not parse (%s)",
                     os.path.basename(path), exc.message or str(exc))
