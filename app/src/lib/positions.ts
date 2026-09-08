@@ -49,8 +49,32 @@ export type PositionKind = 'stock' | 'option'
 export type OptionRight = 'call' | 'put'
 export type OptionSide = 'long' | 'short'
 
-/** One equity option contract. The number that decides whether shares cover a short call. */
+/**
+ * One **US** equity option contract, and the number that decides whether shares cover a short
+ * call.
+ *
+ * It is the app's own constant: nothing in `positions.py` knows a contract multiplier, because
+ * nothing on the desk needs one. That makes it an assumption rather than a fact, and it is only
+ * true of US-listed equity options — a KOSPI 200 contract is not a hundred of anything, and
+ * `SYMBOL_RE`'s docstring puts numeric KR tickers explicitly in scope.
+ *
+ * So `coversShortCall` refuses to answer where the multiplier is unknown, rather than assuming a
+ * hundred and calling something a covered call that is not one. Mislabelling here is a wrong
+ * sentence about what the owner is exposed to, which is the one kind of wrong this feature cannot
+ * afford; an unlabelled short call is merely less helpful.
+ */
 export const SHARES_PER_CONTRACT = 100
+
+/**
+ * Whether `shares` of `symbol` cover `contracts` short calls — `false` when that cannot be known.
+ *
+ * A numeric ticker is a KR listing, where `SHARES_PER_CONTRACT` does not hold. This is a
+ * deliberately narrow test: it does not try to be a multiplier table, it only declines to guess.
+ */
+export function coversShortCall(symbol: string, shares: number, contracts: number): boolean {
+  if (/^\d/.test(symbol)) return false
+  return shares >= contracts * SHARES_PER_CONTRACT
+}
 
 /** `positions.py`'s `MAX_LEGS`: four covers every shape the app offers. */
 export const MAX_LEGS = 4
@@ -357,7 +381,7 @@ export function strategyLabel(
       // `stockShares` is the owner's whole book speaking, which is a thing only this side holds.
       if (
         p.strategy === 'short_call' &&
-        (ctx.stockShares ?? 0) >= one.contracts * SHARES_PER_CONTRACT
+        coversShortCall(p.symbol, ctx.stockShares ?? 0, one.contracts)
       ) {
         return fill(s.covered, { strike })
       }

@@ -213,10 +213,32 @@ class ParseTest(unittest.TestCase):
 
     # -- refusals ------------------------------------------------------------
 
-    def test_strategy_is_output_only(self):
-        """Derived on every write, so a supplied one is a claim about legs
-        that could contradict them."""
-        self.refuses(book(option(strategy="long_call")), "strategy")
+    def test_strategy_is_accepted_and_ignored_like_the_id(self):
+        """Both are output only and both are re-derived, so neither is refused.
+
+        The earlier draft refused a body carrying `strategy`, and the refusal
+        was a 400 that rejected the whole book -- on the ordinary path, because
+        every client round-trips this document and every option position a GET
+        returns carries one. A supplied value that is overwritten anyway does
+        not need a refusal; it needs ignoring.
+        """
+        out = self.parse(book(option(strategy="straddle"),
+                              stock(id="p_000000")))
+        self.assertEqual(out["positions"][0]["strategy"], "long_call")
+        self.assertNotEqual(out["positions"][1]["id"], "p_000000")
+
+    def test_what_a_get_returns_can_be_put_straight_back(self):
+        """The property the two fields above exist to give. A client that
+        changes nothing must be able to send back exactly what it was handed."""
+        first = self.parse(book(option(), stock()))
+        echoed = {"updated_at": "2026-09-08T05:00:00Z",
+                  "positions": [dict(p) for p in first["positions"]]}
+        second = self.parse(echoed)
+        self.assertEqual(second["positions"], first["positions"])
+
+    def test_a_genuinely_unknown_key_is_still_refused(self):
+        """Only those two stopped being unknown."""
+        self.refuses(book(option(delta=0.6)), "unknown key")
 
     def test_a_stock_may_not_carry_legs_and_an_option_may_not_carry_a_quantity(self):
         self.refuses(book(stock(legs=[leg("call", "long", 42000)])), "legs")

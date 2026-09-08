@@ -83,6 +83,20 @@ describe('strategyLabel', () => {
     expect(strategyLabel(shortCall, ko, { nowMs: NOW })).toBe('11월 21일 만기 420 콜 숏')
   })
 
+  it('will not call it covered on a listing where a contract is not a hundred shares', () => {
+    // SHARES_PER_CONTRACT is the app's own assumption and holds only for US-listed equity
+    // options. A numeric ticker is a KR listing, where it does not — and mislabelling here is a
+    // wrong sentence about what the owner is exposed to, where declining to label is merely less
+    // helpful.
+    const krShortCall = {
+      ...option('short_call', [leg({ side: 'short', contracts: 2 })]),
+      symbol: '005930',
+    }
+    expect(strategyLabel(krShortCall, ko, { stockShares: 200, nowMs: NOW })).toBe(
+      '11월 21일 만기 420 콜 숏',
+    )
+  })
+
   it('will not call it covered when the stock leg is itself short', () => {
     // A short stock holding covers nothing. Reading the sign is the whole difference between a
     // covered call and two short positions in the same direction.

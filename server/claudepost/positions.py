@@ -43,14 +43,25 @@ about a position's identity, and the cheapest way to have no such rule is to
 have none -- a symbol that does not already look like a ticker is refused,
 naming the field.
 
-*``strategy`` is written to the file but refused in a body.* It is derived on
-every write, so a body carrying one is a claim about legs that could contradict
-them, and the whole reason the field exists is that the app and the desk must
-never disagree about what a spread is called. It is still *written*, because
-this file exists to be read by whoever is working out what the phone showed.
-:func:`load` therefore drops it before re-parsing -- discarding the value, not
-trusting it -- which is what keeps the desk from refusing its own writing on
-the next boot.
+*``id`` and ``strategy`` are both output only, and both are accepted and
+ignored.* Each is re-derived on every write -- the id from the hash material,
+the strategy from the legs -- so a supplied one decides nothing.
+
+Accepting them is a deliberate reversal of an earlier draft that *refused* a
+body carrying ``strategy``, on the argument that a supplied one is a claim
+about legs that could contradict them. It could; it also could not matter, and
+the refusal was a 400 that rejected the **whole book**. Every client round-trips
+this document -- GET it, change one row, PUT it back -- and every option
+position a GET returns carries a ``strategy``, because the file is written with
+one so that whoever is working out what the phone showed can read it. So the
+refusal punished the ordinary path and taught three separate clients the same
+workaround: the phone had to strip the field, :func:`load` had to strip it
+before re-parsing or the desk would refuse its own writing on the next boot,
+and any future script would have had to discover both. Ignoring is the same
+protection with none of that: the value is overwritten either way.
+
+Unknown keys are still refused whole. What changed is only that these two
+stopped being unknown.
 """
 
 from __future__ import annotations
@@ -139,12 +150,12 @@ STRATEGIES: tuple[str, ...] = (
 #: see :func:`parse_positions`: its value is never read.
 _TOP_KEYS = frozenset({"updated_at", "positions"})
 
-#: ``id`` is here for the same round-trip reason and is re-derived just as
-#: hard. ``strategy`` is *not*: it is output only, so a body carrying one is
-#: refused by name. See the module docstring.
+#: ``id`` and ``strategy`` are here for the round-trip reason and are both
+#: re-derived rather than read -- the id from the hash material, the strategy
+#: from the legs. See the module docstring for why refusing them was worse.
 _POSITION_KEYS = frozenset({
-    "id", "symbol", "kind", "legs", "quantity", "entry_price_cents",
-    "opened_at", "note",
+    "id", "strategy", "symbol", "kind", "legs", "quantity",
+    "entry_price_cents", "opened_at", "note",
 })
 
 _LEG_KEYS = frozenset({
@@ -508,13 +519,13 @@ def _serialised(doc: dict) -> bytes:
 def load(path: str) -> dict | None:
     """The positions at ``path``, or ``None``. Never raises.
 
-    ``strategy`` is stripped from every position before re-parsing. It is
-    *written* to the file -- this file exists to be read by whoever is working
-    out what the phone showed -- but it is *refused* in a body, because it is
-    derived and a supplied one could contradict the legs beside it. Without the
-    strip the desk would refuse its own writing on the next boot, and would do
-    it the way this function reports everything: by answering ``None``, which is
-    also its answer for a desk nobody has ever told.
+    Nothing is stripped on the way in. An earlier draft removed ``strategy``
+    from every position here, because a body carrying one was refused and the
+    file is written with one -- so without the strip the desk declined its own
+    writing on the next boot, silently, ``None`` being its answer both for a
+    file it will not take and for a desk nobody has ever told. Making the field
+    accepted-and-ignored deleted the need for the strip along with the trap; see
+    the module docstring.
     """
     try:
         with open(path, "rb") as f:
@@ -532,11 +543,6 @@ def load(path: str) -> dict | None:
     except (ValueError, UnicodeDecodeError) as exc:
         LOG.warning("%s will not parse (%s)", os.path.basename(path), exc)
         return None
-
-    if isinstance(raw_doc, dict) and isinstance(raw_doc.get("positions"), list):
-        for one in raw_doc["positions"]:
-            if isinstance(one, dict):
-                one.pop("strategy", None)
 
     try:
         doc = parse_positions(raw_doc)
