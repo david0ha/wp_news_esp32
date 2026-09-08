@@ -22,7 +22,7 @@ import threading
 from dataclasses import dataclass
 from typing import Mapping
 
-from . import (calendar as cal, econ, positions as pos, push,
+from . import (alerts, calendar as cal, econ, positions as pos, push,
                quotes as Q, schedule as sched, schedulefile,
                settings as st, watchlist as wl)
 from .auth import Tokens
@@ -207,6 +207,17 @@ class Desk:
         #: back. The tokens are keys here and reach no wire -- see `state()`.
         self.push_failures: dict[str, int] = {}
 
+        #: How a push actually leaves this machine. An attribute rather than
+        #: `push.send`'s own default left implicit, for the reason
+        #: `EconSource` takes a `fetch` and `Desk.quotes` can be replaced by a
+        #: stub: every test of the firing has to run without a socket, and the
+        #: alternative -- patching a module function from a test -- makes the
+        #: seam invisible from here. It names `push`'s private default
+        #: deliberately: this is the one caller that has to spell the module's
+        #: own answer rather than take it, and an alias for it would be a
+        #: second name for one function.
+        self.push_fetch: push.Fetch = push.DEFAULT_FETCH
+
         #: Notified whenever a command is enqueued, so a long poll wakes on the
         #: instruction rather than on its next timeout. The queue is in SQLite
         #: and could be polled, but a poll interval is latency nobody has to pay.
@@ -246,6 +257,10 @@ class Desk:
         if self._fire_due_wake(t):
             did.append("wake")
 
+        fired = self._fire_due_alerts(t)
+        if fired:
+            did.append(fired)
+
         result = self.editions.publish_due(self.schedule, t)
         if result is not None:
             LOG.info("published %s (%s)", result.edition_id, result.reason)
@@ -263,8 +278,13 @@ class Desk:
                 did.append("reaped:%d" % expired)
             swept = self.editions.sweep_drafts()
             pruned = self.editions.prune()
-            if swept or pruned:
-                did.append("housekeeping:%d/%d" % (swept, pruned))
+            # The delivery ledger ages out here rather than in a sweep of its
+            # own: sixty days is the slowest thing this desk measures, and a
+            # second periodic pass to watch it would be a second thing to keep
+            # in step with this one.
+            aged = self.store.reap_deliveries(t - alerts.RETENTION_SECONDS)
+            if swept or pruned or aged:
+                did.append("housekeeping:%d/%d/%d" % (swept, pruned, aged))
 
         return did
 
@@ -684,6 +704,125 @@ class Desk:
             deadline_at=sched.next_wake(self.schedule, last))
         LOG.info("wake at %d: enqueued a filing", int(last))
         return True
+
+    def _fire_due_alerts(self, t: float) -> str | None:
+        """Tell the phones what is about to happen. Returns a ``did`` entry.
+
+        Beside :meth:`_fire_due_wake` and under the same rule -- **idempotent**,
+        because this runs every few seconds forever and a scheduler that fired
+        once per tick would put the same notification on the owner's lock
+        screen twelve times a minute. The idempotency is the delivery ledger
+        rather than anything held in memory, so a restart between two ticks
+        cannot re-deliver what the last one sent.
+
+        **Every exception is caught here**, which is the one thing about this
+        method that is not ordinary. A scheduler that died on a push failure
+        would stop publishing the newspaper -- the wake, the publish and the
+        housekeeping all run after this line -- and the failure it would die on
+        is a network, which is to say a Tuesday.
+
+        The log line carries the exception's *type* and not its text, the rule
+        :mod:`claudepost.econ` states as redaction by omission. There is no key
+        to substitute for here, but the thing this path holds in its hands is a
+        list of push tokens, and a message assembled by a library from
+        something it was handed is exactly where one appears.
+        """
+        try:
+            return self._send_due_alerts(t)
+        except Exception as exc:                                   # noqa: BLE001
+            LOG.warning("alerts: the pass failed (%s)", type(exc).__name__)
+            return None
+
+    def _send_due_alerts(self, t: float) -> str | None:
+        """The pass itself. See :meth:`_fire_due_alerts` for why it is wrapped."""
+        book = self.calendar
+        devices = (self.push_devices or {}).get("devices") or []
+        if not book or not devices:
+            return None
+
+        # The cheap question first, and it is the one asked almost every tick
+        # forever: `alerts.due` is pure and touches nothing, so a desk with
+        # nothing to announce finds that out without opening a read on the
+        # database the publish path is writing.
+        if not alerts.due(book, devices, (), t):
+            return None
+
+        delivered = self.store.deliveries_since(t - alerts.LOOKBACK_SECONDS)
+        held = {one["token"]: one for one in devices}
+        # `due` has already held back an alert whose lead instant fell inside a
+        # quiet window. This is the other half: an alert the desk's own
+        # lateness carried into one -- down when the lead passed, back at two
+        # in the morning. Deferred, never dropped; it stays owed because
+        # nothing is written for it.
+        ready = [one for one in alerts.due(book, devices, delivered, t)
+                 if alerts.defer_for_quiet(one, held[one.token], t) is None]
+        if not ready:
+            return None
+
+        # One POST. What does not fit is owed, and the next tick is five
+        # seconds away -- where a tick that sent everything would spend a
+        # `push.UPSTREAM_TIMEOUT` per batch with the wake and the publish
+        # waiting behind it.
+        batch = ready[:alerts.MAX_PER_TICK]
+        try:
+            tickets = push.send([alerts.message(one) for one in batch],
+                                fetch=self.push_fetch)
+        except Exception as exc:                                   # noqa: BLE001
+            # `push.send` has already logged the redacted detail of what went
+            # wrong. Nothing is recorded, so every one of these is owed again
+            # on the next tick -- which is what makes a network blip cost a
+            # delay rather than a notification.
+            for one in batch:
+                self.push_failures[one.token] = \
+                    self.push_failures.get(one.token, 0) + 1
+            LOG.warning("alerts: %d owed, the batch did not leave (%s)",
+                        len(batch), type(exc).__name__)
+            return None
+
+        sent = 0
+        for alert, ticket in zip(batch, tickets):
+            if not (isinstance(ticket, dict) and ticket.get("status") == "ok"):
+                # Not recorded, so it is owed again next tick. A ticket that
+                # says the phone is gone is dealt with below rather than
+                # retried forever; every other error is about this attempt.
+                self.push_failures[alert.token] = \
+                    self.push_failures.get(alert.token, 0) + 1
+                continue
+            self.push_failures.pop(alert.token, None)
+            self.store.record_delivery(alert.token, alert.event_id,
+                                       alert.lead, t)
+            sent += 1
+
+        self._forget_unregistered(tickets)
+        LOG.info("alerts: sent %d of %d owed", sent, len(ready))
+        return "alerts:%d" % sent if sent else None
+
+    def _forget_unregistered(self, tickets: list[dict]) -> None:
+        """Drop the phones Expo says no longer exist.
+
+        The lock is taken for the read-modify-write and **not** across the send
+        that produced these tickets: ten seconds of a socket is not something
+        to hold the registration route behind, and a phone that registered
+        successfully and was told 200 while this waited would simply never
+        ring.
+
+        Only ``DeviceNotRegistered`` removes anything --
+        :func:`~claudepost.push.prune_unregistered` is where that argument
+        lives, and it is pure, so a pass that removes nothing writes nothing.
+        """
+        with self.push_lock:
+            doc = self.push_devices or {"devices": []}
+            kept, removed = push.prune_unregistered(doc, tickets)
+            if removed:
+                self.set_push_devices(kept)
+                LOG.info("alerts: forgot %d phone(s) Expo no longer knows",
+                         len(removed))
+            # A streak for a phone that is gone is not a signal, it is a number
+            # `state()` would go on reporting after the thing it was about
+            # stopped existing.
+            known = {one["token"] for one in kept["devices"]}
+            for token in [one for one in self.push_failures if one not in known]:
+                self.push_failures.pop(token, None)
 
     def enqueue(self, kind: str, text: str, priority: int = 5,
                 deadline_at: float | None = None, source: str = "api") -> dict:

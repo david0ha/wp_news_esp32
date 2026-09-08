@@ -32,7 +32,7 @@ import unittest
 import urllib.error
 
 from claudepost import push as P
-from claudepost.calendar import COMPUTED_KINDS
+from claudepost.calendar import COMPUTED_KINDS, KINDS as CALENDAR_KINDS
 from claudepost.errors import BadRequest, Upstream
 from claudepost.fsutil import json_bytes
 
@@ -60,9 +60,10 @@ SPEC_DEVICE = {
     "platform": "ios",
     "tz": "Asia/Seoul",
     "prefs": {"earnings": True, "expiry": True, "dividend": True,
-              "econ": True},
+              "econ": True, "researched": True},
     "lead": {"earnings": ["P1D"], "expiry": ["P7D", "P1D"],
-             "dividend": ["P1D"], "econ": ["PT3H"]},
+             "dividend": ["P1D"], "econ": ["PT3H"],
+             "researched": ["P1D"]},
     "quiet": {"from": "23:00", "to": "07:00"},
     "last_seen": "2026-09-08T05:00:00Z",
 }
@@ -129,20 +130,41 @@ class DocumentTest(unittest.TestCase):
         out = P.parse_devices(doc(device(prefs=off)))
         self.assertEqual(out["devices"][0]["prefs"], off)
 
-    def test_the_switches_are_exactly_the_kinds_a_machine_can_compute(self):
-        """A preference for a kind the book cannot compute is a switch that
-        does nothing; a computed kind with no switch cannot be turned off."""
-        self.assertEqual(set(P.KINDS), set(COMPUTED_KINDS))
-        self.assertEqual(set(P.DEFAULT_LEAD), set(COMPUTED_KINDS))
+    def test_every_kind_the_book_can_carry_answers_to_some_switch(self):
+        """The rule, stated the way round it has to be applied: a kind with no
+        switch is a kind the owner cannot turn off -- AND a kind that can never
+        fire. An earlier draft made the switch set the four computed kinds
+        alone, which left the book's other four with neither.
+
+        Five switches rather than eight, because the owner's question is "tell
+        me about things somebody had to go and find", not "tell me about index
+        rebalancing but not litigation".
+        """
+        self.assertEqual(set(P.KINDS), set(COMPUTED_KINDS) | {P.RESEARCHED})
+        self.assertEqual(set(P.DEFAULT_LEAD), set(P.KINDS))
         out = P.parse_devices(doc(device()))
-        self.assertEqual(set(out["devices"][0]["prefs"]), set(COMPUTED_KINDS))
-        self.assertEqual(set(out["devices"][0]["lead"]), set(COMPUTED_KINDS))
+        self.assertEqual(set(out["devices"][0]["prefs"]), set(P.KINDS))
+        self.assertEqual(set(out["devices"][0]["lead"]), set(P.KINDS))
+
+        # And every kind the book may carry lands on one of them.
+        for kind in CALENDAR_KINDS:
+            with self.subTest(kind=kind):
+                self.assertIn(P.pref_for(kind), P.KINDS)
+
+    def test_a_computed_kind_keeps_its_own_switch(self):
+        for kind in COMPUTED_KINDS:
+            self.assertEqual(P.pref_for(kind), kind)
+
+    def test_everything_somebody_had_to_find_shares_one_switch(self):
+        for kind in set(CALENDAR_KINDS) - set(COMPUTED_KINDS):
+            with self.subTest(kind=kind):
+                self.assertEqual(P.pref_for(kind), P.RESEARCHED)
 
     def test_an_absent_switch_is_on(self):
         out = P.parse_devices(doc(device(prefs={"econ": False})))
         self.assertEqual(out["devices"][0]["prefs"],
                          {"earnings": True, "expiry": True, "dividend": True,
-                          "econ": False})
+                          "econ": False, P.RESEARCHED: True})
 
     def test_a_string_is_not_a_switch(self):
         with self.assertRaises(BadRequest) as caught:

@@ -128,12 +128,35 @@ STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 
 PLATFORMS: tuple[str, ...] = ("ios", "android")
 
-#: What a device may be told about, and it is exactly
-#: :data:`claudepost.calendar.COMPUTED_KINDS` -- imported rather than restated,
-#: because a preference for a kind the book cannot compute is a switch that
-#: does nothing, and a kind with no switch is one the owner cannot turn off.
+#: The switch every alert answers to. Four of these are
+#: :data:`claudepost.calendar.COMPUTED_KINDS`, imported rather than restated so
+#: the two cannot drift, and the fifth is :data:`RESEARCHED`.
+#:
+#: The rule is the one an earlier draft of this constant stated correctly and
+#: then applied backwards: *a kind with no switch is a kind the owner cannot
+#: turn off* -- and the draft's switch set was the four computed kinds alone,
+#: which left the book's other four (``corporate``, ``legal``, ``index``,
+#: ``other``) with no switch and therefore no way to fire at all. That is
+#: incoherent with what the book is for: it ranks by effect on the positions,
+#: so the event it puts at rank 1 is quite often a court date or an analyst
+#: day, and a design that can rank one first and never mention it is arguing
+#: with itself. They share one switch rather than getting four, because the
+#: owner's question is "tell me about things somebody had to go and find",
+#: not "tell me about index rebalancing but not litigation".
+#:
 #: Sorted so the stored document is stable across writes.
-KINDS: tuple[str, ...] = tuple(sorted(COMPUTED_KINDS))
+RESEARCHED = "researched"
+
+KINDS: tuple[str, ...] = tuple(sorted(COMPUTED_KINDS)) + (RESEARCHED,)
+
+
+def pref_for(kind: str) -> str:
+    """Which switch an event of ``kind`` answers to.
+
+    One function so `alerts.py` and any future caller cannot disagree about
+    where a `corporate` event's preference lives.
+    """
+    return kind if kind in COMPUTED_KINDS else RESEARCHED
 
 #: The closed set, and its arithmetic. See the module docstring for why this is
 #: a table rather than a parser.
@@ -165,6 +188,10 @@ DEFAULT_LEAD: dict[str, tuple[str, ...]] = {
     "expiry": ("P7D", "P1D"),
     "dividend": ("P1D",),
     "econ": ("PT3H",),
+    # A day, like earnings, and for the same reason: a court date or an
+    # analyst day is a thing to know about the evening before, not three hours
+    # ahead like a scheduled release whose minute is known.
+    RESEARCHED: ("P1D",),
 }
 
 #: The instant the caller stamps over an absent ``last_seen``, at its widest --
@@ -648,6 +675,12 @@ def _send_batch(messages: Sequence[dict], fetch: Fetch) -> list[dict]:
     # something further up to print. `from None` stays as well, so the
     # suppression holds if this raise is ever moved back inside.
     raise failure from None
+
+
+#: The transport :func:`send` uses when nobody injects one, named publicly so a
+#: caller that wants to hold it -- `Desk.push_fetch`, so a test can swap it --
+#: does not have to reach for the underscore.
+DEFAULT_FETCH: "Fetch" = _urlopen_post
 
 
 def send(messages: Sequence[dict], *, fetch: Fetch = _urlopen_post) -> list[dict]:

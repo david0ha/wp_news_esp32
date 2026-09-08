@@ -250,14 +250,28 @@ exception, so the stdlib path works with zero new dependencies and a Cloudflare 
 library cannot abort the chain.
 
 **`push.py`** — Expo Push. POSTs to `https://exp.host/--/api/v2/push/send`. Same outbound shape
-as `quotes.py`, same redaction rule. Tokens live in `<data>/push.json`:
+as `quotes.py`, same redaction rule.
+
+**Five switches, not eight.** The four computed kinds each get their own; the book's other four —
+`corporate`, `legal`, `index`, `other` — share `researched`. The rule is that *a kind with no
+switch is a kind the owner cannot turn off, and also one that can never fire*, and an earlier
+draft applied only its first half: it made the switch set the computed kinds alone, which left
+the researched half of the book unable to notify at all. That is incoherent with what the book is
+for — it ranks by effect on the positions, so the event at rank 1 is quite often a court date or
+an analyst day. They share one switch rather than getting four because the owner's question is
+"tell me about things somebody had to go and find", not "tell me about index rebalancing but not
+litigation". `push.pref_for()` is the only place that mapping lives.
+
+Tokens live in `<data>/push.json`:
 
 ```jsonc
 { "devices": [ { "token": "ExponentPushToken[...]", "platform": "ios",
                  "tz": "Asia/Seoul",
-                 "prefs": { "earnings": true, "expiry": true, "dividend": true, "econ": true },
+                 "prefs": { "earnings": true, "expiry": true, "dividend": true,
+                            "econ": true, "researched": true },
                  "lead": { "earnings": ["P1D"], "expiry": ["P7D","P1D"],
-                           "dividend": ["P1D"], "econ": ["PT3H"] },
+                           "dividend": ["P1D"], "econ": ["PT3H"],
+                           "researched": ["P1D"] },
                  "quiet": { "from": "23:00", "to": "07:00" },
                  "last_seen": "2026-09-08T05:00:00Z" } ] }
 ```
