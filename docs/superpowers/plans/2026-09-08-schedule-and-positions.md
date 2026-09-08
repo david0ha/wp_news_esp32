@@ -150,7 +150,7 @@ def test_single_leg_strategies():
     assert P.derive_strategy([leg("call", "long", 42000)]) == "long_call"
     assert P.derive_strategy([leg("put", "long", 38000)]) == "long_put"
     assert P.derive_strategy([leg("call", "short", 45000)]) == "short_call"
-    assert P.derive_strategy([leg("put", "short", 35000)]) == "cash_secured_put"
+    assert P.derive_strategy([leg("put", "short", 35000)]) == "short_put"
 
 
 def test_vertical_is_same_right_same_expiry_different_strike():
@@ -177,15 +177,20 @@ def test_anything_else_is_custom_not_a_guess():
     assert P.derive_strategy(legs) == "custom"
 ```
 
-Note `short_put` vs `cash_secured_put`: a lone short put is named `cash_secured_put` because that
-is what the owner will call it. `short_put` stays in `STRATEGIES` for a short put that is a leg of
-something the derivation could not name — do **not** emit it from `derive_strategy`; assert that
-in a test so the two names cannot drift into meaning the same thing.
+**`STRATEGIES` names only what legs can prove.** Two names that a first draft of this plan
+carried are deliberately *not* in the enum:
 
-`covered_call` cannot be derived from legs alone (it needs the stock position), so
-`derive_strategy` never returns it. Naming that pairing is the app's job at display time, and
-Task P10 does it. Assert here that `derive_strategy([leg("call","short",…)])` is `short_call`
-and never `covered_call`.
+- **`cash_secured_put`** — "cash-secured" is a claim about collateral sitting in the account, and
+  the desk cannot see an account. A lone short put is `short_put`; whether it is secured is not
+  something legs know.
+- **`covered_call`** — needs the stock position beside the option one, which
+  `derive_strategy(legs)` does not receive. Naming that pairing is a *display* decision with the
+  whole book in hand, and Task P10 makes it.
+
+Assert both: `derive_strategy([leg("call","short",…)])` is `short_call` and never
+`covered_call`; `derive_strategy([leg("put","short",…)])` is `short_put` and never
+`cash_secured_put`. A validator that stores a name the data cannot support is a validator
+teaching the reader to trust the wrong field.
 
 - [ ] **Step 2: Run them and watch them fail** — `sh server/test/run.sh` → ImportError.
 
@@ -360,9 +365,18 @@ model puts one).
 
 `at` must be an RFC3339 instant ending `Z`, parseable, and within `[now - 7d, now + 400d]` —
 the past window exists because an event just fired and the book is still showing it.
-`precision` ∈ `{"exact","session","day"}`; when `precision != "exact"` the instant's time-of-day
-must be `00:00:00Z` for `day` and one of a small session set for `session`, so the wire cannot
-carry a precision it contradicts. `direction` ∈ `{"for","against","both"}`. `rank` int 1..40,
+`precision` ∈ `{"exact","session","day"}`, and it governs two other fields so the wire cannot
+carry a precision it contradicts:
+
+- `precision: "day"` → the instant's time-of-day must be `00:00:00Z`, and `session` must be
+  absent. The app renders `종일` and, by test, **never** a `HH:MM`.
+- `precision: "session"` → `session` is **required** and is one of `{"bmo","amc"}` (before market
+  open / after market close). The instant still has to be a real instant — use the session's
+  conventional time in US/Eastern — because the day grouping needs one; but the app renders the
+  session word, never the instant.
+- `precision: "exact"` → `session` must be absent.
+
+`direction` ∈ `{"for","against","both"}`. `rank` int 1..40,
 unique across events. `title` ≤ 80 chars, `reason_short` ≤ 90, `reason` ≤ 600.
 `push` optional: `{title ≤ 60, body ≤ 180}`. `shortfall` is `None` or a string ≤ 160.
 `symbols` 1..8 entries, each the symbol pattern.
@@ -629,9 +643,18 @@ def test_the_device_plane_serves_only_the_three_documented_routes():
 
 
 def test_no_control_plane_path_answers_without_a_token():
+    """Every control-plane route, by a curated sample path per route.
+
+    Deliberately NOT a path generated from the regex -- generating one is
+    fiddly enough to be wrong quietly, which is the opposite of what this test
+    is for. SAMPLES is a literal dict from pattern to a path that matches it,
+    and the first assertion is that it covers every route: adding a route
+    without adding a sample fails here rather than shipping unguarded.
+    """
+    assert {p.pattern for p, _ in _ROUTES} == set(SAMPLES), "a route has no sample path"
     for pattern, methods in _ROUTES:
         for method in methods:
-            assert unauthenticated(method, sample_path(pattern)).status == 401
+            assert unauthenticated(method, SAMPLES[pattern.pattern]).status == 401
 ```
 
 - [ ] **Step 2: Implement the payload refusal** where a draft's `news.json` is validated. Recurse
@@ -802,10 +825,21 @@ it('labels the day relatively near, absolutely far', () => {
   expect(dayLabel(nextWeek, now, ko)).toBe('9월 15일 (월)')
 })
 
-it('renders exactly the precision the event has', () => {
-  expect(timeLabel({ precision: 'exact', at: '2026-09-08T21:30:00Z' }, ko)).toBe('06:30')
-  expect(timeLabel({ precision: 'session', session: 'amc' }, ko)).toBe('장 마감 후')
-  expect(timeLabel({ precision: 'day' }, ko)).toBe('종일')
+it('renders exactly the precision the event has, in the device timezone', () => {
+  // 12:30Z is 08:30 ET -- when a US CPI print actually lands -- and 21:30 in
+  // Seoul. The rail is ALWAYS local time; the wire is always UTC.
+  expect(timeLabel({ precision: 'exact', at: '2026-09-08T12:30:00Z' }, ko, 'Asia/Seoul'))
+    .toBe('21:30')
+  expect(timeLabel({ precision: 'session', session: 'amc' }, ko, 'Asia/Seoul'))
+    .toBe('장 마감 후')
+  expect(timeLabel({ precision: 'day' }, ko, 'Asia/Seoul')).toBe('종일')
+})
+
+it('groups by the local day, not the UTC one', () => {
+  // The bug this prevents: an event at 23:00Z is tomorrow in Seoul, and
+  // filing it under today puts it above a heading that says 오늘.
+  const g = groupByDay([at('2026-09-08T23:00:00Z')], now, 'Asia/Seoul')
+  expect(g[0].date).toBe('2026-09-09')
 })
 
 it('never invents a time for a day-precision event', () => {

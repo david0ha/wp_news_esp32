@@ -343,6 +343,10 @@ Three decisions in that picture:
 
 - **The left rail is the time, at the precision the event actually has.** `21:30`, `장 마감 후`,
   `종일`. §2's precision field, rendered.
+
+  **The rail is local time and the wire is UTC**, always, both directions. The `21:30` above is
+  a US CPI print — 08:30 in New York, 12:30Z, 21:30 in Seoul — and the day grouping uses the
+  local day too, or an event at 23:00Z lands under a heading that says 오늘 when it is tomorrow.
 - **The right rail is what it means to you, not what investing.com thinks.** `↑ 유리` /
   `↓ 불리` / `양방향`, in the up/down pair. Hanging investing.com's High/Medium/Low there would
   throw away the whole point: this book is ranked by effect on *these* positions, and a High that
