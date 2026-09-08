@@ -379,7 +379,16 @@ def _leg(value: object, path: str, today: datetime.date) -> dict:
     _no_extra_keys(doc, _LEG_KEYS, path)
 
     expiry = _date(doc.get("expiry"), f"{path}.expiry")
-    horizon = today.replace(year=today.year + MAX_EXPIRY_YEARS)
+    try:
+        horizon = today.replace(year=today.year + MAX_EXPIRY_YEARS)
+    except ValueError:
+        # 29 February. The same day three years on does not exist, and
+        # `replace` raises rather than rounding -- so on one day every four
+        # years this line turned every PUT carrying an option leg into a 500,
+        # on a route whose every other refusal is a 400. The 28th is the
+        # conventional answer and the horizon is a bound, not a date anybody
+        # reads.
+        horizon = today.replace(year=today.year + MAX_EXPIRY_YEARS, day=28)
     if datetime.date.fromisoformat(expiry) > horizon:
         _bad(f"{path}.expiry",
              f"{expiry} is more than {MAX_EXPIRY_YEARS} years out")

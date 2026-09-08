@@ -373,7 +373,7 @@ export const en = {
     // setting it would not take.
     desk: {
       unauthorized:
-        'The desk didn’t accept that token. Changing the edition’s language needs an operator token — a producer one can read the setting but not change it.',
+        'The desk didn’t accept that token. Changing anything the desk holds — the edition’s language, the positions — needs an operator token; a producer one can read but not write.',
       transport: 'Couldn’t reach the desk. Check the address and your connection.',
       http: 'The desk answered with an error.',
       httpStatus: 'The desk answered {status}.',
@@ -663,6 +663,65 @@ export const en = {
       leg: '{side} {strike} {right}',
       stock: '{n} shares',
       stockShort: '{n} shares short',
+    },
+  },
+
+  // The sheet that opens on a search result, where somebody says what they hold. `positions` above
+  // is the vocabulary — a call is a call on every screen — and this is the sheet's own copy: the
+  // chips, the four fields a leg has, and the sentence that says the position back before it is
+  // saved. Nothing here names a strategy; that is `positions.strategy`'s job and the desk's.
+  positionSheet: {
+    open: 'Add a position in {symbol}',
+    title: 'What do you hold?',
+    /** Toss's *Predictable Hint*: say what the next step is before it arrives. */
+    help: 'Pick the shape first and the fields follow.',
+    shape: {
+      stock: 'Stock',
+      longCall: 'Long call',
+      longPut: 'Long put',
+      shortCall: 'Short call',
+      shortPut: 'Short put',
+      spread: 'Spread',
+    },
+    /** The heading over one leg form, when a shape opens more than one. */
+    leg: 'Leg {n}',
+    fields: {
+      quantity: 'Shares',
+      expiry: 'Expiry',
+      strike: 'Strike',
+      contracts: 'Contracts',
+      price: 'Average price',
+    },
+    hints: {
+      sharePrice: 'What you paid per share.',
+      legPrice: 'What you paid per contract.',
+    },
+    /** The size on the confirmation line. Korean has one form; English has two. */
+    contract: '{n} contract',
+    contracts: '{n} contracts',
+    confirmTitle: 'Here’s what I’ll record.',
+    confirmHelp: 'Read the strike and the expiry once more — this is the step that catches a typo.',
+    continue: 'Continue',
+    edit: 'Edit',
+    save: 'Save',
+    needsDesk: 'Add your desk address and an operator token in Settings first.',
+    // Every one of these is checked before anything is sent. The desk checks them again and its
+    // answer wins; these exist so the ordinary mistake is caught under the field that caused it
+    // rather than after a round trip, as a JSON path.
+    errors: {
+      symbol: 'A ticker is upper-case letters, digits, “.” and “-”.',
+      required: 'Fill this in.',
+      notAmount: 'An amount, like 420 or 420.50.',
+      precision: 'Two decimal places at most.',
+      notCount: 'A whole number.',
+      strikeRange: 'A strike is more than zero.',
+      tooLarge: 'That is larger than the desk will take.',
+      quantityZero: 'Zero is the absence of a position, not a small one.',
+      quantityRange: 'At most {max} shares.',
+      contractsRange: 'Between 1 and {max} contracts.',
+      dateShape: 'A date, as 2026-11-21.',
+      dateReal: 'That day doesn’t exist.',
+      expiryFar: 'An expiry can be at most {years} years out.',
     },
   },
 }

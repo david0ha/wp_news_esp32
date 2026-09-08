@@ -426,9 +426,19 @@ From the search result in `add-ticker.tsx`, a bottom sheet, one decision at a ti
 
 1. `[주식] [롱 콜] [롱 풋] [숏 콜] [숏 풋] [스프레드]`
 2. the leg form(s) that choice implies — 만기 · 행사가 · 계약수 · 평균단가
-3. the app says the name back: "ETN 11월 21일 만기 420 콜 2계약" / "ETN 콜 버티컬 400/420"
+3. the app says the name back: "AAAA 11월 21일 만기 420 콜 2계약"
 
 The owner never picks a strategy from a taxonomy. They say what they bought and the app names it.
+
+**A spread is confirmed by its legs, not by its name** — "롱 400 콜 · 숏 420 콜 2계약" rather than
+"콜 버티컬 400/420". Naming a vertical *is* a derivation over two legs, and the app is forbidden
+from deriving a strategy in TypeScript (§3): the desk owns that enum, and a second implementation
+is a second thing that can disagree. The name arrives with the desk's answer a moment later. A
+single-leg shape is different and *is* named on the spot, because the chip the owner tapped is
+exactly the `(right, side)` pair the derivation reads.
+
+That turns out to be the better confirmation anyway. This step exists to catch a mistyped strike,
+and a line showing both strikes explicitly does that where a collapsed name does not.
 
 ### Notifications
 

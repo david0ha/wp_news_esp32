@@ -261,6 +261,19 @@ class ParseTest(unittest.TestCase):
         self.refuses(book(option(legs=[leg("call", "long", 42000)] * 5)),
                      "legs")
 
+    def test_the_expiry_horizon_survives_the_twenty_ninth_of_february(self):
+        """`date.replace(year=...)` raises rather than rounding, and leap+3 is
+        never a leap year -- so on one day every four years this turned every
+        PUT carrying an option leg into a 500, on a route whose every other
+        refusal is a 400. Found by the phone's own form, not by this suite."""
+        leap = datetime.date(2028, 2, 29)
+        out = P.parse_positions(book(option()), today=leap)
+        self.assertEqual(len(out["positions"]), 1)
+        with self.assertRaises(BadRequest):
+            P.parse_positions(
+                book(option(legs=[leg("call", "long", 42000,
+                                      expiry="2031-06-20")])), today=leap)
+
     def test_a_boolean_is_not_a_quantity(self):
         """`True` is an `int` in Python, so without an explicit refusal a
         document saying `"quantity": true` becomes a position of one."""

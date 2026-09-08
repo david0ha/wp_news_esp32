@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { Screen } from '../components/Screen'
 import { Card } from '../components/Card'
+import { PositionSheet } from '../components/PositionSheet'
 import { SearchField } from '../components/SearchField'
 import { ScreenMessage } from '../components/ScreenMessage'
 import { yahoo } from '../lib/market/yahoo'
@@ -36,6 +37,10 @@ export default function AddTicker() {
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [watched, setWatched] = useState<Set<string>>(new Set())
+  // The symbol the position sheet is open for, or null. A search result is where somebody says
+  // what they hold (spec §8) — the same row that adds a company to the watchlist, because the two
+  // questions arrive together and the answer to both starts by finding the company.
+  const [holding, setHolding] = useState<string | null>(null)
 
   // Bumped on every new search AND on every input change, so a late response for an old query
   // can never overwrite the state of the current one.
@@ -151,6 +156,13 @@ export default function AddTicker() {
                 last={index === results.length - 1}
                 onOpen={() => open(item.symbol)}
                 onToggle={() => toggle(item)}
+                // As it arrived, NOT upper-cased. The desk requires an upper-case ticker and
+                // refuses rather than canonicalising, precisely so that no two implementations can
+                // disagree about a position's identity (`positions.py`'s `_symbol`) — upper-casing
+                // it on the way into the sheet would be this app quietly keeping the rule the desk
+                // deleted. The watchlist beside it canonicalises freely, because a watchlist entry
+                // is a candidate rather than an identity.
+                onHold={() => setHolding(item.symbol.trim())}
               />
             )}
           />
@@ -192,6 +204,7 @@ export default function AddTicker() {
         </View>
         <View style={styles.body}>{body}</View>
       </KeyboardAvoidingView>
+      <PositionSheet symbol={holding} onClose={() => setHolding(null)} />
     </Screen>
   )
 }
@@ -202,12 +215,14 @@ function ResultRow({
   last,
   onOpen,
   onToggle,
+  onHold,
 }: {
   item: SearchResult
   added: boolean
   last: boolean
   onOpen: () => void
   onToggle: () => void
+  onHold: () => void
 }) {
   const t = useStrings()
   return (
@@ -232,6 +247,18 @@ function ResultRow({
           {item.exchange}
         </Text>
       ) : null}
+      {/* Two questions about the same company, and they are not the same question: the watchlist
+          is what the paper may write about, and a position is what the owner is exposed to. So
+          this is a second control rather than a mode on the first one. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={fill(t.positionSheet.open, { symbol: item.symbol })}
+        onPress={onHold}
+        hitSlop={8}
+        style={[styles.toggle, styles.toggleIdle]}
+      >
+        <Ionicons name="briefcase-outline" size={16} color={colors.textDim} />
+      </Pressable>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={fill(

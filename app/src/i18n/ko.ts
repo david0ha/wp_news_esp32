@@ -310,7 +310,7 @@ export const ko: Strings = {
     },
     desk: {
       unauthorized:
-        '데스크가 이 토큰을 받아들이지 않았습니다. 신문 언어를 바꾸려면 operator 토큰이 필요합니다. producer 토큰으로는 설정을 읽을 수만 있습니다.',
+        '데스크가 이 토큰을 받아들이지 않았습니다. 신문 언어든 보유 포지션이든 데스크의 내용을 바꾸려면 operator 토큰이 필요합니다. producer 토큰으로는 읽을 수만 있습니다.',
       transport: '데스크에 연결하지 못했습니다. 주소와 네트워크 연결을 확인하세요.',
       http: '데스크가 오류로 응답했습니다.',
       httpStatus: '데스크가 {status} 오류로 응답했습니다.',
@@ -575,6 +575,57 @@ export const ko: Strings = {
       leg: '{right} {strike} {side}',
       stock: '{n}주',
       stockShort: '{n}주 공매도',
+    },
+  },
+
+  // 검색 결과에서 열리는 시트. 위의 `positions`가 어휘라면 이쪽은 이 시트만의 문장이다. 토스의
+  // 해요체를 따르고, 겁주지 않는다 — 돈에 관한 화면에서 경고조는 그 자체로 실수를 부른다.
+  positionSheet: {
+    open: '{symbol} 보유 추가',
+    title: '무엇을 보유하고 계신가요?',
+    help: '먼저 종류를 고르면 입력할 항목이 정해져요.',
+    shape: {
+      stock: '주식',
+      longCall: '롱 콜',
+      longPut: '롱 풋',
+      shortCall: '숏 콜',
+      shortPut: '숏 풋',
+      spread: '스프레드',
+    },
+    leg: '{n}번 레그',
+    fields: {
+      quantity: '수량',
+      expiry: '만기',
+      strike: '행사가',
+      contracts: '계약수',
+      price: '평균단가',
+    },
+    hints: {
+      sharePrice: '한 주에 얼마에 사셨나요.',
+      legPrice: '한 계약에 얼마에 사셨나요.',
+    },
+    contract: '{n}계약',
+    contracts: '{n}계약',
+    confirmTitle: '이렇게 기록할게요.',
+    confirmHelp: '행사가와 만기만 한 번 더 봐 주세요. 오타는 여기서 잡혀요.',
+    continue: '다음',
+    edit: '고치기',
+    save: '저장',
+    needsDesk: '먼저 설정에서 데스크 주소와 오퍼레이터 토큰을 입력해 주세요.',
+    errors: {
+      symbol: '종목 코드는 영문 대문자와 숫자, “.”, “-”로 이루어져요.',
+      required: '입력해 주세요.',
+      notAmount: '420, 420.50처럼 금액으로 입력해 주세요.',
+      precision: '소수점 두 자리까지 입력할 수 있어요.',
+      notCount: '정수로 입력해 주세요.',
+      strikeRange: '행사가는 0보다 커야 해요.',
+      tooLarge: '데스크가 받을 수 있는 범위를 넘었어요.',
+      quantityZero: '0주는 작은 포지션이 아니라 없는 포지션이에요.',
+      quantityRange: '최대 {max}주까지 입력할 수 있어요.',
+      contractsRange: '1계약부터 {max}계약까지 입력할 수 있어요.',
+      dateShape: '2026-11-21처럼 입력해 주세요.',
+      dateReal: '없는 날짜예요.',
+      expiryFar: '만기는 최대 {years}년 뒤까지 입력할 수 있어요.',
     },
   },
 }
