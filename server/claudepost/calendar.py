@@ -453,6 +453,50 @@ def _serialised(doc: dict) -> bytes:
     return json_bytes(doc)
 
 
+def prune_to_positions(doc: dict, known: frozenset[str] | set[str]
+                       ) -> tuple[dict, int, int]:
+    """The book with reasoning about vanished positions removed.
+
+    Returns ``(book, events_dropped, affects_dropped)``. The book is a new
+    document; ``doc`` is left alone.
+
+    Called when the owner edits their positions. The alternative that looks
+    simpler is to leave the book exactly as filed and let :func:`load` refuse
+    it on the next boot -- but that serves a book whose ``affects`` point at
+    positions that no longer exist for however many hours lie between here and
+    that boot, and the phone has nothing sensible to render for one.
+
+    The alternative that looks safer is to discard the whole book. That throws
+    away nine true statements because a tenth stopped being about anything.
+
+    So: drop exactly the entries that became false, and drop an event only when
+    it has no reasoning left -- which is the same floor :func:`_event` applies
+    on the way in, applied again to a book the world moved underneath. What
+    survives is every statement that is still true, and what the desk holds in
+    memory is again something :func:`load` would accept.
+
+    Note what does **not** trigger this. :func:`~claudepost.positions._id_material`
+    deliberately leaves size, price and note outside the hash, so correcting an
+    average or buying ten more shares does not change an id and cannot cost a
+    single sentence here. An id disappears when a position is closed or its
+    contract changes, and those are exactly the times the reasoning about it
+    stopped being true.
+    """
+    known = frozenset(known)
+    events = []
+    affects_dropped = 0
+    for event in doc.get("events", []):
+        kept = [one for one in event["affects"]
+                if one["position_id"] in known]
+        affects_dropped += len(event["affects"]) - len(kept)
+        if kept:
+            events.append({**event, "affects": kept})
+
+    return ({**doc, "events": events},
+            len(doc.get("events", [])) - len(events),
+            affects_dropped)
+
+
 def load(path: str, *, known_position_ids: frozenset[str] | set[str],
          now: datetime.datetime | None = None) -> dict | None:
     """The book at ``path``, or ``None``. Never raises.

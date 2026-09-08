@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -26,15 +27,24 @@ import urllib.parse
 import urllib.request
 from unittest import mock
 
-from claudepost import notes, schedule as S, tiles
-from claudepost.app import Config, Desk
+from claudepost import notes, positions as P, push, schedule as S, tiles
+from claudepost.app import Config, Desk, utc_stamp
 from claudepost.clock import FixedClock
+from claudepost.econ import EconSource
 from claudepost.errors import NotFound, Upstream
 from claudepost.gates import GateResult, StubGates
 from claudepost.http import (MAX_CONTROL_BODY, MAX_DRAIN_BYTES,
                              DeskHTTPRequestHandler, make_server)
 from claudepost.quotes import MAX_SYMBOLS, QuoteService
 
+# The document builders the four new route classes file with, taken from the
+# modules' own test files rather than written again here. A second spelling of
+# a valid position or a valid device would be a second thing to keep in step
+# with the validator, and the first divergence would look like a routing bug.
+from test_calendar import aff, book as event_book, event as an_event
+from test_econ import FROM, TO, Fetches
+from test_positions import book as position_book, leg, option, stock
+from test_push import SPEC_DEVICE, TOKEN_A, TOKEN_B, TOKEN_C, device as a_device
 from test_schedule import at
 
 PAYLOAD = json.dumps({
@@ -1216,6 +1226,610 @@ class SettingsTest(DeskTestCase):
         event = doc["events"][0]
         self.assertEqual(event["event"], "settings")
         self.assertEqual(event["detail"], {"lang": "ko"})
+
+
+class PositionsTest(DeskTestCase):
+    """`/api/positions`: read by the agent, written by the owner alone.
+
+    The asymmetry is the feature. Everything downstream -- which events are
+    researched, which reasons are written, what the phone is told before a
+    date -- is reasoning about this document, so an agent that could rewrite
+    it could arrange for the reasoning to be about a position the owner does
+    not have.
+    """
+
+    def test_no_token_reaches_neither_verb(self):
+        for method, body in (("GET", None), ("PUT", b"{}")):
+            status, raw, _ = self.call(method, "/api/positions", body)
+            self.assertEqual(status, 401, method)
+            self.assertEqual(json.loads(raw)["error"], "unauthorized")
+
+    def test_a_desk_that_has_never_been_told_holds_nothing(self):
+        status, doc = self.api("GET", "/api/positions", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertIsNone(doc["positions"])
+
+    def test_the_owner_writes_the_book_and_the_agent_reads_it_back(self):
+        status, put = self.api("PUT", "/api/positions",
+                               position_book(stock(), option()))
+        self.assertEqual(status, 200, put)
+        held = put["positions"]["positions"]
+        self.assertEqual([one["symbol"] for one in held], ["BBBB", "AAAA"])
+        # Derived on the way through, both of them: the id from what makes a
+        # position that position, the strategy from the legs. Neither was in
+        # the body.
+        self.assertTrue(all(P.ID_RE.match(one["id"]) for one in held))
+        self.assertEqual(held[1]["strategy"], "long_call")
+
+        status, got = self.api("GET", "/api/positions", scope="producer")
+        self.assertEqual(status, 200, got)
+        self.assertEqual(got["positions"], put["positions"])
+
+    def test_the_stamp_is_the_desks_clock_and_not_the_bodys(self):
+        # `parse_positions` never reads an `updated_at`, so a body carrying
+        # one is round-trip material rather than a claim. The instant that
+        # lands is this desk's.
+        book = position_book(stock())
+        book["updated_at"] = "1999-01-01T00:00:00Z"
+        status, put = self.api("PUT", "/api/positions", book)
+        self.assertEqual(status, 200, put)
+        self.assertEqual(put["positions"]["updated_at"], utc_stamp(self.START))
+
+    def test_a_producer_may_not_write_one(self):
+        status, body = self.api("PUT", "/api/positions",
+                                position_book(stock()), scope="producer")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error"], "forbidden")
+
+    def test_a_refused_document_names_the_field_and_changes_nothing(self):
+        status, _ = self.api("PUT", "/api/positions", position_book(stock()))
+        self.assertEqual(status, 200)
+
+        # Lower case. The symbol is hash material rather than a display
+        # string, so it is refused rather than canonicalised -- see
+        # `positions.py`'s module docstring.
+        status, body = self.api("PUT", "/api/positions",
+                                position_book(stock(symbol="bbbb")))
+        self.assertEqual(status, 400, body)
+        self.assertEqual(body["error"], "bad_positions")
+        self.assertIn("symbol", body["detail"])
+
+        status, doc = self.api("GET", "/api/positions", scope="producer")
+        self.assertEqual(len(doc["positions"]["positions"]), 1)
+
+    def test_an_expiry_is_judged_against_the_desks_clock(self):
+        # Not the wall's. `parse_positions` bounds an expiry three years out
+        # and the handler hands it `Desk.utc_now().date()`, which is what
+        # makes this test the same test tomorrow -- and what keeps a desk
+        # whose clock a test moved from refusing a document it just accepted.
+        far = option(legs=[leg("call", "long", 42000, expiry="2030-01-18")])
+        status, body = self.api("PUT", "/api/positions", position_book(far))
+        self.assertEqual(status, 400, body)
+        self.assertIn("years out", body["detail"])
+
+    def test_it_survives_a_restart(self):
+        status, _ = self.api("PUT", "/api/positions",
+                             position_book(stock(), option()))
+        self.assertEqual(status, 200)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNotNone(second.positions)
+        self.assertEqual(len(second.positions["positions"]), 2)
+        self.assertEqual(second.positions["updated_at"], utc_stamp(self.START))
+
+    def test_the_file_is_readable_by_nobody_else(self):
+        # 0600, which is the whole reason `positions.py` is a module of its
+        # own rather than a shape in `watchlist.py`: a watchlist is a list of
+        # companies and this is a list of trades.
+        status, _ = self.api("PUT", "/api/positions", position_book(stock()))
+        self.assertEqual(status, 200)
+        path = os.path.join(self.cfg.data_dir, "positions.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_the_state_document_counts_them_and_says_nothing_else(self):
+        status, doc = self.api("GET", "/api/state", scope="producer")
+        self.assertEqual(doc["positions"], {"count": 0})
+
+        status, _ = self.api("PUT", "/api/positions",
+                             position_book(stock(), option()))
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/state", scope="producer")
+        self.assertEqual(doc["positions"], {"count": 2})
+        # A count, never a content. `/api/state` is producer scope and the
+        # symbols are the material the operator scope on the PUT is guarding.
+        self.assertNotIn("BBBB", json.dumps(doc))
+
+    def test_writing_one_is_audited_by_count_alone(self):
+        status, _ = self.api("PUT", "/api/positions",
+                             position_book(stock(), option()))
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(status, 200, doc)
+        event = doc["events"][0]
+        self.assertEqual(event["event"], "positions")
+        self.assertEqual(event["detail"], {"positions": 2})
+        self.assertNotIn("AAAA", json.dumps(doc))
+
+
+class CalendarTest(DeskTestCase):
+    """`/api/calendar`: the agent files it, and it may only reason about
+    positions that exist."""
+
+    def hold(self, *positions):
+        """PUT a book of positions and return the ids the desk minted for them.
+
+        Every test here that files an event book has to hold something first,
+        which is the coupling `h_put_calendar` exists to enforce: the book's
+        `affects[].position_id` may only name a position the desk has.
+        """
+        status, doc = self.api("PUT", "/api/positions", position_book(*positions))
+        self.assertEqual(status, 200, doc)
+        return [one["id"] for one in doc["positions"]["positions"]]
+
+    def test_no_token_reaches_neither_verb(self):
+        for method, body in (("GET", None), ("PUT", b"{}")):
+            status, raw, _ = self.call(method, "/api/calendar", body)
+            self.assertEqual(status, 401, method)
+            self.assertEqual(json.loads(raw)["error"], "unauthorized")
+
+    def test_a_desk_that_has_never_been_told_has_no_book(self):
+        status, doc = self.api("GET", "/api/calendar", scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertIsNone(doc["calendar"])
+
+    def test_a_producer_files_it_which_is_the_whole_point_of_the_scope(self):
+        # PUT is producer here where the positions beside it are operator,
+        # and the difference is the shape of the feature: this document is
+        # the output of a research run, and what a producer may put in it is
+        # bounded by `calendar.py`'s source rule rather than by a scope.
+        [pid] = self.hold(option())
+        status, put = self.api("PUT", "/api/calendar",
+                               event_book(an_event(affects=[aff(position_id=pid)])),
+                               scope="producer")
+        self.assertEqual(status, 200, put)
+        self.assertEqual(len(put["calendar"]["events"]), 1)
+        self.assertEqual(put["calendar"]["generated_at"], utc_stamp(self.START))
+
+        status, got = self.api("GET", "/api/calendar", scope="producer")
+        self.assertEqual(got["calendar"], put["calendar"])
+
+    def test_a_book_that_reasons_about_a_position_nobody_holds_is_refused(self):
+        """The refusal the handler exists to make reachable.
+
+        `parse_calendar` can only enforce it if it is told what the desk
+        holds, and the handler is the only place that knows -- so this is the
+        test that fails if `known_position_ids` is ever dropped from the call.
+        """
+        self.hold(option())
+        status, body = self.api(
+            "PUT", "/api/calendar",
+            event_book(an_event(affects=[aff(position_id="p_000000")])),
+            scope="producer")
+        self.assertEqual(status, 400, body)
+        self.assertEqual(body["error"], "bad_calendar")
+        self.assertIn("position_id", body["detail"])
+        self.assertIn("p_000000", body["detail"])
+
+    def test_a_desk_holding_nothing_can_take_no_book_at_all(self):
+        """The floor and the coupling meeting, which is worth seeing once.
+
+        Every event must reach at least one position (`calendar.py`'s own
+        rule: an event with no reasoning is a generic calendar entry) and
+        every position it reaches must be one the desk holds (this handler's
+        contribution). A desk nobody has told what they hold therefore takes
+        no book -- correctly, because there is nothing yet for a book to be
+        about.
+        """
+        status, body = self.api("PUT", "/api/calendar",
+                                event_book(an_event()), scope="producer")
+        self.assertEqual(status, 400, body)
+        self.assertEqual(body["error"], "bad_calendar")
+        self.assertIn("position_id", body["detail"])
+
+    def test_a_refused_book_names_the_field_and_leaves_the_last_one_in_force(self):
+        [pid] = self.hold(option())
+        good = event_book(an_event(affects=[aff(position_id=pid)]))
+        status, first = self.api("PUT", "/api/calendar", good, scope="producer")
+        self.assertEqual(status, 200, first)
+
+        # A researched kind claiming `computed`: the exact half of the source
+        # rule, and the one a filing agent is most likely to trip.
+        status, body = self.api(
+            "PUT", "/api/calendar",
+            event_book(an_event(kind="corporate", source="computed",
+                                affects=[aff(position_id=pid)])),
+            scope="producer")
+        self.assertEqual(status, 400, body)
+        self.assertEqual(body["error"], "bad_calendar")
+        self.assertIn("source", body["detail"])
+
+        status, doc = self.api("GET", "/api/calendar", scope="producer")
+        self.assertEqual(doc["calendar"], first["calendar"])
+
+    def test_an_event_is_judged_against_the_desks_clock(self):
+        # The book's window is seven days back and four hundred on, measured
+        # from `Desk.utc_now()` rather than the wall -- which is what stops a
+        # book this desk accepted from being refused by `calendar.load` on the
+        # next boot, and what makes this assertion the same one next year.
+        status, body = self.api("PUT", "/api/calendar",
+                                event_book(an_event(at="2025-01-01T12:30:00Z",
+                                                    affects=[])),
+                                scope="producer")
+        self.assertEqual(status, 400, body)
+        self.assertIn("window", body["detail"])
+
+    def test_it_survives_a_restart_with_the_positions_it_reasons_about(self):
+        [pid] = self.hold(option())
+        status, _ = self.api("PUT", "/api/calendar",
+                             event_book(an_event(affects=[aff(position_id=pid)])),
+                             scope="producer")
+        self.assertEqual(status, 200)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNotNone(second.calendar)
+        self.assertEqual(len(second.calendar["events"]), 1)
+
+    def test_a_book_whose_positions_are_gone_is_not_loaded_on_the_next_boot(self):
+        """`calendar.load`'s own rule, reached through the desk.
+
+        The book is refused at the next boot rather than dropped when the
+        position is closed -- `set_positions` says why it does not touch the
+        calendar -- so this is the behaviour to know about rather than a bug
+        to fix here: reasoning about a holding that no longer exists does not
+        come back after a restart.
+        """
+        [pid] = self.hold(option())
+        status, _ = self.api("PUT", "/api/calendar",
+                             event_book(an_event(affects=[aff(position_id=pid)])),
+                             scope="producer")
+        self.assertEqual(status, 200)
+
+        status, _ = self.api("PUT", "/api/positions", position_book())
+        self.assertEqual(status, 200)
+        # Gone at once, not left for the next boot to refuse. Every event in
+        # that book reasoned about the position just closed, so nothing
+        # survived the prune -- and a book with no events is not a smaller
+        # book, it is a document claiming nothing is coming without the
+        # `shortfall` sentence that would make that a claim. The phone goes
+        # back to "no book yet", which is true.
+        self.assertIsNone(self.desk.calendar)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNone(second.calendar)
+
+    def test_an_edit_that_kills_one_position_keeps_the_rest_of_the_book(self):
+        """The half the test above cannot show: pruning is a scalpel.
+
+        Closing one position drops the reasoning about it and the events left
+        with none, and keeps every statement that is still true. Discarding the
+        whole book instead would lose a morning's research because one of ten
+        entries stopped being about anything.
+        """
+        first, second_id = self.hold(option(), stock())
+        keeps = an_event(affects=[aff(position_id=first)])
+        goes = an_event(id="e_aa02", rank=2,
+                        affects=[aff(position_id=second_id)])
+        status, _ = self.api("PUT", "/api/calendar",
+                             event_book(keeps, goes), scope="producer")
+        self.assertEqual(status, 200)
+
+        # The owner closes the second position; the first is untouched.
+        status, _ = self.api("PUT", "/api/positions", position_book(option()))
+        self.assertEqual(status, 200)
+
+        self.assertIsNotNone(self.desk.calendar)
+        self.assertEqual([e["id"] for e in self.desk.calendar["events"]],
+                         ["e_91c2"])
+
+        third = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(third.close)
+        self.assertEqual(len(third.calendar["events"]), 1)
+
+    def test_the_state_document_carries_the_count_the_stamp_and_the_shortfall(self):
+        status, doc = self.api("GET", "/api/state", scope="producer")
+        self.assertEqual(doc["calendar"],
+                         {"count": 0, "generatedAt": None, "shortfall": None})
+
+        [pid] = self.hold(option())
+        book = event_book(an_event(affects=[aff(position_id=pid)]),
+                          shortfall="실적 발표일을 찾지 못했어요")
+        status, _ = self.api("PUT", "/api/calendar", book, scope="producer")
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/state", scope="producer")
+        self.assertEqual(doc["calendar"]["count"], 1)
+        self.assertEqual(doc["calendar"]["generatedAt"], utc_stamp(self.START))
+        # The shortfall travels, because a shortfall nobody reads is a book
+        # that looks complete.
+        self.assertEqual(doc["calendar"]["shortfall"], "실적 발표일을 찾지 못했어요")
+
+    def test_filing_one_is_audited_without_the_shortfalls_words(self):
+        [pid] = self.hold(option())
+        status, _ = self.api("PUT", "/api/calendar",
+                             event_book(an_event(affects=[aff(position_id=pid)]),
+                                        shortfall="AAAA 실적일 미확인"),
+                             scope="producer")
+        self.assertEqual(status, 200)
+
+        status, doc = self.api("GET", "/api/audit", scope="producer")
+        event = doc["events"][0]
+        self.assertEqual(event["event"], "calendar")
+        self.assertEqual(event["detail"], {"events": 1, "shortfall": True})
+        # A sentence about what could not be covered may name a holding, so
+        # what is recorded is that there was one.
+        self.assertNotIn("미확인", json.dumps(doc))
+
+
+class EconTest(DeskTestCase):
+    """`/api/econ`: investing.com, cached, with the network replaced.
+
+    The parsing, the cache and the redaction are `test_econ.py`'s. This class
+    holds the route: the two dates, the envelope, and the health block that
+    travels with the answer.
+    """
+
+    def source(self, fetch):
+        """The real `EconSource` on a fake transport.
+
+        A stub of the service would pass identically if the route stopped
+        checking its dates, since that check lives inside `events()`. This is
+        the real module with `Fetches` where the socket would be -- the same
+        double `test_econ.py` uses.
+        """
+        self.desk.econ = EconSource(self.clock, fetch=fetch)
+        return self.desk.econ
+
+    def test_the_desk_wires_a_real_econ_source(self):
+        # No call: the real transport would go to investing.com, and a test
+        # that reaches the internet is a test that fails on a train. What is
+        # asserted is the wiring `Desk.__init__` does, which every other test
+        # in this class replaces before it calls anything.
+        self.assertIsInstance(self.desk.econ, EconSource)
+
+    def test_no_token_reaches_it(self):
+        status, raw, _ = self.call("GET", "/api/econ?from=%s&to=%s" % (FROM, TO))
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw)["error"], "unauthorized")
+
+    def test_a_window_comes_back_as_events_with_the_health_beside_them(self):
+        fetch = Fetches()
+        self.source(fetch)
+        status, doc = self.api("GET", "/api/econ?from=%s&to=%s" % (FROM, TO),
+                               scope="producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(len(doc["events"]), 3)
+        self.assertEqual([e["date"] for e in doc["events"]],
+                         sorted(e["date"] for e in doc["events"]))
+        # The health travels with the answer rather than only in
+        # `/api/state`: a failed fetch re-serves the last good copy of this
+        # window, so the rows themselves cannot say how old they are.
+        self.assertTrue(doc["health"]["ok"])
+        self.assertEqual(doc["health"]["parsed"], 3)
+        self.assertEqual(fetch.count, 1)
+
+    def test_a_second_call_inside_the_hour_asks_nobody(self):
+        fetch = Fetches()
+        self.source(fetch)
+        path = "/api/econ?from=%s&to=%s" % (FROM, TO)
+        self.assertEqual(self.api("GET", path, scope="producer")[0], 200)
+        self.assertEqual(self.api("GET", path, scope="producer")[0], 200)
+        self.assertEqual(fetch.count, 1)
+
+    def test_a_missing_or_malformed_date_is_refused_by_name(self):
+        fetch = Fetches()
+        self.source(fetch)
+        for query, field in (("", "from"),
+                             ("?to=%s" % TO, "from"),
+                             ("?from=%s" % FROM, "to"),
+                             ("?from=yesterday&to=%s" % TO, "from")):
+            status, doc = self.api("GET", "/api/econ" + query, scope="producer")
+            self.assertEqual(status, 400, doc)
+            self.assertEqual(doc["error"], "bad_request")
+            self.assertIn(field, doc["detail"])
+        # Refused before anything is asked of anybody: the dates are the only
+        # caller-supplied material that reaches the upstream request.
+        self.assertEqual(fetch.count, 0)
+
+    def test_an_upstream_failure_with_nothing_to_serve_is_a_502(self):
+        self.source(Fetches(raises=OSError("tls handshake failed")))
+        status, doc = self.api("GET", "/api/econ?from=%s&to=%s" % (FROM, TO),
+                               scope="producer")
+        self.assertEqual(status, 502, doc)
+        self.assertEqual(doc["error"], "upstream")
+        # The type name and nothing the library wrote -- `econ.py` redacts by
+        # omission, and the route must not undo that by quoting the message
+        # it was handed.
+        self.assertNotIn("handshake", json.dumps(doc))
+
+    def test_the_state_document_carries_the_health_block(self):
+        status, doc = self.api("GET", "/api/state", scope="producer")
+        self.assertEqual(doc["econ"], {"ok": True, "error": None,
+                                       "fetchedAt": None, "windows": 0,
+                                       "parsed": 0, "skipped": 0})
+
+        self.source(Fetches(raises=OSError("tls handshake failed")))
+        self.assertEqual(self.api("GET", "/api/econ?from=%s&to=%s" % (FROM, TO),
+                                  scope="producer")[0], 502)
+
+        status, doc = self.api("GET", "/api/state", scope="producer")
+        # The break has to be visible here rather than as a quiet week on the
+        # phone -- spec §9. A type name is what a break is allowed to say.
+        self.assertFalse(doc["econ"]["ok"])
+        self.assertEqual(doc["econ"]["error"], "OSError")
+        self.assertNotIn("handshake", json.dumps(doc))
+
+
+class PushDevicesTest(DeskTestCase):
+    """`/api/push/devices`: operator throughout, because a push token is a
+    capability to interrupt the owner rather than a document about them."""
+
+    def test_no_token_reaches_any_verb(self):
+        for method, path, body in (("GET", "/api/push/devices", None),
+                                   ("POST", "/api/push/devices", b"{}"),
+                                   ("DELETE", "/api/push/devices/" + TOKEN_A, None)):
+            status, raw, _ = self.call(method, path, body)
+            self.assertEqual(status, 401, method)
+            self.assertEqual(json.loads(raw)["error"], "unauthorized")
+
+    def test_a_producer_may_not_even_read_the_list(self):
+        # The one document on this desk where a *read* is operator-only. A
+        # token is not information about the owner, it is a way to write on
+        # their lock screen.
+        for method, path, body in (("GET", "/api/push/devices", None),
+                                   ("POST", "/api/push/devices", a_device()),
+                                   ("DELETE", "/api/push/devices/" + TOKEN_A, None)):
+            status, doc = self.api(method, path, body, scope="producer")
+            self.assertEqual(status, 403, (method, doc))
+            self.assertEqual(doc["error"], "forbidden")
+
+    def test_a_desk_that_has_never_been_told_has_no_phones(self):
+        status, doc = self.api("GET", "/api/push/devices")
+        self.assertEqual(status, 200, doc)
+        self.assertIsNone(doc["push"])
+
+    def test_a_phone_registers_and_the_desk_stamps_it_seen(self):
+        status, doc = self.api("POST", "/api/push/devices", a_device())
+        self.assertEqual(status, 200, doc)
+        devices = doc["push"]["devices"]
+        self.assertEqual([one["token"] for one in devices], [TOKEN_A])
+        # The body carried a `last_seen` of its own; the instant that lands is
+        # this desk's, because the phone's clock is not evidence of when the
+        # desk heard from it.
+        self.assertEqual(devices[0]["last_seen"], utc_stamp(self.START))
+        self.assertNotEqual(devices[0]["last_seen"], SPEC_DEVICE["last_seen"])
+
+    def test_registering_twice_updates_the_phone_rather_than_adding_one(self):
+        # An app that re-registers on every launch is the ordinary case, and a
+        # desk that appended would fill the household in a week -- with every
+        # notification arriving twice on the way there.
+        status, _ = self.api("POST", "/api/push/devices", a_device())
+        self.assertEqual(status, 200)
+        self.clock.advance(3600)
+        status, doc = self.api("POST", "/api/push/devices",
+                               a_device(tz="America/New_York"))
+        self.assertEqual(status, 200, doc)
+
+        devices = doc["push"]["devices"]
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0]["tz"], "America/New_York")
+        self.assertEqual(devices[0]["last_seen"], utc_stamp(self.START + 3600))
+
+    def test_a_second_phone_joins_the_first(self):
+        self.assertEqual(self.api("POST", "/api/push/devices", a_device())[0], 200)
+        status, doc = self.api("POST", "/api/push/devices", a_device(TOKEN_B))
+        self.assertEqual(status, 200, doc)
+        self.assertEqual([one["token"] for one in doc["push"]["devices"]],
+                         [TOKEN_A, TOKEN_B])
+
+    def test_a_device_the_desk_cannot_use_is_refused_by_name(self):
+        for over, field in (({"token": "not-a-token"}, "token"),
+                            ({"tz": "Mars/Phobos"}, "tz"),
+                            ({"platform": "web"}, "platform"),
+                            ({"lead": {"earnings": ["P3D"]}}, "lead")):
+            status, doc = self.api("POST", "/api/push/devices", a_device(**over))
+            self.assertEqual(status, 400, (over, doc))
+            self.assertEqual(doc["error"], "bad_push")
+            self.assertIn(field, doc["detail"])
+
+    def test_the_cap_is_weighed_against_the_merged_list(self):
+        """One device at a time still cannot overfill the document.
+
+        The device cap is a property of the list rather than of an entry, so
+        a route that validated only what arrived would accept a ninth phone
+        into a document that holds eight.
+        """
+        for i in range(push.MAX_DEVICES):
+            token = "ExponentPushToken[000000000000000000%02d]" % i
+            status, doc = self.api("POST", "/api/push/devices", a_device(token))
+            self.assertEqual(status, 200, doc)
+
+        status, doc = self.api("POST", "/api/push/devices", a_device(TOKEN_C))
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(doc["error"], "bad_push")
+        self.assertIn("at most %d" % push.MAX_DEVICES, doc["detail"])
+
+    def test_a_phone_is_forgotten_by_its_own_token(self):
+        self.assertEqual(self.api("POST", "/api/push/devices", a_device())[0], 200)
+        self.assertEqual(self.api("POST", "/api/push/devices", a_device(TOKEN_B))[0], 200)
+
+        status, doc = self.api("DELETE", "/api/push/devices/"
+                               + urllib.parse.quote(TOKEN_A))
+        self.assertEqual(status, 200, doc)
+        self.assertEqual([one["token"] for one in doc["push"]["devices"]], [TOKEN_B])
+
+    def test_forgetting_one_that_was_never_registered_is_a_404(self):
+        # Rather than a cheerful 200. This caller holds every authority the
+        # desk has and can list the document, so there is nothing to withhold
+        # -- and "there was nothing to forget" is what tells an operator their
+        # delete did not do what they thought.
+        self.assertEqual(self.api("POST", "/api/push/devices", a_device())[0], 200)
+        status, doc = self.api("DELETE", "/api/push/devices/" + TOKEN_B)
+        self.assertEqual(status, 404, doc)
+        self.assertEqual(doc["error"], "not_found")
+
+    def test_a_registration_survives_a_restart(self):
+        """The regression test for the stamp.
+
+        `push.json` has no top-level `updated_at` -- every device carries its
+        own `last_seen` -- so a handler that stamped the document the way the
+        watchlist's does would write a file `push.load` then refuses. It would
+        do it silently, because `None` from that function means both "no file"
+        and "will not take this one", and the symptom would be push quietly
+        not working from the first restart onwards.
+        """
+        status, _ = self.api("POST", "/api/push/devices", a_device())
+        self.assertEqual(status, 200)
+
+        second = Desk(self.cfg, clock=self.clock, gates=self.gates)
+        self.addCleanup(second.close)
+        self.assertIsNotNone(second.push_devices)
+        self.assertEqual([one["token"] for one in second.push_devices["devices"]],
+                         [TOKEN_A])
+        self.assertEqual(second.push_devices["devices"][0]["last_seen"],
+                         utc_stamp(self.START))
+
+    def test_the_file_is_readable_by_nobody_else(self):
+        self.assertEqual(self.api("POST", "/api/push/devices", a_device())[0], 200)
+        path = os.path.join(self.cfg.data_dir, "push.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_no_token_reaches_the_state_document_the_audit_log_or_a_log_line(self):
+        """The rule the whole route is arranged around.
+
+        Both of those surfaces are read at `producer` scope, so a token on
+        either would hand every agent the owner's lock screen -- which is
+        precisely the authority the operator scope on this route withholds.
+        """
+        with self.assertLogs("claudepost", level="INFO") as caught:
+            status, _ = self.api("POST", "/api/push/devices", a_device())
+            self.assertEqual(status, 200)
+            Desk(self.cfg, clock=self.clock, gates=self.gates).close()
+
+        status, state = self.api("GET", "/api/state", scope="producer")
+        self.assertEqual(state["push"], {"devices": 1, "failures": 0})
+        self.assertNotIn(TOKEN_A, json.dumps(state))
+
+        status, audit = self.api("GET", "/api/audit", scope="producer")
+        self.assertEqual(audit["events"][0]["event"], "push_register")
+        self.assertEqual(audit["events"][0]["detail"], {"devices": 1})
+        self.assertNotIn(TOKEN_A, json.dumps(audit))
+
+        self.assertNotIn(TOKEN_A, "\n".join(caught.output))
+
+    def test_the_state_document_reports_the_longest_failure_streak(self):
+        # The map is keyed by token and its keys may not leave the process, so
+        # one number answers the question this row is for -- is push working
+        # -- without answering it by naming the phones.
+        self.assertEqual(self.api("POST", "/api/push/devices", a_device())[0], 200)
+        self.desk.push_failures = {TOKEN_A: 3, TOKEN_B: 1}
+
+        status, doc = self.api("GET", "/api/state", scope="producer")
+        self.assertEqual(doc["push"], {"devices": 1, "failures": 3})
 
 
 class StubQuoteService:

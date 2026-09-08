@@ -261,6 +261,61 @@ class DocumentTest(unittest.TestCase):
         self.refuses(book(event(at="2026-09-08T12:30:00+09:00")), "at")
 
 
+class PruneTest(unittest.TestCase):
+    """What happens to the book when the owner edits their positions.
+
+    Neither of the two obvious answers: not "leave it and let the next boot
+    refuse it", which serves dangling references for hours, and not "throw the
+    book away", which loses nine true statements because a tenth stopped being
+    about anything.
+    """
+
+    def parse(self, doc):
+        return C.parse_calendar(doc, known_position_ids=KNOWN, now=NOW)
+
+    def test_nothing_changes_when_every_position_still_exists(self):
+        doc = self.parse(book(event(), event(id="e_aa02", rank=2)))
+        pruned, events, affects = C.prune_to_positions(doc, KNOWN)
+        self.assertEqual((events, affects), (0, 0))
+        self.assertEqual(pruned["events"], doc["events"])
+
+    def test_reasoning_about_a_closed_position_is_dropped(self):
+        both = event(affects=[aff(position_id="p_1f05f8"),
+                              aff(position_id="p_3e3267")])
+        doc = self.parse(book(both))
+        pruned, events, affects = C.prune_to_positions(doc, {"p_1f05f8"})
+        self.assertEqual((events, affects), (0, 1))
+        self.assertEqual([one["position_id"]
+                          for one in pruned["events"][0]["affects"]],
+                         ["p_1f05f8"])
+
+    def test_an_event_with_no_reasoning_left_goes_too(self):
+        """The same floor `_event` applies on the way in, applied again to a
+        book the world moved underneath."""
+        doc = self.parse(book(event(), event(
+            id="e_aa02", rank=2,
+            affects=[aff(position_id="p_3e3267")])))
+        pruned, events, affects = C.prune_to_positions(doc, {"p_1f05f8"})
+        self.assertEqual((events, affects), (1, 1))
+        self.assertEqual([e["id"] for e in pruned["events"]], ["e_91c2"])
+
+    def test_what_survives_is_something_load_would_accept(self):
+        """The property the whole function exists for: after a prune, what the
+        desk holds in memory is a document it would take off disk."""
+        doc = self.parse(book(event(), event(
+            id="e_aa02", rank=2, affects=[aff(position_id="p_3e3267")])))
+        pruned, _, _ = C.prune_to_positions(doc, {"p_1f05f8"})
+        self.assertTrue(C.parse_calendar(pruned,
+                                         known_position_ids={"p_1f05f8"},
+                                         now=NOW)["events"])
+
+    def test_the_original_is_left_alone(self):
+        doc = self.parse(book(event()))
+        C.prune_to_positions(doc, frozenset())
+        self.assertEqual(len(doc["events"]), 1)
+        self.assertEqual(len(doc["events"][0]["affects"]), 1)
+
+
 class FileTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

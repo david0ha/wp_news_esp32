@@ -537,6 +537,23 @@ class TransportTest(unittest.TestCase):
     def setUp(self):
         self.original = E.TRANSPORTS
         self.addCleanup(setattr, E, "TRANSPORTS", self.original)
+        self.addCleanup(setattr, E, "_elapsed", E._elapsed)
+        self.clock = [0.0]
+
+    def burns(self, tried: list, name: str, seconds: float | None = None):
+        """A transport that spends its whole timeout and then fails.
+
+        The chain's clock is stepped rather than waited on -- `E._elapsed` is
+        replaced in `setUp`'s cleanup and driven from here -- so a test about
+        a seventy-five-second worst case costs no seconds at all.
+        """
+        cost = E.UPSTREAM_TIMEOUT if seconds is None else seconds
+
+        def attempt(url, body, headers):
+            tried.append(name)
+            self.clock[0] += cost
+            raise TimeoutError("no answer")
+        return attempt
 
     def test_the_chain_is_cloudscraper_then_requests_then_urllib(self):
         # The order is the point: the library most likely to get past a
@@ -590,6 +607,66 @@ class TransportTest(unittest.TestCase):
         self.assertIn("ImportError", message)
         self.assertNotIn(SECRET, message)
         self.assertNotIn("cf_clearance", message)
+
+    def test_two_transports_that_burn_the_clock_leave_no_room_for_a_third(self):
+        """The budget, which is what keeps a cold window off cloudflared's 90.
+
+        Two attempts at the full 25-second timeout is 50 seconds, which is
+        past `ECON_TOTAL_BUDGET`, so the third is never started -- the answer
+        names what the two did and says the budget went, rather than reporting
+        a failure for a request nobody made.
+        """
+        tried: list[str] = []
+        E._elapsed = lambda: self.clock[0]
+        E.TRANSPORTS = (self.burns(tried, "cloudscraper"),
+                        self.burns(tried, "requests"),
+                        self.burns(tried, "stdlib"))
+
+        with self.assertRaises(E._TransportFailed) as caught:
+            E._post_fetch("u", b"b", {})
+
+        self.assertEqual(tried, ["cloudscraper", "requests"])
+        self.assertEqual(caught.exception.kinds,
+                         ("TimeoutError", "TimeoutError", E.BUDGET_SPENT))
+
+    def test_one_slow_attempt_still_leaves_the_stdlib_path_a_turn(self):
+        """The other half of the window the budget has to sit in.
+
+        A challenge that burns cloudscraper's whole timeout is the ordinary
+        failure this chain exists for, and a budget at or below one attempt's
+        timeout would let it stop `urllib` from ever being asked -- deleting
+        the fall-through rather than bounding it.
+        """
+        tried: list[str] = []
+        E._elapsed = lambda: self.clock[0]
+
+        def works(url, body, headers):
+            tried.append("stdlib")
+            return b"ok"
+
+        E.TRANSPORTS = (self.burns(tried, "cloudscraper"), works)
+        self.assertEqual(E._post_fetch("u", b"b", {}), b"ok")
+        self.assertEqual(tried, ["cloudscraper", "stdlib"])
+
+    def test_the_first_transport_is_never_skipped(self):
+        """A budget already spent before the call still asks once.
+
+        `_elapsed` is monotonic and this chain's start is its own; the only
+        way the first check could fail is a clock that jumped, and a chain
+        that answered "upstream failed" for a request it declined to make
+        would be reporting on nothing.
+        """
+        tried: list[str] = []
+        self.clock[0] = 10_000.0
+        E._elapsed = lambda: self.clock[0]
+
+        def works(url, body, headers):
+            tried.append("stdlib")
+            return b"ok"
+
+        E.TRANSPORTS = (works,)
+        self.assertEqual(E._post_fetch("u", b"b", {}), b"ok")
+        self.assertEqual(tried, ["stdlib"])
 
 
 class SecrecyTest(EconTestCase):

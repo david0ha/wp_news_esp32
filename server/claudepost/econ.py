@@ -67,6 +67,7 @@ import json
 import logging
 import re
 import threading
+import time
 import urllib.request
 from collections.abc import Callable, Sequence
 
@@ -111,12 +112,43 @@ EVENTS_TTL = 3600
 #: upstream should come back on its own without waiting out a full TTL.
 FAILURE_TTL = 300
 
-#: Per transport attempt. Three attempts is 75 seconds at worst, which is
-#: inside ``http.py``'s 120-second socket timeout and inside cloudflared's
-#: 90-second one, but not by much: it is generous because a Cloudflare
-#: challenge is slow by design, and it is only ever paid once an hour per
-#: window.
+#: Per transport attempt. Generous because a Cloudflare challenge is slow by
+#: design, and only ever paid once an hour per window. What it is *not* is a
+#: bound on the chain -- see :data:`ECON_TOTAL_BUDGET`, which is.
 UPSTREAM_TIMEOUT = 25.0
+
+#: The whole chain's budget, and the arithmetic behind the number.
+#:
+#: Three transports at :data:`UPSTREAM_TIMEOUT` each is **75 seconds** on a
+#: cold window with two libraries installed and failing. That is inside
+#: ``http.py``'s 120-second socket timeout and outside cloudflared's
+#: 90-second ``--proxy-keepalive-timeout`` by only fifteen seconds -- and
+#: ``GET /api/econ`` is a route a phone screen calls, not something only the
+#: scheduler pays. Nothing bounded that 75: it was an emergent product of two
+#: independent constants (how many transports, how long each may take), which
+#: is exactly the kind of number that grows by one the day a fourth transport
+#: looks like a good idea.
+#:
+#: So :func:`_post_fetch` checks the elapsed time before it *starts* each
+#: attempt after the first. The window this figure has to sit in is fixed at
+#: both ends:
+#:
+#: * **above 25** -- a budget at or below one attempt's timeout would mean a
+#:   cloudscraper challenge that burns its full timeout stops ``requests`` and
+#:   ``urllib`` from ever being tried, which deletes the fall-through this
+#:   module is built around.
+#: * **at or below 50** -- two full attempts must leave no room for a third,
+#:   or the budget buys nothing.
+#:
+#: Forty sits in the middle of that 25..50 window. The practical worst case
+#: becomes two attempts, 50 seconds, comfortably inside cloudflared's 90. The
+#: *guarantee* is the weaker and more honest statement, and it is the one to
+#: rely on: no attempt is ever started after 40 seconds have gone. It is
+#: weaker because a transport can overrun its own timeout -- ``urllib``'s is
+#: per socket operation rather than per request, so a body arriving one slow
+#: byte at a time never trips it -- and a bound that assumed otherwise would
+#: be arithmetic about a promise the socket layer does not make.
+ECON_TOTAL_BUDGET = 40.0
 
 #: The most of an upstream answer this module will read into memory. A timeout
 #: bounds how long a fetch may take; this bounds how much it may cost. A week
@@ -189,12 +221,18 @@ class _SafeCause(Exception):
 
 
 class _TransportFailed(_SafeCause):
-    """Every transport refused.
+    """Every transport refused, or the chain ran out of time to ask.
 
     Carries the *type names* of what each attempt raised, in order, which is
     the diagnosis that matters: three ``ModuleNotFoundError``s mean neither
     optional library is installed and the stdlib path is what failed, where an
     ``HTTPError`` after two of them means the page answered and refused.
+
+    A trailing :data:`BUDGET_SPENT` is the one entry that is not a type name.
+    It means :data:`ECON_TOTAL_BUDGET` ran out before the next transport was
+    started, and it is spelled as a phrase rather than as a class precisely so
+    that nobody reading it in ``health()`` takes it for something the upstream
+    did.
     """
 
     def __init__(self, kinds: Sequence[str]) -> None:
@@ -328,6 +366,17 @@ def _via_urllib(url: str, body: bytes, headers: dict[str, str]) -> bytes:
 TRANSPORTS: tuple[Callable[[str, bytes, dict[str, str]], bytes], ...] = (
     _via_cloudscraper, _via_requests, _via_urllib)
 
+#: What the chain measures :data:`ECON_TOTAL_BUDGET` against. Monotonic rather
+#: than wall time, because this is a duration and an NTP correction mid-fetch
+#: would otherwise make the budget already spent or never spendable. A module
+#: attribute for :data:`TRANSPORTS`'s reason: a test replaces it and exercises
+#: the budget without spending forty seconds proving it.
+_elapsed: Callable[[], float] = time.monotonic
+
+#: The entry :func:`_post_fetch` appends when it stops early. Not an exception
+#: type, because nothing raised -- see :class:`_TransportFailed`.
+BUDGET_SPENT = "budget spent"
+
 
 def _post_fetch(url: str, body: bytes, headers: dict[str, str]) -> bytes:
     """POST ``body`` and return the answer. The injectable default.
@@ -339,15 +388,29 @@ def _post_fetch(url: str, body: bytes, headers: dict[str, str]) -> bytes:
     let one library's bad afternoon abort a request the plain stdlib path
     would have answered.
 
+    The fall-through is bounded by :data:`ECON_TOTAL_BUDGET`, checked before
+    each attempt after the first -- never before the first, which always runs,
+    because a chain that could decline to make any request at all would report
+    an upstream failure for a request nobody attempted. The check is at the
+    start of an attempt rather than inside one for the reason a timeout cannot
+    be: this function does not own the sockets, it owns the decision to open
+    another.
+
     Nothing is logged with the exception's text -- only its type -- for the
     reason the module docstring gives.
 
     Raises:
-        _TransportFailed: when every attempt did. Its message is the list of
-            type names and carries nothing from any of them.
+        _TransportFailed: when every attempt did, or when the budget ran out
+            first. Its message is the list of type names, plus
+            :data:`BUDGET_SPENT` in the second case, and carries nothing from
+            any of them.
     """
     kinds: list[str] = []
+    started = _elapsed()
     for attempt in TRANSPORTS:
+        if kinds and _elapsed() - started >= ECON_TOTAL_BUDGET:
+            kinds.append(BUDGET_SPENT)
+            break
         try:
             return attempt(url, body, headers)
         except Exception as exc:                                   # noqa: BLE001
