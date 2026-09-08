@@ -54,10 +54,11 @@ LOG = logging.getLogger("claudepost.calendar")
 #: positions carry numbers.
 MAX_DOC_BYTES = 256 * 1024
 
-#: Forty rather than ten. ``target`` is a setting -- the phone shows the top
-#: ``target`` by rank -- so the book may legitimately hold more than it shows,
-#: and a book truncated to exactly what today's setting displays would have to
-#: be re-researched the moment the owner raised it.
+#: Forty rather than ten. ``target`` is how many events the agent works until it
+#: has -- the design's floor, not a display cap -- so the book may legitimately
+#: hold more than any one screen shows, and a book truncated to today's setting
+#: would have to be re-researched the moment the owner raised it. The schedule
+#: screen shows the whole book, ordered by time; see the design's section 8.
 MAX_EVENTS = 40
 
 MAX_TITLE_CHARS = 80
@@ -410,8 +411,9 @@ def parse_calendar(doc: object, *, known_position_ids: frozenset[str] | set[str]
     events = [_event(one, f"calendar.events[{i}]", known, now)
               for i, one in enumerate(raw_events)]
 
-    # Rank is what the phone sorts by and what `target` cuts at, so a repeated
-    # one is two events with an equal claim on the tenth slot.
+    # Rank is the agent's own ordering -- which events cleared the floor first,
+    # and which `shortfall` is counted against -- so a repeated one is two
+    # events with an equal claim on the tenth slot. The phone sorts by time.
     by_rank: dict[int, int] = {}
     by_id: dict[str, int] = {}
     for i, event in enumerate(events):
