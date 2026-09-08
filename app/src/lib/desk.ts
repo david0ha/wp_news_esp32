@@ -7,10 +7,16 @@
 // on every request, two scopes, and the same `{"ok": false, "error": ...}` envelope the board
 // itself answers refusals in.
 //
-// One route, for now:
+// The routes:
 //
 //   GET  /api/settings   (producer) -> { ok, source: 'file'|'default', settings: { lang } }
 //   PUT  /api/settings   (operator) { lang } -> the same shape, with what is now in force
+//   GET  /api/positions  (producer) -> { ok, positions: { updated_at, positions: [...] } }
+//   PUT  /api/positions  (operator) { positions: [...] } -> the same shape, now in force
+//
+// The two scopes on `/api/positions` are not symmetric and the asymmetry is the point: the agent
+// READS the book to reason about it, but only the owner SAYS what they hold. An agent that could
+// rewrite the positions could arrange for the reasoning to be about a position nobody owns.
 //
 // `lang` is the language the NEWSPAPER is written in — not the app's own chrome, which is
 // `src/i18n/` and never leaves the phone. The desk's setting is what makes the producing agent
@@ -23,6 +29,7 @@
 // pasted into bug reports, and a token that reaches either is a token to be revoked.
 
 import { fill, strings } from '../i18n'
+import { parsePositionsDoc, positionsBody, type PositionsDoc } from './positions'
 
 /** Long enough for a cold tunnel, short enough that a tap on a selector still feels like one. */
 export const DESK_TIMEOUT_MS = 15_000
@@ -169,6 +176,10 @@ export interface DeskClientOptions {
 export interface DeskClient {
   getSettings(): Promise<DeskSettings>
   putSettings(settings: DeskSettings): Promise<DeskSettings>
+  /** The book of positions the desk holds. */
+  positions(): Promise<PositionsDoc>
+  /** Put a whole book in force. There is no partial write — see `putPositions`. */
+  putPositions(doc: PositionsDoc): Promise<PositionsDoc>
 }
 
 export function createDeskClient(opts: DeskClientOptions): DeskClient {
@@ -200,10 +211,11 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
   // A refusal, turned into the error the screen will draw. The envelope is best-effort: a proxy or
   // a tunnel in front of the desk answers HTML, and a 502 with no `error` field is still a 502.
   //
-  // The route names itself in the message rather than arriving as an argument. There is one route
-  // here, so a parameter would be a knob with a single setting that a reader has to check both
-  // call sites to rule out; the second route can add it back, and will say what it is for.
-  async function refusal(res: Response): Promise<DeskError> {
+  // `route` is the second route's doing, as the note this replaces said it would be. It names the
+  // document in the thrown message and nowhere else — the error the screen DRAWS comes from the
+  // catalogue via `humanDeskError` — so what it is for is a bug report: "positions responded 400"
+  // and "settings responded 400" are the same fact about two entirely different screens.
+  async function refusal(res: Response, route: string): Promise<DeskError> {
     let code: string | undefined
     let detail: string | undefined
     try {
@@ -214,12 +226,12 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // Not the desk's envelope. The status is what is left to say.
     }
     const kind: DeskErrorCode = res.status === 401 || res.status === 403 ? 'unauthorized' : 'http'
-    return new DeskError(kind, `settings responded ${res.status}`, res.status, code, detail)
+    return new DeskError(kind, `${route} responded ${res.status}`, res.status, code, detail)
   }
 
   // Every 2xx on this route answers the same document, so one reader serves both calls.
   async function settingsOf(res: Response): Promise<DeskSettings> {
-    if (!res.ok) throw await refusal(res)
+    if (!res.ok) throw await refusal(res, 'settings')
     let lang: unknown
     try {
       const body = JSON.parse(await res.text()) as { settings?: { lang?: unknown } }
@@ -235,6 +247,29 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       throw new DeskError('bad_json', 'settings answered without a language', res.status)
     }
     return { lang }
+  }
+
+  // The same job for the other document, and the same reason it is one function rather than two:
+  // a GET and a PUT answer the identical envelope, so a client that read them apart would have
+  // two chances to disagree with itself about what the desk said.
+  //
+  // A body this app cannot read is `bad_json` rather than an empty book, and that is the whole
+  // care in this function. A book drawn as empty is indistinguishable, on screen, from an owner
+  // who holds nothing — and the next PUT from that screen would make it true.
+  async function positionsOf(res: Response): Promise<PositionsDoc> {
+    if (!res.ok) throw await refusal(res, 'positions')
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', 'positions did not answer JSON', res.status)
+    }
+    const envelope = payload as { positions?: unknown } | null
+    const doc = parsePositionsDoc(envelope?.positions)
+    if (doc === null) {
+      throw new DeskError('bad_json', 'positions answered a book this app cannot read', res.status)
+    }
+    return doc
   }
 
   return {
@@ -256,6 +291,27 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // normalises, and a later release may refuse a value while keeping the old one. The caller
       // draws this, never its own argument.
       return settingsOf(res)
+    },
+
+    async positions(): Promise<PositionsDoc> {
+      return positionsOf(await send('/api/positions', { method: 'GET' }))
+    },
+
+    async putPositions(doc: PositionsDoc): Promise<PositionsDoc> {
+      // The body is built by `positionsBody` field by field, for the reason `putSettings` builds
+      // its own: the desk refuses an unknown key whole with `bad_positions`, and `strategy` — the
+      // field a GET puts on every option position — is refused *by name*, because it is derived
+      // and a supplied one could contradict the legs beside it. Echoing back what was read is
+      // therefore not a shortcut, it is a 400.
+      const res = await send('/api/positions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(positionsBody(doc)),
+      })
+      // What is in force, not what was asked for — and here that is more than a formality: the
+      // desk re-derives every `id` and every `strategy` from the legs it accepted, so this answer
+      // is the only place the app learns what its own write became.
+      return positionsOf(res)
     },
   }
 }

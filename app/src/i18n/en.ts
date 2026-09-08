@@ -633,6 +633,38 @@ export const en = {
       peers: '{n} peers',
     },
   },
+
+  // What the owner holds, named the way an option chain names it. The desk derives the STRATEGY
+  // (`positions.py`'s `derive_strategy`) and this catalogue supplies the WORDS. There is no entry
+  // for a shape the desk cannot name: `custom` renders as its legs rather than taking a name
+  // nobody derived, because a mislabelled spread is worse than an unlabelled one.
+  positions: {
+    right: {
+      call: 'Call',
+      put: 'Put',
+    },
+    side: {
+      long: 'Long',
+      short: 'Short',
+    },
+    // One template per shape, and word order is the whole reason they are templates: Korean puts
+    // the side, and the word "expiry" itself, where English cannot.
+    strategy: {
+      /** A lone leg. Long is unmarked — a bought option is what an option chain assumes. */
+      single: '{expiry} {strike} {right}',
+      singleShort: 'Short {expiry} {strike} {right}',
+      /** The one name the desk cannot derive: it needs the shares sitting in another position. */
+      covered: 'Covered Call {strike}',
+      vertical: '{right} Vertical {low}/{high}',
+      calendar: '{right} Calendar {strike}',
+      straddle: '{side} {strike} Straddle',
+      strangle: '{side} {low}/{high} Strangle',
+      /** One leg inside the list a shape with no name falls back to. */
+      leg: '{side} {strike} {right}',
+      stock: '{n} shares',
+      stockShort: '{n} shares short',
+    },
+  },
 }
 
 /**

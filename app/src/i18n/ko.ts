@@ -552,4 +552,29 @@ export const ko: Strings = {
       peers: '동종 업계 {n}개',
     },
   },
+
+  positions: {
+    right: {
+      call: '콜',
+      put: '풋',
+    },
+    side: {
+      long: '롱',
+      short: '숏',
+    },
+    // 영어는 만기를 앞에 그냥 붙이지만 한국어는 "만기"라는 말이 뒤따라야 하고, 매도 포지션의
+    // '숏'도 영어처럼 앞이 아니라 뒤에 온다 — 자리표시자로 둘 때에만 성립하는 어순이다.
+    strategy: {
+      single: '{expiry} 만기 {strike} {right}',
+      singleShort: '{expiry} 만기 {strike} {right} 숏',
+      covered: '커버드 콜 {strike}',
+      vertical: '{right} 버티컬 {low}/{high}',
+      calendar: '{right} 캘린더 {strike}',
+      straddle: '{strike} 스트래들 {side}',
+      strangle: '{low}/{high} 스트랭글 {side}',
+      leg: '{right} {strike} {side}',
+      stock: '{n}주',
+      stockShort: '{n}주 공매도',
+    },
+  },
 }
