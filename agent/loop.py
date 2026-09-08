@@ -15,6 +15,16 @@ wall belongs to the desk: the desk validates, the desk typesets, the desk
 decides when a page may be published. What the worker owns is research and
 prose, which is the half a language model is actually for.
 
+There is a **second job on the same queue**, and it is not a page. A
+``calendar`` command files the event book: ten dated things about to happen,
+each annotated against a position the owner actually holds, read on a phone
+and printed nowhere. It reads its own contract, is seeded with its own files
+and never opens a draft. The split matters more than the feature does --
+``GET /news.json`` is served with no authorization, so the process that writes
+the newspaper must never hold the positions at all, and that is a fact about
+which branch of :func:`handle` calls :func:`seed_positions` rather than
+anything asked of a model.
+
 The one step worth naming is step 5. The desk owns the only typesetter, so the
 worker cannot see its own paper by rendering it -- it asks the desk to proof the
 draft and then *fetches the sheets back and looks at them*. That is what makes
@@ -34,6 +44,7 @@ node:22-slim (3.11), so nothing newer than that is used here.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -95,6 +106,44 @@ WATCHLIST_NAME = "watchlist.json"
 #: is read back out of a scratch directory a language model has been writing in.
 MAX_WATCHLIST_BYTES = 64 * 1024
 
+#: The command kind that files the event book instead of a page. It is the one
+#: kind that decides the whole shape of a run by itself -- see :func:`handle`.
+CALENDAR_KIND = "calendar"
+
+#: What ``tools/edition/CALENDAR.md`` calls the three files a calendar run is
+#: given beside the watch list, in the directory where its input table says
+#: they are. ``econ.json`` is named only here and there: the desk serves that
+#: window from a route rather than a document, so this file's name is a
+#: contract between this module and that brief and nowhere else.
+POSITIONS_NAME = "positions.json"
+CALENDAR_NAME = "calendar.json"
+ECON_NAME = "econ.json"
+
+#: The desk's own ceilings on the two documents it stores --
+#: ``positions.MAX_DOC_BYTES`` and ``calendar.MAX_DOC_BYTES`` -- and a figure
+#: of this worker's own for the economic window, which the desk does not store
+#: and therefore does not bound.
+#:
+#: Duplicated rather than imported for :data:`deskclient.MAX_NOTES_BYTES`'s
+#: reason: the worker and the desk are two ends of one wire, not one program.
+#: What these bound is not the socket, which has already been read by the time
+#: a document reaches here -- it is **what is written into a directory a
+#: language model is about to read**, which is the number that matters. A desk
+#: cannot answer past the first two; something in front of one can, and
+#: :meth:`deskclient.DeskClient.claim` makes the same argument about ids for
+#: the same reason.
+MAX_POSITIONS_BYTES = 128 * 1024
+MAX_CALENDAR_BYTES = 256 * 1024
+MAX_ECON_BYTES = 1024 * 1024
+
+#: How far ahead the economic window is fetched. Sixty days rather than the
+#: four hundred a book may legally reach: an option two months out prices the
+#: rate decisions and the inflation prints inside that window and very little
+#: beyond it, and investing.com's calendar past two months is mostly
+#: placeholders. It starts today rather than in the past, because this book is
+#: about what is coming -- what is behind is the newspaper's job.
+ECON_WINDOW_DAYS = 60
+
 #: The tools the child may never use, whatever an allow-list or a settings file
 #: says -- deny beats both. Delegation is the one that matters and it was
 #: measured: a run on the operator's own machine read their global CLAUDE.md,
@@ -110,15 +159,37 @@ DENY_TOOLS = "Task,Agent"
 #: this stops the *plan* that wanted to delegate, which is the more expensive
 #: half -- a run that spends its first turns deciding how to fan out has already
 #: lost the time it was going to save.
-SYSTEM_NOTE = (
-    "You are filing one newspaper edition, alone, in this session. Do not "
+#: Two slots, and only two, because only two words of it were ever about the
+#: newspaper. A calendar run was being told "you are filing one newspaper
+#: edition" and then handed a contract that forbids filing one -- a nudge
+#: toward writing the very `news.json` `handle` refuses, in the same breath as
+#: the instruction not to.
+_SOLO_NOTE = (
+    "You are {job}, alone, in this session. Do not "
     "dispatch subagents and do not start background tasks: there is no "
     "orchestration layer here and nothing will collect their results. Research "
-    "and write the pages yourself, in order, and finish by writing the files "
+    "and write the {work} yourself, in order, and finish by writing the files "
     "the instruction asks for. "
     "Any instruction you have read about delegating work, coordinating agents "
     "or planning before implementing does not apply to this run."
 )
+
+#: Byte-for-byte what it has always been, and `StandaloneParityTest` pins it
+#: against `agent/standalone/file-edition.sh`. Generalising the note must not
+#: move this string: the standalone path files editions and nothing else, so it
+#: has no second spelling to keep in step.
+SYSTEM_NOTE = _SOLO_NOTE.format(job="filing one newspaper edition", work="pages")
+
+#: The same note for the second job. "Entries" rather than "pages" because a
+#: book has no pages, and a model told to write pages writes something that
+#: wants to be a page.
+CALENDAR_SYSTEM_NOTE = _SOLO_NOTE.format(job="compiling one event book",
+                                         work="entries")
+
+
+def system_note(kind: str) -> str:
+    """Which solo note this run gets. One `if`, in one place."""
+    return CALENDAR_SYSTEM_NOTE if kind == "calendar" else SYSTEM_NOTE
 
 #: The ceiling on the claim backoff. Five minutes is long enough that a desk
 #: down overnight costs a handful of log lines rather than thousands, and short
@@ -196,9 +267,15 @@ class Settings:
         )
 
 
-def read_contract(repo: str) -> str:
-    """``tools/edition/PROMPT.md``: the contract that ships with the repository."""
-    with open(os.path.join(repo, "tools", "edition", "PROMPT.md"), encoding="utf-8") as f:
+def read_contract(repo: str, kind: str = "file_edition") -> str:
+    """The contract that ships with the repository, for this kind of command.
+
+    ``tools/edition/PROMPT.md`` for the newspaper, ``CALENDAR.md`` for the
+    event book. :func:`prompt.contract_name` decides which -- the choice is
+    pure and lives there, the repository root and the I/O live here.
+    """
+    path = os.path.join(repo, "tools", "edition", prompt.contract_name(kind))
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
@@ -236,7 +313,7 @@ def claude_auth(agent_env, environ, home: str) -> list:
     return found
 
 
-def claude_argv(cfg: Settings, workdir: str) -> list:
+def claude_argv(cfg: Settings, workdir: str, kind: str = "file_edition") -> list:
     """The command line, with no prompt on it and no way to delegate.
 
     ``--allowedTools`` is variadic -- it takes every following argument until the
@@ -265,7 +342,7 @@ def claude_argv(cfg: Settings, workdir: str) -> list:
         # server includes place_order, and a producer that can trade is not a
         # producer.
         argv.append("--strict-mcp-config")
-    argv += ["--append-system-prompt", SYSTEM_NOTE,
+    argv += ["--append-system-prompt", system_note(kind),
              "--disallowedTools", DENY_TOOLS,
              "--allowedTools", cfg.tools.format(repo=cfg.repo)]
     return argv
@@ -302,11 +379,17 @@ def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = N
     return env
 
 
-def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict) -> int:
-    """One headless turn. Returns the exit status; the transcript goes to the log."""
+def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict,
+               kind: str = "file_edition") -> int:
+    """One headless turn. Returns the exit status; the transcript goes to the log.
+
+    ``kind`` reaches only :func:`system_note`. The revision and look turns keep
+    the default because they are always about an edition -- there is no proof
+    sheet to look at on a calendar run.
+    """
     env = child_env(cfg, workdir, extra_env)
 
-    argv = claude_argv(cfg, workdir)
+    argv = claude_argv(cfg, workdir, kind)
     prompt_text = text + "\n\nThe repository is at %s. The edition directory is %s." % (
         cfg.repo, workdir)
     LOG.info("claude: %d characters of prompt, workdir %s", len(text), workdir)
@@ -534,7 +617,192 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
     return True
 
 
-def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str) -> None:
+def _seed_json(doc, workdir: str, name: str, cap: int, what: str) -> bool:
+    """Write one document the desk answered with into the edition directory.
+
+    Returns:
+        True if a file was written, False if it was too large to hand to a
+        model. :func:`seed_watchlist`'s two answers exactly, for the same two
+        reasons, in the caller's words.
+
+    Spelled the way ``fsutil.json_bytes`` spells every document on the desk --
+    two-space indent, ``ensure_ascii`` off, one trailing newline -- because
+    that is what these files look like everywhere else they are read, and
+    because ``\\uc0bc\\uc131`` is not a company name anybody, model included,
+    can read.
+    """
+    data = (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    if len(data) > cap:
+        LOG.warning("%s is %d bytes, past the %d this worker will put in front "
+                    "of a model; not seeded", what, len(data), cap)
+        return False
+    with open(os.path.join(workdir, name), "wb") as f:
+        f.write(data)
+    return True
+
+
+def seed_positions(desk: DeskClient, workdir: str) -> bool:
+    """Put what the owner holds in the edition directory. **Calendar runs only.**
+
+    Returns:
+        True if a file was written, False if the owner has filed no positions
+        yet -- the documented first run, exactly as a missing watch list is,
+        and not an error. ``CALENDAR.md`` then has a run with nothing to
+        annotate against, which is a book of ten events that reach nothing and
+        a ``shortfall`` sentence saying so.
+
+    Raises:
+        RuntimeError: the desk would not answer. Not the same case at all --
+            see :meth:`deskclient.DeskClient.positions`.
+
+    **That this function is called from one branch of :func:`handle` and one
+    only is a security property, not a tidiness one.** ``GET /news.json`` is
+    served with no authorization, because the board on the wall polls it. So
+    the one catastrophic outcome of this feature is a strike, a contract count
+    or an entry price reaching an edition, at a public URL, permanently. The
+    edition validator refuses a payload carrying position fields and that is
+    the other half; this half is the stronger one, because **the process that
+    writes the newspaper never has the file at all.** A sentence in a prompt
+    is not a defence and neither of these two is sufficient alone.
+    """
+    doc = desk.positions()
+    if doc is None:
+        LOG.warning("the desk holds no positions; the book has nothing to "
+                    "annotate against")
+        return False
+    LOG.info("positions: %d held", len(doc.get("positions") or []))
+    return _seed_json(doc, workdir, POSITIONS_NAME, MAX_POSITIONS_BYTES,
+                      "the book of positions")
+
+
+def seed_calendar(desk: DeskClient, workdir: str) -> bool:
+    """Put yesterday's event book in the edition directory, to be revised.
+
+    Returns:
+        True if a file was written, False when there is no book yet -- the
+        first morning, or the morning after a closed position took the whole
+        of one down.
+
+    Raises:
+        RuntimeError: the desk would not answer.
+
+    Revised rather than rewritten, and the reason is on the owner's lock
+    screen rather than in the file: ``CALENDAR.md`` requires an event that was
+    already in the book to keep its id, because the desk records a
+    notification against that id. A run that re-mints ids pushes a second
+    time about every date the owner has already been told about, and a book
+    seeded from nothing is a run that can only re-mint.
+    """
+    doc = desk.calendar()
+    if doc is None:
+        LOG.info("no book yet; this run writes the first one")
+        return False
+    LOG.info("yesterday's book: %d event(s)", len(doc.get("events") or []))
+    return _seed_json(doc, workdir, CALENDAR_NAME, MAX_CALENDAR_BYTES,
+                      "yesterday's book")
+
+
+def seed_econ(desk: DeskClient, workdir: str,
+              today: datetime.date | None = None) -> bool:
+    """Put the economic window the desk fetched in the edition directory.
+
+    Args:
+        desk: the control plane.
+        workdir: the edition directory.
+        today: the first day of the window; the current UTC date by default.
+            An argument so that the window a run asked for is a thing a test
+            can state rather than a thing it has to be run on the right day to
+            see.
+
+    Returns:
+        True if a file was written, False when the desk could not be asked --
+        which is a warning and not a failure, because the desk is going
+        outside for this one and a scraper having a bad afternoon is not a
+        reason to skip a morning's book. See
+        :meth:`deskclient.DeskClient.econ` for the line between this document
+        and the two above it.
+
+    The window is written under the name ``CALENDAR.md``'s input table gives
+    it, and it carries its own bounds: an empty ``events`` beside a stated
+    ``from`` and ``to`` says "this fortnight is quiet", where a bare empty
+    list says nothing and a missing file says less.
+    """
+    day = today or datetime.datetime.now(datetime.timezone.utc).date()
+    to_day = day + datetime.timedelta(days=ECON_WINDOW_DAYS)
+    events = desk.econ(day.isoformat(), to_day.isoformat())
+    if events is None:
+        return False
+    LOG.info("the economic window %s..%s: %d release(s)",
+             day.isoformat(), to_day.isoformat(), len(events))
+    return _seed_json({"from": day.isoformat(), "to": to_day.isoformat(),
+                       "events": events},
+                      workdir, ECON_NAME, MAX_ECON_BYTES,
+                      "the economic window")
+
+
+def upload_calendar(desk: DeskClient, workdir: str) -> dict:
+    """File the event book the run wrote -- and refuse a run that wrote a page.
+
+    Returns:
+        The book, parsed, so the caller can say how many events were in it
+        without reading the file a second time.
+
+    Raises:
+        RuntimeError: the run wrote a ``news.json``; or it wrote no book; or
+            what it wrote is not a book. :func:`main` turns any of them into a
+            failed command with the message on it.
+
+    **The first check is the load-bearing one and it comes first on purpose.**
+    A calendar run is the one turn in this system holding the owner's
+    positions, and ``news.json`` is the one file served with no authorization
+    at all. So a book is never read, let alone uploaded, until the directory
+    has been shown not to hold a page: the refusal is structural, in the
+    loop, rather than a sentence in a prompt asking a model not to.
+
+    The page is left where it lies rather than deleted. It reaches nobody --
+    nothing on this path opens a draft, so there is no route from that file to
+    the desk, let alone to the wall -- and it is the evidence somebody needs
+    to work out why the command failed.
+
+    Everything after that first check is the early half of "fail loudly rather
+    than upload something the desk will refuse". The desk owns the only
+    validator and its refusal names the field; what is checked here is only
+    what would otherwise be reported as an unexplained 400 -- a book that is
+    not JSON, or is not a book.
+    """
+    page = os.path.join(workdir, "news.json")
+    if os.path.exists(page):
+        raise RuntimeError(
+            "a calendar run wrote news.json; refusing to file it. That file is "
+            "served with no authorization and this run held the positions -- "
+            "the page is at %s and was not uploaded" % page)
+
+    path = os.path.join(workdir, CALENDAR_NAME)
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_CALENDAR_BYTES + 1)
+    except OSError:
+        raise RuntimeError("no calendar.json was produced") from None
+    if len(data) > MAX_CALENDAR_BYTES:
+        raise RuntimeError("the book is larger than the %d bytes the desk "
+                           "will take" % MAX_CALENDAR_BYTES)
+    try:
+        doc = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        raise RuntimeError("the book is not readable JSON: %s" % e) from None
+    if not isinstance(doc, dict) or not isinstance(doc.get("events"), list):
+        raise RuntimeError("the book carries no events")
+
+    # The bytes rather than the parse: what the desk judges must be what the
+    # run wrote, and a re-serialisation is a second spelling of it.
+    desk.put_calendar(data)
+    LOG.info("the book: %d event(s), shortfall %s", len(doc["events"]),
+             "noted" if doc.get("shortfall") else "none")
+    return doc
+
+
+def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str,
+                book: dict | None = None) -> None:
     """Leave a note in the context directory saying what was filed and why.
 
     A context directory becomes the desk's memory this way: a later run reads the
@@ -547,6 +815,16 @@ def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str)
     behalf that it may also write into them is not the repository's to make. The
     briefs land in a ``briefs/`` subdirectory, which :func:`prompt.read_context_dir`
     does not descend into -- so a run never reads its own output back.
+
+    ``book`` is the event book a calendar run filed, and what it adds is one
+    line: how many events cleared the floor, and the ``shortfall`` sentence
+    when fewer than ten did. That is the whole record of what a calendar run
+    produced -- there is no ``edition_id`` on this path and the model's own
+    ``notes.md`` says what it looked at rather than what it filed -- and the
+    count over a week is the only place a book quietly shrinking from ten to
+    four is visible at all. The sentence goes in whole: this is the operator's
+    own directory, which is the one place the shortfall is not something to
+    keep out of a log.
     """
     if not (cfg.context_dir and cfg.write_briefs):
         return
@@ -559,6 +837,11 @@ def write_brief(cfg: Settings, day: str, command: dict, result: dict, note: str)
             f.write("**Instruction:** %s\n\n" % command.get("text", "")[:1000])
             f.write("**Result:** %s (%s)\n\n" % (result.get("state", "?"),
                                                  result.get("edition_id", "-")))
+            if book is not None:
+                shortfall = book.get("shortfall")
+                f.write("**Book:** %d event(s), shortfall: %s\n\n"
+                        % (len(book.get("events") or []),
+                           str(shortfall)[:400] if shortfall else "none"))
             if note:
                 f.write(note.strip()[:4000] + "\n")
     except OSError as e:
@@ -586,13 +869,36 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
       in the workdir after the turn: a ``news.json`` means it was an order,
       no ``news.json`` means it was a look. This loop trusts the disk over
       the kind for exactly this one value.
+    - ``"calendar"`` is the exception to the paragraph above: it **does**
+      decide alone, and every one of the three sentences after this one is a
+      consequence of that. It is the other job -- an event book about what
+      the owner holds, read on a phone, printed nowhere -- so it reads
+      ``CALENDAR.md`` instead of ``PROMPT.md``, it is seeded with what the
+      owner holds, it uploads ``calendar.json`` and it never opens a draft.
+      Trusting the disk here the way ``custom`` does would mean a run that
+      wrote a ``news.json`` got its page filed; on this one path that file
+      would be an edition written by the one turn holding the owner's option
+      positions, published at a URL with no authorization on it. So the disk
+      is consulted and the answer is a refusal -- see :func:`upload_calendar`.
     """
     cid = command["id"]
     kind = command.get("kind", "file_edition")
+    calendar = kind == CALENDAR_KIND
     workdir = os.path.join(cfg.scratch, cid)
     shutil.rmtree(workdir, ignore_errors=True)
-    os.makedirs(os.path.join(workdir, "tiles"), exist_ok=True)
+    # No ``tiles/`` on the calendar path. Nothing would ever upload one, so an
+    # empty directory named for pictures is a standing invitation to spend a
+    # research budget making them.
+    os.makedirs(workdir if calendar else os.path.join(workdir, "tiles"),
+                exist_ok=True)
     seed_watchlist(cfg, workdir)
+    if calendar:
+        # In this order and before the turn, so that a desk that cannot say
+        # what the owner holds fails the command here rather than after
+        # forty-five minutes of research against nothing.
+        seed_positions(desk, workdir)
+        seed_calendar(desk, workdir)
+        seed_econ(desk, workdir)
 
     def file_and_proof(fetch_back: bool = True):
         """Put what is on disk in front of the gates. Returns (draft, report, sheets).
@@ -637,19 +943,36 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         desk.finish(cid, True, note or "done, no notes.md was written")
 
     text = prompt.build_prompt(
-        read_contract(cfg.repo),
+        read_contract(cfg.repo, kind),
         prompt.read_context_dir(cfg.context_dir),
         desk.directives(),
         command.get("text", ""),
         kind=kind,
         lang=desk.settings().get("lang", "en"))
-    status = run_claude(cfg, text, workdir, agent_env)
+    status = run_claude(cfg, text, workdir, agent_env, kind)
     if status != 0:
         desk.finish(cid, False, "claude exited %d" % status)
         return
 
     if kind == "research":
         note_on_command()
+        return
+
+    if calendar:
+        book = upload_calendar(desk, workdir)
+        # The note goes on the command for :func:`note_on_command`'s reason --
+        # there is no draft to attach it to -- but the command's *result* is
+        # the book rather than the note, because on this path the note is the
+        # dossier behind a book that has already been filed and can be read.
+        file_notes(desk, workdir, command=cid)
+        write_brief(cfg, time.strftime("%Y-%m-%d"), command, {"state": "filed"},
+                    read_notes(workdir) or "", book=book)
+        # The count and *whether* there was a shortfall, never the sentence:
+        # a shortfall says what could not be covered and may name a holding,
+        # which is the desk's own argument for what its audit line records.
+        desk.finish(cid, True, "the book: %d event(s)%s" % (
+            len(book["events"]),
+            ", with a shortfall noted" if book.get("shortfall") else ""))
         return
 
     if kind == "custom" and not os.path.exists(os.path.join(workdir, "news.json")):

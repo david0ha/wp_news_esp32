@@ -3,7 +3,10 @@
 The split this module draws is the open-source boundary of the whole project.
 ``tools/edition/PROMPT.md`` ships in the repository because it is how anybody
 writes a producer -- the length budgets, the colour policy, the shape of the
-payload. What sits between that contract and the day's instruction is the
+payload. ``CALENDAR.md`` beside it is the same thing for the worker's second
+job, the event book, and :func:`contract_name` is the whole of how a run
+chooses between them. What sits between that contract and the day's
+instruction is the
 operator's: a house style, a rotation, a list of things that must never print.
 None of it is in this repository, none of it is named by this module, and the
 worker is complete without any of it.
@@ -56,6 +59,17 @@ CONTEXT_SUFFIXES = (".md", ".json")
 LANGUAGE_NAMES = {"en": "English", "ko": "Korean (한국어)", "ja": "Japanese", "fr": "French",
                   "de": "German", "es": "Spanish"}
 
+#: The contract a kind of command is written against, by file name inside
+#: ``tools/edition/``. Everything not named here takes the newspaper's, which
+#: is what ``"file_edition"``, ``"research"`` and ``"custom"`` all are: three
+#: ways of being asked about the paper. ``"calendar"`` is the other job
+#: entirely -- a book about one person's money rather than a page for anybody
+#: -- so it reads the other file. See :func:`contract_name`.
+CONTRACT_FILES = {"calendar": "CALENDAR.md"}
+
+#: What every other kind reads.
+EDITION_CONTRACT = "PROMPT.md"
+
 #: Appended to the day's prompt, after everything either side supplied. It is
 #: the one instruction that is about the *mechanism* rather than the paper: the
 #: worker files, the desk publishes, and a producer that tried to do both would
@@ -79,6 +93,47 @@ _RESEARCH_TAIL = (
     "URL, and what you chose not to print and why. Do not write news.json or any tile;\n"
     "this turn ends when notes.md is on disk.\n"
 )
+
+#: The tail for a ``"calendar"`` command. It says the same thing
+#: ``CALENDAR.md`` says at length, at the one place a model reads last, and it
+#: says the *refusal* rather than the preference: ``loop.upload_calendar``
+#: fails the command over a ``news.json`` rather than uploading it, so a run
+#: that writes one has spent a research budget on nothing. That file is served
+#: with no authorization at all, and this turn is the one holding the owner's
+#: positions -- which is why the structural check exists and why this sentence
+#: is not relied on to do the work alone.
+_CALENDAR_TAIL = (
+    "\nThis is a calendar instruction, not a filing one: there is no page to typeset\n"
+    "today and no edition to file. Write only $EDITION_DIR/calendar.json — the event\n"
+    "book — and write it LAST and atomically: to calendar.json.tmp, then rename.\n"
+    "Do not write news.json and do not write a tile. A calendar run files no edition,\n"
+    "and the loop refuses a news.json rather than uploading one, so a turn that\n"
+    "writes one fails having done the work twice.\n"
+)
+
+#: Which tail each kind ends on. The default is the filing one, and it is the
+#: default for the reason ``build_prompt`` gives: a ``custom`` instruction may
+#: or may not turn into a page, and what decides that is what lands in the
+#: workdir rather than a prompt that guessed.
+_TAILS = {"research": _RESEARCH_TAIL, "calendar": _CALENDAR_TAIL}
+
+
+def contract_name(kind: str) -> str:
+    """The file in ``tools/edition/`` this kind of command is written against.
+
+    Args:
+        kind: the command's kind. Anything not in :data:`CONTRACT_FILES` --
+            including a kind this module has never heard of -- gets
+            :data:`EDITION_CONTRACT`, the same way :func:`build_prompt` hands
+            an unrecognised kind the ordinary filing tail rather than raising
+            over it.
+
+    Pure, and a name rather than a path: :func:`loop.read_contract` owns the
+    repository root and the I/O, this module owns which of the two documents
+    is the contract. That split is what lets the choice be asserted without a
+    checkout.
+    """
+    return CONTRACT_FILES.get(kind, EDITION_CONTRACT)
 
 
 def read_context_dir(path: str | None) -> list[tuple[str, str]]:
@@ -131,7 +186,7 @@ def read_context_dir(path: str | None) -> list[tuple[str, str]]:
     return out
 
 
-def language_section(lang: str | None) -> str:
+def language_section(lang: str | None, kind: str = "file_edition") -> str:
     """What goes between the contract and the operator's context when the desk
     is not set to English. Empty for ``"en"``: today's prompt, byte for byte.
 
@@ -141,6 +196,11 @@ def language_section(lang: str | None) -> str:
             top-level ``lang``. ``None`` and ``""`` are English, because this
             is read out of a dict the desk filled in and both are shapes a
             missing setting arrives as.
+        kind: the command's kind. ``"calendar"`` gets
+            :func:`_calendar_language_section`; everything else gets the
+            edition's, including the default -- so the standalone producer's
+            ``--language-section ko``, which names no kind, prints exactly
+            what it has always printed.
 
     Returns:
         A section to splice in after the contract, or ``""``.
@@ -161,6 +221,8 @@ def language_section(lang: str | None) -> str:
     if not lang or lang == "en":
         return ""
     name = LANGUAGE_NAMES.get(lang, lang)
+    if kind == "calendar":
+        return _calendar_language_section(lang, name)
     lines = [
         "\n\n---\n\n# The edition's language\n\n",
         f"Write every reader-facing string in {name}: headlines, decks, bodies, kickers, "
@@ -183,6 +245,40 @@ def language_section(lang: str | None) -> str:
     return "".join(lines)
 
 
+def _calendar_language_section(lang: str, name: str) -> str:
+    """The same instruction for the other job, whose fields are not a page's.
+
+    This exists because the edition's section above is wrong here in both
+    halves, and wrong in the expensive direction each time.
+
+    It names the newspaper's fields and tells the model to set ``lang`` at the
+    top of **news.json** -- the one file a calendar run may not write at all.
+    A prompt that asks for a file the loop then refuses is a research budget
+    spent twice.
+
+    And its Korean addendum carries ``PROMPT.md``'s arithmetic, where a
+    syllable counts two because the paper prints on a fixed measure. The phone
+    reflows and :mod:`claudepost.calendar` counts code points, so carrying that
+    over costs half of every field for nothing -- a 90-character
+    ``reason_short`` written as though it were 45. Saying so plainly is
+    cheaper than hoping the model reads the brief's own note first, because
+    the model that gets this wrong is precisely the one that has read
+    ``PROMPT.md`` before.
+    """
+    return "".join([
+        "\n\n---\n\n# The book's language\n\n",
+        f"Write every string a person reads in {name}: each event's `title`, every "
+        "`reason_short` and `reason`, every `push.title` and `push.body`, and the "
+        "`shortfall` sentence. Tickers, position ids, event ids, `source` URLs and "
+        f"every instant stay as they are. Set `\"lang\": \"{lang}\"` at the top level "
+        "of calendar.json.\n",
+        "\nThe brief's section \"The budget the desk enforces\" is in **characters, "
+        "not the paper's measure**: 한 글자 counts one here. If you have read "
+        "PROMPT.md, do not carry its arithmetic over — it would cost you half of "
+        "every field for nothing.\n",
+    ])
+
+
 def build_prompt(contract: str, context: list[tuple[str, str]],
                  directives: list[dict], command_text: str,
                  kind: str = "file_edition", lang: str = "en") -> str:
@@ -195,12 +291,14 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
             dict with a ``rule``.
         command_text: the instruction the operator queued, passed through
             untouched.
-        kind: the command's kind. ``"research"`` gets :data:`_RESEARCH_TAIL`;
-            every other value, including the default, gets the ordinary
-            :data:`_TAIL` -- this function does not validate `kind` against
-            ``store.COMMAND_KINDS``, the same way ``loop.handle`` treats a
-            kind it does not recognise as ``"file_edition"`` rather than
-            raising over it.
+        kind: the command's kind. ``"research"`` gets :data:`_RESEARCH_TAIL`
+            and ``"calendar"`` gets :data:`_CALENDAR_TAIL`; every other value,
+            including the default, gets the ordinary :data:`_TAIL` -- this
+            function does not validate `kind` against ``store.COMMAND_KINDS``,
+            the same way ``loop.handle`` treats a kind it does not recognise
+            as ``"file_edition"`` rather than raising over it. It also selects
+            which language section is spliced in, because the book's
+            reader-facing fields are not a page's.
         lang: the edition's language, from the desk's settings. ``"en"`` --
             the default, and what an unset or unreadable setting reads as --
             leaves this prompt byte-identical to the one this worker has
@@ -219,7 +317,7 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
     instruction is last because it is the thing being answered, and a model
     reading a long prompt answers the end of it.
     """
-    parts = [contract, language_section(lang)]
+    parts = [contract, language_section(lang, kind)]
 
     if context or directives:
         parts.append("\n\n---\n\n# This desk's standing instructions\n")
@@ -233,7 +331,7 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
             parts.append("- %s\n" % directive.get("rule", ""))
 
     parts.append("\n---\n\n# Today's instruction\n\n%s\n" % command_text)
-    parts.append(_RESEARCH_TAIL if kind == "research" else _TAIL)
+    parts.append(_TAILS.get(kind, _TAIL))
     return "".join(parts)
 
 

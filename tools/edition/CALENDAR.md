@@ -31,7 +31,7 @@ The workdir is made fresh for the run and holds:
 | `positions.json` | what the owner holds. Read it; never write it — the phone owns that file |
 | `watchlist.json` | the companies the desk follows. It widens where you *look*, not what qualifies |
 | `calendar.json` | yesterday's book, when there is one. **Revise it, do not start again** — see the ids rule below |
-| `econ.json` | the economic-release window the desk already fetched, in UTC |
+| `econ.json` | `{"from", "to", "events"}` — the economic-release window the desk already fetched, in UTC. `from` is today and `to` is sixty days on, so an empty `events` means a quiet two months rather than a file that failed to say anything |
 
 `positions.json` looks like `server/positions.example.json`: an `id` the desk derived, a `symbol`,
 a `kind` of `stock` or `option`, and for an option a list of `legs` — right, side, strike in cents,
@@ -454,7 +454,12 @@ date presented cleanly is worse than an untidy book.
 - Every `push` is about the owner's own holding by name, with the emoji inside the sentence — and
   the events that did not deserve an interruption have none.
 - Every character count is inside the table above. Count them; do not estimate.
-- `calendar.json` written last, atomically, and nothing else written at all.
+- `calendar.json` written last, atomically. **No `news.json`** — that file is served publicly with
+  no authorization, this one is not, and the loop refuses a calendar run that produced one.
+- A `notes.md` beside it if you have something to say about the run: what you looked for and did
+  not find, a source you distrusted, a position you could not reach. It is filed onto the command
+  and it is the only durable account of a morning's reasoning, so write one whenever the book alone
+  would not explain itself.
 
 And then the one that the floor exists for: **read your own ten back and ask whether the tenth
 earned its place.** If you would not have bothered telling the owner about it in person, take it
