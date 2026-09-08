@@ -245,6 +245,14 @@ export const en = {
     ],
   },
 
+  // The seven weekday names, indexed as `Date.getDay()` does — Sunday first. `months` above says
+  // why a name like this is copy and not a constant, and the same holds twice over here: Korean
+  // writes a weekday as a single syllable where English abbreviates a word, so a shared table
+  // would have to be a lookup in whichever language it was written in.
+  weekdays: {
+    short: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  },
+
   // How the app spells a quantity that is not a number — an age, an interval, a date — and the
   // vocabulary the board's own state arrives in. Read by `lib/format.ts` and
   // `lib/market/format.ts`, both of which call `strings()` inside each function rather than at
@@ -722,6 +730,56 @@ export const en = {
       dateShape: 'A date, as 2026-11-21.',
       dateReal: 'That day doesn’t exist.',
       expiryFar: 'An expiry can be at most {years} years out.',
+    },
+  },
+
+  // The event book, on the phone. `positions` above is the vocabulary for what the owner holds;
+  // this is the copy for what is about to happen to it. Everything the agent wrote — the title,
+  // the reason, the shortfall sentence — arrives already in the edition's language and is drawn
+  // as it came; nothing here translates it. What is here is the FURNITURE: the day headings, the
+  // three precisions the left rail can carry, the three directions the right rail can carry, and
+  // the sentences for having nothing to show.
+  schedule: {
+    title: 'Schedule',
+    // Near days are named and dated; a far one is only dated. Both templates carry the whole
+    // sentence rather than a shared separator, because "Today ·" is word order and the separator
+    // is the only part of it that happens to be the same today.
+    day: {
+      today: 'Today · {date}',
+      tomorrow: 'Tomorrow · {date}',
+      dated: '{month} {day} ({weekday})',
+    },
+    // The left rail, at the precision the event actually has — never invented. An exact time is a
+    // clock and needs no words; the other two are the only answers a company gives when it says
+    // *when*, and "all day" is the honest reading of a date with no time on it at all.
+    when: {
+      bmo: 'Before open',
+      amc: 'After close',
+      allDay: 'All day',
+    },
+    // The right rail: what this date means to THIS owner, not what a calendar site ranks it. The
+    // mark travels inside the string so a language that puts it after the word can.
+    direction: {
+      for: '↑ Helps',
+      against: '↓ Hurts',
+      both: 'Both ways',
+    },
+    /** The collapsed row names one position; this says how many more the event reaches. */
+    alsoAffects: '+{n} more positions',
+    /** Fewer than the target cleared the floor. The desk's own sentence goes under this. */
+    shortfallLabel: 'Why there aren’t more',
+    // Three empties, and they are three different facts. Only the first asks for anything: the
+    // other two are the desk saying so, and a sentence that sent somebody to check their settings
+    // over either would be sending them after a fault that is not there.
+    empty: {
+      needsDesk: 'The schedule comes from your desk. Add its address and an operator token in Settings.',
+      noBook: 'Your desk hasn’t filed a schedule yet. One is researched in the morning and again after the US close.',
+      nothingUpcoming: 'Everything in the schedule has already happened. The next one is filed in the morning.',
+    },
+    a11y: {
+      expand: 'Show the whole reason',
+      collapse: 'Hide the whole reason',
+      openSource: 'Open {host}',
     },
   },
 }

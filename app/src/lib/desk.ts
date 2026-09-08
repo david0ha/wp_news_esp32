@@ -13,10 +13,16 @@
 //   PUT  /api/settings   (operator) { lang } -> the same shape, with what is now in force
 //   GET  /api/positions  (producer) -> { ok, positions: { updated_at, positions: [...] } }
 //   PUT  /api/positions  (operator) { positions: [...] } -> the same shape, now in force
+//   GET  /api/calendar   (producer) -> { ok, calendar: { generated_at, events: [...] } | null }
 //
 // The two scopes on `/api/positions` are not symmetric and the asymmetry is the point: the agent
 // READS the book to reason about it, but only the owner SAYS what they hold. An agent that could
 // rewrite the positions could arrange for the reasoning to be about a position nobody owns.
+//
+// `/api/calendar` has a PUT and this client does not have one, which is the same asymmetry read
+// from the other end: the event book is `producer` on BOTH verbs because the AGENT files it. It
+// is the output of a research run rather than a statement about the owner's money, so the phone
+// is a reader of it and nothing here can write one.
 //
 // `lang` is the language the NEWSPAPER is written in — not the app's own chrome, which is
 // `src/i18n/` and never leaves the phone. The desk's setting is what makes the producing agent
@@ -30,6 +36,7 @@
 
 import { fill, strings } from '../i18n'
 import { parsePositionsDoc, positionsBody, type PositionsDoc } from './positions'
+import { parseCalendarDoc, type CalendarDoc } from './schedule'
 
 /** Long enough for a cold tunnel, short enough that a tap on a selector still feels like one. */
 export const DESK_TIMEOUT_MS = 15_000
@@ -180,6 +187,17 @@ export interface DeskClient {
   positions(): Promise<PositionsDoc>
   /** Put a whole book in force. There is no partial write — see `putPositions`. */
   putPositions(doc: PositionsDoc): Promise<PositionsDoc>
+  /**
+   * The event book, or `null` for a desk that has none. Read-only: the agent files this one.
+   *
+   * `null` is a STATE and not a failure, which is the one place this method does not mirror
+   * `positions()`. `h_get_calendar` serves `self.desk.calendar` straight and that field is `None`
+   * until an agent has filed a book — and again afterwards, whenever the positions change, because
+   * the desk forgets a book it can no longer prune against them. Reading a perfectly good answer
+   * as `bad_json` would put "the desk answered something this app cannot read" in front of
+   * somebody whose desk is simply new.
+   */
+  calendar(): Promise<CalendarDoc | null>
 }
 
 export function createDeskClient(opts: DeskClientOptions): DeskClient {
@@ -272,6 +290,31 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
     return doc
   }
 
+  // The event book, read the same way and refused the same way, with one arm the positions
+  // document has no equivalent of: an envelope whose `calendar` is explicitly `null`.
+  //
+  // That arm is narrow on purpose. A MISSING key still fails — a 200 with no `calendar` at all is
+  // a desk not speaking this contract, the same fact `settingsOf` refuses a missing `lang` for —
+  // and only an explicit `null`, which is exactly what `h_get_calendar` serves for a desk with no
+  // book, reads as "no book". The two look alike in JavaScript and are completely different
+  // sentences on screen.
+  async function calendarOf(res: Response): Promise<CalendarDoc | null> {
+    if (!res.ok) throw await refusal(res, 'calendar')
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', 'calendar did not answer JSON', res.status)
+    }
+    const envelope = payload as { calendar?: unknown } | null
+    if (envelope !== null && typeof envelope === 'object' && envelope.calendar === null) return null
+    const doc = parseCalendarDoc(envelope?.calendar)
+    if (doc === null) {
+      throw new DeskError('bad_json', 'calendar answered a book this app cannot read', res.status)
+    }
+    return doc
+  }
+
   return {
     async getSettings(): Promise<DeskSettings> {
       return settingsOf(await send('/api/settings', { method: 'GET' }))
@@ -312,6 +355,10 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // desk re-derives every `id` and every `strategy` from the legs it accepted, so this answer
       // is the only place the app learns what its own write became.
       return positionsOf(res)
+    },
+
+    async calendar(): Promise<CalendarDoc | null> {
+      return calendarOf(await send('/api/calendar', { method: 'GET' }))
     },
   }
 }

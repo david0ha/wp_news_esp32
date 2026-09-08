@@ -56,6 +56,8 @@ export default function RootLayout() {
               {/* Full-screen pushes over the tab bar. */}
               <Stack.Screen name="preview" />
               <Stack.Screen name="market/[symbol]" />
+              {/* The event book, opened from the Markets tab's next-three block. */}
+              <Stack.Screen name="schedule" />
               {/* One tile of today's edition, opened. Named `tile` and not `edition` so it does
                   not share a URL prefix with the Today tab, which is `(tabs)/edition.tsx`. */}
               <Stack.Screen name="tile/[id]" />
