@@ -242,7 +242,7 @@ def derive_strategy(legs: list[dict]) -> str:
 - [ ] **Step 5: Write the validator tests**, then the validator
 
 Cases that must be refused, each asserting the *message names the field*:
-`{"positions": [{"symbol": "ETN", "kind": "option", "strategy": "long_call", "legs": [...]}]}`
+`{"positions": [{"symbol": "AAAA", "kind": "option", "strategy": "long_call", "legs": [...]}]}`
 (strategy is output-only → unknown key); a stock position carrying `legs`; an option position
 carrying `quantity`; `contracts: 0`; `strike_cents: 0`; `expiry: "2026-02-30"`; an expiry five
 years out; `quantity: 0`; 65 positions; 5 legs; a `note` of 501 chars; a symbol with a lowercase

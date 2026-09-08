@@ -106,7 +106,7 @@ instead of replacing it.
   "positions": [
     {
       "id": "p_1f05f8",                 // desk-assigned, stable across edits
-      "symbol": "ETN",
+      "symbol": "AAAA",
       "kind": "option",               // "stock" | "option"
       "strategy": "long_call",        // derived from legs; see below
       "legs": [
@@ -117,7 +117,7 @@ instead of replacing it.
       "note": ""                      // ≤ 500 chars, the owner's own words
     },
     {
-      "id": "p_3e3267", "symbol": "SNDK", "kind": "stock",
+      "id": "p_3e3267", "symbol": "BBBB", "kind": "stock",
       "quantity": 40,                 // signed; negative is short
       "entry_price_cents": 158300,
       "opened_at": "2026-07-02", "note": ""
@@ -134,7 +134,7 @@ way without the reader doing the joining.
 `derive_strategy(legs)` is a pure function and is host-tested: it names `long_call`, `long_put`,
 `short_call`, `short_put`, `vertical`, `calendar`, `straddle`, `strangle`, and falls back to
 `custom` rather than guessing. The app offers the common shapes as chips so the owner picks in
-their own words, and then the app **says the name back** — "ETN 11월 21일 만기 420 콜 2계약".
+their own words, and then the app **says the name back** — "AAAA 11월 21일 만기 420 콜 2계약".
 Naming a thing back is how you find out you typed the wrong strike.
 
 **Two names are deliberately absent, and the desk cannot supply either.** `covered_call` needs the
@@ -180,7 +180,7 @@ the desk is already following.
       "title": "미국 8월 소비자물가지수",
       "kind": "econ",                   // econ|earnings|dividend|expiry|corporate|legal|index|other
       "source": "https://www.investing.com/economic-calendar/",
-      "symbols": ["ETN"],
+      "symbols": ["AAAA"],
       "affects": [
         {
           "position_id": "p_1f05f8",
@@ -192,7 +192,7 @@ the desk is already following.
       "rank": 1,
       "push": {
         "title": "오늘 밤 미국 CPI가 나와요",
-        "body": "21:30에 발표예요. ETN 420 콜은 지수가 빠지면 방향이 맞아도 프리미엄이 먼저 줄 수 있어요."
+        "body": "21:30에 발표예요. AAAA 420 콜은 지수가 빠지면 방향이 맞아도 프리미엄이 먼저 줄 수 있어요."
       }
     }
   ],
@@ -384,14 +384,14 @@ that is already there and good.
 ```
 오늘 · 9월 8일 (화)
  21:30 │ 미국 8월 소비자물가지수                    ↓ 불리
-       │ ETN 롱 콜 420 · 만기 D-74
+       │ AAAA 롱 콜 420 · 만기 D-74
        │ 금리 기대가 흔들리면 전력기기 설비투자…
 ─────────────────────────────────────────────────────
 내일 · 9월 9일 (수)
- 장마감후│ ETN 3분기 실적                          양방향
-       │ ETN 롱 콜 420 · 만기 D-73
+ 장마감후│ AAAA 3분기 실적                         양방향
+       │ AAAA 롱 콜 420 · 만기 D-73
        │ 발표 뒤 IV가 빠지면 주가가 그대로여도…
-       │                          🔗 investor.eaton.com
+       │                          🔗 investor.example.com
 ```
 
 Three decisions in that picture:
@@ -427,7 +427,7 @@ pushes demonstrate better than any style guide —
 해요체, emoji inside the sentence rather than decorating it, and the notification is about
 **your** holding, by name, not about the market. Ours read the same way:
 
-> ETN 실적이 내일 장 마감 후예요 📊 11월 만기 420 콜은 발표 뒤 IV가 빠지면서, 주가가 그대로여도 손해가 날 수 있어요.
+> AAAA 실적이 내일 장 마감 후예요 📊 11월 만기 420 콜은 발표 뒤 IV가 빠지면서, 주가가 그대로여도 손해가 날 수 있어요.
 > 420 콜 만기가 일주일 남았어요 ⏳ 지금부터는 시간가치가 하루치씩 눈에 띄게 줄어요.
 
 Not taken: their palette. Only the CI blue `#0064FF` is officially sourced; the in-product tokens
