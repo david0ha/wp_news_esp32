@@ -68,16 +68,23 @@ export const en = {
       // What the editor says after a save, one sentence per outcome. `newsurlsync.ts` picks
       // between them; the choosing is language-free and only the words are here.
       saved: {
-        fetching: 'Saved. The board is fetching it now.',
+        // The desk's line, said first: what the address itself answered. `{edition}` is the
+        // company and the dateline the desk served, which is what makes the line evidence.
+        deskOk: 'Saved. The desk answered — {edition}.',
+        deskOkPlain: 'Saved. The desk answered, and Today reads from this address.',
+        deskFailed: 'Saved, but nothing could be read from that address. {detail}',
+        // The board's line, said second, and about the board alone — the save itself is reported
+        // by whichever desk line above stands over it.
+        fetching: 'The board took the new address and is fetching it now.',
         clearedDemo: 'Cleared — the board is back on demo data.',
-        todayOnly: 'Saved. Today reads from this address. A board you set up later will get it too.',
+        todayOnly: 'No board on this phone yet. One you set up later will get the same address.',
         clearedTodayDemo: 'Cleared — Today is on the demo edition.',
         noClient:
-          'Saved on this phone. Not connected to a board right now — it will be sent when this app reaches one.',
+          'Not connected to a board right now — it will be sent when this app reaches one.',
         boardAsleep:
-          'Saved. The board is asleep, so it will get the new address the next time this app reaches it.',
+          'The board is asleep, so it will get the new address the next time this app reaches it.',
         boardBusy:
-          'Saved on this phone. The board didn’t take it just now — it will get the new address the next time this app reaches it.',
+          'The board didn’t take it just now — it will get the new address the next time this app reaches it.',
       },
     },
     connection: {
@@ -677,6 +684,9 @@ export const en = {
     notInEdition: 'This item isn’t in today’s edition.',
     more: 'More from this edition',
     demoChip: 'Demo edition',
+    // Under the chip, because the chip alone names the state without saying why the phone is
+    // in it — and the date on a bundled edition is months old, which reads as a stuck app.
+    demoNote: 'No edition address yet. Add one in Settings to read today’s paper.',
     /** The filter row, in `lib/edition/tiles.ts`'s canonical order. */
     chips: {
       all: 'All',

@@ -6,6 +6,7 @@ import { join } from 'path'
 import { en } from '../i18n/en'
 import { setActiveLanguage } from '../i18n'
 import { Esp32Error, humanError } from './esp32'
+import { type DeskProbe } from './edition/probe'
 import {
   decideNewsUrlSave,
   settleNewsUrlSync,
@@ -298,124 +299,213 @@ describe('a mark with nothing under it is dropped', () => {
 })
 
 // The Save button's own attempt, as a rule. These pin what the screen may not: that a refusal is
-// the one outcome that saves nothing, that a timeout is the normal case and not an error, and that
-// each end of a save is said in the right voice.
+// the one outcome that saves nothing, that a timeout is the normal case and not an error, that
+// each end of a save is said in the right voice — and that the DESK's answer is reported at all,
+// which is the whole reason the decision now returns two lines instead of one.
 describe('decideNewsUrlSave', () => {
   const URL = 'https://desk.example/news.json'
+  const ANSWERED: DeskProbe = { status: 'ok', subject: 'Acme Corp', dateline: 'WEDNESDAY, 9 SEP' }
+  const SILENT: DeskProbe = { status: 'failed', message: 'Couldn’t reach the edition server.' }
+  const NOTHING_ASKED: DeskProbe = { status: 'skipped' }
 
-  it('board took it: persist, delivered, green', () => {
-    expect(decideNewsUrlSave(URL, { ok: true }, null)).toEqual({
+  it('board took it: persist, delivered, green on both lines', () => {
+    expect(decideNewsUrlSave(URL, { ok: true }, null, ANSWERED)).toEqual({
       persist: true,
       pending: false,
-      tone: 'ok',
-      message: 'Saved. The board is fetching it now.',
+      desk: { tone: 'ok', message: 'Saved. The desk answered — Acme Corp, WEDNESDAY, 9 SEP.' },
+      board: { tone: 'ok', message: 'The board took the new address and is fetching it now.' },
     })
   })
 
-  it('board took the empty address: says demo, not "fetching"', () => {
-    const d = decideNewsUrlSave('', { ok: true }, null)
-    expect(d).toMatchObject({ persist: true, pending: false, tone: 'ok' })
-    expect(d.message).toBe('Cleared — the board is back on demo data.')
+  it('board took the empty address: says demo, not "fetching", and asks the desk nothing', () => {
+    const d = decideNewsUrlSave('', { ok: true }, null, NOTHING_ASKED)
+    expect(d).toMatchObject({ persist: true, pending: false })
+    // An empty address is not an address to ask. A desk line here would be a sentence about a
+    // server nobody named.
+    expect(d.desk).toBeNull()
+    expect(d.board.message).toBe('Cleared — the board is back on demo data.')
   })
 
   it.each(['news_url_invalid', 'too_large', 'bad_json'] as const)(
     'board refused with %s: nothing saved, red, in humanError’s words',
     (code) => {
       const e = new Esp32Error(code, undefined, 400)
-      expect(decideNewsUrlSave(URL, { error: e }, null)).toEqual({
-        persist: false,
-        pending: false,
-        tone: 'error',
-        message: humanError(e),
-      })
+      const d = decideNewsUrlSave(URL, { error: e }, null, ANSWERED)
+      expect(d).toMatchObject({ persist: false, pending: false })
+      expect(d.board).toEqual({ tone: 'error', message: humanError(e) })
     },
   )
 
   it('board asleep (timeout): persist, pending, the help voice, and says asleep', () => {
-    const d = decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null)
-    expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
-    expect(d.message).toMatch(/asleep/)
-    expect(d.message).toMatch(/^Saved/)
+    const d = decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null, ANSWERED)
+    expect(d).toMatchObject({ persist: true, pending: true })
+    expect(d.board.tone).toBe('info')
+    expect(d.board.message).toMatch(/asleep/)
   })
 
   it.each(['network_error', 'busy', 'http_error', 'read_error'] as const)(
     'board did not take it (%s): persist, pending, the help voice, and does not claim asleep',
     (code) => {
-      const d = decideNewsUrlSave(URL, { error: new Esp32Error(code) }, null)
-      expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
-      expect(d.message).not.toMatch(/asleep/)
-      expect(d.message).toMatch(/^Saved/)
+      const d = decideNewsUrlSave(URL, { error: new Esp32Error(code) }, null, ANSWERED)
+      expect(d).toMatchObject({ persist: true, pending: true })
+      expect(d.board.tone).toBe('info')
+      expect(d.board.message).not.toMatch(/asleep/)
     },
   )
 
   it('an error that is not the client’s is treated as the board not taking it', () => {
-    const d = decideNewsUrlSave(URL, { error: new TypeError('cannot read properties of undefined') }, null)
-    expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
-    expect(d.message).not.toMatch(/asleep/)
+    const e = new TypeError('cannot read properties of undefined')
+    const d = decideNewsUrlSave(URL, { error: e }, null, ANSWERED)
+    expect(d).toMatchObject({ persist: true, pending: true })
+    expect(d.board.tone).toBe('info')
+    expect(d.board.message).not.toMatch(/asleep/)
   })
 
   it('no client: persist, pending, and its own sentence — not "asleep"', () => {
-    const d = decideNewsUrlSave(URL, { noClient: true }, null)
-    expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
-    expect(d.message).toBe(
-      'Saved on this phone. Not connected to a board right now — it will be sent when this app reaches one.',
+    const d = decideNewsUrlSave(URL, { noClient: true }, null, ANSWERED)
+    expect(d).toMatchObject({ persist: true, pending: true })
+    expect(d.board).toEqual({
+      tone: 'info',
+      message: 'Not connected to a board right now — it will be sent when this app reaches one.',
+    })
+    expect(d.board.message).not.toBe(
+      decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null, ANSWERED).board.message,
     )
-    expect(d.message).not.toBe(decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null).message)
   })
 
   it('no board on this phone: names the reader that is using the address, not the hardware', () => {
     // The News source editor is no longer gated on owning a board — the Today tab reads this same
     // address — so the board-only sentence is now said to people who have never had one. It named
     // hardware that does not exist and promised a delivery nobody was waiting for.
-    const d = decideNewsUrlSave(URL, { noClient: true }, false)
-    expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
-    expect(d.message).toBe(
-      'Saved. Today reads from this address. A board you set up later will get it too.',
+    const d = decideNewsUrlSave(URL, { noClient: true }, false, ANSWERED)
+    expect(d).toMatchObject({ persist: true, pending: true })
+    expect(d.board.message).toBe(
+      'No board on this phone yet. One you set up later will get the same address.',
     )
+    // And the line that says the address WORKS is the desk's, which a phone with no board is the
+    // only reader of.
+    expect(d.desk).toEqual({
+      tone: 'ok',
+      message: 'Saved. The desk answered — Acme Corp, WEDNESDAY, 9 SEP.',
+    })
   })
 
   it('no board and a cleared address: says the Today tab is on the demo', () => {
     // The help text and the button both promise the demo; the confirmation said only that an
     // absent board would be told, which is the one thing the reader cannot see.
-    const d = decideNewsUrlSave('', { noClient: true }, false)
-    expect(d).toMatchObject({ persist: true, pending: true, tone: 'info' })
-    expect(d.message).toBe('Cleared — Today is on the demo edition.')
+    const d = decideNewsUrlSave('', { noClient: true }, false, NOTHING_ASKED)
+    expect(d).toMatchObject({ persist: true, pending: true })
+    expect(d.desk).toBeNull()
+    expect(d.board.message).toBe('Cleared — Today is on the demo edition.')
   })
 
   it('keeps the board owner’s sentences, and says nothing new while storage is silent', () => {
     // `hasDevice === false`, never `!hasDevice`: `null` is "storage has not answered yet", and a
     // sentence about a board this phone may well own must not be said on a guess.
-    const unknown = decideNewsUrlSave(URL, { noClient: true }, null)
-    const owner = decideNewsUrlSave(URL, { noClient: true }, true)
-    expect(owner.message).toBe(unknown.message)
-    expect(owner.message).toMatch(/board/)
-    expect(decideNewsUrlSave(URL, { ok: true }, false).message).toBe(
-      'Saved. The board is fetching it now.',
+    const unknown = decideNewsUrlSave(URL, { noClient: true }, null, ANSWERED)
+    const owner = decideNewsUrlSave(URL, { noClient: true }, true, ANSWERED)
+    expect(owner.board.message).toBe(unknown.board.message)
+    expect(owner.board.message).toMatch(/board/)
+    expect(decideNewsUrlSave(URL, { ok: true }, false, ANSWERED).board.message).toBe(
+      'The board took the new address and is fetching it now.',
     )
   })
 
-  it('says all six of them in the app’s language', () => {
-    // Six sentences, one per branch, and the branching itself is language-free: the decision
-    // above chose which sentence, and only the words change here.
+  // The desk's line is the one this decision grew for: the address the reader typed, answered by
+  // the address itself rather than by the hardware that may never see it.
+  describe('the desk’s line', () => {
+    it('names the edition it found, because "the desk answered" is not evidence on its own', () => {
+      const d = decideNewsUrlSave(URL, { noClient: true }, false, ANSWERED)
+      expect(d.desk?.message).toContain('Acme Corp')
+      expect(d.desk?.message).toContain('WEDNESDAY, 9 SEP')
+    })
+
+    it('falls back to a plain sentence when the payload named neither', () => {
+      // `isEmptyEdition` lets an edition through on its stories alone, so both slots can be empty
+      // in a payload this app accepts. A line with an empty slot in it reads as a bug.
+      const d = decideNewsUrlSave(URL, { noClient: true }, false, {
+        status: 'ok',
+        subject: '',
+        dateline: '',
+      })
+      expect(d.desk).toEqual({
+        tone: 'ok',
+        message: 'Saved. The desk answered, and Today reads from this address.',
+      })
+    })
+
+    it('uses whichever half the payload did name', () => {
+      const named = decideNewsUrlSave(URL, { noClient: true }, false, {
+        status: 'ok',
+        subject: 'Acme Corp',
+        dateline: '',
+      })
+      expect(named.desk?.message).toBe('Saved. The desk answered — Acme Corp.')
+    })
+
+    it('is red when the address answered nothing — and the address is still saved', () => {
+      // The one pair that used to be unsayable. An address that did not answer may be a typo or a
+      // desk mid-publish or a phone off the network, and only the first is worth losing the
+      // typing over — so the sentence carries the doubt and the storage keeps the address.
+      const d = decideNewsUrlSave(URL, { noClient: true }, false, SILENT)
+      expect(d.persist).toBe(true)
+      expect(d.desk).toEqual({
+        tone: 'error',
+        message:
+          'Saved, but nothing could be read from that address. Couldn’t reach the edition server.',
+      })
+    })
+
+    it('does not overrule the board’s refusal, which is the one thing that saves nothing', () => {
+      // A desk that answers perfectly does not make an address the board rejected storable: the
+      // board's refusal is a verdict on the address, and the two lines report two different
+      // things about the same string.
+      const e = new Esp32Error('news_url_invalid', undefined, 400)
+      const d = decideNewsUrlSave(URL, { error: e }, true, ANSWERED)
+      expect(d.persist).toBe(false)
+      expect(d.desk?.tone).toBe('ok')
+      expect(d.board.tone).toBe('error')
+    })
+  })
+
+  it('says all of them in the app’s language', () => {
+    // One sentence per branch, and the branching itself is language-free: the decision above
+    // chose which sentence, and only the words change here.
     setActiveLanguage('ko')
     try {
       const HANGUL = /[가-힣]/
-      expect(decideNewsUrlSave(URL, { ok: true }, null).message).toMatch(HANGUL)
-      expect(decideNewsUrlSave('', { ok: true }, null).message).toMatch(HANGUL)
-      expect(decideNewsUrlSave(URL, { noClient: true }, null).message).toMatch(HANGUL)
-      expect(decideNewsUrlSave(URL, { noClient: true }, false).message).toMatch(HANGUL)
-      expect(decideNewsUrlSave('', { noClient: true }, false).message).toMatch(HANGUL)
-      expect(decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null).message).toMatch(
+      expect(decideNewsUrlSave(URL, { ok: true }, null, ANSWERED).board.message).toMatch(HANGUL)
+      expect(decideNewsUrlSave('', { ok: true }, null, NOTHING_ASKED).board.message).toMatch(HANGUL)
+      expect(decideNewsUrlSave(URL, { noClient: true }, null, ANSWERED).board.message).toMatch(
         HANGUL,
       )
-      expect(decideNewsUrlSave(URL, { error: new Esp32Error('busy') }, null).message).toMatch(
+      expect(decideNewsUrlSave(URL, { noClient: true }, false, ANSWERED).board.message).toMatch(
         HANGUL,
       )
+      expect(decideNewsUrlSave('', { noClient: true }, false, NOTHING_ASKED).board.message).toMatch(
+        HANGUL,
+      )
+      expect(
+        decideNewsUrlSave(URL, { error: new Esp32Error('timeout') }, null, ANSWERED).board.message,
+      ).toMatch(HANGUL)
+      expect(
+        decideNewsUrlSave(URL, { error: new Esp32Error('busy') }, null, ANSWERED).board.message,
+      ).toMatch(HANGUL)
+      // Both desk lines too. The failure keeps the reader's own sentence inside it — which is
+      // already in the app's language, because `humanEditionError` read the same catalogue.
+      expect(decideNewsUrlSave(URL, { ok: true }, null, ANSWERED).desk?.message).toMatch(HANGUL)
+      const failed = decideNewsUrlSave(URL, { ok: true }, null, SILENT).desk
+      expect(failed?.message).toMatch(HANGUL)
+      expect(failed?.message).toContain('Couldn’t reach the edition server.')
       // The board's own refusal still comes through `humanError`, so it is Korean for the same
       // reason and not for a second one.
       expect(
-        decideNewsUrlSave(URL, { error: new Esp32Error('news_url_invalid', undefined, 400) }, null)
-          .message,
+        decideNewsUrlSave(
+          URL,
+          { error: new Esp32Error('news_url_invalid', undefined, 400) },
+          null,
+          ANSWERED,
+        ).board.message,
       ).toBe(humanError(new Esp32Error('news_url_invalid', undefined, 400)))
     } finally {
       setActiveLanguage('en')
@@ -444,7 +534,31 @@ describe('the screens are wired to the rules', () => {
     // The third argument is the whole of rows B1/B3: without it the editor says "Not yet on the
     // board" to somebody who has never had one, and says it for ever, because nothing without a
     // client ever calls syncPendingNewsUrl to clear the mark.
-    expect(read('src/app/(tabs)/settings.tsx')).toMatch(/decideNewsUrlSave\(next, outcome, hasDevice\)/)
+    expect(read('src/app/(tabs)/settings.tsx')).toMatch(
+      /decideNewsUrlSave\(next, outcome, hasDevice, desk\)/,
+    )
+  })
+
+  it('settings asks the address itself, and asks it beside the board rather than after it', () => {
+    // The fourth argument is the whole of the desk line, and a screen that passed a hardcoded
+    // `{ status: 'skipped' }` would type-check, render, and say nothing about the server — which
+    // is the exact state this change exists to end. The `Promise.all` is the second half: run in
+    // sequence, a save to a phone with a sleeping board would sit through the board's timeout
+    // before asking the question the reader is actually waiting on.
+    const src = read('src/app/(tabs)/settings.tsx')
+    expect(src).toMatch(/probeEdition\(next\)/)
+    expect(src).toMatch(/Promise\.all\(\[boardAttempt, probeEdition\(next\)\]\)/)
+  })
+
+  it('the editor draws both lines, the desk’s above the board’s', () => {
+    // Two `<Text>`s and not one. The failure this pins is a screen that keeps rendering only
+    // `outcome.board` after the decision grew a second line: it would compile, pass every rule
+    // test above, and show the reader nothing about the address they just typed.
+    const src = read('src/app/(tabs)/settings.tsx')
+    const desk = src.indexOf('outcome?.desk ?')
+    const board = src.indexOf('outcome.board.tone')
+    expect(desk).toBeGreaterThan(-1)
+    expect(board).toBeGreaterThan(desk)
   })
 
   it('settings offers the board-less phone the reader’s sentence, on `=== false` and not on falsiness', () => {

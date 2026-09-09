@@ -16,8 +16,9 @@
 // this app has no way to render under test.
 
 import { Esp32Error, humanError, type Esp32Client } from './esp32'
+import { type DeskProbe } from './edition/probe'
 import { clearNewsUrl, clearNewsUrlPending, isNewsUrlPending, peekNewsUrl } from './store'
-import { strings } from '../i18n'
+import { fill, strings } from '../i18n'
 
 /**
  * Which failures mean "the board answered, and said no to this address" — as opposed to the board
@@ -37,19 +38,42 @@ export function boardRefused(e: Esp32Error): boolean {
 /** How the one POST a save makes went. `error` is whatever was thrown, board error or not. */
 export type NewsUrlSaveOutcome = { ok: true } | { error: unknown } | { noClient: true }
 
+/** One sentence and the voice it is said in: green, the help voice, or red. */
+export type SaveLine = { tone: 'ok' | 'info' | 'error'; message: string }
+
 export type NewsUrlSaveDecision = {
   /** Write the address to the phone. False only when the board refused it. */
   persist: boolean
   /** Leave the delivery mark set — the board does not have it yet. */
   pending: boolean
-  /** Which voice the sentence is said in: green, the help voice, or red. */
-  tone: 'ok' | 'info' | 'error'
-  message: string
+  /**
+   * WHAT THE ADDRESS ITSELF ANSWERED, and it is deliberately first.
+   *
+   * This is the line the person typing an address is actually waiting for, and until this field
+   * existed the save could not say it: every sentence below is about the board, so a typo, a desk
+   * that was down and a perfectly good address all confirmed identically and the only way to tell
+   * them apart was to switch to Today and read the date on the page.
+   *
+   * `null` for a cleared address, which is not an address to ask (`DeskProbe`'s `skipped`).
+   */
+  desk: SaveLine | null
+  /** What the BOARD came to — the delivery, which on most phones has not happened yet. */
+  board: SaveLine
 }
 
 /**
- * What a save came to, from the address, the outcome of the attempt to hand it to the board, and
- * whether this phone has a board at all.
+ * What a save came to: from the address, the outcome of the attempt to hand it to the board,
+ * whether this phone has a board at all, and what the address itself answered.
+ *
+ * TWO LINES, AND THE DESK'S GOES FIRST. The reader that uses this address is the phone — the
+ * Today tab fetches it directly — and the board is a second, optional consumer that is asleep
+ * most of the time by design. A confirmation that spoke only about the board therefore reported
+ * on the least important half and stayed silent about the half the reader was about to see.
+ *
+ * THE DESK LINE NEVER DECIDES WHETHER TO SAVE. An address that did not answer is still saved,
+ * loudly and in red: the desk may be mid-publish, the phone may be off the network, and throwing
+ * the typing away over a moment is the one outcome that cannot be undone by waiting. Only the
+ * board refusing the address — a verdict, not a moment — leaves nothing saved.
  *
  * The board is asked first and the phone written after, and the order is what lets a refusal be
  * honoured: an address the board refuses is a red error and is not saved anywhere, which cannot be
@@ -76,7 +100,40 @@ export function decideNewsUrlSave(
   url: string,
   outcome: NewsUrlSaveOutcome,
   hasBoard: boolean | null,
+  desk: DeskProbe,
 ): NewsUrlSaveDecision {
+  return { ...decideBoardLine(url, outcome, hasBoard), desk: deskLine(desk) }
+}
+
+/**
+ * The desk's half: what the address answered, said in the words of the reader that asked.
+ *
+ * A failure is `error` and not the help voice, and it is the only red line a save can show that
+ * still ends with the address saved. That reads as a contradiction and is not one: the sentence
+ * says the address is on the phone AND that nothing could be read from it, which is exactly the
+ * state the phone is in and the state Today is about to show.
+ */
+function deskLine(desk: DeskProbe): SaveLine | null {
+  const m = strings().settings.news.saved
+  if (desk.status === 'skipped') return null
+  if (desk.status === 'failed') {
+    return { tone: 'error', message: fill(m.deskFailed, { detail: desk.message }) }
+  }
+  // A subject and a dateline are what make the line evidence rather than a claim — "the desk
+  // answered" is something a captive portal can also produce, "Samsung Electronics, 2026년 9월 9일"
+  // is not. Either can be absent from a payload this app still accepts, so the plain sentence is
+  // the fallback rather than a line with an empty slot in it.
+  if (desk.subject === '' && desk.dateline === '') return { tone: 'ok', message: m.deskOkPlain }
+  const named = [desk.subject, desk.dateline].filter((s) => s !== '').join(', ')
+  return { tone: 'ok', message: fill(m.deskOk, { edition: named }) }
+}
+
+/** The board's half — the delivery. Unchanged in what it decides; only its wording lost the "Saved", which the desk line above now carries. */
+function decideBoardLine(
+  url: string,
+  outcome: NewsUrlSaveOutcome,
+  hasBoard: boolean | null,
+): { persist: boolean; pending: boolean; board: SaveLine } {
   // The catalogue is read here, inside the call, for the reason every other sentence catalogue in
   // `lib/` reads it here: this module is imported at startup, before a language has been resolved.
   // Which sentence is chosen has no language in it at all — that is the decision this function
@@ -86,8 +143,7 @@ export function decideNewsUrlSave(
     return {
       persist: true,
       pending: false,
-      tone: 'ok',
-      message: url ? m.fetching : m.clearedDemo,
+      board: { tone: 'ok', message: url ? m.fetching : m.clearedDemo },
     }
   }
   if ('noClient' in outcome) {
@@ -95,27 +151,20 @@ export function decideNewsUrlSave(
       return {
         persist: true,
         pending: true,
-        tone: 'info',
-        message: url ? m.todayOnly : m.clearedTodayDemo,
+        board: { tone: 'info', message: url ? m.todayOnly : m.clearedTodayDemo },
       }
     }
-    return {
-      persist: true,
-      pending: true,
-      tone: 'info',
-      message: m.noClient,
-    }
+    return { persist: true, pending: true, board: { tone: 'info', message: m.noClient } }
   }
   const e = outcome.error
   if (e instanceof Esp32Error && boardRefused(e)) {
-    return { persist: false, pending: false, tone: 'error', message: humanError(e) }
+    return { persist: false, pending: false, board: { tone: 'error', message: humanError(e) } }
   }
   const asleep = e instanceof Esp32Error && e.code === 'timeout'
   return {
     persist: true,
     pending: true,
-    tone: 'info',
-    message: asleep ? m.boardAsleep : m.boardBusy,
+    board: { tone: 'info', message: asleep ? m.boardAsleep : m.boardBusy },
   }
 }
 

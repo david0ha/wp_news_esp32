@@ -88,7 +88,16 @@ export function Masthead({
 
       {/* The demo chip and the freshness line are mutually exclusive by construction: the demo's
           fetchedAt is 0, so freshnessLabel answers null for it. */}
-      {demo ? <Chip label={t.today.demoChip} tone="accent" style={styles.demoChip} /> : null}
+      {demo ? (
+        <>
+          <Chip label={t.today.demoChip} tone="accent" style={styles.demoChip} />
+          {/* The chip names the state; this says why the phone is in it. Without the second line
+              the only visible fact is a dateline months old under a masthead that says Today,
+              which reads as an app that has stopped fetching rather than as one that was never
+              given an address. */}
+          <Text style={ty.caption}>{t.today.demoNote}</Text>
+        </>
+      ) : null}
       {freshness !== null ? (
         <Text style={[ty.caption, styles.freshness]}>{freshness}</Text>
       ) : null}

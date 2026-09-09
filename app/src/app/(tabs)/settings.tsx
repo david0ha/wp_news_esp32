@@ -74,6 +74,7 @@ import {
 } from '../../lib/newsurlsync'
 import { wizardEntryHref } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
+import { probeEdition } from '../../lib/edition/probe'
 import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
 import { APP_LANGUAGES, fill, useLanguage, useStrings, type AppLanguage } from '../../i18n'
 import { colors, fonts, layout, radius, space, type } from '../../theme'
@@ -372,23 +373,29 @@ export default function Settings() {
                 onSave={async (next) => {
                   setSyncRejected(null)
                   // What the attempt means — persist or not, pending or not, which voice — is
-                  // `decideNewsUrlSave`'s, tested as a rule. This site only makes the attempt and
-                  // does what the decision says. The one thing it does before the attempt is wait
-                  // for any delivery already on the wire: a POST of an older address racing this
-                  // one would land in whichever order the board took them.
-                  let outcome: NewsUrlSaveOutcome
-                  if (!client) {
-                    outcome = { noClient: true }
-                  } else {
+                  // `decideNewsUrlSave`'s, tested as a rule. This site only makes the two attempts
+                  // and does what the decision says. The one thing it does before the board's is
+                  // wait for any delivery already on the wire: a POST of an older address racing
+                  // this one would land in whichever order the board took them.
+                  //
+                  // TWO ATTEMPTS, IN PARALLEL, AND THEY ASK DIFFERENT THINGS. The board is asked
+                  // whether it will take the address; the address is asked whether there is an
+                  // edition at it. They are independent — a phone with no board still has the
+                  // second question, and it is the one the reader typing an address is waiting
+                  // on — so running them in sequence would add a board's eight-second timeout to
+                  // a save whose answer had nothing to do with the board.
+                  const boardAttempt = (async (): Promise<NewsUrlSaveOutcome> => {
+                    if (!client) return { noClient: true }
                     await settleNewsUrlSync()
                     try {
                       await client.setNewsUrl(next)
-                      outcome = { ok: true }
+                      return { ok: true }
                     } catch (e) {
-                      outcome = { error: e }
+                      return { error: e }
                     }
-                  }
-                  const decision = decideNewsUrlSave(next, outcome, hasDevice)
+                  })()
+                  const [outcome, desk] = await Promise.all([boardAttempt, probeEdition(next)])
+                  const decision = decideNewsUrlSave(next, outcome, hasDevice, desk)
                   if (decision.persist) {
                     await saveNewsUrl(next)
                     if (!decision.pending) await clearNewsUrlPending()
@@ -1402,12 +1409,17 @@ function toggleLead(held: readonly Lead[], lead: Lead): Lead[] {
  * firmware's own rule before any request goes out, and explicit about the empty case: clearing the
  * field and saving is a real, supported action (back to the demo snapshot), not a mistake.
  *
- * `onSave` answers with a `NewsUrlSaveDecision`, and this component only draws it: `ok` is green;
- * `info` is the help voice, because the phone has done what was asked and the sentence is
- * information rather than a verdict; `error` is red, and is the only one that leaves the field
- * dirty, because the address in it is not saved anywhere. `pending` is the standing version of
- * `info` — an address on this phone the board has not been told about — and is said in the same
- * voice for the same reason.
+ * `onSave` answers with a `NewsUrlSaveDecision` — two lines, the desk's and the board's — and this
+ * component only draws them: `ok` is green; `info` is the help voice, because the phone has done
+ * what was asked and the sentence is information rather than a verdict; `error` is red. `pending`
+ * is the standing version of `info` — an address on this phone the board has not been told about —
+ * and is said in the same voice for the same reason.
+ *
+ * RED NO LONGER MEANS NOTHING WAS SAVED. It did while the board was the only thing a save spoke
+ * to, because the board refusing an address was the one red there was. The desk's line can be red
+ * over an address that IS saved — the address is kept and the sentence says the desk did not
+ * answer — and that pair is the honest report of the state the phone is actually in. Which line
+ * is which is why they are separate fields rather than one string with a tone.
  *
  * WHAT THAT STANDING SENTENCE SAYS DEPENDS ON WHETHER THERE IS A BOARD. The mark is set on every
  * save this phone makes without one, and nothing without a client ever clears it, so on a phone
@@ -1468,7 +1480,13 @@ function NewsUrlEditor({
         />
       </View>
       {localError ? <Text style={styles.error}>{localError}</Text> : null}
-      {outcome ? <Text style={TONE[outcome.tone]}>{outcome.message}</Text> : null}
+      {/* The desk first, then the board. Two lines and not one, because they are answers to two
+          different questions and the reader needs both: whether there is an edition at the
+          address they just typed, and whether the hardware — which most saves cannot reach — has
+          been told. Collapsing them was what left a save able to say only "the board did not
+          answer" about an address that was, or was not, serving today's paper. */}
+      {outcome?.desk ? <Text style={TONE[outcome.desk.tone]}>{outcome.desk.message}</Text> : null}
+      {outcome ? <Text style={TONE[outcome.board.tone]}>{outcome.board.message}</Text> : null}
       {pending && !outcome && !dirty ? (
         <Text style={styles.help}>
           {hasBoard === false ? s.settings.news.pendingNoBoard : s.settings.news.pendingWithBoard}

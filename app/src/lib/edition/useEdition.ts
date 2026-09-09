@@ -135,8 +135,20 @@ export function useEdition(): {
     async (opts: { fresh?: boolean } = {}) => {
       const current = machineRef.current
       const url = current.url
-      // Nothing to refresh against the demo; the bundled edition is the whole of it.
-      if (url === null || url === '') return
+      if (url === null) return
+      if (url === '') {
+        // There is nothing to fetch against the bundled demo — but the gesture must not be dead.
+        // A reader who has just saved an address in Settings and pulled down here got no request,
+        // no spinner outcome and no change, on the one screen whose date is months old; the only
+        // thing that picked the address up was a tab switch, which is not what they did. So an
+        // explicit pull re-reads the stored address and adopts it if it has moved. A silent,
+        // throttled focus re-check still does nothing: the focus callback already re-reads the
+        // address itself, and doing it twice per focus buys a second disk read and no fact.
+        if (!opts.fresh) return
+        const stored = (await getNewsUrl()) ?? ''
+        if (stored !== '' && stored !== machineRef.current.url) await adopt(stored)
+        return
+      }
       const state = current.state
       // The one rule: any call with `fresh: true` fetches, unconditionally; a silent call needs
       // a ready screen AND a `fetchedAt` older than the throttle.
@@ -160,7 +172,7 @@ export function useEdition(): {
       // costs one round trip instead of twenty KB even on an explicit refresh.
       await runFetch(url, state.status === 'ready' ? state.cached.etag : null)
     },
-    [runFetch],
+    [adopt, runFetch],
   )
 
   // The whole loop, on every focus including the mount. Either the stored address is not the one
