@@ -20,15 +20,26 @@ unable to read a file, and nothing in the log would say why.
 this repository that writes into a directory the operator owns, and the failure
 is not an exception -- it is a file appearing in somebody's vault that they
 did not ask for.
+
+The third thing pinned here is not a decision at all, it is a **split**, and
+it is the one property in this file whose failure is not quiet but permanent:
+``seed_positions`` runs for the ``calendar`` kind and for no other, so the
+process that writes the newspaper never holds the owner's positions. See
+:class:`SeedingSplitTest`, which is written as a sweep over every other kind
+rather than as an assertion about the one -- what is being asserted is an
+absence, and an absence has to be looked for everywhere it could be.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 import loop
 
@@ -173,6 +184,31 @@ class WriteBriefTest(unittest.TestCase):
         self.assertIn("AAPL", text)
         self.assertIn("aaa", text)
         self.assertIn("bbb", text)
+        # And no book line: an edition is not a book, and the brief for one
+        # reads exactly as it always has.
+        self.assertNotIn("**Book:**", text)
+
+    def test_a_book_adds_one_line_and_an_edition_adds_none(self):
+        # The count is the point. There is no edition_id on the calendar path
+        # and the model's own notes say what it looked at rather than what it
+        # filed, so a book quietly shrinking from ten to four over a fortnight
+        # is visible in this line and nowhere else.
+        cfg = self.settings(AGENT_WRITE_BRIEFS="1")
+        loop.write_brief(cfg, "2026-08-23", {"kind": "calendar", "text": "the book"},
+                         {"state": "filed"}, "",
+                         book={"events": [{"id": "e_a1c4"}, {"id": "e_b207"}],
+                               "shortfall": "여섯 개였어요"})
+        with open(self.file(), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("**Book:** 2 event(s), shortfall: 여섯 개였어요", text)
+
+        # A full book says so rather than leaving the field out, so the line
+        # is a count somebody can read down a column of days.
+        loop.write_brief(cfg, "2026-08-23", {"kind": "calendar", "text": "the book"},
+                         {"state": "filed"}, "",
+                         book={"events": [{}] * 10, "shortfall": None})
+        with open(self.file(), encoding="utf-8") as f:
+            self.assertIn("**Book:** 10 event(s), shortfall: none", f.read())
 
 
 class UploadNotesTest(unittest.TestCase):
@@ -284,13 +320,13 @@ class HandleResearchTest(unittest.TestCase):
         # turn in this test needs none of tools/edition/PROMPT.md's text, so
         # it is replaced rather than pointing CLAUDEPOST_REPO at a checkout.
         self._real_read_contract = loop.read_contract
-        loop.read_contract = lambda repo: "the contract"
+        loop.read_contract = lambda repo, kind="file_edition": "the contract"
         self.addCleanup(setattr, loop, "read_contract", self._real_read_contract)
 
     def test_a_research_command_attaches_its_note_to_the_command(self):
         note_text = "Looked at NVDA's supplier mix. Nothing outranks the rotation today.\n"
 
-        def fake_run_claude(cfg, text, workdir, extra_env):
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
             # Stands in for the headless turn: a research command's model
             # writes notes.md and no news.json, because there is no page.
             with open(os.path.join(workdir, "notes.md"), "w", encoding="utf-8") as f:
@@ -406,7 +442,7 @@ class HandleCustomTest(unittest.TestCase):
         self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
 
         self._real_read_contract = loop.read_contract
-        loop.read_contract = lambda repo: "the contract"
+        loop.read_contract = lambda repo, kind="file_edition": "the contract"
         self.addCleanup(setattr, loop, "read_contract", self._real_read_contract)
 
     def _patch_run_claude(self, fn):
@@ -417,7 +453,7 @@ class HandleCustomTest(unittest.TestCase):
     def test_a_custom_command_that_produced_a_page_still_files_it(self):
         note_text = "NVDA's guide beat the whisper number; sourced to the call transcript.\n"
 
-        def fake_run_claude(cfg, text, workdir, extra_env):
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
             with open(os.path.join(workdir, "news.json"), "w", encoding="utf-8") as f:
                 f.write("{}")
             with open(os.path.join(workdir, "notes.md"), "w", encoding="utf-8") as f:
@@ -441,7 +477,7 @@ class HandleCustomTest(unittest.TestCase):
     def test_a_custom_command_without_a_page_files_its_note_on_the_command(self):
         note_text = "Looked into NVDA's supplier mix. Nothing outranks the rotation today.\n"
 
-        def fake_run_claude(cfg, text, workdir, extra_env):
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
             # No news.json -- the operator's text turned out to be a look,
             # not an order, and this loop takes disk as the source of truth.
             with open(os.path.join(workdir, "notes.md"), "w", encoding="utf-8") as f:
@@ -458,6 +494,504 @@ class HandleCustomTest(unittest.TestCase):
         self.assertEqual(desk.notes_calls,
                          [{"text": note_text, "draft": None, "command": cid}])
         self.assertEqual(desk.finished, [(cid, True, note_text)])
+
+
+class CalendarDesk:
+    """Enough of :class:`deskclient.DeskClient` for every kind of command.
+
+    One stub rather than four because :class:`SeedingSplitTest` runs the same
+    handle() over every kind and has to be able to; the per-kind stubs above
+    stay as they are, where the point of each is the method it deliberately
+    does *not* have.
+    """
+
+    def __init__(self, positions=None, calendar=None, econ=None):
+        self._positions = positions
+        self._calendar = calendar
+        self._econ = econ
+        self.books = []
+        self.notes_calls = []
+        self.finished = []
+        self.commits = []
+        self.econ_windows = []
+
+    # the prompt
+    def directives(self):
+        return []
+
+    def settings(self):
+        return {"lang": "en"}
+
+    # the owner's documents
+    def positions(self):
+        return self._positions
+
+    def calendar(self):
+        return self._calendar
+
+    def econ(self, from_date, to_date):
+        self.econ_windows.append((from_date, to_date))
+        return self._econ
+
+    def put_calendar(self, data):
+        self.books.append(data)
+
+    # the draft path
+    def open_draft(self):
+        return "d" * 32
+
+    def put_payload(self, draft, data):
+        pass
+
+    def put_tile(self, draft, tile_id, data):
+        pass
+
+    def proof(self, draft):
+        return {"ok": True, "sheets": []}
+
+    def commit(self, draft):
+        self.commits.append(draft)
+        return {"state": "staged", "edition_id": "e" * 32}
+
+    # both paths
+    def put_notes(self, text, *, draft=None, command=None):
+        self.notes_calls.append({"text": text, "draft": draft, "command": command})
+
+    def finish(self, cid, ok, result):
+        self.finished.append((cid, ok, result))
+
+
+class SeedingSplitTest(unittest.TestCase):
+    """**The security property**, and it is the reason this feature is shaped
+    the way it is rather than a tidiness argument about scratch directories.
+
+    ``GET /news.json`` is served with **no authorization at all** -- it has to
+    be, because the board on the wall polls it. So the one catastrophic
+    outcome of the event book is a strike, a contract count or an entry price
+    reaching an edition, at a public URL, permanently, in a fetch that cannot
+    be taken back.
+
+    Two defences, neither sufficient alone. The edition validator refuses a
+    payload carrying position fields; that is the other half and it lives on
+    the desk. This half is structural and stronger: **the process that writes
+    the newspaper never has the file.** ``seed_positions`` runs for exactly
+    one kind of command, and what this asserts is what is on disk at the
+    instant the model starts reading -- which is the only moment the question
+    is about.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
+        real = loop.read_contract
+        loop.read_contract = lambda repo, kind="file_edition": "the contract"
+        self.addCleanup(setattr, loop, "read_contract", real)
+
+    #: A book of positions in the shape the desk serves, from the shipped
+    #: example. No real ticker, strike or holding enters a committed file.
+    POSITIONS = {
+        "updated_at": "2026-09-08T05:00:00Z",
+        "positions": [{"id": "p_1f05f8", "symbol": "AAAA", "kind": "stock",
+                       "opened_at": "2026-08-19", "note": "", "quantity": 40,
+                       "entry_price_cents": 158300}],
+    }
+
+    def run_seeding(self, kind: str) -> str:
+        """Run one command of ``kind`` and answer with what the model could see.
+
+        The workdir is returned still holding what was seeded into it, because
+        the fake turn below writes that kind's deliverable and nothing else --
+        so an assertion about ``positions.json`` afterwards is an assertion
+        about the directory the child was started in.
+        """
+        deliverable = {"research": "notes.md", "calendar": "calendar.json"}.get(
+            kind, "news.json")
+        contents = ('{"events": [], "shortfall": null}'
+                    if kind == "calendar" else "{}")
+
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            with open(os.path.join(workdir, deliverable), "w",
+                      encoding="utf-8") as f:
+                f.write(contents)
+            return 0
+
+        real = loop.run_claude
+        loop.run_claude = fake_run_claude
+        self.addCleanup(setattr, loop, "run_claude", real)
+
+        cid = ("%s" % kind).ljust(32, "0")[:32]
+        desk = CalendarDesk(positions=self.POSITIONS, calendar=None, econ=[])
+        loop.handle(self.cfg, desk, {"id": cid, "kind": kind, "text": "go"}, {})
+        return os.path.join(self.tmp, cid)
+
+    def test_seed_positions_runs_only_for_the_calendar_kind(self):
+        # The newspaper's producer never has the file. This is the structural
+        # half of the rule that positions do not reach news.json; the edition
+        # validator is the other half, and neither is sufficient alone.
+        for kind in ("file_edition", "research", "custom"):
+            with self.subTest(kind=kind):
+                workdir = self.run_seeding(kind)
+                self.assertFalse(
+                    os.path.exists(os.path.join(workdir, "positions.json")))
+        workdir = self.run_seeding("calendar")
+        self.assertTrue(os.path.exists(os.path.join(workdir, "positions.json")))
+
+    def test_the_other_two_seeded_files_follow_the_same_split(self):
+        # Yesterday's book and the economic window are not secrets the way the
+        # positions are, but a newspaper run has no use for either, and a file
+        # in front of a model is an invitation to read it.
+        for kind in ("file_edition", "research", "custom"):
+            for name in ("positions.json", "calendar.json", "econ.json"):
+                with self.subTest(kind=kind, name=name):
+                    workdir = self.run_seeding(kind)
+                    self.assertFalse(os.path.exists(os.path.join(workdir, name)))
+
+    def test_the_watch_list_is_seeded_for_every_kind_including_the_book(self):
+        # The one file both jobs get: it is the universe the paper rotates
+        # through and, for the book, where else to look for a date. It is
+        # seeded from the operator's own directory rather than from the desk,
+        # so it is not part of the split.
+        path = os.path.join(self.tmp, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["AAAA"], "last": "AAAA"}, f)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp,
+                                           "CLAUDEPOST_WATCHLIST": path})
+        for kind in ("file_edition", "calendar"):
+            with self.subTest(kind=kind):
+                workdir = self.run_seeding(kind)
+                self.assertTrue(
+                    os.path.exists(os.path.join(workdir, "watchlist.json")))
+
+    def test_a_calendar_run_is_given_the_four_files_its_brief_names(self):
+        # tools/edition/CALENDAR.md's input table promises exactly these, and
+        # the table is a promise this function is what keeps.
+        path = os.path.join(self.tmp, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["AAAA"], "last": "AAAA"}, f)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp,
+                                           "CLAUDEPOST_WATCHLIST": path})
+
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            self.seen = sorted(os.listdir(workdir))
+            with open(os.path.join(workdir, "calendar.json"), "w") as f:
+                f.write('{"events": []}')
+            return 0
+
+        real = loop.run_claude
+        loop.run_claude = fake_run_claude
+        self.addCleanup(setattr, loop, "run_claude", real)
+        desk = CalendarDesk(positions=self.POSITIONS,
+                            calendar={"events": [], "shortfall": None},
+                            econ=[{"date": "2026-09-10"}])
+        loop.handle(self.cfg, desk, {"id": "c" * 32, "kind": "calendar",
+                                     "text": "the book"}, {})
+        self.assertEqual(self.seen, ["calendar.json", "econ.json",
+                                     "positions.json", "watchlist.json"])
+        # ...and no tiles/. Nothing on this path would ever upload a picture,
+        # so an empty directory named for them is an invitation to make some.
+        self.assertNotIn("tiles", self.seen)
+
+
+class CalendarSeedTest(unittest.TestCase):
+    """The three documents a calendar run is handed, one at a time.
+
+    ``seed_watchlist``'s posture throughout: a document the desk does not hold
+    is the documented first morning rather than an error, and something too
+    large to put in front of a model is a warning and a file not written.
+    What is *not* shared with the watch list is the failure case -- see
+    :meth:`test_a_desk_that_will_not_say_fails_the_command`.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def read(self, name):
+        with open(os.path.join(self.tmp, name), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_the_positions_land_under_the_name_the_brief_uses(self):
+        book = {"updated_at": "2026-09-08T05:00:00Z", "positions": []}
+        self.assertTrue(loop.seed_positions(CalendarDesk(positions=book), self.tmp))
+        self.assertEqual(self.read("positions.json"), book)
+
+    def test_yesterdays_book_is_seeded_so_it_can_be_revised(self):
+        # Not a nicety: CALENDAR.md requires an event that was already in the
+        # book to keep its id, because the desk records a notification against
+        # that id. A run seeded from nothing can only re-mint, and every
+        # re-minted id is a second push about a date the owner has already
+        # been told about.
+        book = {"events": [{"id": "e_a1c4"}], "shortfall": None}
+        self.assertTrue(loop.seed_calendar(CalendarDesk(calendar=book), self.tmp))
+        self.assertEqual(self.read("calendar.json"), book)
+
+    def test_a_document_the_desk_does_not_hold_is_a_first_run(self):
+        desk = CalendarDesk(positions=None, calendar=None)
+        self.assertFalse(loop.seed_positions(desk, self.tmp))
+        self.assertFalse(loop.seed_calendar(desk, self.tmp))
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_a_desk_that_will_not_say_fails_the_command(self):
+        # Where this parts company with the watch list. A missing watch list
+        # costs a rotation; a book filed while the positions could not be read
+        # is a book that reaches nothing, written over a good one. So the
+        # client raises and handle() lets it out to main(), which fails the
+        # command with the message on it.
+        class Down(CalendarDesk):
+            def positions(self):
+                raise RuntimeError("positions: 502 <html>")
+
+        with self.assertRaises(RuntimeError):
+            loop.seed_positions(Down(), self.tmp)
+
+    def test_the_economic_window_is_asked_for_from_today_forward(self):
+        desk = CalendarDesk(econ=[{"date": "2026-09-10"}])
+        self.assertTrue(loop.seed_econ(desk, self.tmp,
+                                       today=datetime.date(2026, 9, 8)))
+        self.assertEqual(desk.econ_windows, [("2026-09-08", "2026-11-07")])
+        # The window travels with its own bounds, so an empty list is "this
+        # fortnight is quiet" rather than a file that says nothing.
+        self.assertEqual(self.read("econ.json"),
+                         {"from": "2026-09-08", "to": "2026-11-07",
+                          "events": [{"date": "2026-09-10"}]})
+
+    def test_a_window_the_desk_could_not_fetch_is_not_a_failure(self):
+        # The desk is going outside for this one. A scraper behind a challenge
+        # costs the book one tier-1 source; it does not cost a morning.
+        self.assertFalse(loop.seed_econ(CalendarDesk(econ=None), self.tmp))
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_a_document_too_large_to_hand_a_model_is_not_seeded(self):
+        # `seed_watchlist`'s oversize branch, and here for the same reason:
+        # the check is at the point where bytes become a file in a directory a
+        # language model is about to read. The desk cannot answer past its own
+        # cap; something in front of one can.
+        huge = {"positions": [{"note": "x" * loop.MAX_POSITIONS_BYTES}]}
+        self.assertFalse(loop.seed_positions(CalendarDesk(positions=huge), self.tmp))
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_korean_is_written_as_korean_and_not_as_escapes(self):
+        # `fsutil.json_bytes`'s spelling, for its reason: every one of these
+        # files is read, and \\uc0bc\\uc131 is not a company name anybody can
+        # read -- a model included.
+        book = {"events": [{"title": "삼성전자 실적"}]}
+        loop.seed_calendar(CalendarDesk(calendar=book), self.tmp)
+        with open(os.path.join(self.tmp, "calendar.json"), encoding="utf-8") as f:
+            self.assertIn("삼성전자", f.read())
+
+
+class UploadCalendarTest(unittest.TestCase):
+    """What is filed, and the one thing that is refused instead of filed."""
+
+    BOOK = ('{"generated_at": "2026-09-08T05:00:00Z", "lang": "ko", '
+            '"target": 10, "events": [], "shortfall": null}')
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def write(self, name, text):
+        with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_the_book_goes_up_as_the_bytes_the_run_wrote(self):
+        self.write("calendar.json", self.BOOK)
+        desk = CalendarDesk()
+        doc = loop.upload_calendar(desk, self.tmp)
+        self.assertEqual(desk.books, [self.BOOK.encode("utf-8")])
+        self.assertEqual(doc["target"], 10)
+
+    def test_a_calendar_run_that_wrote_a_page_files_nothing_at_all(self):
+        # The refusal, and the reason it is a refusal rather than a warning:
+        # this is the one turn in the system holding the owner's positions,
+        # and news.json is the one file served with no authorization on it.
+        self.write("calendar.json", self.BOOK)
+        self.write("news.json", '{"headline": "…"}')
+        desk = CalendarDesk()
+        with self.assertRaises(RuntimeError) as caught:
+            loop.upload_calendar(desk, self.tmp)
+        self.assertIn("news.json", str(caught.exception))
+        # Not even the book went up -- the check is first, before the book is
+        # so much as read.
+        self.assertEqual(desk.books, [])
+        # And the page is left where it lies: nothing on this path opens a
+        # draft, so it reaches nobody, and it is the evidence somebody needs.
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "news.json")))
+
+    def test_a_page_with_no_book_beside_it_is_still_refused_by_name(self):
+        # The order matters: a run that wrote only news.json must fail saying
+        # what it did, not "no calendar.json was produced".
+        self.write("news.json", "{}")
+        with self.assertRaises(RuntimeError) as caught:
+            loop.upload_calendar(CalendarDesk(), self.tmp)
+        self.assertIn("news.json", str(caught.exception))
+
+    def test_a_run_that_produced_no_book_fails(self):
+        with self.assertRaises(RuntimeError) as caught:
+            loop.upload_calendar(CalendarDesk(), self.tmp)
+        self.assertIn("no calendar.json", str(caught.exception))
+
+    def test_something_that_is_not_a_book_fails_here_rather_than_at_the_desk(self):
+        # The early half of "fail loudly rather than upload something the desk
+        # will refuse". The desk owns the only validator and names the field;
+        # what is caught here is what would otherwise be an unexplained 400.
+        for junk in ("not json at all", "[]", '{"events": "ten"}', '{}'):
+            with self.subTest(junk=junk):
+                self.write("calendar.json", junk)
+                desk = CalendarDesk()
+                with self.assertRaises(RuntimeError):
+                    loop.upload_calendar(desk, self.tmp)
+                self.assertEqual(desk.books, [])
+
+
+class HandleCalendarTest(unittest.TestCase):
+    """``handle()``'s fourth case, and the only one where ``kind`` decides alone.
+
+    A calendar command reads the other contract, is seeded with the owner's
+    documents, files ``calendar.json`` and never opens a draft. ``custom``
+    trusts the disk over the kind; this one consults the disk and answers a
+    ``news.json`` with a refusal.
+    """
+
+    class NoDraftDesk(CalendarDesk):
+        """No ``open_draft``, ``proof`` or ``commit``: a call to any of them
+        is the bug this test exists to catch, and an ``AttributeError`` from a
+        stub without the method says so more loudly than a counted call.
+
+        Taken away rather than left off, because this one inherits them: the
+        shared stub above answers every kind of command, and what is being
+        pinned here is that the calendar path never asks."""
+
+        def __getattribute__(self, name):
+            if name in ("open_draft", "proof", "commit"):
+                raise AttributeError(name)
+            return object.__getattribute__(self, name)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
+        self.contracts = []
+
+        def read_contract(repo, kind="file_edition"):
+            self.contracts.append(kind)
+            return "the brief"
+
+        real = loop.read_contract
+        loop.read_contract = read_contract
+        self.addCleanup(setattr, loop, "read_contract", real)
+
+    def patch_run_claude(self, fn):
+        real = loop.run_claude
+        loop.run_claude = fn
+        self.addCleanup(setattr, loop, "run_claude", real)
+
+    def test_a_calendar_command_files_a_book_and_never_opens_a_draft(self):
+        note = "Looked at both symbols; six cleared the floor.\n"
+        book = ('{"events": [{"id": "e_a1c4"}, {"id": "e_b207"}], '
+                '"shortfall": "여섯 개였어요"}')
+
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            with open(os.path.join(workdir, "calendar.json"), "w",
+                      encoding="utf-8") as f:
+                f.write(book)
+            with open(os.path.join(workdir, "notes.md"), "w",
+                      encoding="utf-8") as f:
+                f.write(note)
+            return 0
+
+        self.patch_run_claude(fake_run_claude)
+        desk = self.NoDraftDesk()
+        cid = "c" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "calendar",
+                                     "text": "the book"}, {})
+
+        self.assertEqual(desk.books, [book.encode("utf-8")])
+        # The contract read was the book's, not the newspaper's.
+        self.assertEqual(self.contracts, ["calendar"])
+        # The note goes on the command, because there is no draft to hang it
+        # on -- the same place a research turn's does.
+        self.assertEqual(desk.notes_calls,
+                         [{"text": note, "draft": None, "command": cid}])
+        # The result is the answer to the instruction, so it carries the
+        # count *and* the sentence. The shortfall is the agent's own prose
+        # about its own run -- the desk serves it whole at `GET /api/calendar`
+        # and again in `/api/state`, and this same turn has already written it
+        # in full to the note two lines above. Withholding it here bought
+        # nothing and cost the operator the one sentence saying what the book
+        # is missing.
+        (finished_cid, ok, result), = desk.finished
+        self.assertEqual((finished_cid, ok), (cid, True))
+        self.assertIn("2 event(s)", result)
+        self.assertIn("여섯 개였어요", result)
+
+    def test_a_calendar_run_files_no_edition(self):
+        # A calendar command that produced a news.json is a bug, and the loop
+        # refuses it rather than uploading it. The command fails with the
+        # reason on it, which is what an operator reads.
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            with open(os.path.join(workdir, "calendar.json"), "w") as f:
+                f.write('{"events": []}')
+            with open(os.path.join(workdir, "news.json"), "w") as f:
+                f.write('{"lead": {"headline": "…"}}')
+            return 0
+
+        self.patch_run_claude(fake_run_claude)
+        desk = self.NoDraftDesk()
+        cid = "d" * 32
+        # handle() lets it out; main()'s own except turns it into a failed
+        # command, which is the arrangement every other bug in a turn takes.
+        with self.assertRaises(RuntimeError) as caught:
+            loop.handle(self.cfg, desk, {"id": cid, "kind": "calendar",
+                                         "text": "the book"}, {})
+        self.assertIn("news.json", str(caught.exception))
+        self.assertEqual(desk.books, [])
+        self.assertEqual(desk.finished, [])
+
+    def test_a_turn_that_exited_nonzero_never_reaches_the_desk(self):
+        self.patch_run_claude(lambda cfg, text, workdir, extra_env, *_: 1)
+        desk = self.NoDraftDesk()
+        loop.handle(self.cfg, desk, {"id": "e" * 32, "kind": "calendar",
+                                     "text": "the book"}, {})
+        self.assertEqual(desk.books, [])
+        self.assertEqual(desk.finished, [("e" * 32, False, "claude exited 1")])
+
+    def test_the_brief_records_the_count_and_the_shortfall(self):
+        # The only durable record of what a calendar run produced: there is no
+        # edition_id on this path, and a book quietly shrinking from ten to
+        # four over a fortnight is visible nowhere else.
+        context = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, context, True)
+        cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp,
+                                      "AGENT_CONTEXT_DIR": context,
+                                      "AGENT_WRITE_BRIEFS": "1"})
+
+        def fake_run_claude(c, text, workdir, extra_env, *_):
+            with open(os.path.join(workdir, "calendar.json"), "w",
+                      encoding="utf-8") as f:
+                f.write('{"events": [{"id": "e_a1c4"}], '
+                        '"shortfall": "여섯 개였어요"}')
+            return 0
+
+        self.patch_run_claude(fake_run_claude)
+        desk = self.NoDraftDesk()
+        loop.handle(cfg, desk, {"id": "f" * 32, "kind": "calendar",
+                                "text": "the book"}, {})
+        day = time.strftime("%Y-%m-%d")
+        with open(os.path.join(context, "briefs", day + ".md"),
+                  encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("calendar", text)
+        self.assertIn("**Book:** 1 event(s)", text)
+        self.assertIn("여섯 개였어요", text)
+        # And the same sentence, unaltered, in the other thing this run
+        # records. Both are asserted here on purpose: the two used to disagree
+        # about whether the shortfall could be written down at all, and a rule
+        # enforced in one place and assumed in the next is the one that gets
+        # got wrong later.
+        (_, _, result), = desk.finished
+        self.assertIn("여섯 개였어요", result)
 
 
 class AuthRouteTest(unittest.TestCase):
@@ -635,6 +1169,28 @@ class ArgvTest(unittest.TestCase):
         cfg = loop.Settings.from_env({"CLAUDEPOST_USE_API_KEY": "1"})
         env = loop.child_env(cfg, "/work", {"ANTHROPIC_API_KEY": "k"}, home=home)
         self.assertEqual(env.get("ANTHROPIC_API_KEY"), "k")
+
+    def test_the_desk_token_never_reaches_the_child_from_the_environment(self):
+        # `load_agent_env` pops CLAUDEPOST_TOKEN out of `agent.env`, which is
+        # the documented place to keep it. It is not the only place it can be:
+        # `child_env` starts from `os.environ`, and `run-host.sh` exports every
+        # KEY=value in `$REPO/agent/.env`, so an operator who kept the token
+        # there -- or who exported it in the shell they started the loop from
+        # -- has it in the process environment and it would go straight back
+        # into the child. The child is a model with a shell and the token is
+        # `GET /api/positions`: the owner's strikes, sizes and entry prices.
+        cfg = loop.Settings.from_env({})
+        with mock.patch.dict(os.environ, {"CLAUDEPOST_TOKEN": "producer-tok"}):
+            env = loop.child_env(cfg, "/work", {})
+        self.assertNotIn("CLAUDEPOST_TOKEN", env)
+        self.assertNotIn("producer-tok", "".join(env.values()))
+
+    def test_the_desk_token_never_reaches_the_child_from_agent_env_either(self):
+        """Belt and braces on purpose: `load_agent_env` already strips this
+        one, and this door is the last one either way."""
+        cfg = loop.Settings.from_env({})
+        env = loop.child_env(cfg, "/work", {"CLAUDEPOST_TOKEN": "producer-tok"})
+        self.assertNotIn("CLAUDEPOST_TOKEN", env)
 
     def test_the_repository_is_substituted_into_the_allowlist(self):
         cfg = loop.Settings.from_env({

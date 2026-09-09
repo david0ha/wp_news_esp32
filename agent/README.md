@@ -151,6 +151,37 @@ means it was an order and the note follows the draft, no `news.json` means it
 was a look and the note follows the command. Leaving no `notes.md` files
 nothing; that is the ordinary case, not a gap.
 
+## The second job: the event book
+
+A `calendar` command is not a page. It files **ten dated things about to
+happen**, each annotated with which of the owner's positions it reaches and
+why, read on a phone and printed nowhere. Same queue, same worker, nothing new
+to install:
+
+```sh
+curl -sS -X POST "$DESK/api/commands" -H "Authorization: Bearer $TOKEN" \
+     -d '{"kind":"calendar","text":"the morning book"}'
+```
+
+It is the one kind that decides the whole shape of a run by itself. It reads
+[`tools/edition/CALENDAR.md`](../tools/edition/CALENDAR.md) instead of
+`PROMPT.md`; it is seeded with four files rather than one — `positions.json`
+(`GET /api/positions`), the watch list, the **current** `calendar.json` so
+yesterday's reasoning is revised rather than rewritten, and `econ.json`, a
+sixty-day window from `GET /api/econ`; and it never opens a draft. What it
+writes goes up with `PUT /api/calendar`, and its note lands on the command, the
+way a `research` turn's does.
+
+**A calendar run files no edition, and that is a security property rather than
+a tidiness one.** `GET /news.json` is served with no authorization at all —
+the board on the wall polls it — so a strike, a contract count or an entry
+price reaching an edition is a public URL that cannot be taken back. Two
+defences, neither sufficient alone: the desk's edition validator refuses a
+payload carrying position fields, and `seed_positions()` runs for this kind and
+no other, so **the process that writes the newspaper never has the file**. A
+`calendar` run that produced a `news.json` is a bug, and the loop refuses it
+rather than uploading it.
+
 ## Bring your own continuity
 
 There is nothing personal in this repository and there is not going to be. What

@@ -49,9 +49,10 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import (notes, policy, quotes as Q, schedule as sched, settings as st,
+from . import (calendar as cal, notes, policy, positions as pos, push,
+               quotes as Q, schedule as sched, settings as st,
                tiles, watchlist as wl)
-from .app import COMMAND_ID_RE, Desk, as_int
+from .app import COMMAND_ID_RE, Desk, as_int, utc_stamp
 from .auth import require, scope_from_header
 from .editions import CommitResult, SHEET_RE
 from .errors import BadRequest, Conflict, DeskError, Internal, NotFound, TooLarge, epoch_seconds
@@ -773,6 +774,235 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, "source": self.desk.settings_source,
                               "settings": self.desk.settings})
 
+    # -- handlers: the positions --------------------------------------------
+    def h_get_positions(self, _match, _query) -> None:
+        """The book of positions, whole, at ``producer`` scope.
+
+        Read by the agent, which cannot reason about what the owner holds
+        without being told it, and by the phone that wrote it. Read at the
+        weaker scope and written at the stronger, and that asymmetry is the
+        point of the pair -- see :meth:`h_put_positions`.
+        """
+        self._send_json(200, {"ok": True, "positions": self.desk.positions})
+
+    def h_put_positions(self, _match, _query) -> None:
+        """Validate the whole document, stamp it, then put it in force and write it down.
+
+        ``operator``, and this is the one scope on the feature that is not
+        negotiable. Everything downstream -- which events are researched,
+        which reasons are written, what the phone is told before a date -- is
+        reasoning *about this document*, so an agent that could rewrite it
+        could arrange for the reasoning to be about a position the owner does
+        not have. The owner says what they hold; nothing else does.
+
+        :meth:`h_put_watchlist`'s shape otherwise, refusal included: there is
+        no partial book, so a document that fails
+        :func:`~claudepost.positions.parse_positions` is refused whole and
+        leaves the one in force untouched. ``updated_at`` is stamped from the
+        desk's own clock rather than trusted from the body -- ``parse_positions``
+        never reads one -- and ``today`` is that same clock, so the expiry
+        horizon a ``PUT`` is judged against is the one this desk keeps rather
+        than the wall's.
+
+        The audit line carries the count and nothing else, and the reason is
+        not the scope: ``GET /api/audit`` and ``GET /api/positions`` are both
+        ``producer``, so a strike in that log reaches no token the book itself
+        does not. What it reaches is a different *place*. This document is one
+        file, 0600, rewritten whole by every edit and empty the moment the
+        owner closes everything; an audit row is a copy of it in the database,
+        which nothing chmods and nothing reaps, and which keeps what it was
+        told after the position, the file and the owner's interest in it are
+        all gone. A log that recorded the strikes would be the one place on
+        this desk where what the owner holds outlives their holding it.
+
+        Which is also what an audit row is *for*: it says what the desk did --
+        a document was accepted, and it had this many entries -- and never
+        carries the document, because the document has a route of its own and
+        this is not it.
+        """
+        desk = self.desk
+        doc = pos.parse_positions(self._json_body(), today=desk.utc_now().date())
+        doc["updated_at"] = utc_stamp(desk.clock.now())
+        desk.set_positions(doc)
+        desk.store.audit("positions", {"positions": len(doc["positions"])})
+        self._send_json(200, {"ok": True, "positions": desk.positions})
+
+    # -- handlers: the event book -------------------------------------------
+    def h_get_calendar(self, _match, _query) -> None:
+        """The event book, whole. ``producer``: the phone renders it and the
+        agent reads back what it filed."""
+        self._send_json(200, {"ok": True, "calendar": self.desk.calendar})
+
+    def h_put_calendar(self, _match, _query) -> None:
+        """Validate the whole book, stamp it, then put it in force and write it down.
+
+        ``producer`` on **both** verbs, where the positions beside it are
+        producer/operator, and the difference is the whole shape of the
+        feature: the agent files this. It is the output of a research run, not
+        a statement about the owner's money -- and every date in it has to
+        survive :mod:`~claudepost.calendar`'s source rule to get this far, so
+        what a producer can put here is bounded by a validator rather than by
+        a scope.
+
+        ``known_position_ids`` comes from :meth:`~claudepost.app.Desk.position_ids`,
+        and passing it is what makes that module's fourth refusal reachable at
+        all: a book may only reason about positions that exist. Without it an
+        agent could file reasoning against an id nobody holds and the phone
+        would render it beside a position that is not there.
+
+        ``now`` is the desk's clock for the same reason ``today`` is in
+        :meth:`h_put_positions`: the window an event is judged against must be
+        the one this desk keeps, or an event accepted here is one
+        :func:`~claudepost.calendar.load` drops on the next boot. Which is the
+        other half of the window rule -- a ``PUT`` refuses an event outside it
+        and a load drops one, because the agent filing has a mistake it can
+        still fix and the desk reading its own file a week later has nobody to
+        tell and a book to lose. :func:`~claudepost.calendar.prune_to_window`
+        argues it.
+
+        The audit line carries counts and a boolean, on :meth:`h_put_positions`'
+        argument and not on a claim that the sentence is private -- it is not.
+        ``shortfall`` is the agent's prose about its own run, served whole by
+        the route above this one and again by ``/api/state``, and the worker
+        writes it in full into its brief and its note. What the audit records
+        is that a book arrived, how many events it carried and whether it came
+        up short; the sentence itself is a copy of a document, and a row that
+        outlives every book it describes is the wrong place to keep one.
+        """
+        desk = self.desk
+        doc = cal.parse_calendar(self._json_body(),
+                                 known_position_ids=desk.position_ids(),
+                                 now=desk.utc_now())
+        doc["generated_at"] = utc_stamp(desk.clock.now())
+        desk.set_calendar(doc)
+        desk.store.audit("calendar", {"events": len(doc["events"]),
+                                      "shortfall": doc["shortfall"] is not None})
+        self._send_json(200, {"ok": True, "calendar": desk.calendar})
+
+    # -- handlers: the economic calendar ------------------------------------
+    def h_get_econ(self, _match, query) -> None:
+        """One window of investing.com's calendar, cached -- see :mod:`~claudepost.econ`.
+
+        ``producer``, and read-only because there is nothing here to write:
+        this is the desk going outside on somebody's behalf, the way
+        :meth:`h_quotes` is. One caller wants it -- the agent, seeding a
+        ``calendar`` turn with the window it is going to build the book's first
+        tier from (``deskclient.econ``, called by ``loop.seed_econ``). The
+        phone is not a caller and is not expected to become one: it reads the
+        *book*, where these rows arrive ranked and annotated against a
+        position, which is the whole difference between this feature and the
+        generic calendar it replaces.
+
+        Neither date is defaulted. ``events`` refuses anything that is not
+        ``YYYY-MM-DD``, naming the field, which is also what a missing one
+        gets -- a window this route guessed at would be a calendar the caller
+        did not ask for, and the dates are the only caller-supplied material
+        that reaches the upstream request at all.
+
+        ``health`` travels with the answer rather than only in
+        ``/api/state``. A failed fetch re-serves the last good copy of this
+        window, so the rows themselves cannot say how old they are, and the
+        caller that is about to *reason* from them is the one that needs to
+        know -- a research turn that files last week's economic calendar as
+        this week's first tier has done its worst work confidently. A second
+        request to find that out is one the caller has to remember to make.
+        """
+        source = self.desk.econ
+        events = source.events(_query_str(query, "from"), _query_str(query, "to"))
+        self._send_json(200, {"ok": True, "events": events,
+                              "health": source.health()})
+
+    # -- handlers: the phones -----------------------------------------------
+    def h_get_push_devices(self, _match, _query) -> None:
+        """Every registered phone, whole. ``operator``, like the rest of this route.
+
+        A push token is a capability: whoever holds it can put a line of text
+        on the owner's lock screen, from anywhere, with no further credential
+        -- ``push.py``'s module docstring is the long version. So this is the
+        one document on the desk that even a *read* is operator-only, and it
+        is why nothing here reaches ``/api/state``, the audit log or a log
+        line.
+        """
+        self._send_json(200, {"ok": True, "push": self.desk.push_devices})
+
+    def h_post_push_device(self, _match, _query) -> None:
+        """Register or update one phone, by its token. ``operator`` -- see above.
+
+        The body is one device, not the whole document, because that is what
+        a phone knows: its own token, its zone, its switches. What is
+        *validated* is nevertheless the whole merged document, through
+        :func:`~claudepost.push.parse_devices` -- the device cap, the
+        aggregate byte cap and the duplicate-token rule are properties of the
+        list rather than of one entry, and validating the entry alone would
+        accept a ninth phone into a document that holds eight.
+
+        Re-registering replaces the entry that carried the same token rather
+        than adding a second one, which is what makes this idempotent for a
+        phone that reopens the app: an app that re-registered on every launch
+        would otherwise fill the household in a week, and every notification
+        would arrive twice on the way there.
+
+        ``last_seen`` is stamped here, on the device just registered, and this
+        is the one place this feature departs from :meth:`h_put_watchlist`'s
+        shape. There is no top-level ``updated_at`` on this document -- see
+        :data:`~claudepost.push._TOP_KEYS` -- so stamping one would write a
+        file :func:`~claudepost.push.load` refuses on the next boot, silently,
+        because ``None`` from that function means both "no file" and "will not
+        take this one". The device just registered is the appended one and
+        ``parse_devices`` preserves order.
+
+        The audit line counts phones and names none. The audit log is read at
+        ``producer`` scope, so a token in a ``detail`` would hand every agent
+        the owner's lock screen.
+        """
+        desk = self.desk
+        body = self._json_body()
+        # The lock spans the read and the write, not just the write. This is
+        # the desk's one read-modify-write document -- see `Desk.push_lock` --
+        # and without it two phones registering in the same instant both merge
+        # into the same pre-merge list, the second write erases the first, and
+        # the phone that lost was told 200 and simply never rings.
+        with desk.push_lock:
+            held = (desk.push_devices or {"devices": []})["devices"]
+            # `.get` rather than an index: the body is unvalidated at this
+            # point, and a token that is missing or not a string simply matches
+            # nothing here and is refused by name a line later.
+            kept = [one for one in held if one["token"] != body.get("token")]
+            doc = push.parse_devices({"devices": kept + [body]})
+            doc["devices"][-1]["last_seen"] = utc_stamp(desk.clock.now())
+            desk.set_push_devices(doc)
+        desk.store.audit("push_register", {"devices": len(doc["devices"])})
+        self._send_json(200, {"ok": True, "push": desk.push_devices})
+
+    def h_delete_push_device(self, match, _query) -> None:
+        """Forget one phone. ``operator`` -- see :meth:`h_get_push_devices`.
+
+        The token is in the path because that is the phone's own name for
+        itself and the only thing an uninstalling app still knows. It reaches
+        this handler already percent-decoded, so the brackets Expo's spelling
+        carries are ordinary characters by now, and it is compared rather than
+        parsed -- a string that is not a token matches no device and is a 404.
+
+        A 404 for a token nobody registered rather than a cheerful 200: this
+        route's caller already holds every authority the desk has and can list
+        the document, so there is nothing to withhold, and "there was nothing
+        to forget" is the answer that tells an operator their delete did not
+        do what they thought.
+
+        No re-parse of what is left. Removing an entry cannot break a cap that
+        the document already satisfied, and the entries that remain are the
+        normalised ones :func:`~claudepost.push.parse_devices` produced.
+        """
+        desk = self.desk
+        with desk.push_lock:                   # read-modify-write; see above
+            held = (desk.push_devices or {"devices": []})["devices"]
+            kept = [one for one in held if one["token"] != match.group("token")]
+            if len(kept) == len(held):
+                raise NotFound(message="no such device")
+            desk.set_push_devices({"devices": kept})
+        desk.store.audit("push_forget", {"devices": len(kept)})
+        self._send_json(200, {"ok": True, "push": desk.push_devices})
+
     # -- handlers: quotes ---------------------------------------------------
     def h_quotes(self, _match, query) -> None:
         """Last price, day's change and a sparkline, proxied so the phone
@@ -1046,6 +1276,26 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_get_settings),
         "PUT": ("operator", DeskHTTPRequestHandler.h_put_settings)}),
 
+    # The scopes on these five are argued at each handler and are not a
+    # pattern to copy from: the positions are read by a producer and written
+    # only by the operator, the event book is both-ways producer because the
+    # agent files it, and the phones are operator throughout because a push
+    # token is a capability to interrupt the owner rather than a document
+    # about them.
+    (re.compile(r"^/api/positions\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_positions),
+        "PUT": ("operator", DeskHTTPRequestHandler.h_put_positions)}),
+    (re.compile(r"^/api/calendar\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_calendar),
+        "PUT": ("producer", DeskHTTPRequestHandler.h_put_calendar)}),
+    (re.compile(r"^/api/econ\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_econ)}),
+    (re.compile(r"^/api/push/devices\Z"), {
+        "GET": ("operator", DeskHTTPRequestHandler.h_get_push_devices),
+        "POST": ("operator", DeskHTTPRequestHandler.h_post_push_device)}),
+    (re.compile(r"^/api/push/devices/(?P<token>[^/]{1,120})\Z"), {
+        "DELETE": ("operator", DeskHTTPRequestHandler.h_delete_push_device)}),
+
     (re.compile(r"^/api/quotes\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_quotes)}),
 
@@ -1164,6 +1414,17 @@ def _parse_symbols(query: dict) -> list[str]:
         if not wl.SYMBOL_RE.match(symbol):
             raise BadRequest(message="%r is not a symbol" % symbol)
     return symbols
+
+
+def _query_str(query: dict, key: str) -> str | None:
+    """One query parameter as it arrived, or ``None`` when it did not.
+
+    ``None`` rather than ``""`` for an absent one, because the caller of this
+    is ``/api/econ`` and the module behind it refuses both by name -- so the
+    two need not be told apart here, and the one that must not happen is a
+    date this function invented on the caller's behalf.
+    """
+    return (query.get(key) or [None])[0]
 
 
 def _query_int(query: dict, key: str, default: int) -> int:

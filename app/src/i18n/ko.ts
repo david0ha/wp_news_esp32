@@ -2,21 +2,42 @@
 // `index.test.ts` refuses a key that is present and still English.
 //
 // Register: 존댓말 throughout, and UI-short — a Korean button label is two or three syllables, not a
-// transliterated English sentence. The vocabulary is fixed so the same object is not called three
-// things across five screens: board → 보드, desk → 데스크, edition → 에디션, front page → 1면. The
-// masthead and the product name stay Latin ("Claude Post"): a nameplate is the paper's brand, not
-// copy, which is the same rule the board's own masthead follows.
+// transliterated English sentence. 해요체 or 합니다체 is decided PER SCREEN and never per block: a
+// reader sees one screen, not the catalogue's nesting. The onboarding wizard, the board tab, the
+// markets screens and the older half of Settings are 합니다체; everything this product has grown
+// since — `settings.desk`, `settings.notify`, `positionSheet` and `schedule` — is 해요체, and so is
+// `errors.desk`, which is the only `errors.*` block those four are the sole readers of and which
+// `notify` splices whole into its own sentences at `{detail}`. `settings.desk` was the block that
+// broke the rule, sitting in 합니다체 directly above `notify` on the same Settings screen; it was
+// converted rather than the other way round, because the newer surfaces are where the product is
+// going.
+//
+// The vocabulary is fixed so the same object is not called three things across five screens:
+// board → 보드, desk → 데스크, edition → 에디션, front page → 1면, position → 포지션, leg → 레그,
+// expiry → 만기, strike → 행사가. The masthead and the product name stay Latin ("Claude Post"): a
+// nameplate is the paper's brand, not copy, which is the same rule the board's own masthead follows.
 //
 // What is NOT translated, and why each one: "Wi-Fi", "SSID", "IP", "JSON" and "USB-C" are what a
 // Korean phone's own settings call them, so translating them would make the instruction harder to
-// follow, not easier; they appear inside sentences that do differ, so the parity test still sees a
-// translation. Only the two language endonyms below are identical strings, and the test names them.
+// follow, not easier. `operator` and `producer` are on that list for the same reason one step over:
+// they are the desk's own two token scopes, spelled that way in the desk's JSON and in the command
+// that mints one, so an owner reading this screen is being told which of two Latin words to go and
+// look for — and `errors.desk.unauthorized` contrasts the two in one sentence, which only reads if
+// both are the same script. All of them appear inside sentences that do differ, so the parity test
+// still sees a translation. Only the two language endonyms below and `marketDetail.info.eps` are
+// identical strings, and the test names them.
 //
 // The placeholders travel, they do not stay put: `{host}` leads its sentence in English and takes
 // a 에서/에 particle mid-sentence here. That is the whole reason the catalogue interpolates by name
 // instead of concatenating at the call site. Every `{next}`, `{again}` and `{later}` is filled with
 // a word ending in a consonant (다음, 다시 확인, 나중에 설정), so the 을 that follows each is correct
 // for all three — check that again if any of those labels is ever reworded.
+//
+// That is the ONLY place a batchim-sensitive particle follows a placeholder, and it is meant to
+// stay the only one. Everywhere else a value is followed by a counter (개, 건, 주, 계약), by 의 or
+// 에 — which do not change on the preceding syllable — or by a space. A new template that puts
+// 을/를, 이/가 or 은/는 straight after a `{...}` cannot be made correct for every value it will
+// take, so it has to be reworded rather than guessed at.
 
 import { type Strings } from './en'
 
@@ -41,6 +62,7 @@ export const ko: Strings = {
       setup: '초기 설정',
       language: '앱 언어',
       desk: '데스크',
+      notifications: '알림',
     },
     board: {
       none: '이 휴대폰에 설정된 보드가 없습니다.',
@@ -95,24 +117,82 @@ export const ko: Strings = {
       english: 'English',
       korean: '한국어',
     },
+    // 해요체다. 바로 아래 `notify`와 같은 화면에 붙어 있고, 이 블록의 실패 문장은 `errors.desk`를
+    // 그대로 인용한다 — 셋이 한 목소리여야 읽는 사람에게 한 화면이 된다. 보안에 관한 세 문장
+    // (`help`, `tokenSaved`, `tokenNotSaved`)은 말투만 바뀌었고 내용은 그대로다.
     desk: {
-      help: '신문을 만드는 데스크입니다. 데스크 주소와 본인의 operator 토큰을 입력하면, 이 휴대폰에서 신문을 어떤 언어로 쓸지 정할 수 있습니다. 토큰은 이 휴대폰의 키체인에 보관되며 여기에 입력한 데스크에만 전송됩니다. 공개 주소는 https로 연결하지만, 집 네트워크의 http:// 데스크를 지정하면 암호화 없이 전송됩니다.',
+      help: '신문을 만드는 데스크예요. 데스크 주소와 본인의 operator 토큰을 입력하면, 이 휴대폰에서 신문을 어떤 언어로 쓸지 정할 수 있어요. 토큰은 이 휴대폰의 키체인에 보관되며 여기에 입력한 데스크에만 전송돼요. 공개 주소는 https로 연결하지만, 집 네트워크의 http:// 데스크를 지정하면 암호화 없이 전송돼요.',
       saveAddress: '데스크 주소 저장',
-      addressSaved: '저장했습니다.',
-      addressInvalid: '데스크 주소 형식이 아닙니다. 호스트 이름을 입력하거나, http:// 또는 https:// 로 시작하는 전체 주소를 입력하세요.',
+      addressSaved: '저장했어요.',
+      addressInvalid: '데스크 주소 형식이 아니에요. 호스트 이름을 입력하거나, http:// 또는 https:// 로 시작하는 전체 주소를 입력해 주세요.',
       tokenPlaceholder: 'operator 토큰',
       saveToken: '토큰 저장',
-      tokenSaved: '이 휴대폰의 키체인에 저장했습니다. 다시 표시되지 않으며, 바꾸려면 새 토큰을 저장하세요.',
-      tokenEmpty: '저장할 내용이 없습니다. 토큰 입력란이 비어 있으며, 이미 저장된 토큰은 그대로 유지됩니다.',
-      tokenHeld: '이 휴대폰에 토큰이 저장되어 있습니다.',
-      tokenNotSaved: '이 휴대폰의 키체인이 토큰을 저장하지 못했습니다. 잠금을 해제한 뒤 다시 시도하세요.',
+      tokenSaved: '이 휴대폰의 키체인에 저장했어요. 다시 표시되지 않으니, 바꾸려면 새 토큰을 저장해 주세요.',
+      tokenEmpty: '저장할 내용이 없어요. 토큰 입력란이 비어 있고, 이미 저장된 토큰은 그대로 있어요.',
+      tokenHeld: '이 휴대폰에 토큰이 저장되어 있어요.',
+      tokenNotSaved: '이 휴대폰의 키체인이 토큰을 저장하지 못했어요. 잠금을 해제한 뒤 다시 시도해 주세요.',
       forgetToken: '토큰 지우기',
       editionLanguage: '에디션 언어',
       editionHelp:
-        '신문 자체를 쓰는 언어입니다. 헤드라인, 본문, 사진 설명, 도표의 항목 이름이 모두 이 언어로 작성됩니다. 위의 앱 언어는 이 앱 화면에만 적용됩니다.',
-      needsSetup: '이 설정을 바꾸려면 데스크 주소와 operator 토큰을 입력하세요.',
-      unsupported: '데스크가 이 앱에서 제공하지 않는 언어({lang})로 설정되어 있습니다. 위에서 하나를 고르면 그 언어로 바뀝니다.',
-      languageSaved: '데스크가 다음 에디션부터 이 언어로 작성합니다.',
+        '신문 자체를 쓰는 언어예요. 헤드라인, 본문, 사진 설명, 도표의 항목 이름이 모두 이 언어로 작성돼요. 위의 앱 언어는 이 앱 화면에만 적용돼요.',
+      needsSetup: '이 설정을 바꾸려면 데스크 주소와 operator 토큰을 입력해 주세요.',
+      unsupported: '데스크가 이 앱에서 제공하지 않는 언어({lang})로 설정되어 있어요. 위에서 하나를 고르면 그 언어로 바뀌어요.',
+      languageSaved: '데스크가 다음 에디션부터 이 언어로 작성해요.',
+    },
+    // 알림. 보내는 쪽은 데스크이고, 이 블록은 받을 휴대폰을 등록하고 데스크가 읽을 설정을 고치는
+    // 자리다. 위의 `desk`, `positionSheet`, `schedule`과 같은 해요체를 쓴다 — 이 기능 줄에서
+    // 이어지는 목소리가 그쪽이고, 같은 화면에 두 말투가 서면 블록이 아니라 이음매가 보인다.
+    notify: {
+      help: '데스크가 일정에 있는 날짜를 미리 알려 줘요. 여기에 등록한 휴대폰에만 보내고, 켜기 전에는 아무것도 보내지 않아요.',
+      master: '오기 전에 알려 주기',
+      registered: '이 휴대폰이 데스크에 등록됐어요.',
+      saved: '데스크에 저장했어요.',
+      needsDesk: '켜려면 위에 데스크 주소와 operator 토큰을 먼저 입력해 주세요.',
+      unsupported: '이 휴대폰으로는 알림을 보낼 수 없어요.',
+      blocked: '휴대폰 설정에서 Claude Post 알림이 꺼져 있어요. 거기서 켠 뒤 다시 와 주세요.',
+      blockedRegistered:
+        '휴대폰 설정에서 Claude Post 알림이 꺼져 있어서 데스크가 보낸 알림이 그냥 버려지고 있어요. 휴대폰 설정에서 켜시거나, 여기서 끄면 데스크가 더 보내지 않아요.',
+      unreachable:
+        '이 휴대폰이 등록되어 있는지 데스크에 물어보지 못해서, 알림이 오고 있는지 알 수 없어요. 위의 주소와 토큰을 확인해 주세요.',
+      retry: '데스크에 다시 물어보기',
+      openSettings: '휴대폰 설정 열기',
+      tokenFailed: '휴대폰은 알림을 허용했지만 푸시 토큰을 받지 못했어요. 연결을 확인하고 다시 시도해 주세요.',
+      deskFailed: '휴대폰은 알림을 허용했는데 데스크가 등록을 받지 않았어요. {detail}',
+      changeFailed: '데스크가 이 변경을 받지 않아서 전과 똑같이 보내고 있어요. {detail}',
+      forgetFailed: '데스크에 중지를 전하지 못해서 계속 올 수 있어요. 다시 시도해 주세요. {detail}',
+      unsure:
+        '데스크가 응답하지 않아서 방금 요청이 반영됐는지 알 수 없어요. 데스크에 연결되면 다시 시도해 주세요. {detail}',
+      released: '이 휴대폰을 데스크 목록에서 먼저 뺐어요. 앞으로 알림이 가지 않아요.',
+      releaseUnsure:
+        '이 휴대폰을 데스크 목록에서 빼지 못했어요. 그 데스크가 계속 보낼 수 있는데, 이대로 바꾸면 앱에서 그 데스크에 연결할 수 없어 멈추지도 못해요. 그래도 진행하시려면 한 번 더 눌러 주세요. {detail}',
+      releasedNot:
+        '그 데스크 목록에서 빼지 않은 채로 진행했어요. 아직 등록되어 있었다면 그 데스크가 계속 보낼 수 있고, 이제 앱에서 멈출 수 없어요.',
+      kinds: {
+        earnings: '실적',
+        expiry: '옵션 만기',
+        dividend: '배당',
+        econ: '경제 지표',
+        researched: '조사로 찾은 일정',
+      },
+      leadLabel: '얼마나 미리',
+      noLead: '켜져 있지만 위에서 고른 시점이 없어서 아무것도 보내지 않아요.',
+      leads: {
+        P7D: '1주',
+        P2D: '2일',
+        P1D: '1일',
+        PT12H: '12시간',
+        PT3H: '3시간',
+        PT1H: '1시간',
+      },
+      quiet: {
+        label: '방해 금지 시간',
+        help: '이 두 시각 사이에는 알림이 오지 않아요. 그 사이에 있는 날짜도 알려 드리는데, 시간이 끝난 뒤 이미 지난 일정으로 표시되어 도착해요.',
+        from: '시작',
+        to: '종료',
+        save: '방해 금지 시간 저장',
+        shape: '22:00처럼 24시간 형식으로 입력해 주세요.',
+        same: '두 시각이 같으면 종일인지 아예 없는지 알 수 없어요. 다르게 정해 주세요.',
+      },
     },
   },
 
@@ -207,6 +287,11 @@ export const ko: Strings = {
   // 한국어는 달 이름을 줄이지 않고 번호로 부르므로, 이 열두 값은 철자가 아니라 번역이다.
   months: {
     short: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
+  },
+
+  // 일요일부터 — `Date.getDay()`의 순서 그대로다. 한국어는 요일을 한 글자로 쓴다.
+  weekdays: {
+    short: ['일', '월', '화', '수', '목', '금', '토'],
   },
 
   format: {
@@ -308,15 +393,18 @@ export const ko: Strings = {
         '에디션을 해석하지 못했습니다. 데스크가 발행 중일 수 있으니 잠시 뒤 당겨서 새로고침하세요.',
       unknown: '에디션을 읽는 중 문제가 발생했습니다.',
     },
+    // 이 블록만 해요체다. 나머지 `errors.*`는 보드 탭과 오늘 탭이 읽고 그 화면들은 합니다체지만,
+    // 여기 일곱 문장은 데스크 설정·알림·포지션 시트·일정 화면에서만 나오고, 그중 다섯 곳은
+    // `{detail}` 자리에 이 문장을 통째로 끼워 넣는다 — 한 줄 안에서 말투가 갈리는 자리다.
     desk: {
       unauthorized:
-        '데스크가 이 토큰을 받아들이지 않았습니다. 신문 언어를 바꾸려면 operator 토큰이 필요합니다. producer 토큰으로는 설정을 읽을 수만 있습니다.',
-      transport: '데스크에 연결하지 못했습니다. 주소와 네트워크 연결을 확인하세요.',
-      http: '데스크가 오류로 응답했습니다.',
-      httpStatus: '데스크가 {status} 오류로 응답했습니다.',
-      refused: '데스크가 받아들이지 않았습니다: {detail}',
-      badJson: '그 주소는 응답했지만 데스크의 응답이 아닙니다. 주소를 확인한 뒤 다시 시도하세요.',
-      unknown: '데스크와 통신하는 중 문제가 발생했습니다.',
+        '데스크가 이 토큰을 받아들이지 않았어요. 신문 언어든 보유 포지션이든 데스크의 내용을 바꾸려면 operator 토큰이 필요해요. producer 토큰으로는 읽을 수만 있어요.',
+      transport: '데스크에 연결하지 못했어요. 주소와 네트워크 연결을 확인해 주세요.',
+      http: '데스크가 오류로 응답했어요.',
+      httpStatus: '데스크가 {status} 오류로 응답했어요.',
+      refused: '데스크가 받아들이지 않았어요: {detail}',
+      badJson: '그 주소는 응답했지만 데스크의 응답이 아니에요. 주소를 확인한 뒤 다시 시도해 주세요.',
+      unknown: '데스크와 통신하는 중 문제가 발생했어요.',
     },
     market: {
       transport: 'Yahoo Finance에 연결하지 못했습니다. 네트워크 연결을 확인하세요.',
@@ -477,6 +565,7 @@ export const ko: Strings = {
     },
     calendar: {
       unavailable: '일정을 불러올 수 없습니다',
+      deskEvents: '내 포지션 기준',
       upcoming: '예정',
       empty: '예정된 일정이 없습니다.',
       pastEarnings: '지난 실적',
@@ -550,6 +639,132 @@ export const ko: Strings = {
       figures: '{group}, 수치 {n}개',
       briefs: '단신 {n}건',
       peers: '동종 업계 {n}개',
+    },
+  },
+
+  positions: {
+    right: {
+      call: '콜',
+      put: '풋',
+    },
+    side: {
+      long: '롱',
+      short: '숏',
+    },
+    // 영어는 만기를 앞에 그냥 붙이지만 한국어는 "만기"라는 말이 뒤따라야 하고, 매도 포지션의
+    // '숏'도 영어처럼 앞이 아니라 뒤에 온다 — 자리표시자로 둘 때에만 성립하는 어순이다.
+    // 행사가와 콜/풋의 순서는 이 블록 전체에서 하나다: '420 콜'. `leg`만 '콜 420'으로 뒤집혀
+    // 있었는데, 한 줄에 여러 다리를 늘어놓는 자리라 `single`과 어긋나는 것이 가장 잘 보인다.
+    strategy: {
+      single: '{expiry} 만기 {strike} {right}',
+      singleShort: '{expiry} 만기 {strike} {right} 숏',
+      covered: '커버드 콜 {strike}',
+      vertical: '{right} 버티컬 {low}/{high}',
+      calendar: '{right} 캘린더 {strike}',
+      straddle: '{strike} 스트래들 {side}',
+      strangle: '{low}/{high} 스트랭글 {side}',
+      leg: '{strike} {right} {side}',
+      // 한국어는 수를 세는 데 단수형이 없어서 `stockOne`과 `stock`이 같은 문자열이다. 영어 쪽에서
+      // "1 shares"가 나오지 않게 하려고 갈라 둔 키이고, `positionSheet.contract`·`contracts`가
+      // 이미 같은 이유로 같은 값을 두 번 들고 있다.
+      stockOne: '{n}주',
+      stock: '{n}주',
+      stockShortOne: '{n}주 공매도',
+      stockShort: '{n}주 공매도',
+    },
+  },
+
+  // 검색 결과에서 열리는 시트. 위의 `positions`가 어휘라면 이쪽은 이 시트만의 문장이다. 토스의
+  // 해요체를 따르고, 겁주지 않는다 — 돈에 관한 화면에서 경고조는 그 자체로 실수를 부른다.
+  positionSheet: {
+    open: '{symbol} 포지션 추가',
+    title: '무엇을 보유하고 계신가요?',
+    help: '먼저 종류를 고르면 입력할 항목이 정해져요.',
+    shape: {
+      stock: '주식',
+      longCall: '롱 콜',
+      longPut: '롱 풋',
+      shortCall: '숏 콜',
+      shortPut: '숏 풋',
+      spread: '스프레드',
+    },
+    leg: '{n}번 레그',
+    fields: {
+      quantity: '수량',
+      expiry: '만기',
+      strike: '행사가',
+      contracts: '계약수',
+      price: '평균단가',
+    },
+    hints: {
+      sharePrice: '한 주에 얼마에 사셨나요?',
+      legPrice: '한 계약에 얼마에 사셨나요?',
+    },
+    contract: '{n}계약',
+    contracts: '{n}계약',
+    confirmTitle: '이렇게 기록할게요.',
+    confirmHelp: '행사가와 만기만 한 번 더 봐 주세요. 오타는 여기서 잡혀요.',
+    continue: '다음',
+    edit: '고치기',
+    save: '저장',
+    needsDesk: '먼저 설정에서 데스크 주소와 operator 토큰을 입력해 주세요.',
+    errors: {
+      symbol: '종목 코드는 영문 대문자와 숫자, “.”, “-”로 이루어져요.',
+      required: '입력해 주세요.',
+      notAmount: '420, 420.50처럼 금액으로 입력해 주세요.',
+      precision: '소수점 두 자리까지 입력할 수 있어요.',
+      notCount: '정수로 입력해 주세요.',
+      strikeRange: '행사가는 0보다 커야 해요.',
+      tooLarge: '데스크가 받을 수 있는 범위를 넘었어요.',
+      quantityZero: '0주는 작은 포지션이 아니라 없는 포지션이에요.',
+      quantityRange: '최대 {max}주까지 입력할 수 있어요.',
+      contractsRange: '1계약부터 {max}계약까지 입력할 수 있어요.',
+      dateShape: '2026-11-21처럼 입력해 주세요.',
+      dateReal: '없는 날짜예요.',
+      expiryFar: '만기는 최대 {years}년 뒤까지 입력할 수 있어요.',
+    },
+  },
+
+  // 일정 화면의 가구에 해당하는 문구들. 제목도 이유도 부족 사유도 에이전트가 이미 에디션 언어로
+  // 써 보낸 것이라 여기서 번역하지 않는다. 여기 있는 건 날짜 머리글, 왼쪽 레일의 세 가지 정밀도,
+  // 오른쪽 레일의 세 가지 방향, 그리고 보여 줄 것이 없을 때의 문장뿐이다.
+  schedule: {
+    title: '일정',
+    day: {
+      today: '오늘 · {date}',
+      tomorrow: '내일 · {date}',
+      dated: '{month} {day}일 ({weekday})',
+    },
+    when: {
+      bmo: '장 시작 전',
+      amc: '장 마감 후',
+      allDay: '종일',
+    },
+    // 화살표는 문자열 안에 둔다. 한국어는 표시가 단어 앞에 오지만 그 자리가 언어마다 같지 않다.
+    direction: {
+      for: '↑ 유리',
+      against: '↓ 불리',
+      both: '양방향',
+    },
+    countdown: '만기 D-{n}',
+    alsoAffects: '포지션 {n}개 더',
+    upcoming: {
+      title: '다가오는 일정',
+      seeAll: '전체 {n}건 보기',
+    },
+    shortfallLabel: '더 없는 이유',
+    empty: {
+      needsDesk: '일정은 데스크에서 가져와요. 설정에서 데스크 주소와 operator 토큰을 입력해 주세요.',
+      noBook: '아직 데스크에 올라온 일정이 없어요. 아침에 한 번, 미국 장 마감 뒤에 한 번 조사해서 올려요.',
+      nothingUpcoming: '일정이 모두 지나갔어요. 다음 일정은 아침에 올라와요.',
+    },
+    a11y: {
+      expand: '이유 전체 보기',
+      collapse: '이유 접기',
+      openSource: '{host} 열기',
+      // `settings.notify.kinds.researched`와 같은 말. 한 가지 개념에는 한 가지 어휘.
+      researched: '조사로 찾은 일정',
+      openSchedule: '전체 일정 열기',
     },
   },
 }

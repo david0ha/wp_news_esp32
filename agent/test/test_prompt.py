@@ -164,6 +164,53 @@ class BuildPromptTest(unittest.TestCase):
         self.assertIn("research instruction", text)
         self.assertNotIn("news.json LAST", text)
 
+    def test_the_english_edition_prompt_is_spelled_out_here_in_full(self):
+        # The regression guard for the whole feature, and it is a real one
+        # rather than a formality: `build_prompt` grew a second contract, a
+        # second tail and a second language section, and every one of those is
+        # a place where a `kind` that fell through to the wrong branch would
+        # change the newspaper's prompt without changing anything anybody
+        # would notice until a page came out wrong.
+        #
+        # Written out byte for byte rather than compared against another call
+        # to the same function -- comparing a function to itself is satisfied
+        # by any change that is applied consistently, which is exactly the
+        # change this is here to catch.
+        text = prompt.build_prompt("CONTRACT", [("standing.md", "house style")],
+                                   [{"rule": "Never print TSLA."}], "NVDA today")
+        self.assertEqual(
+            text,
+            "CONTRACT"
+            "\n\n---\n\n# This desk's standing instructions\n"
+            "\n## standing.md\n\nhouse style\n"
+            "\n## Standing directives, most recent first\n\n"
+            "- Never print TSLA.\n"
+            "\n---\n\n# Today's instruction\n\nNVDA today\n"
+            "\nWrite the edition into $EDITION_DIR: news.json, and tiles/<id>.bin"
+            " for every\npicture it names. Write news.json LAST. Do not try to"
+            " publish it — the desk\nvalidates, typesets and publishes; your job"
+            " ends when the files are on disk.\n")
+        # And the default kind, the missing key's kind and an explicit English
+        # all produce that same byte string.
+        self.assertEqual(prompt.build_prompt(
+            "CONTRACT", [("standing.md", "house style")],
+            [{"rule": "Never print TSLA."}], "NVDA today",
+            kind="file_edition", lang="en"), text)
+
+    def test_a_calendar_kind_gets_the_calendar_tail_instead(self):
+        # The other job entirely. A calendar run files no edition, so the last
+        # thing the model reads must not be an instruction to write news.json
+        # -- that file is served with no authorization and this is the one run
+        # holding the owner's positions, so the loop refuses one rather than
+        # uploading it. A prompt that asked for it would spend the whole
+        # research budget on a turn that then fails.
+        text = prompt.build_prompt(self.CONTRACT, [], [], "the book",
+                                   kind="calendar")
+        self.assertIn("$EDITION_DIR/calendar.json", text)
+        self.assertIn("files no edition", text)
+        self.assertNotIn("news.json LAST", text)
+        self.assertNotIn("research instruction", text)
+
     def test_the_shipped_contract_assembles_on_its_own(self):
         # The one integration point with the rest of the repository: PROMPT.md
         # is the file the worker actually reads, and a prompt built from it and
@@ -175,6 +222,41 @@ class BuildPromptTest(unittest.TestCase):
         text = prompt.build_prompt(contract, [], [], "NVDA today")
         self.assertTrue(text.startswith(contract))
         self.assertIn("NVDA today", text)
+
+
+class ContractNameTest(unittest.TestCase):
+    """Which of the two shipped contracts a kind of command is written against.
+
+    Two jobs on one queue, and the whole of how a run tells them apart is this
+    one lookup: ``PROMPT.md`` files a page about one company for anybody,
+    ``CALENDAR.md`` files a book about one person's money. Pure and by name
+    rather than by path, so the choice can be asserted without a checkout --
+    ``loop.read_contract`` owns the repository root and the open().
+    """
+
+    def test_a_calendar_command_reads_the_other_contract(self):
+        self.assertEqual(prompt.contract_name("calendar"), "CALENDAR.md")
+
+    def test_every_other_kind_reads_the_newspapers(self):
+        # Including a kind this module has never heard of. `build_prompt` has
+        # always treated an unrecognised kind as a filing one rather than
+        # raising over it, and a worker one release behind a desk that grew a
+        # fourth kind should file a page, not crash.
+        for kind in ("file_edition", "research", "custom", "something_new", ""):
+            with self.subTest(kind=kind):
+                self.assertEqual(prompt.contract_name(kind), "PROMPT.md")
+
+    def test_both_contracts_are_actually_in_the_repository(self):
+        # The one integration point: these two names are joined onto
+        # tools/edition/ and opened. A name that drifted from the file would
+        # fail every calendar command with a FileNotFoundError from inside
+        # loop.read_contract, which is a long way from where the typo is.
+        here = os.path.dirname(os.path.abspath(__file__))
+        for kind in ("file_edition", "calendar"):
+            path = os.path.join(here, "..", "..", "tools", "edition",
+                                prompt.contract_name(kind))
+            with self.subTest(kind=kind):
+                self.assertTrue(os.path.exists(path), path)
 
 
 class LanguageSectionTest(unittest.TestCase):
@@ -236,6 +318,76 @@ class LanguageSectionTest(unittest.TestCase):
             contract = f.read()
         self.assertIn('section "The language"', prompt.language_section("ko"))
         self.assertIn("\n## The language\n", contract)
+
+
+class CalendarLanguageSectionTest(unittest.TestCase):
+    """The same instruction for the other job, whose fields are not a page's.
+
+    The edition's section is wrong here in both halves and expensively wrong
+    in each. It names the newspaper's fields and asks for ``lang`` at the top
+    of ``news.json`` -- the one file a calendar run may not write at all -- and
+    its Korean addendum carries the paper's arithmetic, where a syllable
+    counts two against a fixed measure. The phone reflows and the desk counts
+    code points, so carrying that over writes a 90-character field as though
+    it were 45.
+    """
+
+    def test_it_asks_for_the_book_and_never_for_a_page(self):
+        sec = prompt.language_section("ko", kind="calendar")
+        self.assertIn("calendar.json", sec)
+        self.assertNotIn("news.json", sec)
+        # The book's own reader-facing fields, not the paper's.
+        for field in ("title", "reason_short", "reason", "push.title",
+                      "push.body", "shortfall"):
+            with self.subTest(field=field):
+                self.assertIn(field, sec)
+        self.assertNotIn("headlines", sec)
+        self.assertNotIn("generated_at", sec)
+
+    def test_the_papers_syllable_arithmetic_is_not_carried_over(self):
+        sec = prompt.language_section("ko", kind="calendar")
+        self.assertNotIn("two characters", sec)
+        self.assertIn("한 글자 counts one", sec)
+        # And nothing about the panel's faces: KS X 1001 and the won sign are
+        # facts about what the board can print, and this book is printed
+        # nowhere.
+        self.assertNotIn("KS X 1001", sec)
+
+    def test_english_costs_nothing_on_this_path_either(self):
+        self.assertEqual(prompt.language_section("en", kind="calendar"), "")
+        self.assertEqual(prompt.language_section(None, kind="calendar"), "")
+
+    def test_an_unknown_tag_is_still_asked_for_by_name(self):
+        self.assertIn('"lang": "fr"', prompt.language_section("fr", kind="calendar"))
+        self.assertIn("French", prompt.language_section("fr", kind="calendar"))
+
+    def test_the_default_kind_is_still_the_editions_section(self):
+        # The standalone producer asks for a section by tag and names no kind
+        # -- `python3 agent/prompt.py --language-section ko` -- and it files
+        # editions. The default has to keep printing what it always printed.
+        self.assertEqual(prompt.language_section("ko"),
+                         prompt.language_section("ko", kind="file_edition"))
+        self.assertIn("news.json", prompt.language_section("ko"))
+
+    def test_the_section_it_sends_the_model_to_read_exists(self):
+        # `LanguageSectionTest`'s last test, for the other contract: a
+        # cross-file reference by quoted title goes stale silently, and this
+        # one is pointing at the table that decides whether a book is refused.
+        here = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(here, "..", "..", "tools", "edition", "CALENDAR.md")
+        with open(path, encoding="utf-8") as f:
+            brief = f.read()
+        self.assertIn('"The budget the desk enforces"',
+                      prompt.language_section("ko", kind="calendar"))
+        self.assertIn("\n## The budget the desk enforces\n", brief)
+
+    def test_the_book_is_composed_with_the_calendar_tail(self):
+        text = prompt.build_prompt("CONTRACT", [], [], "the book",
+                                   kind="calendar", lang="ko")
+        sec = prompt.language_section("ko", kind="calendar")
+        self.assertLess(text.index("CONTRACT"), text.index(sec))
+        self.assertLess(text.index(sec), text.index("the book"))
+        self.assertIn("$EDITION_DIR/calendar.json", text)
 
 
 class SheetPromptTest(unittest.TestCase):

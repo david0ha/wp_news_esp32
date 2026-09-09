@@ -60,7 +60,14 @@ MAX_ATTEMPTS: int = 3
 
 #: Advisory: it tells a worker whether the expected outcome is an edition. The
 #: desk never acts on a command itself, so this is never dispatch.
-COMMAND_KINDS: tuple[str, ...] = ("file_edition", "research", "custom")
+#:
+#: ``calendar`` is the second job -- the event book rather than the newspaper --
+#: and it has to be here or the whole path is unreachable from outside: the
+#: worker knows what to do with one, but nothing can queue it. That is exactly
+#: how it was found, by the worker's own author noticing there was no way to
+#: ask for the work that had just been built.
+COMMAND_KINDS: tuple[str, ...] = ("file_edition", "research", "custom",
+                                  "calendar")
 
 #: An instruction in the owner's own words, not a document.
 MAX_COMMAND_TEXT: int = 2000
@@ -121,6 +128,28 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- What has already been said to which phone. The primary key IS the promise:
+-- one notification per device per event per lead, ever. It is a table rather
+-- than something the scheduler holds in memory because the failure it prevents
+-- is a restart -- a desk that came back up and told the owner a second time
+-- about the same expiry, which reads on a lock screen as the desk being broken
+-- and cannot be undone.
+--
+-- The token is here and nowhere else in this database. It is not served: no
+-- route reads this table, `state()` does not count it, and `audit` must never
+-- carry one. See `push.py`'s module docstring for why a push token is a
+-- capability rather than an identifier.
+CREATE TABLE IF NOT EXISTS deliveries (
+    token    TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    lead     TEXT NOT NULL,
+    at       REAL NOT NULL,
+    PRIMARY KEY (token, event_id, lead)
+);
+-- Both reads are windows on `at`: the scheduler asks for the recent rows every
+-- time something is due, and housekeeping deletes the old ones.
+CREATE INDEX IF NOT EXISTS deliveries_at ON deliveries (at);
 
 CREATE TABLE IF NOT EXISTS audit (
     seq    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -479,6 +508,65 @@ class Store:
             row = self._db.execute("SELECT MAX(at) FROM publishes").fetchone()
         return None if row is None or row[0] is None else float(row[0])
 
+    # -- the delivery ledger -----------------------------------------------
+
+    def record_delivery(self, token: str, event_id: str, lead: str,
+                        at: float) -> None:
+        """Remember that ``token`` was told about ``event_id`` at ``lead``.
+
+        The row is written **after** the send comes back, for the ticket that
+        succeeded and no other -- so a failed push is retried on the next tick
+        from the rows that are not here yet, and a successful one is never
+        sent twice however often the desk ticks or restarts.
+
+        Recording the same key again keeps the first instant rather than
+        moving it. The question this row answers weeks later is "when was I
+        told", and the answer is the first time, not the last time something
+        tried.
+        """
+        when = epoch_seconds(at, "at")
+        if when is None:
+            raise BadRequest(message="a delivery happens at an instant")
+        with self._write():
+            self._db.execute(
+                "INSERT INTO deliveries (token, event_id, lead, at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(token, event_id, lead) DO NOTHING",
+                (token, event_id, lead, when))
+
+    def deliveries_since(self, t: float) -> list[dict]:
+        """Every delivery at or after ``t``, oldest first.
+
+        Bounded on purpose: the caller decides how far back can still change
+        an answer (:data:`claudepost.alerts.LOOKBACK_SECONDS` derives it) and
+        this runs on the scheduler's thread, so an unbounded read would grow
+        with the ledger forever for rows that cannot suppress anything.
+        """
+        since = epoch_seconds(t, "t")
+        if since is None:
+            raise BadRequest(message="a window starts at an instant")
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT token, event_id, lead, at FROM deliveries "
+                " WHERE at >= ? ORDER BY at ASC", (since,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def reap_deliveries(self, before: float) -> int:
+        """Delete delivery rows older than ``before``. Returns how many.
+
+        Called from the tick's housekeeping pass, beside the queue's reap and
+        the edition prune, rather than from a sweep of its own: what it
+        measures is month-scale, and a DELETE every five seconds to find
+        nothing is a write transaction on the connection the publish path
+        uses.
+        """
+        cutoff = epoch_seconds(before, "before")
+        if cutoff is None:
+            raise BadRequest(message="a cutoff is an instant")
+        with self._write():
+            return self._db.execute(
+                "DELETE FROM deliveries WHERE at < ?", (cutoff,)).rowcount
+
     # -- hold --------------------------------------------------------------
 
     def set_hold(self, until: float | None) -> None:
@@ -530,9 +618,13 @@ class Store:
     def audit(self, event: str, detail: dict) -> None:
         """Append to the audit log.
 
-        Never put a credential in ``detail``. This log is served to any
-        ``operator`` token, so it is the least private place in the desk that
-        still looks like a private one.
+        Never put a credential in ``detail``, and never a copy of a document
+        either. ``GET /api/audit`` is served to any ``producer`` token -- the
+        weaker of the two -- so it is the least private place in the desk that
+        still looks like a private one; and this table is the most durable,
+        because nothing chmods the database it lives in and nothing reaps its
+        rows. What a row says outlives the thing it is about. A count is the
+        right size for that; a strike is not.
         """
         with self._write():
             self._db.execute(

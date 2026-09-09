@@ -1,0 +1,55 @@
+<!--
+  A hand-written stand-in for the rows investing.com returns inside the
+  {"data": "..."} string of getCalendarFilteredData.
+
+  Every event, figure, time and row id in it is invented, and there is no
+  cookie, token, session id or anything else out of a live session: this file
+  is committed, and a capture of a real page is a capture of whoever happened
+  to be logged in when it was taken.
+
+  It is trimmed to the markup the parser actually reads -- the row's
+  data-event-datetime, the seven cells, and the count of grayFullBullishIcon
+  in the third of them -- because a fixture carrying markup nothing reads is a
+  fixture that fails for reasons unrelated to the parser. Three details in it
+  are traps rather than decoration, and each is one the live page contains:
+
+    * the rows are deliberately NOT in chronological order, so the test that
+      the events come back ascending asserts on something this file could get
+      wrong;
+    * the half-filled importance cells say grayEmptyBullishIcon, which
+      contains "BullishIcon" and must not be counted -- an importance read
+      with the wrong substring is off by exactly the number of empty pips,
+      which is to say always wrong and never obviously so;
+    * the last row's actual is a non-breaking space rather than an empty
+      cell, which is how the live page spells "not published yet".
+
+  This file is the artefact that turns a scraper break into a failing test
+  instead of a calendar that quietly goes blank.
+-->
+<tr id="eventRowId_900001" event_attr_ID="900001" data-event-datetime="2026/09/10 12:30:00">
+  <td class="first left time js-time">12:30</td>
+  <td class="left flagCur noWrap"><span data-img_key="United_States" class="ceFlags United_States" title="United States">&nbsp;</span>&nbsp;USD</td>
+  <td class="left textNum sentiment noWrap" title="High Volatility Expected" data-img_key="bull3"><i class="grayFullBullishIcon"></i><i class="grayFullBullishIcon"></i><i class="grayFullBullishIcon"></i></td>
+  <td class="left event"><a href="/economic-calendar/invented-core-inflation-900001" target="_blank" title="Invented release">Core Inflation Rate (MoM)&nbsp;</a></td>
+  <td class="bold act blackFont event-900001-actual" id="eventActual_900001" title="">0.4%</td>
+  <td class="fore event-900001-forecast" id="eventForecast_900001">0.3%</td>
+  <td class="prev event-900001-previous" id="eventPrevious_900001"><span title="">0.2%</span></td>
+</tr>
+<tr id="eventRowId_900002" event_attr_ID="900002" data-event-datetime="2026/09/09 09:00:00">
+  <td class="first left time js-time">09:00</td>
+  <td class="left flagCur noWrap"><span data-img_key="Euro_Zone" class="ceFlags Euro_Zone" title="Euro Zone">&nbsp;</span>&nbsp;EUR</td>
+  <td class="left textNum sentiment noWrap" title="Moderate Volatility Expected" data-img_key="bull2"><i class="grayFullBullishIcon"></i><i class="grayFullBullishIcon"></i><i class="grayEmptyBullishIcon"></i></td>
+  <td class="left event"><a href="/economic-calendar/invented-industrial-production-900002" target="_blank" title="Invented release">Industrial Production (YoY)</a></td>
+  <td class="bold act blackFont event-900002-actual" id="eventActual_900002" title="">1.4%</td>
+  <td class="fore event-900002-forecast" id="eventForecast_900002">1.2%</td>
+  <td class="prev event-900002-previous" id="eventPrevious_900002">0.9%</td>
+</tr>
+<tr id="eventRowId_900003" event_attr_ID="900003" data-event-datetime="2026/09/11 01:50:00">
+  <td class="first left time js-time">01:50</td>
+  <td class="left flagCur noWrap"><span data-img_key="Japan" class="ceFlags Japan" title="Japan">&nbsp;</span>&nbsp;JPY</td>
+  <td class="left textNum sentiment noWrap" title="Low Volatility Expected" data-img_key="bull1"><i class="grayFullBullishIcon"></i><i class="grayEmptyBullishIcon"></i><i class="grayEmptyBullishIcon"></i></td>
+  <td class="left event"><a href="/economic-calendar/invented-machinery-orders-900003" target="_blank" title="Invented release">Machinery Orders (MoM)</a></td>
+  <td class="bold act blackFont event-900003-actual" id="eventActual_900003" title="">&nbsp;</td>
+  <td class="fore event-900003-forecast" id="eventForecast_900003">-1.8%</td>
+  <td class="prev event-900003-previous" id="eventPrevious_900003">2.6%</td>
+</tr>

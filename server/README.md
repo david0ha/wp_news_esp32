@@ -53,6 +53,9 @@ can serve a fourth path. `server/test/test_http.py` asserts it.
 | Watchlist | `GET/PUT /api/watchlist` |
 | Settings | `GET/PUT /api/settings` |
 | Quotes | `GET /api/quotes?symbols=…` |
+| Positions | `GET /api/positions` (producer) · `PUT /api/positions` (operator) |
+| Event book | `GET/PUT /api/calendar` · `GET /api/econ?from=…&to=…` |
+| Push | `GET/POST /api/push/devices` · `DELETE /api/push/devices/<token>` |
 | Operations | `GET /api/state` · `POST /api/publish` · `POST /api/hold` · `GET /api/audit` |
 
 Errors come back as `{"ok":false,"error":"<code>"}` with a 4xx — the same

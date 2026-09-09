@@ -71,6 +71,13 @@ MAX_NOTES_BYTES = 262144
 #: builder that is free to do what it likes with the dict it was given.
 SETTINGS_FALLBACK = {"lang": "en"}
 
+#: A date on ``GET /api/econ``'s two query parameters, which the desk refuses
+#: by name rather than defaulting. Checked here as well because both of them
+#: are formatted straight into a query string: this client builds them from
+#: its own clock today, and the day one of them comes from somewhere else is
+#: the day the check is worth having.
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\Z")
+
 
 class DeskClient:
     """The control plane, over HTTP, with a bearer token.
@@ -378,6 +385,125 @@ class DeskClient:
                         "-- filing in English")
             return dict(SETTINGS_FALLBACK)
         return settings
+
+    # -- the event book, and what it is about ------------------------------
+    def _document(self, what: str, path: str, key: str) -> dict | None:
+        """One whole document off a ``{"ok": true, "<key>": ...}`` envelope.
+
+        Returns:
+            The document, or ``None`` when the desk holds none -- which it
+            answers as an explicit ``null`` under ``key``, and which is the
+            documented first run rather than a failure.
+
+        Raises:
+            RuntimeError: any status but 200, and -- the case worth naming --
+                a 200 whose envelope does not carry ``key`` at all. The
+                difference matters more here than anywhere else in this
+                client: :meth:`_json` turns a proxy's HTML error page into an
+                ``{"ok": false, "error": "not_json"}`` envelope, and a caller
+                that read ``doc.get(key)`` off that would take "a gateway
+                answered" for "the owner holds nothing" -- and then file a
+                book about nothing, over a good one.
+        """
+        status, doc = self._json("GET", path)
+        if status != 200:
+            raise self._fail(what, status, doc)
+        if not isinstance(doc, dict) or key not in doc:
+            raise self._fail("%s answered with no document" % what, status, doc)
+        got = doc[key]
+        if got is None:
+            return None
+        if not isinstance(got, dict):
+            raise self._fail("%s answered with a %s" % (what, type(got).__name__),
+                             status, doc)
+        return got
+
+    def positions(self) -> dict | None:
+        """What the owner holds, whole, or ``None`` when they have filed none.
+
+        A **precondition**, not an enrichment, and that is the difference
+        between this and :meth:`directives` beside it. The event book is
+        reasoning *about this document*: a run that filed a book while this
+        one could not be read would file a book that reaches nothing, and
+        replace a good one with it. So a desk that will not answer raises and
+        the command fails loudly; only an explicit "there are none" is a
+        first run.
+        """
+        return self._document("positions", "/api/positions", "positions")
+
+    def calendar(self) -> dict | None:
+        """Yesterday's event book, whole, or ``None`` when there is none yet.
+
+        Seeded so that today's run *revises* rather than rewrites, which is
+        not a nicety: ``tools/edition/CALENDAR.md`` requires an event that was
+        already in the book to keep its id, and the desk records a
+        notification against that id. A book re-minted from nothing pushes the
+        owner a second time about every date they have already been told
+        about, which is why a desk that will not answer raises here too.
+        """
+        return self._document("calendar", "/api/calendar", "calendar")
+
+    def econ(self, from_date: str, to_date: str) -> list | None:
+        """One window of the economic calendar, or ``None`` when the desk will not say.
+
+        Args:
+            from_date: the first day of the window, ``YYYY-MM-DD``, UTC.
+            to_date: the last day, inclusive, the same shape.
+
+        Returns:
+            The releases, ascending -- possibly an empty list, which is an
+            honestly quiet window -- or ``None`` when the desk could not be
+            asked.
+
+        :meth:`directives`'s posture rather than :meth:`positions`', and the
+        line between them is what the document *is*. The positions and
+        yesterday's book live on the desk and their absence changes what the
+        book means. This one is the desk going outside on somebody's behalf,
+        the way ``/api/quotes`` does, and a scraper that is having a bad
+        afternoon is not a reason to skip a morning's book: the run loses one
+        tier-1 source and says so in its shortfall. The warning is here
+        because that loss is otherwise invisible -- a book with no economic
+        releases in it looks exactly like a quiet fortnight.
+        """
+        for value, field in ((from_date, "from"), (to_date, "to")):
+            if not _DATE_RE.match(value):
+                raise ValueError("econ: %s is a date as YYYY-MM-DD" % field)
+        try:
+            status, doc = self._json(
+                "GET", "/api/econ?from=%s&to=%s" % (from_date, to_date))
+        except (OSError, http.client.HTTPException) as e:
+            LOG.warning("the economic window is unreadable (%s) -- the book "
+                        "files without it", type(e).__name__)
+            return None
+        if status != 200:
+            LOG.warning("the economic window is unreadable (HTTP %s) -- the "
+                        "book files without it", status)
+            return None
+        events = doc.get("events") if isinstance(doc, dict) else None
+        if not isinstance(events, list):
+            LOG.warning("the desk answered 200 with no economic window -- the "
+                        "book files without it")
+            return None
+        return events
+
+    def put_calendar(self, data: bytes) -> None:
+        """File the event book, exactly as the run wrote it.
+
+        The bytes go up unparsed, the way :meth:`put_payload`'s do and for the
+        same reason: the desk owns the only validator, and re-serialising a
+        document on the way to the thing that judges it means the thing judged
+        is not quite the thing written. The caller reads it first to fail
+        early on a book that is not JSON at all -- see
+        :func:`loop.upload_calendar` -- but what is sent is the file.
+
+        Raises:
+            RuntimeError: anything but 200, redacted and short. A refusal here
+                is the whole book refused, naming the field that did it, and
+                that message is what reaches the operator.
+        """
+        status, raw = self._request("PUT", "/api/calendar", data)
+        if status != 200:
+            raise self._fail("put calendar", status, raw)
 
 
 def read_token(secrets: str) -> str:

@@ -460,6 +460,12 @@ Everything above is the LAN-only channel to the board itself. When a
 channel — straight to it, the same `Authorization: Bearer` control plane a
 worker speaks. This section is what the app calls and against which token.
 
+**The line between the two halves of this file is where the schedule feature
+lands, entirely on this side.** The positions the owner holds, the event book
+researched against them and the push before a date are desk documents the phone
+reads and writes; the board sees none of them, and nothing above this heading
+changed for any of it. A sheet of paper is not an alarm clock.
+
 **The app's first authenticated call is `GET/PUT /api/settings`**, from
 Settings' Desk section — the desk's address, an operator token, and the
 language the *newspaper* is written in. `app/src/lib/desk.ts` is the whole
@@ -527,6 +533,9 @@ rules.
 | `GET /api/watchlist` | the vault's grades, reasons and thesis notes — editing it is `operator` |
 | `GET /api/settings` | the desk's own preferences — today, the language the edition is written in. Changing it is `operator` |
 | `GET /api/quotes?symbols=…` | last price, day's change and a sparkline, proxied so the phone never holds the Alpaca key |
+| `GET /api/positions` | what the owner holds — writing it is `operator` |
+| `GET /api/calendar` | the event book: ranked dates, each annotated against a position. The `PUT` beside it is the agent's, not a phone's |
+| `GET /api/econ?from=&to=` | investing.com's calendar for a window, cached, both dates required and `YYYY-MM-DD` |
 | `GET /api/audit` | the desk's own record of what it has done |
 
 Unauthenticated, and not under `/api/*` at all — the device plane, open to
@@ -548,7 +557,26 @@ phone would offer:
 | `PUT /api/schedule` | change when the desk may publish |
 | `PUT /api/watchlist` | rewrite the vault's document |
 | `PUT /api/settings` | set the language the edition is written in — `{"lang": "ko"}`, and an unknown key is refused whole with `bad_settings` |
+| `PUT /api/positions` | rewrite what the owner holds |
+| `GET /api/push/devices` · `POST /api/push/devices` · `DELETE /api/push/devices/<token>` | the phones the desk notifies |
 | `POST /api/publish` · `POST /api/hold` | force the staged edition up, or hold the wall |
+
+**`/api/positions` is the one pair whose two verbs sit in different scopes, and
+`/api/push/devices` is the one document where even the read is `operator`.**
+The first is deliberate: the agent must be able to read what the owner holds in
+order to reason about it, but everything downstream is reasoning *about that
+document*, so an agent that could rewrite it could arrange for the reasoning to
+be about a position the owner does not have. The second is what a push token
+is — not an identifier but a capability, since whoever holds one can put a line
+of text on the owner's lock screen from anywhere with no further credential.
+[desk-server.md](desk-server.md) argues both at length.
+
+`app/src/lib/desk.ts` speaks `GET/PUT /api/settings`, `GET/PUT /api/positions`
+and `GET /api/calendar` today. The other three rows are the desk's side of a
+phone-facing contract whose client half has not shipped, and they are listed
+because this table's rule is *the routes a phone client uses* — the drafts
+family and the queue's claim belong to the worker and are excluded on that
+rule, where these do not.
 
 A `producer` token that can enqueue but never promote or publish is
 deliberate, the same split [desk-server.md](desk-server.md#the-five-gates)'s

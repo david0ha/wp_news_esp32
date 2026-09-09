@@ -46,6 +46,7 @@ export const en = {
       setup: 'Setup',
       language: 'App language',
       desk: 'Desk',
+      notifications: 'Notifications',
     },
     board: {
       none: 'No board set up on this phone.',
@@ -125,6 +126,80 @@ export const en = {
       needsSetup: 'Add the desk’s address and an operator token to change this.',
       unsupported: 'The desk is set to a language this app doesn’t offer ({lang}). Choosing one above replaces it.',
       languageSaved: 'The desk will write the next edition in this language.',
+    },
+    // Notifications. The desk sends them; this section registers the phone that receives them and
+    // edits the preferences the desk reads. Its own block, below the desk's, because every
+    // sentence here is about a desk that has already been given an address and a token.
+    notify: {
+      help: 'Your desk tells this phone about a date in the schedule before it arrives. It sends to the phones registered here and to no others, and nothing is sent until you turn this on.',
+      master: 'Tell me before it happens',
+      registered: 'This phone is registered with the desk.',
+      saved: 'Saved to the desk.',
+      needsDesk: 'Add the desk’s address and an operator token above to turn this on.',
+      unsupported: 'This phone can’t be sent notifications.',
+      blocked: 'This phone doesn’t allow notifications for Claude Post. Turn them on in the phone’s own settings, then come back.',
+      // The same fact over a phone the desk IS holding, and a different sentence because there is
+      // now something to lose by doing nothing: the desk keeps sending into a hole. Two ways out,
+      // and it names both.
+      blockedRegistered:
+        'This phone doesn’t allow notifications for Claude Post, so the desk’s alerts are being thrown away. Turn them on in the phone’s own settings — or turn this off, to stop the desk sending them.',
+      // Said when the app could not find out where it stands, which is not the same as being off.
+      unreachable:
+        'This phone couldn’t ask the desk whether it’s registered, so it can’t say whether alerts are being sent. Check the address and token above.',
+      retry: 'Ask the desk again',
+      openSettings: 'Open phone settings',
+      tokenFailed: 'The phone allowed notifications, but no push token could be issued. Check the connection and try again.',
+      // Both name which half failed, because the two are fixed in completely different places and
+      // "notifications didn't turn on" sends somebody to the wrong one.
+      deskFailed: 'The phone allowed notifications; the desk wouldn’t register it. {detail}',
+      // Not the same failure: this phone is still registered and the desk is still sending what it
+      // was sending before, so the switch stays on and only the change was lost.
+      changeFailed: 'The desk wouldn’t take that change, and is still sending what it was. {detail}',
+      forgetFailed: 'The desk wasn’t told to stop, so it may keep sending. Try again. {detail}',
+      // Neither "it worked" nor "it didn't" — the honest third answer, for a write that went out
+      // to a desk that then couldn't be asked what became of it.
+      unsure:
+        'The desk didn’t answer, so this phone can’t tell whether that took effect. Try again once the desk is reachable. {detail}',
+      // Said by the Desk section above, before it cuts this phone off from the desk holding it.
+      released: 'This phone was taken off the desk’s list first, so it won’t go on being sent alerts.',
+      releaseUnsure:
+        'This phone couldn’t be taken off the desk’s list, so that desk may keep sending to it — and once this changes, the app can’t reach that desk to stop it. Tap again to go ahead anyway. {detail}',
+      // Said AT THE MOMENT the owner goes ahead, not before it. The warning above was read at some
+      // earlier point, possibly about a different control and a different network; this is the
+      // sentence that belongs to the act itself.
+      releasedNot:
+        'Went ahead without taking this phone off that desk’s list. If it was still registered, that desk may keep sending and the app can no longer reach it to stop.',
+      // The five switches. `researched` is one switch over four of the book's kinds — corporate
+      // actions, court dates, index changes and everything else — so it is named by where the
+      // date came from rather than by what it is.
+      kinds: {
+        earnings: 'Earnings',
+        expiry: 'Option expiries',
+        dividend: 'Dividends',
+        econ: 'Economic releases',
+        researched: 'Dates found by research',
+      },
+      leadLabel: 'How far ahead',
+      // A kind can be on with nothing chosen, and it is a real setting rather than a mistake — but
+      // it looks exactly like a broken switch, so it says so.
+      noLead: 'On, but nothing is chosen above — nothing will be sent for these.',
+      leads: {
+        P7D: '1 week',
+        P2D: '2 days',
+        P1D: '1 day',
+        PT12H: '12 hours',
+        PT3H: '3 hours',
+        PT1H: '1 hour',
+      },
+      quiet: {
+        label: 'Quiet hours',
+        help: 'Nothing arrives between these two times. A date that falls inside them is still told about — it arrives once the window ends, marked as already past.',
+        from: 'From',
+        to: 'To',
+        save: 'Save quiet hours',
+        shape: 'Enter a 24-hour time, like 22:00.',
+        same: 'Both times are the same, which could mean no quiet hours or every hour. Set them apart.',
+      },
     },
   },
 
@@ -243,6 +318,14 @@ export const en = {
       'Nov',
       'Dec',
     ],
+  },
+
+  // The seven weekday names, indexed as `Date.getDay()` does — Sunday first. `months` above says
+  // why a name like this is copy and not a constant, and the same holds twice over here: Korean
+  // writes a weekday as a single syllable where English abbreviates a word, so a shared table
+  // would have to be a lookup in whichever language it was written in.
+  weekdays: {
+    short: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
   },
 
   // How the app spells a quantity that is not a number — an age, an interval, a date — and the
@@ -373,7 +456,7 @@ export const en = {
     // setting it would not take.
     desk: {
       unauthorized:
-        'The desk didn’t accept that token. Changing the edition’s language needs an operator token — a producer one can read the setting but not change it.',
+        'The desk didn’t accept that token. Changing anything the desk holds — the edition’s language, the positions — needs an operator token; a producer one can read but not write.',
       transport: 'Couldn’t reach the desk. Check the address and your connection.',
       http: 'The desk answered with an error.',
       httpStatus: 'The desk answered {status}.',
@@ -547,6 +630,13 @@ export const en = {
     },
     calendar: {
       unavailable: 'Calendar unavailable',
+      /**
+       * The label over this symbol's slice of the desk's event book, which sits ABOVE Yahoo's
+       * dates. It names what makes the two different: Yahoo lists what is scheduled for the
+       * company, the desk lists what the agent researched and reasoned about against what this
+       * owner actually holds.
+       */
+      deskEvents: 'Against your positions',
       upcoming: 'Upcoming',
       empty: 'No scheduled events.',
       pastEarnings: 'Past earnings',
@@ -631,6 +721,188 @@ export const en = {
       figures: '{group}, {n} figures',
       briefs: '{n} briefs',
       peers: '{n} peers',
+    },
+  },
+
+  // What the owner holds, named the way an option chain names it. The desk derives the STRATEGY
+  // (`positions.py`'s `derive_strategy`) and this catalogue supplies the WORDS. There is no entry
+  // for a shape the desk cannot name: `custom` renders as its legs rather than taking a name
+  // nobody derived, because a mislabelled spread is worse than an unlabelled one.
+  positions: {
+    right: {
+      call: 'Call',
+      put: 'Put',
+    },
+    side: {
+      long: 'Long',
+      short: 'Short',
+    },
+    // One template per shape, and word order is the whole reason they are templates: Korean puts
+    // the side, and the word "expiry" itself, where English cannot.
+    strategy: {
+      /** A lone leg. Long is unmarked — a bought option is what an option chain assumes. */
+      single: '{expiry} {strike} {right}',
+      singleShort: 'Short {expiry} {strike} {right}',
+      /** The one name the desk cannot derive: it needs the shares sitting in another position. */
+      covered: 'Covered Call {strike}',
+      vertical: '{right} Vertical {low}/{high}',
+      calendar: '{right} Calendar {strike}',
+      straddle: '{side} {strike} Straddle',
+      strangle: '{side} {low}/{high} Strangle',
+      /** One leg inside the list a shape with no name falls back to. */
+      leg: '{side} {strike} {right}',
+      // A stock holding, and the one-share form of each. English needs the singular and Korean
+      // does not — `positionSheet.contract` / `contracts` is the same pair for the same reason —
+      // so the split is carried here rather than built out of fragments at the call site, and the
+      // Korean value under both keys is the one string it has. `{n}` stays in the singular
+      // deliberately: it is grouped by `formatCount`, and the parity test holds both catalogues to
+      // the same placeholders.
+      stockOne: '{n} share',
+      stock: '{n} shares',
+      stockShortOne: '{n} share short',
+      stockShort: '{n} shares short',
+    },
+  },
+
+  // The sheet that opens on a search result, where somebody says what they hold. `positions` above
+  // is the vocabulary — a call is a call on every screen — and this is the sheet's own copy: the
+  // chips, the four fields a leg has, and the sentence that says the position back before it is
+  // saved. Nothing here names a strategy; that is `positions.strategy`'s job and the desk's.
+  positionSheet: {
+    open: 'Add a position in {symbol}',
+    title: 'What do you hold?',
+    /** Toss's *Predictable Hint*: say what the next step is before it arrives. */
+    help: 'Pick the shape first and the fields follow.',
+    shape: {
+      stock: 'Stock',
+      longCall: 'Long call',
+      longPut: 'Long put',
+      shortCall: 'Short call',
+      shortPut: 'Short put',
+      spread: 'Spread',
+    },
+    /** The heading over one leg form, when a shape opens more than one. */
+    leg: 'Leg {n}',
+    fields: {
+      quantity: 'Shares',
+      expiry: 'Expiry',
+      strike: 'Strike',
+      contracts: 'Contracts',
+      price: 'Average price',
+    },
+    hints: {
+      sharePrice: 'What you paid per share.',
+      legPrice: 'What you paid per contract.',
+    },
+    /** The size on the confirmation line. Korean has one form; English has two. */
+    contract: '{n} contract',
+    contracts: '{n} contracts',
+    confirmTitle: 'Here’s what I’ll record.',
+    confirmHelp: 'Read the strike and the expiry once more — this is the step that catches a typo.',
+    continue: 'Continue',
+    edit: 'Edit',
+    save: 'Save',
+    needsDesk: 'Add your desk address and an operator token in Settings first.',
+    // Every one of these is checked before anything is sent. The desk checks them again and its
+    // answer wins; these exist so the ordinary mistake is caught under the field that caused it
+    // rather than after a round trip, as a JSON path.
+    errors: {
+      symbol: 'A ticker is upper-case letters, digits, “.” and “-”.',
+      required: 'Fill this in.',
+      notAmount: 'An amount, like 420 or 420.50.',
+      precision: 'Two decimal places at most.',
+      notCount: 'A whole number.',
+      strikeRange: 'A strike is more than zero.',
+      tooLarge: 'That is larger than the desk will take.',
+      quantityZero: 'Zero is the absence of a position, not a small one.',
+      quantityRange: 'At most {max} shares.',
+      contractsRange: 'Between 1 and {max} contracts.',
+      dateShape: 'A date, as 2026-11-21.',
+      dateReal: 'That day doesn’t exist.',
+      expiryFar: 'An expiry can be at most {years} years out.',
+    },
+  },
+
+  // The event book, on the phone. `positions` above is the vocabulary for what the owner holds;
+  // this is the copy for what is about to happen to it. Everything the agent wrote — the title,
+  // the reason, the shortfall sentence — arrives already in the edition's language and is drawn
+  // as it came; nothing here translates it. What is here is the FURNITURE: the day headings, the
+  // three precisions the left rail can carry, the three directions the right rail can carry, and
+  // the sentences for having nothing to show.
+  schedule: {
+    title: 'Schedule',
+    // Near days are named and dated; a far one is only dated. Both templates carry the whole
+    // sentence rather than a shared separator, because "Today ·" is word order and the separator
+    // is the only part of it that happens to be the same today.
+    day: {
+      today: 'Today · {date}',
+      tomorrow: 'Tomorrow · {date}',
+      dated: '{month} {day} ({weekday})',
+    },
+    // The left rail, at the precision the event actually has — never invented. An exact time is a
+    // clock and needs no words; the other two are the only answers a company gives when it says
+    // *when*, and "all day" is the honest reading of a date with no time on it at all.
+    when: {
+      bmo: 'Before open',
+      amc: 'After close',
+      allDay: 'All day',
+    },
+    // The right rail: what this date means to THIS owner, not what a calendar site ranks it. The
+    // mark travels inside the string so a language that puts it after the word can.
+    direction: {
+      for: '↑ Helps',
+      against: '↓ Hurts',
+      both: 'Both ways',
+    },
+    /**
+     * Days to expiry, beside the name of an option position — the number that decides whether an
+     * event reaches it at all. A stock has no expiry and takes none of this; an expired leg takes
+     * none either, because there is nothing left to count down to.
+     */
+    countdown: 'Exp D-{n}',
+    /**
+     * The collapsed row names one position; this says how many more the event reaches.
+     *
+     * The partitive is not a flourish: `{n}` is `affects.length - 1`, so an event that reaches
+     * exactly two positions renders this with a 1 in it, and "+1 more positions" is the reading
+     * this phrasing exists to avoid. Korean needs none of that — `포지션 {n}개 더` counts either
+     * way — which is why the two sentences are shaped differently for once.
+     */
+    alsoAffects: '+{n} more of your positions',
+    // The block at the top of Markets: the next few dates, and the way through to the whole book.
+    // It appears only when there IS a book, so none of these is ever an empty state.
+    upcoming: {
+      title: 'Coming up',
+      /** `{n}` is the WHOLE book and not the three shown — the count is the reason to tap. */
+      seeAll: 'See all {n}',
+    },
+    /** Fewer than the target cleared the floor. The desk's own sentence goes under this. */
+    shortfallLabel: 'Why there aren’t more',
+    // Three empties, and they are three different facts. Only the first asks for anything: the
+    // other two are the desk saying so, and a sentence that sent somebody to check their settings
+    // over either would be sending them after a fault that is not there.
+    empty: {
+      needsDesk: 'The schedule comes from your desk. Add its address and an operator token in Settings.',
+      noBook: 'Your desk hasn’t filed a schedule yet. One is researched in the morning and again after the US close.',
+      nothingUpcoming: 'Everything in the schedule has already happened. The next one is filed in the morning.',
+    },
+    a11y: {
+      expand: 'Show the whole reason',
+      collapse: 'Hide the whole reason',
+      openSource: 'Open {host}',
+      /**
+       * The badge on a researched date whose host could not be read — a malformed source, or one
+       * carrying credentials, where `sourceBadge` refuses to name an authority it cannot vouch
+       * for. The mark is drawn but is not a link, so this labels a fact rather than an action.
+       *
+       * Named by WHERE THE DATE CAME FROM, in the vocabulary `settings.notify.kinds.researched`
+       * already settled for exactly this concept — singular here because it labels one row's
+       * badge rather than a switch over a whole kind. §8's promise is that a reader can always
+       * tell a researched date from a computed one; without this, a VoiceOver user got silence,
+       * which is indistinguishable from the computed date that carries no badge at all.
+       */
+      researched: 'Date found by research',
+      openSchedule: 'Open the full schedule',
     },
   },
 }

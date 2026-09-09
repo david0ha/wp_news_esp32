@@ -7,10 +7,31 @@
 // on every request, two scopes, and the same `{"ok": false, "error": ...}` envelope the board
 // itself answers refusals in.
 //
-// One route, for now:
+// The routes:
 //
 //   GET  /api/settings   (producer) -> { ok, source: 'file'|'default', settings: { lang } }
 //   PUT  /api/settings   (operator) { lang } -> the same shape, with what is now in force
+//   GET  /api/positions  (producer) -> { ok, positions: { updated_at, positions: [...] } }
+//   PUT  /api/positions  (operator) { positions: [...] } -> the same shape, now in force
+//   GET  /api/calendar   (producer) -> { ok, calendar: { generated_at, events: [...] } | null }
+//   GET  /api/push/devices          (operator) -> { ok, push: { devices: [...] } | null }
+//   POST /api/push/devices          (operator) one device -> the same shape, now in force
+//   DELETE /api/push/devices/<token> (operator) -> the same shape, or 404 for a token it never had
+//
+// The two scopes on `/api/positions` are not symmetric and the asymmetry is the point: the agent
+// READS the book to reason about it, but only the owner SAYS what they hold. An agent that could
+// rewrite the positions could arrange for the reasoning to be about a position nobody owns.
+//
+// `/api/calendar` has a PUT and this client does not have one, which is the same asymmetry read
+// from the other end: the event book is `producer` on BOTH verbs because the AGENT files it. It
+// is the output of a research run rather than a statement about the owner's money, so the phone
+// is a reader of it and nothing here can write one.
+//
+// `/api/push/devices` is the only document on this desk whose READ is operator-only, and the
+// reason is not privacy in the ordinary sense: an Expo push token is a *capability*. Whoever holds
+// one can put a line of text on the owner's lock screen from anywhere, with no further credential.
+// So the three methods below hold to the same rule this file already holds for the operator token —
+// it goes into a body or a path and nowhere else, and it is in the message of nothing thrown.
 //
 // `lang` is the language the NEWSPAPER is written in — not the app's own chrome, which is
 // `src/i18n/` and never leaves the phone. The desk's setting is what makes the producing agent
@@ -23,6 +44,8 @@
 // pasted into bug reports, and a token that reaches either is a token to be revoked.
 
 import { fill, strings } from '../i18n'
+import { parsePositionsDoc, positionsBody, type PositionsDoc } from './positions'
+import { parseCalendarDoc, type CalendarDoc } from './schedule'
 
 /** Long enough for a cold tunnel, short enough that a tap on a selector still feels like one. */
 export const DESK_TIMEOUT_MS = 15_000
@@ -31,6 +54,40 @@ export const DESK_TIMEOUT_MS = 15_000
 export interface DeskSettings {
   /** BCP-47 primary subtag — `en`, `ko`, or anything else the desk has been set to. */
   lang: string
+}
+
+/**
+ * One registered phone, as `push.parse_devices` normalises it.
+ *
+ * Typed at the WIRE's width rather than at the app's: `prefs` and `lead` are keyed by whatever the
+ * desk sent, not by this app's five switches. A desk one release ahead can carry a sixth kind, and
+ * a client that typed it as a closed record would have to either drop it or refuse the document —
+ * both of which are this app deciding something about a phone it does not own. `notify.ts` narrows
+ * it, for THIS phone's entry only, and leaves the rest alone.
+ */
+export interface PushDevice {
+  token: string
+  platform: string
+  tz: string
+  prefs: Record<string, boolean>
+  lead: Record<string, string[]>
+  /** ABSENT for a device with no quiet hours — `push._device` omits the key rather than nulling it. */
+  quiet?: { from: string; to: string } | null
+}
+
+/** Every phone the desk will send to. Empty for a desk that has never been registered with. */
+export interface PushDoc {
+  devices: PushDevice[]
+}
+
+/** One device, as `POST /api/push/devices` takes it. Built field by field — see `deviceBody`. */
+export interface PushDeviceBody {
+  token: string
+  platform: string
+  tz: string
+  prefs: Record<string, boolean>
+  lead: Record<string, string[]>
+  quiet?: { from: string; to: string }
 }
 
 /**
@@ -61,6 +118,24 @@ export class DeskError extends Error {
 }
 
 /**
+ * Every spelling of an Expo push token, wherever one turns up in prose.
+ *
+ * `push.py` holds this rule on the desk and calls it `_redact`; this is the same rule read from the
+ * other end, and it is needed for the same reason. A push token is a capability, and the desk's own
+ * refusals QUOTE what they refused — `push._token`'s message is `'<the token>' is not an Expo push
+ * token`, which arrives in `detail` and would otherwise be drawn on screen and pasted into a bug
+ * report. The desk redacts what it logs; this redacts what it says.
+ *
+ * The pattern is `push.TOKEN_RE`'s, both spellings, unanchored so it finds one inside a sentence.
+ */
+const PUSH_TOKEN = /Expo(?:nent)?PushToken\[[A-Za-z0-9_-]*\]/g
+
+/** `<redacted>`, the same word the desk writes, so a bug report reads alike from both ends. */
+export function redactPushTokens(text: string): string {
+  return text.replace(PUSH_TOKEN, '<redacted>')
+}
+
+/**
  * One sentence per failure, in the language the app is drawn in.
  *
  * The `http` arm is the only one that quotes the desk. `detail` is prose the desk wrote for
@@ -68,6 +143,12 @@ export class DeskError extends Error {
  * desk will not take — it is the only thing that says what was wrong with it. Passing it through
  * inside a catalogue sentence is better than swallowing it: the alternative is "the desk answered
  * 400", which sends the operator to read a server log they may not be able to reach.
+ *
+ * It goes through `redactPushTokens` on the way, and that is not belt-and-braces: `/api/push/devices`
+ * refuses a token BY QUOTING IT, so the one sentence in this app that exists to pass the desk's own
+ * words through is also the one place a capability can reach the screen. The redaction lives here
+ * rather than at the notification call site because `detail` is the desk's prose on every route,
+ * and nothing drawn anywhere in this app ever needs to show a push token.
  */
 export function humanDeskError(e: unknown): string {
   const m = strings().errors.desk
@@ -78,7 +159,7 @@ export function humanDeskError(e: unknown): string {
       case 'transport':
         return m.transport
       case 'http':
-        if (e.detail) return fill(m.refused, { detail: e.detail })
+        if (e.detail) return fill(m.refused, { detail: redactPushTokens(e.detail) })
         return e.status === undefined ? m.http : fill(m.httpStatus, { status: String(e.status) })
       case 'bad_json':
         return m.badJson
@@ -169,6 +250,27 @@ export interface DeskClientOptions {
 export interface DeskClient {
   getSettings(): Promise<DeskSettings>
   putSettings(settings: DeskSettings): Promise<DeskSettings>
+  /** The book of positions the desk holds. */
+  positions(): Promise<PositionsDoc>
+  /** Put a whole book in force. There is no partial write — see `putPositions`. */
+  putPositions(doc: PositionsDoc): Promise<PositionsDoc>
+  /**
+   * The event book, or `null` for a desk that has none. Read-only: the agent files this one.
+   *
+   * `null` is a STATE and not a failure, which is the one place this method does not mirror
+   * `positions()`. `h_get_calendar` serves `self.desk.calendar` straight and that field is `None`
+   * until an agent has filed a book — and again afterwards, whenever the positions change, because
+   * the desk forgets a book it can no longer prune against them. Reading a perfectly good answer
+   * as `bad_json` would put "the desk answered something this app cannot read" in front of
+   * somebody whose desk is simply new.
+   */
+  calendar(): Promise<CalendarDoc | null>
+  /** Every phone the desk will send to. A desk with no file at all answers an empty household. */
+  pushDevices(): Promise<PushDoc>
+  /** Register or replace ONE phone, by its token. Idempotent — the desk replaces, never appends. */
+  registerPushDevice(body: PushDeviceBody): Promise<PushDoc>
+  /** Forget one phone. Answers nothing: what matters is that the desk no longer holds the token. */
+  forgetPushDevice(token: string): Promise<void>
 }
 
 export function createDeskClient(opts: DeskClientOptions): DeskClient {
@@ -200,10 +302,11 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
   // A refusal, turned into the error the screen will draw. The envelope is best-effort: a proxy or
   // a tunnel in front of the desk answers HTML, and a 502 with no `error` field is still a 502.
   //
-  // The route names itself in the message rather than arriving as an argument. There is one route
-  // here, so a parameter would be a knob with a single setting that a reader has to check both
-  // call sites to rule out; the second route can add it back, and will say what it is for.
-  async function refusal(res: Response): Promise<DeskError> {
+  // `route` is the second route's doing, as the note this replaces said it would be. It names the
+  // document in the thrown message and nowhere else — the error the screen DRAWS comes from the
+  // catalogue via `humanDeskError` — so what it is for is a bug report: "positions responded 400"
+  // and "settings responded 400" are the same fact about two entirely different screens.
+  async function refusal(res: Response, route: string): Promise<DeskError> {
     let code: string | undefined
     let detail: string | undefined
     try {
@@ -214,12 +317,12 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // Not the desk's envelope. The status is what is left to say.
     }
     const kind: DeskErrorCode = res.status === 401 || res.status === 403 ? 'unauthorized' : 'http'
-    return new DeskError(kind, `settings responded ${res.status}`, res.status, code, detail)
+    return new DeskError(kind, `${route} responded ${res.status}`, res.status, code, detail)
   }
 
   // Every 2xx on this route answers the same document, so one reader serves both calls.
   async function settingsOf(res: Response): Promise<DeskSettings> {
-    if (!res.ok) throw await refusal(res)
+    if (!res.ok) throw await refusal(res, 'settings')
     let lang: unknown
     try {
       const body = JSON.parse(await res.text()) as { settings?: { lang?: unknown } }
@@ -235,6 +338,85 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       throw new DeskError('bad_json', 'settings answered without a language', res.status)
     }
     return { lang }
+  }
+
+  // The same job for the other document, and the same reason it is one function rather than two:
+  // a GET and a PUT answer the identical envelope, so a client that read them apart would have
+  // two chances to disagree with itself about what the desk said.
+  //
+  // A body this app cannot read is `bad_json` rather than an empty book, and that is the whole
+  // care in this function. A book drawn as empty is indistinguishable, on screen, from an owner
+  // who holds nothing — and the next PUT from that screen would make it true.
+  async function positionsOf(res: Response): Promise<PositionsDoc> {
+    if (!res.ok) throw await refusal(res, 'positions')
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', 'positions did not answer JSON', res.status)
+    }
+    const envelope = payload as { positions?: unknown } | null
+    const doc = parsePositionsDoc(envelope?.positions)
+    if (doc === null) {
+      throw new DeskError('bad_json', 'positions answered a book this app cannot read', res.status)
+    }
+    return doc
+  }
+
+  // The event book, read the same way and refused the same way, with one arm the positions
+  // document has no equivalent of: an envelope whose `calendar` is explicitly `null`.
+  //
+  // That arm is narrow on purpose. A MISSING key still fails — a 200 with no `calendar` at all is
+  // a desk not speaking this contract, the same fact `settingsOf` refuses a missing `lang` for —
+  // and only an explicit `null`, which is exactly what `h_get_calendar` serves for a desk with no
+  // book, reads as "no book". The two look alike in JavaScript and are completely different
+  // sentences on screen.
+  async function calendarOf(res: Response): Promise<CalendarDoc | null> {
+    if (!res.ok) throw await refusal(res, 'calendar')
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', 'calendar did not answer JSON', res.status)
+    }
+    const envelope = payload as { calendar?: unknown } | null
+    if (envelope !== null && typeof envelope === 'object' && envelope.calendar === null) return null
+    const doc = parseCalendarDoc(envelope?.calendar)
+    if (doc === null) {
+      throw new DeskError('bad_json', 'calendar answered a book this app cannot read', res.status)
+    }
+    return doc
+  }
+
+  // The household, read the same way. `push: null` is a desk that has never been registered with,
+  // and it reads as an EMPTY household rather than as an absent one — unlike `calendar`, where the
+  // difference is a sentence on screen. Here there is nothing to say: a desk with no file and a
+  // desk with an empty list will both send to nobody, and the phone's next act on either is the
+  // same POST.
+  //
+  // A device the desk sent that this reader cannot type is dropped rather than refused. The list
+  // may hold another phone entirely — an Android, an old handset, a release ahead of this one —
+  // and refusing the document over somebody else's entry would take this phone's own switch down
+  // with it.
+  async function pushOf(res: Response): Promise<PushDoc> {
+    if (!res.ok) throw await refusal(res, 'push')
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', 'push did not answer JSON', res.status)
+    }
+    const envelope = payload as { push?: unknown } | null
+    const push = envelope?.push
+    if (push === null || push === undefined) return { devices: [] }
+    if (typeof push !== 'object') {
+      throw new DeskError('bad_json', 'push answered a document this app cannot read', res.status)
+    }
+    const raw = (push as { devices?: unknown }).devices
+    if (!Array.isArray(raw)) {
+      throw new DeskError('bad_json', 'push answered a document this app cannot read', res.status)
+    }
+    return { devices: raw.filter(isPushDevice) }
   }
 
   return {
@@ -257,5 +439,81 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // draws this, never its own argument.
       return settingsOf(res)
     },
+
+    async positions(): Promise<PositionsDoc> {
+      return positionsOf(await send('/api/positions', { method: 'GET' }))
+    },
+
+    async putPositions(doc: PositionsDoc): Promise<PositionsDoc> {
+      // The body is built by `positionsBody` field by field, for the reason `putSettings` builds
+      // its own: the desk refuses an unknown key whole with `bad_positions`, and `strategy` — the
+      // field a GET puts on every option position — is refused *by name*, because it is derived
+      // and a supplied one could contradict the legs beside it. Echoing back what was read is
+      // therefore not a shortcut, it is a 400.
+      const res = await send('/api/positions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(positionsBody(doc)),
+      })
+      // What is in force, not what was asked for — and here that is more than a formality: the
+      // desk re-derives every `id` and every `strategy` from the legs it accepted, so this answer
+      // is the only place the app learns what its own write became.
+      return positionsOf(res)
+    },
+
+    async calendar(): Promise<CalendarDoc | null> {
+      return calendarOf(await send('/api/calendar', { method: 'GET' }))
+    },
+
+    async pushDevices(): Promise<PushDoc> {
+      return pushOf(await send('/api/push/devices', { method: 'GET' }))
+    },
+
+    async registerPushDevice(body: PushDeviceBody): Promise<PushDoc> {
+      // Field by field again, and here the refused key has a name worth knowing: `last_seen` is
+      // in the document a GET hands back and is stamped by the desk on the entry it just took, so
+      // a client that echoed a read straight back would be refused by the clock rather than by
+      // anything the owner touched. `deviceBody` is the only builder; nothing forwards a device.
+      const res = await send('/api/push/devices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return pushOf(res)
+    },
+
+    async forgetPushDevice(token: string): Promise<void> {
+      // The token is a path segment, so it is percent-encoded on the way out: Expo's spelling
+      // carries brackets, and the desk unquotes the path before it matches. It reaches the
+      // handler as the string the phone owns and is compared, never parsed.
+      const res = await send(`/api/push/devices/${encodeURIComponent(token)}`, { method: 'DELETE' })
+      // A 404 IS THE ANSWER THIS CALL WANTED. The desk says "no such device" for a token it does
+      // not hold, and a token it does not hold is exactly the state the owner asked for by
+      // turning the switch off. Treating it as a failure would leave the switch reporting on —
+      // and reporting on is a promise that the desk is still sending, which it is not.
+      if (!res.ok && res.status !== 404) throw await refusal(res, 'push')
+    },
   }
+}
+
+/**
+ * One entry from the desk's household, or nothing.
+ *
+ * A predicate rather than a parser because there is nothing to normalise: `push.parse_devices`
+ * has already refused anything malformed on the way IN, so an entry that fails this check is a
+ * desk speaking a contract this app does not know, and the honest thing is to leave it out of
+ * this phone's reckoning rather than to guess at it.
+ */
+function isPushDevice(v: unknown): v is PushDevice {
+  if (v === null || typeof v !== 'object') return false
+  const d = v as Record<string, unknown>
+  return (
+    typeof d.token === 'string' &&
+    typeof d.platform === 'string' &&
+    typeof d.tz === 'string' &&
+    typeof d.prefs === 'object' &&
+    d.prefs !== null &&
+    typeof d.lead === 'object' &&
+    d.lead !== null
+  )
 }

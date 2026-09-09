@@ -460,5 +460,128 @@ class SecretsTest(unittest.TestCase):
         self.assertEqual(deskclient.load_agent_env(self.tmp), {})
 
 
+class OwnersDocumentsTest(unittest.TestCase):
+    """The three documents a calendar run is seeded from, and the one line
+    between them: which absences are a first morning and which are a failure.
+
+    ``positions`` and ``calendar`` live on the desk, and the book is
+    *reasoning about them*. A run that filed while either could not be read
+    would file a book that reaches nothing, over a good one -- so a desk that
+    will not answer raises and the command fails loudly. ``econ`` is the desk
+    going outside on somebody's behalf, and a scraper having a bad afternoon
+    costs one tier-1 source rather than a morning.
+    """
+
+    def test_the_documents_come_back_whole(self):
+        book = {"updated_at": "2026-09-08T05:00:00Z", "positions": []}
+        desk, opener = client((200, json.dumps({"ok": True, "positions": book}).encode()))
+        self.assertEqual(desk.positions(), book)
+        self.assertEqual(opener.requests[0].get_method(), "GET")
+        self.assertTrue(opener.requests[0].full_url.endswith("/api/positions"))
+
+        desk, _ = client((200, json.dumps({"ok": True, "calendar": {"events": []}}).encode()))
+        self.assertEqual(desk.calendar(), {"events": []})
+
+    def test_an_explicit_null_is_a_first_run_and_not_a_failure(self):
+        # What the desk answers before the owner has filed anything: the
+        # documented first morning, which `loop.seed_positions` reports and
+        # carries on from.
+        desk, _ = client((200, json.dumps({"ok": True, "positions": None}).encode()))
+        self.assertIsNone(desk.positions())
+        desk, _ = client((200, json.dumps({"ok": True, "calendar": None}).encode()))
+        self.assertIsNone(desk.calendar())
+
+    def test_an_envelope_that_carries_no_document_raises(self):
+        # The case this whole method shape exists for. `_json` turns a proxy's
+        # HTML error page into {"ok": false, "error": "not_json"}, and a
+        # `doc.get("positions")` off that answers None -- which would read as
+        # "the owner holds nothing" and file a book about nothing over a good
+        # one. The key has to be *present*, not merely gettable.
+        for body in (b"<html>502 Bad Gateway</html>",
+                     json.dumps({"ok": True}).encode(),
+                     json.dumps([1, 2]).encode()):
+            with self.subTest(body=body[:20]):
+                desk, _ = client((200, body))
+                with self.assertRaises(RuntimeError):
+                    desk.positions()
+
+    def test_a_document_that_is_not_a_document_raises(self):
+        desk, _ = client((200, json.dumps({"ok": True, "calendar": []}).encode()))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.calendar()
+        self.assertIn("list", str(caught.exception))
+
+    def test_a_desk_that_will_not_answer_raises_rather_than_seeding_nothing(self):
+        for answer in ((500, b"boom"), (404, b""),
+                       urllib.error.URLError("connection refused")):
+            with self.subTest(answer=answer):
+                desk, _ = client(answer)
+                with self.assertRaises(Exception):
+                    desk.positions()
+
+    def test_the_token_is_not_in_the_refusal(self):
+        desk, _ = client((500, b"Authorization: Bearer " + TOKEN.encode()))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.calendar()
+        self.assertNotIn(TOKEN, str(caught.exception))
+
+    def test_the_economic_window_is_asked_for_by_both_dates(self):
+        desk, opener = client((200, json.dumps(
+            {"ok": True, "events": [{"date": "2026-09-10"}]}).encode()))
+        self.assertEqual(desk.econ("2026-09-08", "2026-11-07"),
+                         [{"date": "2026-09-10"}])
+        self.assertIn("from=2026-09-08&to=2026-11-07", opener.requests[0].full_url)
+
+    def test_a_window_the_desk_will_not_serve_is_none_rather_than_a_raise(self):
+        # `directives()`'s posture, not `positions()`'. The book files with one
+        # fewer tier-1 source and says so in its shortfall; it does not skip a
+        # morning because investing.com is behind a challenge.
+        for answer in ((502, b"econ: TimeoutError"), (500, b""),
+                       urllib.error.URLError("no route to host"),
+                       http.client.BadStatusLine("\n"),
+                       (200, b"<html>a proxy</html>"),
+                       (200, json.dumps({"ok": True}).encode())):
+            with self.subTest(answer=answer):
+                desk, _ = client(answer)
+                self.assertIsNone(desk.econ("2026-09-08", "2026-11-07"))
+
+    def test_an_empty_window_is_an_answer_and_not_a_failure(self):
+        # A genuinely quiet fortnight. `None` means "could not ask"; this is
+        # "asked, and nothing is scheduled", and the two must not collapse.
+        desk, _ = client((200, json.dumps({"ok": True, "events": []}).encode()))
+        self.assertEqual(desk.econ("2026-09-08", "2026-11-07"), [])
+
+    def test_a_date_that_is_not_one_never_reaches_the_query_string(self):
+        # Both parameters are formatted straight into a URL. The desk refuses
+        # a malformed one by name, but this client is the last place that
+        # knows it built them.
+        desk, opener = client()
+        for bad in ("2026-9-8", "", "yesterday", "2026-09-08&limit=999"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    desk.econ(bad, "2026-11-07")
+        self.assertEqual(opener.requests, [])
+
+    def test_the_book_goes_up_exactly_as_it_was_written(self):
+        # The bytes rather than a re-serialisation: the desk owns the only
+        # validator, and what it judges must be what the run wrote.
+        data = b'{"events": [], "shortfall": "\xed\x95\x9c \xea\xb0\x9c"}'
+        desk, opener = client((200, json.dumps({"ok": True, "calendar": {}}).encode()))
+        desk.put_calendar(data)
+        req = opener.requests[0]
+        self.assertEqual(req.get_method(), "PUT")
+        self.assertTrue(req.full_url.endswith("/api/calendar"))
+        self.assertEqual(req.data, data)
+
+    def test_a_refused_book_raises_with_the_desks_own_words(self):
+        # The desk names the field that did it, and that message is the whole
+        # of what an operator gets back on the failed command.
+        desk, _ = client((400, b'{"error":"bad_calendar",'
+                               b'"detail":"events[3].source is required"}'))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.put_calendar(b"{}")
+        self.assertIn("events[3].source", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

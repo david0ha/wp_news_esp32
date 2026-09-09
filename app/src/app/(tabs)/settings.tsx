@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -13,6 +15,7 @@ import { useFocusEffect, useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
+import { Chip } from '../../components/Chip'
 import { InfoRow } from '../../components/InfoRow'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { useDevice } from '../../lib/device'
@@ -20,6 +23,7 @@ import { humanError, type DeviceInfo, type DeviceState } from '../../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../../lib/discovery'
 import {
   clearNewsUrlPending,
+  deskScheme,
   getDeskBaseUrl,
   getDeviceBaseUrl,
   getNewsUrl,
@@ -34,6 +38,33 @@ import {
   humanDeskError,
 } from '../../lib/desk'
 import { clearDeskToken, getDeskToken, saveDeskToken } from '../../lib/deskToken'
+import {
+  applyNotifyPrefs,
+  askPermission,
+  decideNotify,
+  decideRelease,
+  DEFAULT_PREFS,
+  DEFAULT_QUIET,
+  fetchPushToken,
+  findRegistration,
+  LEADS,
+  notifyView,
+  phoneZone,
+  PUSH_KINDS,
+  pushPlatform,
+  readPermission,
+  releaseThisPhone,
+  shouldAttemptRelease,
+  turnOffNotifications,
+  turnOnNotifications,
+  validateQuiet,
+  type DeskAnswer,
+  type Lead,
+  type NotifyPrefs,
+  type NotifyStep,
+  type PermissionState,
+  type ReleaseControl,
+} from '../../lib/notify'
 import {
   decideNewsUrlSave,
   settleNewsUrlSync,
@@ -78,6 +109,31 @@ export default function Settings() {
     const [url, pending] = await Promise.all([getNewsUrl(), isNewsUrlPending()])
     setLocalUrl(url)
     setPendingSync(pending)
+  }, [])
+
+  // The desk's address and the operator token, read once and held HERE rather than inside the
+  // section that edits them. TWO sections depend on them now: the desk's own, and Notifications,
+  // which cannot register a phone without both. Left inside `DeskSection` they would be invisible
+  // to the second — and the commonest first run of this feature is exactly the order that breaks:
+  // paste the address, paste the token, scroll down, turn notifications on. The Notifications
+  // section would still be holding the nulls it read on mount and would say "add the desk's
+  // address" to somebody who had just added it two rows above.
+  const [deskAddress, setDeskAddress] = useState<string | null>(null)
+  const [deskToken, setDeskToken] = useState<string | null>(null)
+  const [deskLoaded, setDeskLoaded] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const [saved, held] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+      if (!active) return
+      setDeskAddress(saved)
+      setDeskToken(held)
+      setDeskLoaded(true)
+    })()
+    return () => {
+      active = false
+    }
   }, [])
 
   // Reconnect ("find board") UI state.
@@ -449,7 +505,20 @@ export default function Settings() {
             edition URL and no credential at all. What is here is what an OWNER can do that nobody
             else can — say what language their newspaper is written in.
           */}
-          <DeskSection />
+          <DeskSection
+            address={deskAddress}
+            token={deskToken}
+            loaded={deskLoaded}
+            onAddress={setDeskAddress}
+            onToken={setDeskToken}
+          />
+
+          {/*
+            Notifications, last, because everything in it is about a desk that already has an
+            address and a token — and because it is the only section on this screen that asks the
+            phone itself for anything. The permission prompt is spent here and nowhere else.
+          */}
+          <NotifySection address={deskAddress} token={deskToken} loaded={deskLoaded} />
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
@@ -517,14 +586,33 @@ type Toned = { tone: 'ok' | 'info' | 'error'; message: string }
  * for the phone that is being handed on.
  *
  * The address is not a secret and is prefilled, like every other address on this screen.
+ *
+ * BOTH SAVED VALUES COME FROM THE SCREEN, not from this component's own read of storage. They were
+ * local here until Notifications needed the same two facts, and a second component reading the
+ * same two keys on its own mount is two components that can disagree about them for as long as
+ * this tab is up — see the note beside the state in `Settings`. This section still owns the
+ * WRITES; it hands each one up as it lands.
  */
-function DeskSection() {
+function DeskSection({
+  address,
+  token,
+  loaded,
+  onAddress,
+  onToken,
+}: {
+  /** The saved desk address, or `null`. Meaningless until `loaded`. */
+  address: string | null
+  /** Whether a token is held. The value is never drawn — see above. */
+  token: string | null
+  /** Storage has answered about both. */
+  loaded: boolean
+  onAddress: (address: string | null) => void
+  onToken: (token: string | null) => void
+}) {
   const s = useStrings()
-  // What is SAVED, both of them. The drafts beside them are what is being typed.
-  const [address, setAddress] = useState<string | null>(null)
+  // What is being typed, beside what is saved. The drafts are this section's alone.
   const [addressDraft, setAddressDraft] = useState('')
   const [addressMsg, setAddressMsg] = useState<Toned | null>(null)
-  const [token, setToken] = useState<string | null>(null)
   const [tokenDraft, setTokenDraft] = useState('')
   const [tokenMsg, setTokenMsg] = useState<Toned | null>(null)
   // What the desk says it is set to — `null` until it has answered, and again if it stops
@@ -532,10 +620,27 @@ function DeskSection() {
   const [lang, setLang] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [langMsg, setLangMsg] = useState<Toned | null>(null)
-  // Storage has answered about both. Until it has, `address` and `token` being null means "not
-  // read yet" rather than "not saved", and the note under the selector must not read it as the
-  // second — see `deskLanguageView`.
-  const [loaded, setLoaded] = useState(false)
+  /**
+   * WHICH control has already reported that this phone could not be taken off the desk's list.
+   *
+   * Per control, and cleared whenever the desk changes. It was a bare boolean shared by both, never
+   * reset, in a tab that mounts once — so a warning raised by a failed "Forget token" was spent by
+   * a later "Save address": no read, no DELETE, no message, address overwritten, and the desk left
+   * holding a token nothing could ever delete because the DELETE needs the address that had just
+   * been replaced. A warning belongs to the act it was raised about.
+   */
+  const [warned, setWarned] = useState<ReleaseControl | null>(null)
+
+  // A failure to reach one desk says nothing about the next, in either direction: a new address is
+  // a different desk, and a new operator token may authenticate where the old one could not.
+  useEffect(() => {
+    setWarned(null)
+  }, [address, token])
+
+  // Which of the two severing controls is working, so the other can be held and the pressed one can
+  // spin. A release is up to three round trips — a desk read, an Expo token and a desk delete — and
+  // both of these buttons sat live and silent through all of it.
+  const [working, setWorking] = useState<ReleaseControl | null>(null)
 
   // Whether this section is still on screen, for the one handler that awaits the NETWORK. The
   // effects below have their own `active` flags; a handler has no cleanup to hang one on, and
@@ -548,23 +653,13 @@ function DeskSection() {
     }
   }, [])
 
-  // Read both once, on mount rather than on focus. Neither changes behind this screen's back —
-  // this is the only place in the app that writes either — so re-reading on every focus would be
-  // two storage reads to learn what the component already holds, and would fight the drafts.
+  // The field follows the saved address. It runs twice on a cold open — once for the null before
+  // storage answers, once for what it answered — and after that only when a save changes the
+  // address, which is exactly when the field should be showing the normalised form rather than
+  // what was typed. Typing does not change `address`, so it cannot be clobbered mid-word.
   useEffect(() => {
-    let active = true
-    void (async () => {
-      const [saved, held] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
-      if (!active) return
-      setAddress(saved)
-      setAddressDraft(saved ?? '')
-      setToken(held)
-      setLoaded(true)
-    })()
-    return () => {
-      active = false
-    }
-  }, [])
+    setAddressDraft(address ?? '')
+  }, [address])
 
   // Ask the desk what it is set to, whenever there is an address and a token to ask with. Both
   // arms matter: losing either (a forgotten token) has to clear the language too, or the selector
@@ -598,16 +693,79 @@ function DeskSection() {
     }
   }, [address, token])
 
+  /**
+   * TAKE THIS PHONE OFF THE DESK'S LIST BEFORE CUTTING THE APP OFF FROM THAT DESK.
+   *
+   * Both controls below sever the phone from the desk it is registered with — forgetting the token
+   * removes the credential, changing the address points the app somewhere else — and both do it in
+   * the direction that cannot be undone. The desk goes on holding the push token and goes on
+   * sending; the app can no longer authenticate to it; the DELETE that would stop it is unreachable
+   * from every screen the app has. There is no recovery inside the product, so the fix is to make
+   * the orphan impossible rather than survivable, and that means going first rather than warning
+   * afterwards.
+   *
+   * Answers whether the caller may proceed. A `released` or a `nothing` is a yes. An `unsure` is a
+   * no THE FIRST TIME: it says what could not be established and what a second tap will do, and the
+   * second tap goes ahead — because the owner may be forgetting the token of a desk that no longer
+   * exists, and an app that refused outright would trap them with a credential they cannot remove.
+   * The choice is theirs; being told is not optional.
+   */
+  const releaseFirst = async (control: ReleaseControl): Promise<boolean> => {
+    // Whether to spend the round trips at all. The second tap of the control that was already
+    // warned about does not re-ask — the owner has read the sentence and decided — but a tap of
+    // the OTHER control does, because it was never warned about and the network may have come back
+    // since. `decideRelease` then says what happened, in one place for both callers.
+    const step = shouldAttemptRelease(control, warned)
+      ? await releaseThisPhone({
+          client: address && token ? createDeskClient({ baseUrl: address, token }) : null,
+          token: fetchPushToken,
+        })
+      : null
+    if (!alive.current) return false
+    const decision = decideRelease(control, warned, step)
+    setWarned(decision.warned)
+    setTokenMsg(
+      decision.tone && decision.message
+        ? { tone: decision.tone, message: decision.message }
+        : null,
+    )
+    return decision.proceed
+  }
+
   const applyAddress = async () => {
+    // The buttons are disabled while a release is out, but both fields also submit on return, so
+    // the guard is on the handler and not only on the control. This is the answer to "can a second
+    // tap reach anything during the busy window": it cannot.
+    if (working) return
     setAddressMsg(null)
-    if (!(await saveDeskBaseUrl(addressDraft))) {
+    setTokenMsg(null)
+    // Normalised HERE rather than by letting `saveDeskBaseUrl` do it, because the address must not
+    // be written until the old desk has let this phone go — a save that landed and a release that
+    // did not would leave storage pointing at the new desk while the app's state still described
+    // the old one. `deskScheme` then `normalizeBaseUrl` is exactly what the store does.
+    const norm = normalizeBaseUrl(deskScheme(addressDraft))
+    if (!norm.ok || !norm.value) {
+      setAddressMsg({ tone: 'error', message: s.settings.desk.addressInvalid })
+      return
+    }
+    const next = norm.value
+    // Only a CHANGE of desk orphans anything. Re-saving the address already in force is a no-op
+    // and must not cost this phone its registration.
+    if (next !== address) {
+      setWorking('address')
+      const proceed = await releaseFirst('address')
+      if (!alive.current) return
+      setWorking(null)
+      if (!proceed) return
+    }
+    if (!(await saveDeskBaseUrl(next))) {
       setAddressMsg({ tone: 'error', message: s.settings.desk.addressInvalid })
       return
     }
     // Read back rather than trusting the draft: the store normalizes (it drops a trailing slash
     // and any path), and the field should show what will actually be called.
     const saved = await getDeskBaseUrl()
-    setAddress(saved)
+    onAddress(saved)
     setAddressDraft(saved ?? '')
     setAddressMsg({ tone: 'ok', message: s.settings.desk.addressSaved })
   }
@@ -619,6 +777,9 @@ function DeskSection() {
   // does NOT clear the saved token: forgetting one is a button of its own, and an accidental
   // return should never be the way somebody loses the credential that is working.
   const applyToken = async () => {
+    // Saving a token severs nothing, so it needs no release — but it must not land in the middle of
+    // one, because the client the release is using was built from the token it would replace.
+    if (working) return
     setTokenMsg(null)
     const typed = tokenDraft.trim()
     const outcome = await saveDeskToken(typed)
@@ -630,16 +791,25 @@ function DeskSection() {
       setTokenMsg({ tone: 'error', message: s.settings.desk.tokenNotSaved })
       return
     }
-    setToken(typed)
+    onToken(typed)
     setTokenDraft('')
     setTokenMsg({ tone: 'ok', message: s.settings.desk.tokenSaved })
   }
 
+  // Forgetting the token is the other way to orphan a registration, and the worse one: it removes
+  // the only credential that could ever delete the device, so the desk is left sending to a phone
+  // the app can no longer speak for. The release goes first, and an `unsure` stops the first tap.
   const forgetToken = async () => {
-    await clearDeskToken()
-    setToken(null)
-    setTokenDraft('')
+    if (working) return
     setTokenMsg(null)
+    setWorking('token')
+    const proceed = await releaseFirst('token')
+    if (!alive.current) return
+    setWorking(null)
+    if (!proceed) return
+    await clearDeskToken()
+    onToken(null)
+    setTokenDraft('')
     setLangMsg(null)
   }
 
@@ -699,10 +869,21 @@ function DeskSection() {
           />
         </View>
         {addressMsg ? <Text style={TONE[addressMsg.tone]}>{addressMsg.message}</Text> : null}
+        {/*
+          `loading` on the one that was pressed, `disabled` on both while either is out. A release
+          is a desk read, an Expo token and a desk delete — up to forty-five seconds against a dead
+          desk — and these two buttons used to sit live and silent through all of it, one of them
+          destructive.
+        */}
         <Button
           label={s.settings.desk.saveAddress}
           variant="secondary"
-          disabled={!addressDraft.trim() || addressDraft.trim() === (address ?? '')}
+          disabled={
+            !addressDraft.trim() ||
+            addressDraft.trim() === (address ?? '') ||
+            working !== null
+          }
+          loading={working === 'address'}
           onPress={applyAddress}
         />
       </View>
@@ -736,11 +917,17 @@ function DeskSection() {
         <Button
           label={s.settings.desk.saveToken}
           variant="secondary"
-          disabled={!tokenDraft.trim()}
+          disabled={!tokenDraft.trim() || working !== null}
           onPress={applyToken}
         />
         {token ? (
-          <Button label={s.settings.desk.forgetToken} variant="ghost" onPress={forgetToken} />
+          <Button
+            label={s.settings.desk.forgetToken}
+            variant="ghost"
+            disabled={working !== null}
+            loading={working === 'token'}
+            onPress={forgetToken}
+          />
         ) : null}
       </View>
 
@@ -756,6 +943,458 @@ function DeskSection() {
       {langMsg ? <Text style={TONE[langMsg.tone]}>{langMsg.message}</Text> : null}
     </Section>
   )
+}
+
+/**
+ * Notifications: the master switch, the five kinds, their lead times, and quiet hours.
+ *
+ * THIS COMPONENT DECIDES NOTHING. `notifyView` says what is drawn, `decideNotify` says what a
+ * touch came to, and `turnOnNotifications` / `turnOffNotifications` / `applyNotifyPrefs` do the
+ * work — all of them in `lib/notify.ts`, all of them tested. What is left here is state and JSX,
+ * deliberately, because this app has no way to render a screen under test: a failure path argued
+ * inside one branch of a `?:` is a failure path argued only in prose, and this feature has four
+ * outcomes on its master switch and a fifth on the way back off.
+ *
+ * THE PUSH TOKEN LIVES IN THIS COMPONENT'S STATE AND NOWHERE ELSE. Not AsyncStorage, not the
+ * keychain, not a log. It is fetched from Expo when it is needed, held for as long as this screen
+ * is up, and handed to the desk in one body and one path. A token is a capability to write on the
+ * owner's lock screen; the cost of re-fetching one is a round trip, and the cost of persisting one
+ * is that it is somewhere it can be read.
+ *
+ * `prefs === null` IS "NOT REGISTERED", and it is the single source of the switch's position. Every
+ * outcome either sets it, clears it, or deliberately leaves it alone — a failed forget leaves it
+ * alone, which is what keeps the switch on over a desk that is still sending.
+ */
+function NotifySection({
+  address,
+  token,
+  loaded,
+}: {
+  address: string | null
+  token: string | null
+  /** Storage has answered about both, so `null` means "none saved" rather than "not read". */
+  loaded: boolean
+}) {
+  const s = useStrings()
+  const t = s.settings.notify
+
+  // Two constants of the install rather than state. `Platform.OS` cannot change and the zone can
+  // only change with the phone's own settings, which restarts this screen.
+  const platform = useMemo(() => pushPlatform(Platform.OS), [])
+  const tz = useMemo(() => phoneZone(), [])
+
+  const [permission, setPermission] = useState<PermissionState | null>(null)
+  // The Expo push token for this install. In memory, for this screen's life. See above.
+  const [pushToken, setPushToken] = useState<string | null>(null)
+  /**
+   * WHAT THE DESK HAS SAID, and the `prefs` beside it are only meaningful when it says `holding`.
+   *
+   * Two fields rather than `prefs === null`, which is the whole of this round's worst finding: a
+   * single nullable document cannot tell "the desk does not hold this phone" from "the desk could
+   * not be asked", so the discovery `catch` wrote the first when it meant the second — a switch
+   * drawn OFF, with no sentence, over a desk still sending.
+   */
+  const [desk, setDesk] = useState<DeskAnswer>('unknown')
+  const [prefs, setPrefs] = useState<NotifyPrefs | null>(null)
+  // Bumped by the retry button, to ask the desk again without leaving the screen. This is a
+  // persistent tab: it mounts once, so without this an `unreachable` sticks for the session.
+  const [asks, setAsks] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<Toned | null>(null)
+  const [offerSettings, setOfferSettings] = useState(false)
+  // The two quiet-hour fields, which are the only controls here that are typed rather than tapped
+  // and therefore the only ones with a draft of their own.
+  const [fromDraft, setFromDraft] = useState(DEFAULT_QUIET.from)
+  const [toDraft, setToDraft] = useState(DEFAULT_QUIET.to)
+  const [quietMsg, setQuietMsg] = useState<Toned | null>(null)
+  // The OS has answered. Separate from `loaded`, which is about storage: both have to be in before
+  // the switch can say anything, and they arrive from different places at different times.
+  const [asked, setAsked] = useState(false)
+
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+
+  const client = useMemo(
+    () => (address && token ? createDeskClient({ baseUrl: address, token }) : null),
+    [address, token],
+  )
+
+  // What the OS says, asked WITHOUT prompting. This is the one read that happens on its own, and
+  // it is a read: `getPermissionsAsync` shows nothing and cannot spend the one prompt.
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      let state: PermissionState = 'undetermined'
+      try {
+        state = await readPermission()
+      } catch {
+        // A permissions module that will not answer is a phone that will not deliver, which is the
+        // same fact as a denial everywhere above here. Not logged: the message is a library's.
+        state = 'denied'
+      }
+      if (active) {
+        setPermission(state)
+        setAsked(true)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  /**
+   * Whether the DESK is holding this phone — the only thing that decides where the switch stands.
+   *
+   * IT RUNS WHATEVER THE PERMISSION IS, and that is deliberate rather than thorough. A phone that
+   * registered and then revoked notifications in the OS is the state this feature is worst at: iOS
+   * throws every push away without telling Expo, so nothing ever prunes the device and the desk
+   * sends forever. The only way out is the DELETE, the DELETE needs the push token, and the token
+   * is reachable — APNs registration is not gated on the alert permission, and neither is FCM's.
+   * Skipping the read for a denied phone was what made that state permanent.
+   *
+   * A FAILURE HERE IS `unreachable` AND NOT `not_holding`. They were the same value until this
+   * round, and the difference is the difference between a switch that says "I could not find out"
+   * and one that says "you are not registered" to somebody whose phone is buzzing.
+   */
+  useEffect(() => {
+    if (!client) {
+      setDesk('unknown')
+      setPrefs(null)
+      return
+    }
+    let active = true
+    setDesk('unknown')
+    void (async () => {
+      try {
+        const mine = await fetchPushToken()
+        const doc = await client.pushDevices()
+        if (!active) return
+        const held = findRegistration(doc, mine)
+        setPushToken(mine)
+        setPrefs(held)
+        setDesk(held ? 'holding' : 'not_holding')
+      } catch {
+        // Not logged: the thrown message can be the desk quoting the token back at us.
+        if (!active) return
+        setPrefs(null)
+        setDesk('unreachable')
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [client, asks])
+
+  // The fields follow whatever window is actually IN FORCE, so opening the section on a phone with
+  // quiet hours set shows those hours rather than the defaults.
+  //
+  // The dependencies are the two clock strings and not the object they sit in. `prefs` is replaced
+  // wholesale on every change — a kind switched off replaces it too — so depending on the object
+  // would reset both fields under somebody halfway through typing a time, for a change that had
+  // nothing to do with the window.
+  useEffect(() => {
+    if (prefs?.quiet) {
+      setFromDraft(prefs.quiet.from)
+      setToDraft(prefs.quiet.to)
+    }
+  }, [prefs?.quiet?.from, prefs?.quiet?.to])
+
+  /**
+   * One place where an outcome becomes what the screen holds. Every handler ends here, so there is
+   * no arm of this feature whose reporting lives in a branch of JSX.
+   *
+   * `decision.desk` IS THE SWITCH. The screen used to keep its own reckoning of where the switch
+   * stood and let `decideNotify` return a `boolean on` that nothing read — so the tests asserted
+   * one thing and the product did another, and the two had already drifted. Now there is one
+   * answer: the decision says what the step established about the desk, `null` means it
+   * established nothing, and the last thing the desk actually said stands.
+   */
+  const settle = useCallback((step: NotifyStep) => {
+    const decision = decideNotify(step)
+    if (decision.desk !== null) setDesk(decision.desk)
+    // The documents that travel with the answer. `change_failed` carries what the desk turned out
+    // to be holding, which may not be either the old document or the new one.
+    if (step.step === 'on') {
+      setPushToken(step.token)
+      setPrefs(step.prefs)
+      setPermission('granted')
+    } else if (step.step === 'off') {
+      setPrefs(null)
+    } else if (step.step === 'saved') {
+      setPrefs(step.prefs)
+    } else if (step.step === 'change_failed') {
+      setPrefs(step.held)
+    } else if (step.step === 'denied') {
+      setPermission('denied')
+    }
+    setMsg(decision.tone && decision.message ? { tone: decision.tone, message: decision.message } : null)
+    setOfferSettings(decision.openSettings)
+  }, [])
+
+  const toggleMaster = async (on: boolean) => {
+    setBusy(true)
+    setMsg(null)
+    setOfferSettings(false)
+    const step = on
+      ? await turnOnNotifications({
+          client,
+          platform,
+          tz,
+          permission: readPermission,
+          request: askPermission,
+          token: fetchPushToken,
+          // A phone turning this on again in the same session gets the switches it was last
+          // showing rather than the defaults; a fresh one gets the desk's own.
+          prefs: prefs ?? DEFAULT_PREFS,
+        })
+      : await turnOffNotifications({ client, token: pushToken })
+    if (!alive.current) return
+    setBusy(false)
+    settle(step)
+  }
+
+  // A changed preference document, put in force. Optimism is deliberate: the switch moves under
+  // the finger and `settle` puts it back if the desk refuses, which is the only honest order —
+  // a control that waits out a round trip before moving reads as broken on a slow tunnel.
+  const change = async (next: NotifyPrefs) => {
+    const previous = prefs
+    setPrefs(next)
+    setBusy(true)
+    setMsg(null)
+    const step = await applyNotifyPrefs({ client, token: pushToken, platform, tz, prefs: next })
+    if (!alive.current) return
+    setBusy(false)
+    // Back to the old document first, then `settle` — which overwrites it again from `held` on a
+    // `change_failed`, because a POST whose answer was lost may well have landed and the desk's
+    // own answer beats both guesses.
+    if (step.step !== 'saved') setPrefs(previous)
+    settle(step)
+  }
+
+  const view = notifyView({
+    loaded: loaded && asked,
+    ready: Boolean(address) && Boolean(token),
+    supported: platform !== null,
+    permission,
+    desk,
+    busy,
+  })
+  const note =
+    view.note === 'needs_desk'
+      ? t.needsDesk
+      : view.note === 'unsupported'
+        ? t.unsupported
+        : view.note === 'blocked'
+          ? t.blocked
+          : view.note === 'blocked_registered'
+            ? t.blockedRegistered
+            : view.note === 'unreachable'
+              ? t.unreachable
+              : null
+
+  const saveQuiet = async () => {
+    setQuietMsg(null)
+    const outcome = validateQuiet(fromDraft, toDraft)
+    if (!outcome.ok) {
+      setQuietMsg({
+        tone: 'error',
+        message: outcome.reason === 'same' ? t.quiet.same : t.quiet.shape,
+      })
+      return
+    }
+    if (!prefs) return
+    await change({ ...prefs, quiet: outcome.quiet })
+  }
+
+  // Turning the window on sends the DRAFTS when they are a window the desk will take, and the
+  // defaults when they are not. The drafts can be anything at that moment — somebody can type a
+  // time, switch the window off, and switch it back on — and sending an unparseable pair would
+  // spend a round trip to be told what `validateQuiet` already knows, under a switch that had
+  // just sprung back for no reason the owner could see.
+  const toggleQuiet = async (on: boolean) => {
+    if (!prefs) return
+    setQuietMsg(null)
+    if (!on) {
+      await change({ ...prefs, quiet: null })
+      return
+    }
+    const outcome = validateQuiet(fromDraft, toDraft)
+    const quiet = outcome.ok ? outcome.quiet : DEFAULT_QUIET
+    setFromDraft(quiet.from)
+    setToDraft(quiet.to)
+    await change({ ...prefs, quiet })
+  }
+
+  return (
+    <Section title={s.settings.sections.notifications}>
+      <Text style={styles.help}>{t.help}</Text>
+
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>{t.master}</Text>
+        <Switch
+          value={view.on}
+          disabled={view.disabled}
+          onValueChange={(on) => void toggleMaster(on)}
+          trackColor={{ false: colors.surfaceAlt, true: colors.accentBright }}
+          thumbColor={colors.white}
+          ios_backgroundColor={colors.surfaceAlt}
+        />
+      </View>
+      {note ? <Text style={styles.help}>{note}</Text> : null}
+      {msg ? <Text style={TONE[msg.tone]}>{msg.message}</Text> : null}
+      {/*
+        Drawn for the one outcome nothing in this app can fix. A denied permission is the phone's
+        own setting and only the phone's own settings can change it, so the button that goes there
+        is the whole of the remedy.
+      */}
+      {offerSettings ? (
+        <Button
+          label={t.openSettings}
+          variant="ghost"
+          onPress={() => void Linking.openSettings()}
+        />
+      ) : null}
+      {/*
+        Offered only where asking again IS the remedy — a desk that did not answer. Settings is a
+        persistent tab and mounts once, so without a control the owner cannot get the section to
+        try again without restarting the app, and an `unreachable` would stand for the session.
+      */}
+      {view.retry ? (
+        <Button label={t.retry} variant="ghost" onPress={() => setAsks((n) => n + 1)} />
+      ) : null}
+
+      {view.detail && prefs ? (
+        <>
+          {/*
+            A hairline above each row, which is also a hairline under the master switch — and that
+            is the one that matters. Without it the six switches are a flat list of equals, and
+            they are not: the five here answer to the one above, and nothing else on the row tells
+            them apart. Same shape, same type, same control, one after another.
+          */}
+          {PUSH_KINDS.map((kind) => (
+            <View key={kind} style={[styles.field, styles.ruled]}>
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>{t.kinds[kind]}</Text>
+                <Switch
+                  value={prefs.prefs[kind]}
+                  disabled={busy}
+                  onValueChange={(on) =>
+                    void change({ ...prefs, prefs: { ...prefs.prefs, [kind]: on } })
+                  }
+                  trackColor={{ false: colors.surfaceAlt, true: colors.accentBright }}
+                  thumbColor={colors.white}
+                  ios_backgroundColor={colors.surfaceAlt}
+                />
+              </View>
+              {prefs.prefs[kind] ? (
+                <>
+                  <View style={styles.chipRow} accessibilityLabel={t.leadLabel}>
+                    {LEADS.map((lead) => (
+                      <Chip
+                        key={lead}
+                        label={t.leads[lead]}
+                        active={prefs.lead[kind].includes(lead)}
+                        disabled={busy}
+                        onPress={() =>
+                          void change({
+                            ...prefs,
+                            lead: { ...prefs.lead, [kind]: toggleLead(prefs.lead[kind], lead) },
+                          })
+                        }
+                      />
+                    ))}
+                  </View>
+                  {/*
+                    A real setting the desk supports on purpose, and one that looks exactly like a
+                    broken switch: on, and nothing will ever be sent. It says so rather than
+                    leaving the owner to notice over a week of silence.
+                  */}
+                  {prefs.lead[kind].length === 0 ? (
+                    <Text style={styles.help}>{t.noLead}</Text>
+                  ) : null}
+                </>
+              ) : null}
+            </View>
+          ))}
+
+          <View style={[styles.switchRow, styles.ruled]}>
+            <Text style={styles.deskLabel}>{t.quiet.label}</Text>
+            <Switch
+              value={prefs.quiet !== null}
+              disabled={busy}
+              onValueChange={(on) => void toggleQuiet(on)}
+              trackColor={{ false: colors.surfaceAlt, true: colors.accentBright }}
+              thumbColor={colors.white}
+              ios_backgroundColor={colors.surfaceAlt}
+            />
+          </View>
+          <Text style={styles.help}>{t.quiet.help}</Text>
+          {prefs.quiet ? (
+            <View style={styles.field}>
+              <View style={styles.timeRow}>
+                <View style={styles.timeField}>
+                  <Text style={styles.help}>{t.quiet.from}</Text>
+                  <TextInput
+                    value={fromDraft}
+                    onChangeText={(v) => {
+                      setFromDraft(v)
+                      setQuietMsg(null)
+                    }}
+                    // A 24-hour clock is the same characters in every language, so the placeholder
+                    // is a literal rather than a catalogue entry that can be mistranslated.
+                    placeholder="22:00"
+                    placeholderTextColor={colors.textFaint}
+                    keyboardType="numbers-and-punctuation"
+                    autoCorrect={false}
+                    maxLength={5}
+                    style={styles.hostInput}
+                    onSubmitEditing={() => void saveQuiet()}
+                  />
+                </View>
+                <View style={styles.timeField}>
+                  <Text style={styles.help}>{t.quiet.to}</Text>
+                  <TextInput
+                    value={toDraft}
+                    onChangeText={(v) => {
+                      setToDraft(v)
+                      setQuietMsg(null)
+                    }}
+                    placeholder="07:00"
+                    placeholderTextColor={colors.textFaint}
+                    keyboardType="numbers-and-punctuation"
+                    autoCorrect={false}
+                    maxLength={5}
+                    style={styles.hostInput}
+                    onSubmitEditing={() => void saveQuiet()}
+                  />
+                </View>
+              </View>
+              {quietMsg ? <Text style={TONE[quietMsg.tone]}>{quietMsg.message}</Text> : null}
+              <Button
+                label={t.quiet.save}
+                variant="secondary"
+                disabled={
+                  busy || (fromDraft === prefs.quiet.from && toDraft === prefs.quiet.to)
+                }
+                onPress={() => void saveQuiet()}
+              />
+            </View>
+          ) : null}
+        </>
+      ) : null}
+    </Section>
+  )
+}
+
+/** One lead chip tapped: in if it was out, out if it was in, and the order the desk stores. */
+function toggleLead(held: readonly Lead[], lead: Lead): Lead[] {
+  const next = held.includes(lead) ? held.filter((l) => l !== lead) : [...held, lead]
+  return LEADS.filter((l) => next.includes(l))
 }
 
 /**
@@ -906,6 +1545,43 @@ const styles = StyleSheet.create({
   },
   field: {
     gap: 8,
+  },
+  // A label and a control on one line, with the control at the trailing edge — the shape the
+  // platform's own settings use for a switch, and the only row on this screen that has one.
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.md,
+  },
+  switchLabel: {
+    flex: 1,
+    fontFamily: fonts.medium,
+    fontSize: 15,
+    color: colors.text,
+  },
+  // A hairline above a row, to separate the switches that answer to the master one from the master
+  // one itself. `space.md` of air above the rule and the row's own gap below it, so the line sits
+  // between two rows rather than crowding the one it belongs to.
+  ruled: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingTop: space.md,
+  },
+  // The six lead chips. They wrap because six of them do not fit a phone's width, and a row that
+  // scrolled sideways would hide the shortest lead behind an edge with nothing to say it is there.
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space.sm,
+  },
+  timeRow: {
+    flexDirection: 'row',
+    gap: space.md,
+  },
+  timeField: {
+    flex: 1,
+    gap: space.xs,
   },
   hostRow: {
     flexDirection: 'row',
