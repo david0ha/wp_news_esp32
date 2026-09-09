@@ -230,7 +230,8 @@ CORS.
 
 `eas.json` carries three profiles — `development` (dev client), `preview` (internal
 distribution) and `production` (store). The production profile has `autoIncrement` on with the
-version source remote: the build number lives with EAS, so nothing here needs bumping per build.
+version source remote: EAS Build increments the remote build number. A direct local
+`xcodebuild` does not; reserve a unique number in EAS and set it in the generated native project.
 
 ```sh
 npm install -g eas-cli && eas login    # once
@@ -243,6 +244,12 @@ live — in EAS's credential store and, if you want the prompts gone, in `EXPO_A
 `EXPO_APPLE_TEAM_ID` in your shell — never in a committed file, which is why `eas.json` carries
 no `appleId` or `ascAppId`. TestFlight needs the app to exist in App Store Connect with the
 matching bundle id (`com.claudepost.app`); `eas submit` offers to create it.
+
+For a local Archive → IPA → EAS Submit release, follow
+[`../docs/app-testflight-release.md`](../docs/app-testflight-release.md). It covers the
+Xcode capability-cache and keychain signing failures, version checks, credential cleanup,
+and the difference between upload success and TestFlight availability. Local compilation
+does not consume an EAS cloud-build allocation; submit the verified IPA with `--path`.
 
 **Forks:** `app.json`'s `extra.eas.projectId` names *this* app's Expo project. Run `eas init`
 in your fork to claim your own before the first build.
