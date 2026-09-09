@@ -85,6 +85,16 @@ startup, and tools may recreate internal directories. Before and after updates, 
 the selected Xcode, mount path, symlinks, available runtimes, existing-device boot and app
 build/install. This arrangement does not guarantee that every future update preserves it.
 
+External-volume access is also controlled by macOS privacy permissions. If existing devices
+disappear after linking and CoreSimulator logs report `Operation not permitted`, inspect
+the TCC log for `kTCCServiceSystemPolicyRemovableVolumes` and the responsible process.
+The service may be attributed to `com.apple.CoreSimulator.CoreSimulatorService` separately
+from the Simulator application. A user must grant the required access in macOS Privacy &
+Security; changing file modes does not grant it. Do not edit the TCC database or disable
+privacy protection. Restore the original path while permission is pending, retain the SSD
+copy, and repeat synchronization and validation after access is granted. Do not create
+replacement devices or report reclaimed internal space before migration validation passes.
+
 Modern runtime MobileAsset storage under SIP-protected `/System/Library/AssetsV2` and
 system Simulator dyld caches are separate from user device data. Leave their placement to
 macOS; do not disable SIP or replace system storage directories with links. The installed
