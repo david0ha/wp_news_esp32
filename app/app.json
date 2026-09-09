@@ -3,7 +3,7 @@
     "name": "Claude Post",
     "slug": "claudepost-companion",
     "scheme": "claudepost",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "locales": {
@@ -48,7 +48,12 @@
       ],
       "expo-localization",
       "expo-secure-store",
-      "expo-notifications"
+      [
+        "expo-notifications",
+        {
+          "mode": "production"
+        }
+      ]
     ],
     "extra": {
       "router": {},
