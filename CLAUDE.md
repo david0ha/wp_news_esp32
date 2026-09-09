@@ -529,6 +529,7 @@ agent/                    an example worker that files into the desk, plus the s
 - [docs/pinout.md](docs/pinout.md) — GPIO assignments and the four traps
 - [docs/board-hardware.md](docs/board-hardware.md) — hardware notes
 - [docs/app-control.md](docs/app-control.md) — the companion-app HTTP/JSON contract
+- [docs/app-testflight-release.md](docs/app-testflight-release.md) — local iOS archive, signing recovery, version checks, and EAS Submit; read before releasing the companion app
 - [docs/simulator.md](docs/simulator.md) — the desktop simulator and what it asserts
 - [docs/esp-idf-development.md](docs/esp-idf-development.md) — install / build / flash / menuconfig
 - [docs/references.md](docs/references.md) — datasheets and upstream sources
