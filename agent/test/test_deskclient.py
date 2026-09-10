@@ -426,24 +426,52 @@ class SecretsTest(unittest.TestCase):
 
     def test_agent_env_is_preferred(self):
         # Two files can hold a token and they can disagree. agent.env is the one
-        # a human edited last, so it wins.
+        # a human edited last, so it wins. environ={} is explicit here -- these
+        # cases are about the FILE, and a bare read_token(self.tmp) would let a
+        # developer's own CLAUDEPOST_TOKEN in their shell win instead and change
+        # what this test is exercising.
         self.write("agent.env", 'ANTHROPIC_API_KEY=sk-x\nCLAUDEPOST_TOKEN="from-env"\n')
         self.write("tokens.json", json.dumps(
             {"tokens": [{"scope": "producer", "token": "from-json"}]}))
-        self.assertEqual(deskclient.read_token(self.tmp), "from-env")
+        self.assertEqual(deskclient.read_token(self.tmp, {}), "from-env")
 
     def test_tokens_json_is_the_fallback(self):
         self.write("tokens.json", json.dumps(
             {"tokens": [{"scope": "operator", "token": "op"},
                         {"scope": "producer", "token": "from-json"}]}))
-        self.assertEqual(deskclient.read_token(self.tmp), "from-json")
+        self.assertEqual(deskclient.read_token(self.tmp, {}), "from-json")
 
     def test_neither_is_a_hard_exit(self):
         # Not a retry loop: a worker that cannot authenticate will not start
         # being able to, and a container that exits is a container somebody sees.
         with self.assertRaises(SystemExit) as caught:
-            deskclient.read_token(self.tmp)
+            deskclient.read_token(self.tmp, {})
         self.assertEqual(caught.exception.code, 2)
+
+    def test_the_token_can_arrive_as_the_environment(self):
+        # The container arrangement: ~/.claudepost/agent.env is read by compose
+        # ON THE HOST and handed to the loop as environment. It is not mounted,
+        # because a bind mount's mode is not enforced on Docker Desktop for Mac
+        # -- a 0600 file mounted in was read straight out by an unprivileged
+        # user when this was measured. The environment is the one place the
+        # kernel does keep another uid out.
+        self.assertEqual(
+            deskclient.read_token(self.tmp, {"CLAUDEPOST_TOKEN": "from-the-env"}),
+            "from-the-env")
+
+    def test_the_environment_wins_over_a_file(self):
+        # "What this process was started with" beats "what somebody wrote once",
+        # which is agent/run-host.sh's rule for its own .env as well.
+        with open(os.path.join(self.tmp, "agent.env"), "w") as f:
+            f.write("CLAUDEPOST_TOKEN=from-the-file\n")
+        self.assertEqual(
+            deskclient.read_token(self.tmp, {"CLAUDEPOST_TOKEN": "from-the-env"}),
+            "from-the-env")
+
+    def test_a_host_run_still_reads_the_file(self):
+        with open(os.path.join(self.tmp, "agent.env"), "w") as f:
+            f.write("CLAUDEPOST_TOKEN=from-the-file\n")
+        self.assertEqual(deskclient.read_token(self.tmp, {}), "from-the-file")
 
     def test_the_child_environment_excludes_the_desk_token(self):
         # The token authorises writing to the desk. The child process is a model

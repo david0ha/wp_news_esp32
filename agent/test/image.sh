@@ -16,9 +16,10 @@
 #   2. `gosu model` lands on uid 10001, a different uid from the loop's.
 #   3. the model cannot read the loop's environment, which is the only place
 #      the desk token exists inside this container.
-#   4. no agent.env anywhere in the filesystem -- the credentials arrive as the
-#      loop's environment, because a bind-mounted file's mode is NOT enforced
-#      on Docker Desktop for Mac. A 0600 file mounted in was read straight out
+#   4. no file named agent.env anywhere in the filesystem -- searched, not
+#      assumed by checking one path. The credentials arrive as the loop's
+#      environment, because a bind-mounted file's mode is NOT enforced on
+#      Docker Desktop for Mac. A 0600 file mounted in was read straight out
 #      by an unprivileged user when this was measured.
 #   5. Pillow imports, because tools/make_tile.py exits without it and the
 #      failure lands forty minutes into a filing run.
@@ -57,9 +58,15 @@ run 'python3 -c "import PIL"' >/dev/null 2>&1 \
     || note "Pillow is not importable; tools/make_tile.py would refuse and the paper
   would come out without photographs"
 
-if run 'test -e /run/secrets/agent.env'; then
-    note "there is an agent.env in the image; the credentials are supposed to arrive
-  as the loop's environment, because a bind mount's mode is not enforced here"
+# The whole filesystem, not one path: the credentials are supposed to arrive
+# only as the loop's environment, and a single-path check asserts nothing once
+# the mount that path used to name is gone. /proc, /sys and /dev are pruned so
+# the search is quick and quiet -- none of the three can hold a real file.
+found=$(run 'find / \( -path /proc -o -path /sys -o -path /dev \) -prune \
+        -o -type f -name agent.env -print 2>/dev/null') || true
+if [ -n "$found" ]; then
+    note "found an agent.env in the image at: $found; the credentials are supposed to
+  arrive as the loop's environment, because a bind mount's mode is not enforced here"
 fi
 
 # The one property that IS enforced by the kernel rather than by a mount option.

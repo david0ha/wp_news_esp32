@@ -46,18 +46,30 @@ services:
       AGENT_TOOLS: ${AGENT_TOOLS:-}
       # On by default: the child inherits no MCP servers -- see claude_argv.
       AGENT_STRICT_MCP: ${AGENT_STRICT_MCP:-1}
-      # Empty means <secrets>/watchlist.json -- which the mount below makes
-      # READ-ONLY, so a container seeds the rotation but cannot advance it.
-      # Deliberate: the secrets hold the token. Point this at a writable mount
-      # if this container should keep the cursor itself; see agent/.env.example.
-      CLAUDEPOST_WATCHLIST: ${CLAUDEPOST_WATCHLIST:-}
+      # The user every `claude` turn is handed to. Empty would run the model as
+      # the loop, which is root here -- so this is the wall, and the image sets
+      # it too. agent/test/image.sh is where it is checked rather than assumed.
+      AGENT_RUN_AS: ${AGENT_RUN_AS:-model}
+      # /state rather than beside the token: the secrets are not a mount any
+      # more (see env_file below), and the rotation needs a writable one -- see
+      # the /state volume below.
+      CLAUDEPOST_WATCHLIST: /state/watchlist.json
       CLAUDEPOST_ONCE: ${CLAUDEPOST_ONCE:-0}
       CLAUDEPOST_LOG_LEVEL: ${CLAUDEPOST_LOG_LEVEL:-INFO}
       TZ: ${TZ:-UTC}
+
+    # The producer token and the Claude credential, read by COMPOSE, ON THE
+    # HOST, and handed to the loop as its environment. Not a volume, and the
+    # difference is the whole security argument: a bind-mounted file's mode is
+    # NOT enforced on Docker Desktop for Mac. A file reported as `-rw------- 0 0`
+    # was read straight out by an unprivileged container user when this was
+    # measured, so `model` could open a mounted agent.env whatever it was
+    # chmodded to. It cannot open /proc/<loop pid>/environ -- different uid, and
+    # the kernel does enforce that one.
+    env_file:
+      - ${HOME}/.claudepost/agent.env
+
     volumes:
-      # Tokens and the API key. Read-only, and outside the repository, because
-      # the repository is public and git history is permanent.
-      - ${HOME}/.claudepost:/run/secrets:ro
       # Bring your own continuity. Uncomment this line and set
       # AGENT_CONTEXT_DIR in agent/.env to a directory on THIS machine -- a
       # folder of an Obsidian vault, a git checkout of notes, anything. Nothing
@@ -66,6 +78,13 @@ services:
       # Read-only: what the worker may write is the briefs, and that is
       # AGENT_WRITE_BRIEFS plus a `:rw` here, both deliberate.
       # - ${AGENT_CONTEXT_DIR}:/context:ro
+      #
+      # The rotation cursor, and only that. Writable, which the old
+      # /run/secrets:ro mount could not be -- so until now a container seeded
+      # the watch list and could never advance it. Nothing confidential goes
+      # here: this file is copied into the workdir in front of the model every
+      # run, by design.
+      - ${HOME}/.claudepost/state:/state
       #
       # The workdir for one edition: the prompt's output, the tiles, and the
       # proof sheets fetched back to look at. Named rather than a bind mount --

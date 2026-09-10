@@ -33,6 +33,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 
 LOG = logging.getLogger("worker.desk")
 
@@ -506,24 +507,41 @@ class DeskClient:
             raise self._fail("put calendar", status, raw)
 
 
-def read_token(secrets: str) -> str:
-    """The producer token, from the mounted secrets directory.
+def read_token(secrets: str, environ: Mapping[str, str] | None = None) -> str:
+    """The producer token: from the environment, then the mounted directory.
 
     Args:
-        secrets: the directory ``~/.claudepost`` is mounted at, read-only.
+        secrets: the directory ``~/.claudepost`` is mounted at, when it is.
+        environ: the process environment; ``os.environ`` by default. An
+            argument so that a test can state one rather than patch one.
 
-    Two shapes are accepted because two things write them: ``agent.env`` is what
-    a human edits, ``tokens.json`` is what the desk reads. ``agent.env`` wins
-    when both hold one, because it is the one somebody edited last.
+    Three shapes are accepted because three things write them, and the order is
+    "what this process was started with" before "what somebody wrote once" --
+    which is also ``agent/run-host.sh``'s rule for its own ``.env``.
+
+    The environment is first because it is the container's route and the only
+    one that holds. ``agent/compose.yaml`` reads ``~/.claudepost/agent.env`` on
+    the HOST, through ``env_file``, and the file is not mounted at all: a
+    bind-mounted file's mode is not enforced on Docker Desktop for Mac -- a
+    0600 file mounted in was read straight out by an unprivileged container user
+    when this was measured -- so ``model`` could open a mounted ``agent.env``
+    however it was chmodded. It cannot open ``/proc/<loop>/environ``, because
+    that is a different uid and the kernel does enforce that one.
+
+    ``agent.env`` and ``tokens.json`` follow, for a host run where neither is a
+    problem: there the turn runs as the operator anyway.
 
     Neither is ever logged, and a missing token is a hard exit rather than a
-    loop that retries forever against a 401 -- a worker that cannot
-    authenticate will not start being able to, and a container that exits is a
-    container somebody notices.
+    loop that retries forever against a 401.
 
     Raises:
         SystemExit: with code 2, when there is no producer token to be had.
     """
+    env = os.environ if environ is None else environ
+    token = env.get("CLAUDEPOST_TOKEN")
+    if token:
+        return token
+
     env_path = os.path.join(secrets, "agent.env")
     token = _read_env_file(env_path).get("CLAUDEPOST_TOKEN")
     if token:
@@ -537,8 +555,9 @@ def read_token(secrets: str) -> str:
             if entry.get("scope") == "producer":
                 return entry["token"]
 
-    LOG.error("no producer token: put CLAUDEPOST_TOKEN in %s, or a producer entry in %s",
-              env_path, tokens_path)
+    LOG.error("no producer token: set CLAUDEPOST_TOKEN in this process's "
+              "environment (agent/compose.yaml's env_file does it), or put it "
+              "in %s, or a producer entry in %s", env_path, tokens_path)
     raise SystemExit(2)
 
 

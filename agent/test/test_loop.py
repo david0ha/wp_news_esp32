@@ -1403,12 +1403,19 @@ class WatchlistTest(unittest.TestCase):
         with open(self.path, encoding="utf-8") as f:
             return json.load(f)
 
-    def test_the_default_lives_beside_the_token_not_in_the_scratch(self):
-        # <secrets>/watchlist.json: the operator's own directory, which survives
-        # a container being rebuilt and a scratch volume being pruned. The
-        # rotation is the one piece of worker state that must outlive both.
+    def test_the_default_is_the_state_mount_and_not_the_secrets_one(self):
+        # It used to default beside the token, in /run/secrets -- which is
+        # mounted read-only, correctly, because it held one. The consequence was
+        # that a container could seed the rotation and never advance it. The
+        # secrets are not a mount any more (compose hands them to the loop as
+        # environment), so the cursor gets a mount of its own, writable, holding
+        # nothing confidential: the watch list is seeded into the workdir in
+        # front of the model on purpose.
         self.assertEqual(loop.Settings.from_env({}).watchlist,
-                         "/run/secrets/watchlist.json")
+                         "/state/watchlist.json")
+        self.assertEqual(
+            loop.Settings.from_env({"CLAUDEPOST_WATCHLIST": "/tmp/w.json"}).watchlist,
+            "/tmp/w.json")
 
     def test_no_watchlist_anywhere_is_not_an_error(self):
         # The contract already covers this: "if it is missing, write one and say
@@ -1479,21 +1486,45 @@ class WatchlistTest(unittest.TestCase):
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
                      "root ignores directory modes; the refusal cannot be staged")
-    def test_a_read_only_secrets_mount_is_a_warning_not_a_failure(self):
-        # The container mounts ~/.claudepost read-only, which is right: it holds
-        # the token. Losing a rotation cursor is not a reason to fail a filing
-        # that has already reached the glass.
+    def test_a_read_only_watchlist_directory_is_a_warning_not_a_failure(self):
+        # This used to be about the secrets mount specifically -- ~/.claudepost
+        # was read-only because it held the token, and a container that lost
+        # its write there still had to keep the filing it had already made. The
+        # secrets are not a mount at all any more (compose hands the token to
+        # the loop as environment), and the cursor's own mount, /state, is
+        # writable. What the assertion still pins is more general and still
+        # true: whatever the reason a rotation write cannot land -- a
+        # misconfigured mount, a full filesystem reporting EROFS, anything --
+        # losing a rotation cursor is not a reason to fail a filing that has
+        # already reached the glass.
         self.write({"symbols": ["NVDA"], "last": "NVDA"})
         self.write_work({"symbols": ["NVDA"], "last": "AAPL"})
-        # The directory rather than the file: the container mounts the whole
-        # secrets directory read-only, and a rename-based write never opens the
-        # target file at all -- the temp file beside it is what cannot be
+        # The directory rather than the file: a rename-based write never opens
+        # the target file at all -- the temp file beside it is what cannot be
         # created. (The earlier in-place writer was tested with a chmodded
         # file; that write path no longer exists.)
         os.chmod(self.tmp, 0o555)
         self.addCleanup(os.chmod, self.tmp, 0o755)
         self.assertFalse(loop.persist_watchlist(self.settings(), self.work))
         self.assertEqual(self.back()["last"], "NVDA")
+
+    def test_the_file_keeps_its_owner_when_a_root_loop_replaces_it(self):
+        # The loop is root inside the container, and this writes into a
+        # directory the operator owns on the host. Without this the first
+        # rotation advance leaves them a root-owned watchlist.json on any host
+        # that maps uids honestly. os.chown is patched rather than called: this
+        # test does not run as root either.
+        cfg = self.settings()
+        self.write({"symbols": ["AAAA"], "last": "AAAA"})
+        before = os.stat(self.path)
+        self.write_work({"symbols": ["AAAA", "BBBB"], "last": "BBBB"})
+        with mock.patch("os.chown") as chown:
+            self.assertTrue(loop.persist_watchlist(cfg, self.work))
+        chown.assert_called_once()
+        self.assertEqual(chown.call_args.args[1:], (before.st_uid, before.st_gid))
+        # And the rename still happened: the owner is carried across a replace,
+        # not instead of one.
+        self.assertEqual(self.back()["last"], "BBBB")
 
 
 class StandaloneParityTest(unittest.TestCase):

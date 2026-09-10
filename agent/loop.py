@@ -246,11 +246,11 @@ class Settings:
             secrets=secrets,
             repo=env.get("CLAUDEPOST_REPO", "/repo"),
             scratch=env.get("CLAUDEPOST_SCRATCH", "/scratch"),
-            # Beside the token rather than in the scratch: the scratch is made
-            # fresh per command, and the rotation is the one piece of state that
-            # has to outlive both a command and a container.
-            watchlist=(env.get("CLAUDEPOST_WATCHLIST")
-                       or os.path.join(secrets, WATCHLIST_NAME)),
+            # /state rather than beside the token: the secrets are not a mount
+            # any more, and the rotation needs a writable one. Nothing
+            # confidential goes here -- the watch list is seeded into the
+            # workdir in front of the model on purpose.
+            watchlist=(env.get("CLAUDEPOST_WATCHLIST") or "/state/watchlist.json"),
             context_dir=env.get("AGENT_CONTEXT_DIR") or None,
             write_briefs=env.get("AGENT_WRITE_BRIEFS", "0").strip().lower() in _TRUTHY,
             once=env.get("CLAUDEPOST_ONCE", "0").strip().lower() in _TRUTHY,
@@ -446,10 +446,9 @@ def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = N
     # `GET /api/positions`, which is the owner's strikes, sizes and entry
     # prices, where before this branch it read editions.
     if env.pop("CLAUDEPOST_TOKEN", None) is not None:
-        LOG.warning("CLAUDEPOST_TOKEN was in this process's environment; "
-                    "keeping it out of the child. The worker reads it from "
-                    "%s and the child has no use for it.",
-                    os.path.join(cfg.secrets, "agent.env"))
+        LOG.debug("the desk token is in this process's environment, which is "
+                  "where compose's env_file puts it; keeping it out of the "
+                  "child, which has no use for it.")
     # The metered key comes out when the subscription can pay instead.
     # run-host.sh unsets it from its own environment, but agent.env -- the file
     # a container operator is told to keep, and the file run-host.sh advertises
@@ -679,10 +678,9 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
     empty list or a truncated write would end the rotation permanently and
     silently, which is a worse failure than the run having advanced nothing.
 
-    A read-only secrets directory -- which is how ``agent/compose.yaml`` mounts
-    it, correctly, because it holds the token -- is a warning and not a failure.
-    Losing a cursor is not a reason to fail a filing that already reached the
-    glass.
+    A directory the loop cannot write into -- a misconfigured mount, a full
+    filesystem -- is a warning and not a failure. Losing a cursor is not a
+    reason to fail a filing that already reached the glass.
     """
     path = os.path.join(workdir, WATCHLIST_NAME)
     data = _read_watchlist(path, "the watch list came back too large to be "
@@ -707,6 +705,16 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
     try:
         with open(tmp, "wb") as f:
             f.write(data)
+        # The loop is root inside the container and this file is the operator's,
+        # on a mount they own. Carry the owner across rather than leaving them a
+        # root-owned watch list after the first rotation advance. Best effort:
+        # on a host where the loop is not root this is a no-op that raises, and
+        # a cursor is not worth failing a filing over.
+        try:
+            before = os.stat(cfg.watchlist)
+            os.chown(tmp, before.st_uid, before.st_gid)
+        except OSError:
+            pass
         os.replace(tmp, cfg.watchlist)
     except OSError as e:
         try:
