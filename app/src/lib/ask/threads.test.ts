@@ -1,4 +1,5 @@
-import { describe, it, expect } from '@jest/globals'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals'
 import {
   isWorking,
   lastCommandId,
@@ -6,8 +7,12 @@ import {
   newTurnId,
   nextThreads,
   readResult,
+  readThreads,
+  sanitizeThreads,
+  THREADS_KEY,
   threadIsWorking,
   threadOfCommand,
+  writeThreads,
   type Thread,
   type Turn,
 } from './threads'
@@ -316,5 +321,87 @@ describe('the questions the poll and the router ask', () => {
 
   it('mints an id that is unique within a millisecond', () => {
     expect(newTurnId(1000, 0)).not.toBe(newTurnId(1000, 1))
+  })
+})
+
+describe('sanitizeThreads — what survives a read off disk', () => {
+  it('reads back what the reducer wrote', () => {
+    expect(sanitizeThreads(JSON.parse(JSON.stringify(pending())))).toEqual(pending())
+  })
+
+  it('drops a thread it cannot read without taking the others with it', () => {
+    // A thread is the owner's own history. Refusing the whole file over one bad entry would throw
+    // away every conversation because of one.
+    const good = pending()
+    expect(sanitizeThreads([{ id: 42 }, ...good, { turns: 'no' }])).toEqual(good)
+  })
+
+  it('drops a turn with an unknown status rather than a whole thread', () => {
+    const raw = JSON.parse(JSON.stringify(pending())) as Array<{ turns: unknown[] }>
+    raw[0].turns.push({ id: 'x', commandId: null, text: 'x', lang: 'en', sentAt: 1, status: 'zzz', result: null, answer: null, error: null })
+    expect(sanitizeThreads(raw)[0].turns).toHaveLength(1)
+  })
+
+  it('drops a thread left with no turns at all', () => {
+    expect(sanitizeThreads([{ id: 'th1', turns: [] }])).toEqual([])
+  })
+
+  it('reads anything that is not a list as no threads', () => {
+    expect(sanitizeThreads(null)).toEqual([])
+    expect(sanitizeThreads({ threads: [] })).toEqual([])
+  })
+})
+
+describe('threads on disk', () => {
+  beforeEach(async () => {
+    await AsyncStorage.clear()
+  })
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('is namespaced under this board’s own name, and the literal is pinned', () => {
+    // Renaming this key is not a refactor: every install already carrying threads would wake up
+    // with none, the same way `store.ts` pins its three.
+    expect(THREADS_KEY).toBe('claudepost.threads')
+  })
+
+  it('writes and reads back the same conversations', async () => {
+    await writeThreads(pending())
+    expect(await readThreads()).toEqual(pending())
+  })
+
+  it('reads an empty store as no conversations', async () => {
+    expect(await readThreads()).toEqual([])
+  })
+
+  it('reads something that is not JSON as no conversations', async () => {
+    await AsyncStorage.setItem(THREADS_KEY, 'not json')
+    expect(await readThreads()).toEqual([])
+  })
+
+  it('reads a store that threw as no conversations rather than crashing a screen', async () => {
+    // `...Once`, not the persistent form: the official AsyncStorage mock's methods are already
+    // `jest.fn()`s, so spying on one and overriding it permanently leaves nothing real for
+    // `restoreAllMocks()` to restore — the next test's calls would keep rejecting. A one-shot
+    // rejection is exactly what this test needs and does not carry that trap; `deskToken.test.ts`
+    // uses the same idiom for the same reason.
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk'))
+    expect(await readThreads()).toEqual([])
+  })
+
+  it('never writes more than the cap', async () => {
+    const many = Array.from({ length: MAX_THREADS + 5 }, (_, i) => ({
+      id: `th${i}`,
+      turns: pending()[0].turns,
+    }))
+    await writeThreads(many)
+    expect(await readThreads()).toHaveLength(MAX_THREADS)
+  })
+
+  it('swallows a failed write — a lost thread costs a refetch, a crash costs the screen', async () => {
+    // Same reasoning as the read above: `...Once` so this test's rejection does not outlive it.
+    jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('disk full'))
+    await expect(writeThreads(pending())).resolves.toBeUndefined()
   })
 })

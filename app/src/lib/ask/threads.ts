@@ -22,6 +22,8 @@
 // its own ids. That is `editionState.ts`'s rule and it exists for the same reason: this app has no
 // component test runner, so anything decided inside a hook body is argued only in prose.
 
+import AsyncStorage from '@react-native-async-storage/async-storage'
+
 import { COMMAND_STATUSES, type Command, type CommandStatus } from '../desk'
 
 /**
@@ -255,4 +257,92 @@ export function lastCommandId(thread: Thread): string | null {
  */
 export function newTurnId(now: number, seq: number): string {
   return `t${now.toString(36)}-${seq.toString(36)}`
+}
+
+// ---------------------------------------------------------------------------
+// On disk
+// ---------------------------------------------------------------------------
+//
+// One AsyncStorage key holding the list. No schema version and no migration: the read sanitizes,
+// so a record written by a newer build degrades to the turns this build can read rather than
+// crashing a launch. That is `edition/store.ts`'s argument, and it holds here for a smaller record.
+//
+// NOTHING IN A THREAD IS A CREDENTIAL. The token is in the keychain and reaches one header; a
+// thread holds the owner's own words, the desk's answer and six identifiers. AsyncStorage is a
+// plain file in the app's container, which is the right place for exactly that and no more.
+
+/** Namespaced like every other key this app owns. The literal is load-bearing — see `store.ts`. */
+export const THREADS_KEY = 'claudepost.threads'
+
+function isTurnStatus(v: unknown): v is TurnStatus {
+  return typeof v === 'string' && (TURN_STATUSES as readonly string[]).includes(v)
+}
+
+function sanitizeTurn(raw: unknown): Turn | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.id !== 'string' || o.id === '') return null
+  if (typeof o.text !== 'string') return null
+  if (!isTurnStatus(o.status)) return null
+  return {
+    id: o.id,
+    commandId: typeof o.commandId === 'string' ? o.commandId : null,
+    text: o.text,
+    lang: typeof o.lang === 'string' ? o.lang : '',
+    sentAt: typeof o.sentAt === 'number' && Number.isFinite(o.sentAt) ? o.sentAt : 0,
+    status: o.status,
+    result: typeof o.result === 'string' ? o.result : null,
+    answer: typeof o.answer === 'string' ? o.answer : null,
+    error: typeof o.error === 'string' ? o.error : null,
+  }
+}
+
+/**
+ * Every conversation worth returning, and the granularity is the point.
+ *
+ * A bad TURN loses a turn; a bad THREAD loses a thread; neither loses the file. This is the
+ * owner's own history, and refusing all of it over one unreadable entry is the failure mode a
+ * whole-document check has — `pushOf` drops a device it cannot type for the same reason.
+ */
+export function sanitizeThreads(raw: unknown): Thread[] {
+  if (!Array.isArray(raw)) return []
+  const out: Thread[] = []
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const o = entry as Record<string, unknown>
+    if (typeof o.id !== 'string' || o.id === '') continue
+    if (!Array.isArray(o.turns)) continue
+    const turns = o.turns.map(sanitizeTurn).filter((t): t is Turn => t !== null)
+    // A thread with nothing left in it is not a thread. Keeping it would draw an empty row that
+    // opens an empty screen.
+    if (turns.length === 0) continue
+    out.push({ id: o.id, turns })
+  }
+  return out.slice(0, MAX_THREADS)
+}
+
+export async function readThreads(): Promise<Thread[]> {
+  let raw: string | null
+  try {
+    raw = await AsyncStorage.getItem(THREADS_KEY)
+  } catch {
+    // A read that threw is not an answer, and nothing is cached from it: the next call asks the
+    // disk again rather than inheriting a wrong "no conversations" for the session.
+    return []
+  }
+  if (raw === null || raw === undefined) return []
+  try {
+    return sanitizeThreads(JSON.parse(raw))
+  } catch {
+    return []
+  }
+}
+
+export async function writeThreads(threads: Thread[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(THREADS_KEY, JSON.stringify(threads.slice(0, MAX_THREADS)))
+  } catch {
+    // Best-effort: what this costs is one conversation not surviving a relaunch. Throwing would
+    // cost the screen that was drawing it.
+  }
 }
