@@ -75,6 +75,7 @@ import {
 import { wizardEntryHref } from '../../onboarding/flow'
 import { validateNewsUrl, newsUrlErrorMessage } from '../../lib/newsurl'
 import { probeEdition } from '../../lib/edition/probe'
+import { editionUrl, isDerived } from '../../lib/edition/source'
 import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../../lib/format'
 import { APP_LANGUAGES, fill, useLanguage, useStrings, type AppLanguage } from '../../i18n'
 import { colors, fonts, layout, radius, space, type } from '../../theme'
@@ -370,6 +371,9 @@ export default function Settings() {
                 initial={pendingSync ? localUrl : (source?.url ?? localUrl)}
                 pending={pendingSync}
                 hasBoard={hasDevice}
+                // What Today is reading when this field is empty. Without it the field is blank,
+                // the paper arrives anyway, and the two facts have nothing on screen joining them.
+                derived={isDerived(localUrl, deskAddress) ? editionUrl(localUrl, deskAddress) : null}
                 onSave={async (next) => {
                   setSyncRejected(null)
                   // What the attempt means — persist or not, pending or not, which voice — is
@@ -1432,12 +1436,15 @@ function NewsUrlEditor({
   initial,
   pending,
   hasBoard,
+  derived,
   onSave,
 }: {
   initial: string
   pending: boolean
   /** Tri-state, from `useDevice`. `null` is "storage has not answered", never "no board". */
   hasBoard: boolean | null
+  /** The address Today is reading because this field is empty, or null when this field decides. */
+  derived: string | null
   onSave: (value: string) => Promise<NewsUrlSaveDecision>
 }) {
   const s = useStrings()
@@ -1487,6 +1494,11 @@ function NewsUrlEditor({
           answer" about an address that was, or was not, serving today's paper. */}
       {outcome?.desk ? <Text style={TONE[outcome.desk.tone]}>{outcome.desk.message}</Text> : null}
       {outcome ? <Text style={TONE[outcome.board.tone]}>{outcome.board.message}</Text> : null}
+      {/* Only while the field is genuinely empty and untouched: once there is a draft in it, the
+          sentence would describe an address the next save is about to replace. */}
+      {derived !== null && !outcome && !dirty ? (
+        <Text style={styles.help}>{fill(s.settings.news.derived, { url: derived })}</Text>
+      ) : null}
       {pending && !outcome && !dirty ? (
         <Text style={styles.help}>
           {hasBoard === false ? s.settings.news.pendingNoBoard : s.settings.news.pendingWithBoard}

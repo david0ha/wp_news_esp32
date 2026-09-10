@@ -63,6 +63,7 @@ export const en = {
       polls: 'Polls',
       saveAddress: 'Save address',
       clearAndDemo: 'Clear and use demo data',
+      derived: 'Empty, so Today reads {url} — the desk address below. Enter an address here to override it.',
       pendingNoBoard: 'Today reads from this address. A board you set up later will get it too.',
       pendingWithBoard: 'Not yet on the board — it will be sent the next time this app reaches it.',
       // What the editor says after a save, one sentence per outcome. `newsurlsync.ts` picks
@@ -686,7 +687,7 @@ export const en = {
     demoChip: 'Demo edition',
     // Under the chip, because the chip alone names the state without saying why the phone is
     // in it — and the date on a bundled edition is months old, which reads as a stuck app.
-    demoNote: 'No edition address yet. Add one in Settings to read today’s paper.',
+    demoNote: 'No edition address yet. Add one — or a desk address — in Settings to read today’s paper.',
     /** The filter row, in `lib/edition/tiles.ts`'s canonical order. */
     chips: {
       all: 'All',

@@ -57,13 +57,32 @@ describe('useEdition’s effect shape', () => {
     .filter((l) => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('*'))
     .join('\n')
 
-  it('has exactly one driver, and it is the focus callback', () => {
-    // `useFocusEffect` fires on mount as well as on every return to the tab, so a mount
-    // `useEffect` beside it is a second driver for the same event — and serialising the two by
-    // hand is what dropped every focus during the first fetch, `bootedRef` and all.
+  it('has one loop body, and every trigger calls it', () => {
+    // The rule this replaces was "exactly one driver, and it is the focus callback", which the
+    // foreground trigger breaks by design: a reader who leaves the app standing on Today and opens
+    // it the next morning never changes tabs, so `useFocusEffect` never fires and the page stays
+    // on yesterday's paper. What that rule was really protecting is intact and is what is pinned
+    // here — ONE loop body, called by both triggers, never two copies serialised by hand. Two
+    // drivers with their own bodies is how `bootedRef` came to exist, and it dropped every focus
+    // that happened during the first fetch.
     expect(source.match(/useFocusEffect\(/g)).toHaveLength(1)
-    expect(source).not.toMatch(/\buseEffect\(/)
+    expect(source.match(/void load\(/g)).toHaveLength(2)
+    expect(source).toMatch(/const load = useCallback\(/)
     expect(source).not.toMatch(/bootedRef/)
+  })
+
+  it('refreshes when the app returns to the foreground, not only when the tab is focused', () => {
+    // The gap this closes has no unit-testable symptom: it is an event that was never subscribed
+    // to. `AppState` appearing at all is the fact, and that it gates on 'active' is the rest of it.
+    expect(source).toMatch(/AppState\.addEventListener\('change'/)
+    expect(source).toMatch(/next === 'active'/)
+  })
+
+  it('reads the desk address as well as the edition address', () => {
+    // Today reads `news.json` off the desk's own host when no edition address was typed. Reading
+    // only `getNewsUrl` here is what left a phone with a working desk showing the bundled demo.
+    expect(source).toMatch(/getDeskBaseUrl\(\)/)
+    expect(source).toMatch(/editionUrl\(stored, desk\)/)
   })
 
   it('bumps the sequence at the moment it dispatches a new URL, before any await', () => {
