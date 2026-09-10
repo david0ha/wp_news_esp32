@@ -111,6 +111,37 @@ MAX_WATCHLIST_BYTES = 64 * 1024
 #: kind that decides the whole shape of a run by itself -- see :func:`handle`.
 CALENDAR_KIND = "calendar"
 
+#: The command kind the phone posts: a message about the paper, answered in
+#: `answer.md`, which becomes an edition only if the model decided the message
+#: asked for one. Like `custom`, the disk decides -- see :func:`handle`.
+ASK_KIND = "ask"
+
+#: Where the edition the message is about is put. A directory rather than a
+#: bare file because the payload names its pictures by id, and a model asked
+#: whether the photograph suits the story cannot answer that from an id.
+CURRENT_DIR = "current"
+
+#: The reply to a person. A second file beside ``notes.md`` rather than the same
+#: one, because an `ask` that rewrites the paper writes both: the dossier goes
+#: on the draft and the answer goes on the command, where the phone reads it.
+ANSWER_NAME = "answer.md"
+
+#: One turn of the conversation behind this message. One, not the thread: the
+#: desk keeps every turn and the phone shows them, and the prompt gets the one
+#: that matters.
+PREVIOUS_NAME = "previous.md"
+
+#: ``tiles.TILE_ID_RE`` on the desk's side of the token, which is ``ui_tile.c``'s
+#: ``id_ok()`` restated. Checked here because an id off the wire becomes a URL
+#: and then a filename -- :func:`fetch_sheets`' argument, on the other document.
+TILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,15}\Z")
+
+#: ``tiles.MAX_PAYLOAD_BYTES`` and ``tiles.MAX_TILE_BYTES``, duplicated for
+#: :data:`MAX_POSITIONS_BYTES`'s reason: what these bound is not the socket but
+#: what is written into a directory a language model is about to read.
+MAX_PUBLIC_PAYLOAD_BYTES = 300 * 1024
+MAX_PUBLIC_TILE_BYTES = 960_000
+
 #: What ``tools/edition/CALENDAR.md`` calls the three files a calendar run is
 #: given beside the watch list, in the directory where its input table says
 #: they are. ``econ.json`` is named only here and there: the desk serves that
@@ -509,8 +540,8 @@ def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict,
     return proc.returncode
 
 
-def read_notes(workdir: str) -> str | None:
-    """``workdir/notes.md`` -- the dossier behind whatever else the run wrote.
+def _read_workdir_text(workdir: str, name: str) -> str | None:
+    """One text file out of the workdir, capped and decoded forgivingly.
 
     Capped at :data:`deskclient.MAX_NOTES_BYTES`, the same quarter-megabyte
     the desk itself refuses past: reading further into memory only to have
@@ -521,42 +552,52 @@ def read_notes(workdir: str) -> str | None:
     land on a UTF-8 character boundary, and a visible ``�`` at the cut is a
     worse ending than the one dropped character silently missing.
 
-    Returns:
-        The note's text, or ``None`` when there is no ``notes.md``. That is
-        the ordinary case rather than a failure -- a turn with nothing worth
-        writing down left nothing behind, the way an edition with no picture
-        is still a normal edition. Never raises: a directory that vanished
-        between the write and this read is not a reason to lose the payload
-        it sits beside.
+    Never raises: a directory that vanished between the write and this read
+    is not a reason to lose the payload beside it.
     """
     try:
-        with open(os.path.join(workdir, "notes.md"), "rb") as f:
+        with open(os.path.join(workdir, name), "rb") as f:
             data = f.read(MAX_NOTES_BYTES)
     except OSError:
         return None
     return data.decode("utf-8", "ignore")
 
 
-def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
-               command: str | None = None) -> None:
-    """File ``workdir/notes.md`` on a draft or a command, best effort.
+def read_notes(workdir: str) -> str | None:
+    """``workdir/notes.md`` -- the dossier behind whatever else the run wrote.
+
+    Returns:
+        The note's text, or ``None`` when there is no ``notes.md``. That is
+        the ordinary case rather than a failure -- a turn with nothing worth
+        writing down left nothing behind, the way an edition with no picture
+        is still a normal edition.
+    """
+    return _read_workdir_text(workdir, "notes.md")
+
+
+def read_answer(workdir: str) -> str | None:
+    """``workdir/answer.md`` -- the reply an `ask` writes to a person.
+
+    Separate from :func:`read_notes` because they are separate documents: a
+    message that changes the paper produces a dossier about the page *and* a
+    reply about the change, and they go to different places.
+    """
+    return _read_workdir_text(workdir, ANSWER_NAME)
+
+
+def put_notes_best_effort(desk: DeskClient, text: str | None, *,
+                          draft: str | None = None,
+                          command: str | None = None) -> None:
+    """File one piece of text as a note, best effort.
 
     Best effort is the whole of it. A note is evidence about a page, not the
     page: a desk that refused one -- too large, some transient failure -- is
     not a reason to hold back an edition that has already passed every gate
-    that matters, nor to report a turn that did the work as failed. So the
-    refusal is a log line and nothing else, and a turn that wrote no
-    ``notes.md`` is the ordinary case rather than a failure to report.
-
-    One function rather than the same shape at each of the two places a note is
-    filed, because "best effort" is a *policy*, and a policy written down twice
-    is one that can be half-changed -- the two would then disagree about
-    whether a refused note costs the work it was filed beside.
+    that matters, nor to report a turn that did the work as failed.
 
     ``ValueError`` is deliberately not caught: naming both or neither of
     ``draft``/``command`` is a bug in this file, not a desk that said no.
     """
-    text = read_notes(workdir)
     if not text:
         return
     try:
@@ -564,6 +605,18 @@ def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
     except RuntimeError as e:
         owner = f"draft {draft}" if draft is not None else f"command {command}"
         LOG.warning("could not file notes on %s: %s", owner, e)
+
+
+def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
+               command: str | None = None) -> None:
+    """File ``workdir/notes.md`` on a draft or a command, best effort.
+
+    One function rather than the same shape at each of the two places a note is
+    filed, because "best effort" is a *policy*, and a policy written down twice
+    is one that can be half-changed -- the two would then disagree about
+    whether a refused note costs the work it was filed beside.
+    """
+    put_notes_best_effort(desk, read_notes(workdir), draft=draft, command=command)
 
 
 def upload(desk: DeskClient, workdir: str) -> str:
@@ -849,6 +902,132 @@ def seed_econ(desk: DeskClient, workdir: str,
                        "events": events},
                       workdir, ECON_NAME, MAX_ECON_BYTES,
                       "the economic window")
+
+
+def _current_tile_ids(doc) -> list[str]:
+    """Every tile the served edition can ask for: the photographs and the thumbs.
+
+    The same two places ``tools/mock_news_server.py``'s ``_tile_problems``
+    looks, and an id that is not one is dropped here rather than fetched: it
+    becomes a URL and then a filename.
+    """
+    ids = []
+    if not isinstance(doc, dict):
+        return ids
+    for story in doc.get("stories") or []:
+        if not isinstance(story, dict):
+            continue
+        photo = story.get("photo")
+        tid = photo.get("id") if isinstance(photo, dict) else None
+        if isinstance(tid, str) and TILE_ID_RE.match(tid):
+            ids.append(tid)
+    for thumb in doc.get("thumbs") or []:
+        if not isinstance(thumb, dict):
+            continue
+        tid = thumb.get("id")
+        if isinstance(tid, str) and TILE_ID_RE.match(tid):
+            ids.append(tid)
+    return sorted(set(ids))
+
+
+def seed_current(desk: DeskClient, workdir: str) -> bool:
+    """Put the edition the desk is serving now in the workdir. **`ask` runs only.**
+
+    Returns:
+        True if the paper was written, False when the desk is serving none --
+        the documented first run, exactly as a missing watch list is. A message
+        is still answerable then ("what is EPS"); what is not possible is a
+        revision, because the prompt's rule 3 revises by copying a file that is
+        not there.
+
+    Raises:
+        RuntimeError: the desk answered with something that is not an edition.
+            A precondition rather than an enrichment, and the line is the same
+            one :meth:`deskclient.DeskClient.positions` draws: a run that
+            rewrote the paper while it could not read the paper would replace a
+            good edition with one written from nothing.
+
+    Fetched off the **public** plane, with no token on the request. That is not
+    a shortcut around the control plane -- it is the same bytes the board reads,
+    which is what the message is about.
+    """
+    raw = desk.fetch_public("/news.json")
+    if raw is None:
+        LOG.info("the desk is serving no edition yet; this message is about a "
+                 "paper that does not exist")
+        return False
+    if len(raw) > MAX_PUBLIC_PAYLOAD_BYTES:
+        raise RuntimeError("the served edition is %d bytes, past the %d a payload "
+                           "may be" % (len(raw), MAX_PUBLIC_PAYLOAD_BYTES))
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        raise RuntimeError("the desk served an edition that is not JSON: %s" % e)
+
+    into = os.path.join(workdir, CURRENT_DIR)
+    os.makedirs(os.path.join(into, "tiles"), exist_ok=True)
+    with open(os.path.join(into, "news.json"), "wb") as f:
+        f.write(raw)
+
+    kept = 0
+    for tid in _current_tile_ids(doc):
+        path = "/tiles/%s.bin" % tid
+        try:
+            data = desk.fetch_public(path)
+        except RuntimeError as e:
+            LOG.warning("could not fetch %s: %s", path, e)
+            continue
+        if data is None:
+            LOG.warning("the edition names %s and the desk does not hold it", path)
+            continue
+        if len(data) > MAX_PUBLIC_TILE_BYTES:
+            LOG.warning("%s is %d bytes; not seeded", path, len(data))
+            continue
+        with open(os.path.join(into, "tiles", tid + ".bin"), "wb") as f:
+            f.write(data)
+        kept += 1
+
+    LOG.info("the current edition: %d bytes and %d tile(s)", len(raw), kept)
+    return True
+
+
+def seed_previous(desk: DeskClient, workdir: str, reply_to: str) -> bool:
+    """Put the turn this message answers in the workdir. **`ask` runs only.**
+
+    Returns:
+        True if a file was written, False when the earlier turn could not be
+        read at all -- including a ``reply_to`` that is not a command id,
+        which :meth:`deskclient.DeskClient.command` refuses with a
+        ``ValueError`` before it ever becomes a URL.
+
+    An **enrichment**, not a precondition -- :meth:`deskclient.DeskClient.directives`'
+    posture rather than :meth:`positions`'. Losing the earlier turn costs the
+    conversation, not the answer: the message itself is still in the prompt, so
+    the worst case is a reply that does not remember rather than a command that
+    fails. That is also why a malformed ``reply_to`` is folded into the same
+    outcome rather than checked here first: this file carries no id pattern of
+    its own -- ``deskclient.DESK_ID_RE`` is the one rule for what a command id
+    looks like, and :meth:`command`/:meth:`command_notes` already enforce it,
+    as a ``ValueError``, before either call reaches a URL.
+
+    One turn back, not the thread. The desk keeps every turn and the phone shows
+    them; what the prompt gets is the one that this message is a follow-up to.
+    """
+    try:
+        row = desk.command(reply_to)
+        answer = desk.command_notes(reply_to)
+    except (RuntimeError, ValueError) as e:
+        LOG.warning("could not read the turn before this one (%s); answering "
+                    "without it", e)
+        return False
+    text = "".join([
+        "# The turn before this one\n\n",
+        "## What was asked\n\n%s\n" % (row.get("text") or "(nothing was recorded)"),
+        "\n## What you answered\n\n%s\n" % (answer or "(no answer was filed)"),
+    ])
+    with open(os.path.join(workdir, PREVIOUS_NAME), "w", encoding="utf-8") as f:
+        f.write(text)
+    return True
 
 
 def upload_calendar(desk: DeskClient, workdir: str) -> dict:

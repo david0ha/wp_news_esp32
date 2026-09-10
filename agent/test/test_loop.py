@@ -782,6 +782,147 @@ class CalendarSeedTest(unittest.TestCase):
             self.assertIn("삼성전자", f.read())
 
 
+class AskSeedTest(unittest.TestCase):
+    """What an `ask` is given: the paper it is about, and the turn before it."""
+
+    EDITION = json.dumps({
+        "lang": "en",
+        "stories": [{"headline": "A", "photo": {"id": "sndk_fab", "w": 4, "h": 2}},
+                    {"headline": "B"}],
+        "thumbs": [{"id": "chart_a", "w": 2, "h": 2}],
+    }).encode()
+
+    class Desk:
+        """Enough of DeskClient for the two seeding calls."""
+
+        def __init__(self, edition=None, tiles=None, row=None, notes=None):
+            self.edition = edition
+            self.tiles = tiles or {}
+            self.row = row
+            self.notes = notes
+            self.public = []
+
+        def fetch_public(self, path):
+            self.public.append(path)
+            if path == "/news.json":
+                return self.edition
+            return self.tiles.get(path)
+
+        def command(self, cid):
+            if self.row is None:
+                raise RuntimeError("command %s: 404 not found" % cid)
+            return self.row
+
+        def command_notes(self, cid):
+            return self.notes
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_the_served_edition_and_its_pictures_land_under_current(self):
+        desk = self.Desk(self.EDITION,
+                         {"/tiles/sndk_fab.bin": b"\x01\x02\x03\x04",
+                          "/tiles/chart_a.bin": b"\x05\x06"})
+        self.assertTrue(loop.seed_current(desk, self.tmp))
+
+        with open(os.path.join(self.tmp, "current", "news.json"), "rb") as f:
+            self.assertEqual(f.read(), self.EDITION)
+        tiles = sorted(os.listdir(os.path.join(self.tmp, "current", "tiles")))
+        self.assertEqual(tiles, ["chart_a.bin", "sndk_fab.bin"])
+        # Both kinds of picture the payload can name: a story's photograph and
+        # a thumb. A model asked whether the photo suits the story cannot answer
+        # from an id.
+        self.assertEqual(sorted(desk.public),
+                         ["/news.json", "/tiles/chart_a.bin", "/tiles/sndk_fab.bin"])
+
+    def test_a_desk_with_no_edition_yet_is_not_a_failure(self):
+        # "What is EPS" is answerable on a desk that has never filed. What is
+        # NOT allowed is inventing a paper, and the prompt's rule 3 is what
+        # stops that: a revision copies current/news.json, which is not there.
+        desk = self.Desk(None)
+        self.assertFalse(loop.seed_current(desk, self.tmp))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "current")))
+
+    def test_a_missing_tile_costs_the_picture_and_not_the_turn(self):
+        desk = self.Desk(self.EDITION, {"/tiles/chart_a.bin": b"\x05\x06"})
+        self.assertTrue(loop.seed_current(desk, self.tmp))
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "current", "tiles")),
+                         ["chart_a.bin"])
+
+    def test_an_edition_that_is_not_json_fails_the_command(self):
+        desk = self.Desk(b"<html>gateway</html>")
+        with self.assertRaises(RuntimeError):
+            loop.seed_current(desk, self.tmp)
+
+    def test_a_tile_id_that_is_a_path_is_never_asked_for(self):
+        # The id becomes a URL and then a filename. Same argument as
+        # fetch_sheets: two containers, one token, and the check belongs where
+        # the name is joined.
+        bad = json.dumps({"stories": [{"photo": {"id": "../../etc/passwd"}}]}).encode()
+        desk = self.Desk(bad)
+        self.assertTrue(loop.seed_current(desk, self.tmp))
+        self.assertEqual(desk.public, ["/news.json"])
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "current", "tiles")), [])
+
+    def test_the_previous_turn_carries_the_question_and_the_answer(self):
+        desk = self.Desk(row={"id": "a" * 32, "text": "why did it move?"},
+                         notes="Because the guide beat the whisper number.\n")
+        self.assertTrue(loop.seed_previous(desk, self.tmp, "a" * 32))
+        with open(os.path.join(self.tmp, "previous.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("why did it move?", text)
+        self.assertIn("Because the guide beat the whisper number.", text)
+
+    def test_a_previous_turn_that_cannot_be_read_costs_the_thread_not_the_answer(self):
+        # An enrichment, not a precondition -- directives' posture rather than
+        # positions'. The message itself is still in the prompt, so the worst
+        # case is an answer that does not remember, not a command that fails.
+        desk = self.Desk(row=None)
+        self.assertFalse(loop.seed_previous(desk, self.tmp, "a" * 32))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "previous.md")))
+
+    def test_a_reply_to_that_is_not_an_id_never_becomes_a_url(self):
+        # loop.py carries no id pattern of its own for this -- deskclient's
+        # DESK_ID_RE is the one rule for what a command id looks like, and
+        # DeskClient.command() already enforces it before either read reaches
+        # a URL, raising ValueError. This fake stands in for exactly that,
+        # rather than for loop re-checking the shape itself.
+        class RejectingDesk:
+            def command(self, cid):
+                raise ValueError("command: not a command id: %r" % (cid,))
+
+            def command_notes(self, cid):
+                raise ValueError("command_notes: not a command id: %r" % (cid,))
+
+        self.assertFalse(loop.seed_previous(RejectingDesk(), self.tmp,
+                                            "../../api/positions"))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "previous.md")))
+
+
+class ReadAnswerTest(unittest.TestCase):
+    """`answer.md` is the reply to a person; `notes.md` is the dossier behind a
+    page. An `ask` may write both, which is why they are two files."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_no_answer_file_reads_as_no_answer(self):
+        self.assertIsNone(loop.read_answer(self.tmp))
+
+    def test_an_answer_comes_back_whole(self):
+        with open(os.path.join(self.tmp, "answer.md"), "w", encoding="utf-8") as f:
+            f.write("답변이 여기 있습니다.\n")
+        self.assertEqual(loop.read_answer(self.tmp), "답변이 여기 있습니다.\n")
+
+    def test_a_notes_file_is_not_an_answer_and_the_reverse(self):
+        with open(os.path.join(self.tmp, "notes.md"), "w", encoding="utf-8") as f:
+            f.write("the dossier\n")
+        self.assertIsNone(loop.read_answer(self.tmp))
+        self.assertEqual(loop.read_notes(self.tmp), "the dossier\n")
+
+
 class UploadCalendarTest(unittest.TestCase):
     """What is filed, and the one thing that is refused instead of filed."""
 
