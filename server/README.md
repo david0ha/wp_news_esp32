@@ -47,7 +47,7 @@ can serve a fourth path. `server/test/test_http.py` asserts it.
 |---|---|
 | Drafts | `POST /api/drafts` · `PUT …/news.json` · `PUT …/tiles/<id>.bin` · `GET/PUT …/notes.md` · `POST …/proof` · `GET …/proof/<name>` · `POST …/commit` · `GET …` |
 | Editions | `GET /api/editions` · `GET /api/editions/<id>` · `GET …/notes.md` · `GET …/proof/<name>` · `POST …/promote` |
-| Queue | `POST /api/commands` · `GET /api/commands/next?wait=60` · `POST …/done` · `POST …/fail` · `GET/PUT …/notes.md` · `GET /api/commands` · `DELETE …` |
+| Queue | `POST /api/commands` · `GET /api/commands/next?wait=60` · `POST …/done` · `POST …/fail` · `GET/PUT …/notes.md` · `GET /api/commands` · `GET /api/commands/<id>` · `DELETE …` |
 | Directives | `GET/POST /api/directives` · `DELETE /api/directives/<id>` |
 | Schedule | `GET/PUT /api/schedule` · `GET /api/schedule/next` |
 | Watchlist | `GET/PUT /api/watchlist` |
