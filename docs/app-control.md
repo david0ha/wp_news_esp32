@@ -521,7 +521,10 @@ below already say. `app/src/lib/desk.ts` is again the whole client —
 `postCommand`, `command`, `commandNotes` and `publishNow`, plus `Command`,
 `CommandStatus` and `MAX_COMMAND_TEXT` (2000, the composer's own limit so a
 long message is refused on screen rather than as a 400 the client has to
-translate).
+translate). `CommandStatus` is exactly six values: `pending`, `claimed`,
+`done`, `failed`, `expired`, `cancelled` — the same six the worker's side of
+the queue uses, because this is one queue with one status column, not a
+phone-specific subset.
 
 | Method | Path | Body | What the phone does with it |
 |---|---|---|---|
@@ -539,7 +542,11 @@ got each one wrong once before it got it right:
   word and keeps anything else as an opaque sentence, so a worker one release
   ahead of the app degrades to a line of text on screen rather than a crash.
 - **A 404 is a state on three of the four, not a failure.** An unknown command
-  id (`GET /api/commands/<id>`) is "the desk has reaped this row"; a missing
+  id on `GET /api/commands/<id>` is an id the desk has never held under any
+  status — `get_command()` returns a row regardless of what state it finished
+  in, so an id that 404s was never valid on this desk at all, rather than one
+  that expired or was cleaned up; a copy-pasted id, or a phone still pointed
+  at a desk it was reset against, are the ordinary ways to get here. A missing
   `notes.md` is "it finished and filed no answer"; `nothing is staged` on
   `POST /api/publish` is "the staged edition already went out" — published by
   the owner's own tooling, or by a second phone answering the same push. None
@@ -547,6 +554,16 @@ got each one wrong once before it got it right:
   for publish, the outcome `nothing_staged`) rather than throwing — the same
   rule `forgetPushDevice` already held for a push token the desk had already
   forgotten.
+- **`expired` and `cancelled` are the two statuses that never reach a phone
+  that isn't looking.** The desk's push batch only ever selects `done` and
+  `failed` rows, because those are the two a worker actually wrote a report
+  for — an expired deadline or a cancelled instruction has no answer to
+  announce, so neither rings anybody. The phone's own poll agrees, stopping
+  only on the four terminal statuses rather than the two working ones. So a
+  message that lapses past its deadline, or one the owner cancels from
+  another phone, changes silently: the only way to learn it did is to have
+  the thread open, or to reopen it later and see the row `TurnRow.tsx` draws
+  for that status. No notification is coming.
 - **`reply_to` is the whole thread.** There is no server-side thread object.
   `app/src/lib/ask/threads.ts` keeps the grouping — one AsyncStorage record
   under `claudepost.threads`, a pure reducer over the desk's rows, and a
@@ -640,7 +657,7 @@ phone would offer:
 | `PUT /api/settings` | set the language the edition is written in — `{"lang": "ko"}`, and an unknown key is refused whole with `bad_settings` |
 | `PUT /api/positions` | rewrite what the owner holds |
 | `GET /api/push/devices` · `POST /api/push/devices` · `DELETE /api/push/devices/<token>` | the phones the desk notifies |
-| `POST /api/publish` · `POST /api/hold` | force the staged edition up, or hold the wall |
+| `POST /api/publish` · `POST /api/hold` | put a staged edition up now, or hold the wall — the ask flow calls the first one itself; see [above](#the-desk-from-the-phone) |
 
 **`/api/positions` is the one pair whose two verbs sit in different scopes, and
 `/api/push/devices` is the one document where even the read is `operator`.**
