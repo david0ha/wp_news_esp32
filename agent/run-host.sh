@@ -65,6 +65,17 @@ export CLAUDEPOST_DESK="${CLAUDEPOST_DESK:-http://127.0.0.1:8790}"
 export CLAUDEPOST_SECRETS="${CLAUDEPOST_SECRETS:-$HOME/.claudepost}"
 export CLAUDEPOST_REPO="$REPO"
 export CLAUDEPOST_SCRATCH="${CLAUDEPOST_SCRATCH:-$HOME/.claudepost/scratch}"
+# The image now defaults this to /state/watchlist.json, which is a mount that
+# exists only in a container. Out here it lives beside the token, where it
+# always has.
+export CLAUDEPOST_WATCHLIST="${CLAUDEPOST_WATCHLIST:-$CLAUDEPOST_SECRETS/watchlist.json}"
+# agent/.env is read as KEY=value above, and an operator who put AGENT_RUN_AS
+# there to pin the container's identity would trip Task 2's non-root guard out
+# here: run_as demands a root loop to switch from, and this loop is whoever is
+# signed in. There is nobody to hand a turn to on a host run, so this is
+# pinned rather than defaulted -- a bare `${AGENT_RUN_AS:-}` would still let
+# the file's value through.
+export AGENT_RUN_AS=""
 export CLAUDEPOST_LOG_LEVEL="${CLAUDEPOST_LOG_LEVEL:-INFO}"
 
 # A context directory is opt-in in the container because a default there would

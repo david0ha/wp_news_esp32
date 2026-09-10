@@ -268,7 +268,7 @@ whole deliverable there.
 | Root | Where | Holds |
 |---|---|---|
 | **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json`, `settings.json`, and `0600`: `positions.json`, `calendar.json`, `push.json` |
-| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` |
+| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` — `agent.env` is no longer in the *agent* container's view of this mount; it reaches that loop through `env_file` instead |
 
 **Secrets are not in the repository, the image, or any synced directory.**
 `~/.claudepost/` sits outside all three — the repository is public and git history
@@ -1226,6 +1226,18 @@ handling at all — `agent/run-host.sh` runs the same `loop.py` against the same
 desk and spends the subscription. The trade is availability: a container
 restarts itself, a laptop sleeps.
 
+**In the container there are two users and the split is the credential.** The
+loop runs as root and every `claude` turn runs as `model` through `gosu`, in a
+workdir handed to that user for the length of the turn. Root is the only thing
+that works — `gosu` is not setuid and `no-new-privileges` is set, so a non-root
+process cannot change uid — and what it buys is that the desk's producer token
+lives only in the loop's environment, which another uid cannot read. The token
+is not a file in the container: compose reads `~/.claudepost/agent.env` on the
+host and hands it over as environment, because a bind mount's mode is not
+enforced on Docker Desktop for Mac. The tool allowlist is unchanged, and the
+container has ordinary outbound internet: this is a wall around the
+credentials, not an egress allowlist.
+
 A separate container from the desk, and separate for the reason
 [`agent/README.md`](../agent/README.md) gives for splitting filing from
 serving: **filing is an event that can fail, serving is a condition that must
@@ -1251,7 +1263,7 @@ on it is set larger than a deck, a photograph that halftoned to mush.
 
 Two revisions, then it reports the failure with the validator's own words.
 
-**`kind` decides where the turn's `notes.md` goes, and one of the four kinds
+**`kind` decides where the turn's `notes.md` goes, and one of the five kinds
 decides it from the disk rather than from itself.** `"file_edition"` always
 takes the draft path above, and if the run left a `notes.md` in its workdir it
 rides beside the draft (`PUT .../notes.md`) — the dossier behind the page,
@@ -1281,6 +1293,16 @@ where it lies as evidence, and nothing is uploaded. The seeding is the same
 rule from the other side, and it runs **before** the turn, so a desk that
 cannot say what the owner holds fails the command at the start rather than
 after forty-five minutes of research against nothing.
+
+**`"ask"` is the fifth, and it decides from the disk the way `custom` does.**
+A message from the phone, seeded with the edition the desk is serving (off the
+public plane, the same bytes the board reads) and one turn of the conversation
+behind it. It must write `answer.md`, which is filed on the command and is what
+the phone reads back; it writes `news.json` only if it judged that the message
+asked for the paper to change, and then the ordinary five gates apply
+unchanged. The result reads `answered`, `revised <edition id>` or `staged
+<edition id>`. A revision that fails a gate fails the command and the current
+edition stays current.
 
 ## Cloudflare
 

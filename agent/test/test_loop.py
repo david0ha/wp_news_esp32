@@ -36,6 +36,7 @@ import datetime
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -536,6 +537,10 @@ class CalendarDesk:
     def put_calendar(self, data):
         self.books.append(data)
 
+    # the public plane, which only an `ask` reads
+    def fetch_public(self, path):
+        return b'{"lang": "en"}' if path == "/news.json" else None
+
     # the draft path
     def open_draft(self):
         return "d" * 32
@@ -605,10 +610,10 @@ class SeedingSplitTest(unittest.TestCase):
         so an assertion about ``positions.json`` afterwards is an assertion
         about the directory the child was started in.
         """
-        deliverable = {"research": "notes.md", "calendar": "calendar.json"}.get(
-            kind, "news.json")
-        contents = ('{"events": [], "shortfall": null}'
-                    if kind == "calendar" else "{}")
+        deliverable = {"research": "notes.md", "calendar": "calendar.json",
+                       "ask": "answer.md"}.get(kind, "news.json")
+        contents = {"calendar": '{"events": [], "shortfall": null}',
+                    "ask": "answered\n"}.get(kind, "{}")
 
         def fake_run_claude(cfg, text, workdir, extra_env, *_):
             with open(os.path.join(workdir, deliverable), "w",
@@ -629,7 +634,7 @@ class SeedingSplitTest(unittest.TestCase):
         # The newspaper's producer never has the file. This is the structural
         # half of the rule that positions do not reach news.json; the edition
         # validator is the other half, and neither is sufficient alone.
-        for kind in ("file_edition", "research", "custom"):
+        for kind in ("file_edition", "research", "custom", "ask"):
             with self.subTest(kind=kind):
                 workdir = self.run_seeding(kind)
                 self.assertFalse(
@@ -641,11 +646,24 @@ class SeedingSplitTest(unittest.TestCase):
         # Yesterday's book and the economic window are not secrets the way the
         # positions are, but a newspaper run has no use for either, and a file
         # in front of a model is an invitation to read it.
-        for kind in ("file_edition", "research", "custom"):
+        for kind in ("file_edition", "research", "custom", "ask"):
             for name in ("positions.json", "calendar.json", "econ.json"):
                 with self.subTest(kind=kind, name=name):
                     workdir = self.run_seeding(kind)
                     self.assertFalse(os.path.exists(os.path.join(workdir, name)))
+
+    def test_the_paper_is_seeded_for_an_ask_and_for_no_other_kind(self):
+        # The mirror of the positions split, and a weaker property on purpose:
+        # /news.json is public, so seeding it into a morning run leaks nothing.
+        # It is still wrong -- a filing run handed yesterday's paper edits it
+        # instead of writing today's -- and an absence has to be looked for
+        # everywhere it could be.
+        for kind in ("file_edition", "research", "custom", "calendar"):
+            with self.subTest(kind=kind):
+                workdir = self.run_seeding(kind)
+                self.assertFalse(os.path.exists(os.path.join(workdir, "current")))
+        workdir = self.run_seeding("ask")
+        self.assertTrue(os.path.exists(os.path.join(workdir, "current", "news.json")))
 
     def test_the_watch_list_is_seeded_for_every_kind_including_the_book(self):
         # The one file both jobs get: it is the universe the paper rotates
@@ -779,6 +797,147 @@ class CalendarSeedTest(unittest.TestCase):
         loop.seed_calendar(CalendarDesk(calendar=book), self.tmp)
         with open(os.path.join(self.tmp, "calendar.json"), encoding="utf-8") as f:
             self.assertIn("삼성전자", f.read())
+
+
+class AskSeedTest(unittest.TestCase):
+    """What an `ask` is given: the paper it is about, and the turn before it."""
+
+    EDITION = json.dumps({
+        "lang": "en",
+        "stories": [{"headline": "A", "photo": {"id": "sndk_fab", "w": 4, "h": 2}},
+                    {"headline": "B"}],
+        "thumbs": [{"id": "chart_a", "w": 2, "h": 2}],
+    }).encode()
+
+    class Desk:
+        """Enough of DeskClient for the two seeding calls."""
+
+        def __init__(self, edition=None, tiles=None, row=None, notes=None):
+            self.edition = edition
+            self.tiles = tiles or {}
+            self.row = row
+            self.notes = notes
+            self.public = []
+
+        def fetch_public(self, path):
+            self.public.append(path)
+            if path == "/news.json":
+                return self.edition
+            return self.tiles.get(path)
+
+        def command(self, cid):
+            if self.row is None:
+                raise RuntimeError("command %s: 404 not found" % cid)
+            return self.row
+
+        def command_notes(self, cid):
+            return self.notes
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_the_served_edition_and_its_pictures_land_under_current(self):
+        desk = self.Desk(self.EDITION,
+                         {"/tiles/sndk_fab.bin": b"\x01\x02\x03\x04",
+                          "/tiles/chart_a.bin": b"\x05\x06"})
+        self.assertTrue(loop.seed_current(desk, self.tmp))
+
+        with open(os.path.join(self.tmp, "current", "news.json"), "rb") as f:
+            self.assertEqual(f.read(), self.EDITION)
+        tiles = sorted(os.listdir(os.path.join(self.tmp, "current", "tiles")))
+        self.assertEqual(tiles, ["chart_a.bin", "sndk_fab.bin"])
+        # Both kinds of picture the payload can name: a story's photograph and
+        # a thumb. A model asked whether the photo suits the story cannot answer
+        # from an id.
+        self.assertEqual(sorted(desk.public),
+                         ["/news.json", "/tiles/chart_a.bin", "/tiles/sndk_fab.bin"])
+
+    def test_a_desk_with_no_edition_yet_is_not_a_failure(self):
+        # "What is EPS" is answerable on a desk that has never filed. What is
+        # NOT allowed is inventing a paper, and the prompt's rule 3 is what
+        # stops that: a revision copies current/news.json, which is not there.
+        desk = self.Desk(None)
+        self.assertFalse(loop.seed_current(desk, self.tmp))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "current")))
+
+    def test_a_missing_tile_costs_the_picture_and_not_the_turn(self):
+        desk = self.Desk(self.EDITION, {"/tiles/chart_a.bin": b"\x05\x06"})
+        self.assertTrue(loop.seed_current(desk, self.tmp))
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "current", "tiles")),
+                         ["chart_a.bin"])
+
+    def test_an_edition_that_is_not_json_fails_the_command(self):
+        desk = self.Desk(b"<html>gateway</html>")
+        with self.assertRaises(RuntimeError):
+            loop.seed_current(desk, self.tmp)
+
+    def test_a_tile_id_that_is_a_path_is_never_asked_for(self):
+        # The id becomes a URL and then a filename. Same argument as
+        # fetch_sheets: two containers, one token, and the check belongs where
+        # the name is joined.
+        bad = json.dumps({"stories": [{"photo": {"id": "../../etc/passwd"}}]}).encode()
+        desk = self.Desk(bad)
+        self.assertTrue(loop.seed_current(desk, self.tmp))
+        self.assertEqual(desk.public, ["/news.json"])
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "current", "tiles")), [])
+
+    def test_the_previous_turn_carries_the_question_and_the_answer(self):
+        desk = self.Desk(row={"id": "a" * 32, "text": "why did it move?"},
+                         notes="Because the guide beat the whisper number.\n")
+        self.assertTrue(loop.seed_previous(desk, self.tmp, "a" * 32))
+        with open(os.path.join(self.tmp, "previous.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("why did it move?", text)
+        self.assertIn("Because the guide beat the whisper number.", text)
+
+    def test_a_previous_turn_that_cannot_be_read_costs_the_thread_not_the_answer(self):
+        # An enrichment, not a precondition -- directives' posture rather than
+        # positions'. The message itself is still in the prompt, so the worst
+        # case is an answer that does not remember, not a command that fails.
+        desk = self.Desk(row=None)
+        self.assertFalse(loop.seed_previous(desk, self.tmp, "a" * 32))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "previous.md")))
+
+    def test_a_reply_to_that_is_not_an_id_never_becomes_a_url(self):
+        # loop.py carries no id pattern of its own for this -- deskclient's
+        # DESK_ID_RE is the one rule for what a command id looks like, and
+        # DeskClient.command() already enforces it before either read reaches
+        # a URL, raising ValueError. This fake stands in for exactly that,
+        # rather than for loop re-checking the shape itself.
+        class RejectingDesk:
+            def command(self, cid):
+                raise ValueError("command: not a command id: %r" % (cid,))
+
+            def command_notes(self, cid):
+                raise ValueError("command_notes: not a command id: %r" % (cid,))
+
+        self.assertFalse(loop.seed_previous(RejectingDesk(), self.tmp,
+                                            "../../api/positions"))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "previous.md")))
+
+
+class ReadAnswerTest(unittest.TestCase):
+    """`answer.md` is the reply to a person; `notes.md` is the dossier behind a
+    page. An `ask` may write both, which is why they are two files."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_no_answer_file_reads_as_no_answer(self):
+        self.assertIsNone(loop.read_answer(self.tmp))
+
+    def test_an_answer_comes_back_whole(self):
+        with open(os.path.join(self.tmp, "answer.md"), "w", encoding="utf-8") as f:
+            f.write("답변이 여기 있습니다.\n")
+        self.assertEqual(loop.read_answer(self.tmp), "답변이 여기 있습니다.\n")
+
+    def test_a_notes_file_is_not_an_answer_and_the_reverse(self):
+        with open(os.path.join(self.tmp, "notes.md"), "w", encoding="utf-8") as f:
+            f.write("the dossier\n")
+        self.assertIsNone(loop.read_answer(self.tmp))
+        self.assertEqual(loop.read_notes(self.tmp), "the dossier\n")
 
 
 class UploadCalendarTest(unittest.TestCase):
@@ -994,6 +1153,267 @@ class HandleCalendarTest(unittest.TestCase):
         self.assertIn("여섯 개였어요", result)
 
 
+class HandleAskTest(unittest.TestCase):
+    """`handle()`'s fourth case, and its outcomes are the phone's whole contract.
+
+    Like `custom`, the disk decides: a `news.json` after the turn means the
+    model judged that the message asked for the paper to change. Unlike
+    `custom`, `answer.md` is required either way -- a turn that answered
+    nobody has failed, whatever else it produced.
+    """
+
+    class Desk:
+        """Enough of DeskClient for an ask, either way it goes."""
+
+        def __init__(self, state="published", edition=b'{"lang":"en"}'):
+            self.state = state
+            self.edition = edition
+            self.notes_calls = []
+            self.finished = []
+            self.commits = []
+            self.payloads = []
+
+        def directives(self):
+            return []
+
+        def settings(self):
+            return {"lang": "en"}
+
+        def fetch_public(self, path):
+            return self.edition if path == "/news.json" else None
+
+        def command(self, cid):
+            return {"id": cid, "text": "why did it move?"}
+
+        def command_notes(self, cid):
+            return "Because the guide beat the whisper number.\n"
+
+        def open_draft(self):
+            return "d" * 32
+
+        def put_payload(self, draft, data):
+            self.payloads.append((draft, data))
+
+        def put_tile(self, draft, tile_id, data):
+            pass
+
+        def put_notes(self, text, *, draft=None, command=None):
+            self.notes_calls.append({"text": text, "draft": draft, "command": command})
+
+        def proof(self, draft):
+            return {"ok": True, "sheets": []}
+
+        def commit(self, draft):
+            self.commits.append(draft)
+            return {"state": self.state, "edition_id": "e" * 32}
+
+        def finish(self, cid, ok, result):
+            self.finished.append((cid, ok, result))
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
+        self._real_read_contract = loop.read_contract
+        loop.read_contract = lambda repo, kind="file_edition": "the contract"
+        self.addCleanup(setattr, loop, "read_contract", self._real_read_contract)
+
+    def _patch_run_claude(self, fn):
+        real = loop.run_claude
+        loop.run_claude = fn
+        self.addCleanup(setattr, loop, "run_claude", real)
+
+    def _writes(self, **files):
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            for name, body in files.items():
+                path = os.path.join(workdir, name.replace("__", "."))
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(body)
+            return 0
+        return fake_run_claude
+
+    def test_a_question_is_answered_and_nothing_is_filed(self):
+        self._patch_run_claude(self._writes(answer__md="EPS is earnings per share.\n"))
+        desk = self.Desk()
+        cid = "a" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "what is EPS?"}, {})
+
+        self.assertEqual(desk.commits, [])
+        self.assertEqual(desk.notes_calls, [{"text": "EPS is earnings per share.\n",
+                                             "draft": None, "command": cid}])
+        self.assertEqual(desk.finished, [(cid, True, "answered")])
+
+    def test_a_message_that_changes_the_paper_files_it_and_says_which(self):
+        self._patch_run_claude(self._writes(answer__md="Led with the lawsuit.\n",
+                                            news__json="{}"))
+        desk = self.Desk(state="published")
+        cid = "b" * 32
+        loop.handle(self.cfg, desk,
+                    {"id": cid, "kind": "ask", "text": "lead with the lawsuit"}, {})
+
+        self.assertEqual(desk.commits, ["d" * 32])
+        self.assertEqual(desk.finished, [(cid, True, "revised " + "e" * 32)])
+        # The answer is on the COMMAND whatever else happened: that is where
+        # the phone reads it, at GET /api/commands/<cid>/notes.md.
+        self.assertIn({"text": "Led with the lawsuit.\n", "draft": None, "command": cid},
+                      desk.notes_calls)
+
+    def test_an_edit_that_changed_nothing_is_still_an_answer(self):
+        self._patch_run_claude(self._writes(answer__md="Nothing needed changing.\n",
+                                            news__json="{}"))
+        desk = self.Desk(state="unchanged")
+        cid = "c" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "add the CFO quote"}, {})
+        self.assertEqual(desk.finished, [(cid, True, "revised " + "e" * 32)])
+
+    def test_a_held_desk_says_staged_so_the_phone_can_offer_to_publish(self):
+        self._patch_run_claude(self._writes(answer__md="Rewrote the lead.\n",
+                                            news__json="{}"))
+        desk = self.Desk(state="staged")
+        cid = "d" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "rewrite the lead"}, {})
+        self.assertEqual(desk.finished, [(cid, True, "staged " + "e" * 32)])
+
+    def test_a_turn_that_answered_nobody_failed(self):
+        # Even one that wrote a perfectly good page: the message came from a
+        # person waiting for a reply, and a paper is not a reply.
+        self._patch_run_claude(self._writes(news__json="{}"))
+        desk = self.Desk()
+        cid = "e" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "lead with the lawsuit"}, {})
+        self.assertEqual(desk.commits, [])
+        self.assertEqual(desk.finished, [(cid, False, "no answer written")])
+
+    def test_the_paper_and_the_thread_are_in_the_directory_before_the_turn(self):
+        seen = {}
+
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            seen["current"] = os.path.exists(os.path.join(workdir, "current", "news.json"))
+            seen["previous"] = os.path.exists(os.path.join(workdir, "previous.md"))
+            seen["prompt"] = text
+            with open(os.path.join(workdir, "answer.md"), "w") as f:
+                f.write("ok\n")
+            return 0
+
+        self._patch_run_claude(fake_run_claude)
+        desk = self.Desk()
+        loop.handle(self.cfg, desk,
+                    {"id": "f" * 32, "kind": "ask", "text": "and the buyback?",
+                     "reply_to": "a" * 32, "lang": "ko"}, {})
+        self.assertTrue(seen["current"])
+        self.assertTrue(seen["previous"])
+        # The phone's language reached the prompt as the fallback it is.
+        self.assertIn("fall back to Korean", seen["prompt"])
+
+    def test_a_first_turn_has_no_previous_and_asks_for_none(self):
+        asked = []
+
+        class Desk(self.Desk):
+            def command(self, cid):
+                asked.append(cid)
+                return {"id": cid, "text": "t"}
+
+        self._patch_run_claude(self._writes(answer__md="ok\n"))
+        desk = Desk()
+        loop.handle(self.cfg, desk, {"id": "0" * 32, "kind": "ask", "text": "hello"}, {})
+        self.assertEqual(asked, [])
+
+    class NotingDesk(Desk):
+        """A desk that remembers what each draft's note was **at the instant of
+        the commit**, which is the only moment the question is about.
+
+        The desk copies a draft's note into the edition inside ``commit``
+        (``editions._commit``), so "was ``put_notes`` called at some point"
+        is the wrong question -- the version of this loop that filed the note
+        after ``desk.commit()`` returned called it, and the edition still went
+        out with nothing beside it. Each draft gets its own id so that a note
+        that rode only the first upload can be told from one that rode the
+        draft that survived the revision loop.
+        """
+
+        def __init__(self, state="published", proofs=None):
+            super().__init__(state=state)
+            self._proofs = list(proofs or [])
+            self.draft_notes = {}
+            self.note_at_commit = None
+            self.drafts = []
+
+        def open_draft(self):
+            self.drafts.append("%032d" % len(self.drafts))
+            return self.drafts[-1]
+
+        def put_notes(self, text, *, draft=None, command=None):
+            super().put_notes(text, draft=draft, command=command)
+            if draft is not None:
+                self.draft_notes[draft] = text
+
+        def proof(self, draft):
+            return self._proofs.pop(0) if self._proofs else {"ok": True, "sheets": []}
+
+        def commit(self, draft):
+            self.note_at_commit = self.draft_notes.get(draft)
+            return super().commit(draft)
+
+    def test_the_draft_has_the_answer_as_its_note_when_the_commit_reads_it(self):
+        # The defect this test exists for. A note filed after `desk.commit()`
+        # returns is on a draft nobody reads again: the desk copies the note
+        # into the edition *inside* the commit. So the assertion is about the
+        # draft at that instant, not about `put_notes` having been called --
+        # the broken version called it.
+        self._patch_run_claude(self._writes(answer__md="Led with the lawsuit.\n",
+                                            news__json="{}"))
+        desk = self.NotingDesk()
+        loop.handle(self.cfg, desk,
+                    {"id": "1" * 32, "kind": "ask", "text": "lead with the lawsuit"}, {})
+        self.assertEqual(desk.note_at_commit, "Led with the lawsuit.\n")
+
+    def test_a_dossier_of_the_turns_own_is_the_draft_note_and_the_answer_is_not(self):
+        # The reply stands in only where nothing stands already: notes.md is
+        # about the page, answer.md is about the person, and a turn that wrote
+        # both gets both filed where each belongs.
+        self._patch_run_claude(self._writes(answer__md="Led with the lawsuit.\n",
+                                            news__json="{}",
+                                            notes__md="Three sources, one dropped.\n"))
+        desk = self.NotingDesk()
+        cid = "2" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "lead with it"}, {})
+        self.assertEqual(desk.note_at_commit, "Three sources, one dropped.\n")
+        self.assertIn({"text": "Led with the lawsuit.\n", "draft": None, "command": cid},
+                      desk.notes_calls)
+
+    def test_the_note_rides_the_draft_the_revision_loop_ends_on(self):
+        # `upload()` opens a fresh draft on every pass, so the draft that
+        # reaches the commit is not the one the note was first filed on. It is
+        # on disk in the workdir rather than on a draft, which is what makes
+        # that free.
+        self._patch_run_claude(self._writes(answer__md="Rewrote the lead.\n",
+                                            news__json="{}"))
+        desk = self.NotingDesk(proofs=[{"ok": False, "sheets": [], "validate": "no"},
+                                       {"ok": True, "sheets": []}])
+        loop.handle(self.cfg, desk, {"id": "3" * 32, "kind": "ask", "text": "rewrite"}, {})
+        self.assertEqual(len(desk.drafts), 2)
+        self.assertEqual(desk.commits, [desk.drafts[-1]])
+        self.assertEqual(desk.note_at_commit, "Rewrote the lead.\n")
+
+    def test_a_question_that_files_nothing_writes_no_notes_md(self):
+        # The stand-in belongs to the revise path alone. There is no draft to
+        # put a dossier on, and a notes.md in the workdir afterwards would be
+        # this loop inventing one.
+        self._patch_run_claude(self._writes(answer__md="EPS is earnings per share.\n"))
+        loop.handle(self.cfg, self.Desk(),
+                    {"id": "4" * 32, "kind": "ask", "text": "what is EPS?"}, {})
+        self.assertFalse(os.path.exists(
+            os.path.join(self.tmp, "4" * 32, "notes.md")))
+
+    def test_a_turn_that_exited_nonzero_never_reaches_the_desk(self):
+        self._patch_run_claude(lambda *a, **k: 3)
+        desk = self.Desk()
+        cid = "9" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "hi"}, {})
+        self.assertEqual(desk.notes_calls, [])
+        self.assertEqual(desk.finished, [(cid, False, "claude exited 3")])
+
+
 class AuthRouteTest(unittest.TestCase):
     """Which credentials `claude --print` can start from, and the expensive tie.
 
@@ -1088,6 +1508,17 @@ class ArgvTest(unittest.TestCase):
         cfg = loop.Settings.from_env({"AGENT_STRICT_MCP": "0"})
         self.assertFalse(cfg.strict_mcp)
         self.assertNotIn("--strict-mcp-config", loop.claude_argv(cfg, "/work"))
+
+    def test_an_answer_only_turn_is_not_told_it_is_filing_a_newspaper(self):
+        # The calendar note's argument, on the third job: a turn told "you are
+        # filing one newspaper edition" and then handed rules that say most
+        # messages file nothing is a nudge toward writing the news.json that
+        # rule 2 just refused.
+        argv = loop.claude_argv(loop.Settings.from_env({}), "/work", "ask")
+        note = argv[argv.index("--append-system-prompt") + 1]
+        self.assertIn("answering one message about the newspaper", note)
+        self.assertNotIn("filing one newspaper edition", note)
+        self.assertIn("Do not dispatch subagents", note)
 
     def test_the_child_may_not_delegate(self):
         # The third live run failed here and produced nothing but a skeleton:
@@ -1200,6 +1631,168 @@ class ArgvTest(unittest.TestCase):
                       loop.claude_argv(cfg, "/work")[-1])
 
 
+class RunAsTest(unittest.TestCase):
+    """Handing one turn to a second user, which is the whole of the wall.
+
+    The mechanism is not a preference and the tests say so: gosu is not setuid,
+    compose sets no-new-privileges, and a process that is not root cannot change
+    uid. So the loop is root in the container and every `claude` is `model` --
+    and on a host, where AGENT_RUN_AS is unset, nothing switches at all and the
+    command line is byte-identical to the one this worker has always run.
+    """
+
+    def test_a_host_run_switches_nobody(self):
+        cfg = loop.Settings.from_env({})
+        self.assertEqual(cfg.run_as, "")
+        self.assertEqual(loop.claude_argv(cfg, "/work")[0], "claude")
+
+    def test_the_model_user_is_prefixed_before_the_cli(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model"})
+        argv = loop.claude_argv(cfg, "/work")
+        self.assertEqual(argv[:3], ["gosu", "model", "claude"])
+        # And the allow-list is still last with nothing after its value: gosu
+        # must not push the prompt back onto the command line.
+        self.assertEqual(argv[-2], "--allowedTools")
+
+    def test_the_child_gets_that_users_home_and_not_the_loops(self):
+        # `claude` writes its own configuration into $HOME. Left at the loop's,
+        # every turn fails on its first write into a directory it does not own,
+        # and the message is about a config file rather than about a uid.
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model"})
+        env = loop.child_env(cfg, "/work", {})
+        self.assertEqual(env["HOME"], loop.run_as_home("model"))
+        self.assertEqual(env["USER"], "model")
+        self.assertEqual(env["LOGNAME"], "model")
+
+    def test_an_unset_run_as_leaves_home_alone(self):
+        cfg = loop.Settings.from_env({})
+        with mock.patch.dict(os.environ, {"HOME": "/home/somebody"}):
+            env = loop.child_env(cfg, "/work", {})
+        self.assertEqual(env["HOME"], "/home/somebody")
+
+    def test_a_user_this_image_does_not_have_still_yields_a_home(self):
+        # Pure, so a test can assert it on a machine with no `model` user.
+        self.assertEqual(loop.run_as_home("nobody-here-at-all"),
+                         "/home/nobody-here-at-all")
+
+
+class OwnWorkdirTest(unittest.TestCase):
+    """The workdir is the only writable path the model has, so it has to own it.
+
+    Handed over AFTER the seeding and before the turn: the seeded files are
+    written by the loop, and `watchlist.json` is one the contract asks the model
+    to rewrite in place.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        os.makedirs(os.path.join(self.tmp, "tiles"))
+        with open(os.path.join(self.tmp, "watchlist.json"), "w") as f:
+            f.write("{}")
+
+    def test_nothing_is_chowned_when_nobody_is_being_switched_to(self):
+        cfg = loop.Settings.from_env({})
+        with mock.patch("os.chown") as chown:
+            loop.own_workdir(cfg, self.tmp)
+        chown.assert_not_called()
+
+    def test_every_path_in_the_workdir_is_handed_over(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model"})
+        with mock.patch("os.chown") as chown, \
+             mock.patch("loop.pwd.getpwnam") as getpwnam:
+            getpwnam.return_value = mock.Mock(pw_uid=10001, pw_gid=10001)
+            loop.own_workdir(cfg, self.tmp)
+        handed = sorted(call.args[0] for call in chown.call_args_list)
+        self.assertEqual(handed, sorted([
+            self.tmp,
+            os.path.join(self.tmp, "tiles"),
+            os.path.join(self.tmp, "watchlist.json")]))
+        for call in chown.call_args_list:
+            self.assertEqual(call.args[1:], (10001, 10001))
+
+    def test_a_user_the_image_does_not_have_fails_the_command_by_name(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "ghost"})
+        with self.assertRaises(RuntimeError) as caught:
+            loop.own_workdir(cfg, self.tmp)
+        self.assertIn("ghost", str(caught.exception))
+
+
+class MainRefusesTest(unittest.TestCase):
+    """The two ways this setting and this uid can disagree, both fatal.
+
+    Both guards sit right after `logging.basicConfig` and both `return 2`
+    before `main` builds a `DeskClient` or reaches the network -- so calling
+    `loop.main()` directly, with the environment and the euid patched, is
+    still layer 0: nothing here opens a socket.
+    """
+
+    def test_a_non_root_loop_may_not_switch_user(self):
+        with mock.patch.dict(os.environ, {"AGENT_RUN_AS": "model"}, clear=True), \
+             mock.patch("os.geteuid", return_value=10001), \
+             self.assertLogs("worker", level="ERROR") as caught:
+            self.assertEqual(loop.main(), 2)
+        self.assertIn("AGENT_RUN_AS", caught.output[0])
+
+    def test_a_root_loop_may_not_skip_switching_user(self):
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("os.geteuid", return_value=0), \
+             self.assertLogs("worker", level="ERROR") as caught:
+            self.assertEqual(loop.main(), 2)
+        self.assertIn("AGENT_RUN_AS", caught.output[0])
+
+
+class RunClaudeCredentialProbeTest(unittest.TestCase):
+    """`run_claude` must hand `child_env` the CHILD's home, not the loop's.
+
+    Dormant today -- nothing mounts a CLI login under the model user's home --
+    but the day one exists, checking the wrong home leaves the metered key in
+    the child's environment and the subscription silently stops paying.
+    """
+
+    def test_the_credential_probe_looks_at_the_child_s_home_when_switching_user(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model",
+                                       "CLAUDEPOST_REPO": "/repo"})
+        child_home = loop.run_as_home("model")
+        credentials = os.path.join(child_home, ".claude", ".credentials.json")
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["env"] = kwargs["env"]
+            return subprocess.CompletedProcess(argv, 0, stdout=b"")
+
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}), \
+             mock.patch("os.path.exists", side_effect=lambda p: p == credentials), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            loop.run_claude(cfg, "prompt text", "/work", {})
+
+        # A login under the child's home was found, so the metered key comes
+        # out -- which only happens if the probe looked there rather than at
+        # the loop's own home, where this fake filesystem has nothing at all.
+        self.assertNotIn("ANTHROPIC_API_KEY", captured["env"])
+
+    def test_a_host_run_still_probes_its_own_home(self):
+        # run_as is "" on a host, so the fallback to os.path.expanduser("~")
+        # in child_env must still be reached -- this pins that the fix does
+        # not change behaviour when nobody is being switched to.
+        cfg = loop.Settings.from_env({"CLAUDEPOST_REPO": "/repo"})
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["env"] = kwargs["env"]
+            return subprocess.CompletedProcess(argv, 0, stdout=b"")
+
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test",
+                                          "HOME": "/home/operator"}), \
+             mock.patch("os.path.exists", return_value=False) as exists, \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            loop.run_claude(cfg, "prompt text", "/work", {})
+
+        exists.assert_called_once_with(
+            os.path.join("/home/operator", ".claude", ".credentials.json"))
+        self.assertIn("ANTHROPIC_API_KEY", captured["env"])
+
+
 class WatchlistTest(unittest.TestCase):
     """The universe and the rotation cursor, across a scratch directory that dies.
 
@@ -1240,12 +1833,19 @@ class WatchlistTest(unittest.TestCase):
         with open(self.path, encoding="utf-8") as f:
             return json.load(f)
 
-    def test_the_default_lives_beside_the_token_not_in_the_scratch(self):
-        # <secrets>/watchlist.json: the operator's own directory, which survives
-        # a container being rebuilt and a scratch volume being pruned. The
-        # rotation is the one piece of worker state that must outlive both.
+    def test_the_default_is_the_state_mount_and_not_the_secrets_one(self):
+        # It used to default beside the token, in /run/secrets -- which is
+        # mounted read-only, correctly, because it held one. The consequence was
+        # that a container could seed the rotation and never advance it. The
+        # secrets are not a mount any more (compose hands them to the loop as
+        # environment), so the cursor gets a mount of its own, writable, holding
+        # nothing confidential: the watch list is seeded into the workdir in
+        # front of the model on purpose.
         self.assertEqual(loop.Settings.from_env({}).watchlist,
-                         "/run/secrets/watchlist.json")
+                         "/state/watchlist.json")
+        self.assertEqual(
+            loop.Settings.from_env({"CLAUDEPOST_WATCHLIST": "/tmp/w.json"}).watchlist,
+            "/tmp/w.json")
 
     def test_no_watchlist_anywhere_is_not_an_error(self):
         # The contract already covers this: "if it is missing, write one and say
@@ -1316,21 +1916,45 @@ class WatchlistTest(unittest.TestCase):
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
                      "root ignores directory modes; the refusal cannot be staged")
-    def test_a_read_only_secrets_mount_is_a_warning_not_a_failure(self):
-        # The container mounts ~/.claudepost read-only, which is right: it holds
-        # the token. Losing a rotation cursor is not a reason to fail a filing
-        # that has already reached the glass.
+    def test_a_read_only_watchlist_directory_is_a_warning_not_a_failure(self):
+        # This used to be about the secrets mount specifically -- ~/.claudepost
+        # was read-only because it held the token, and a container that lost
+        # its write there still had to keep the filing it had already made. The
+        # secrets are not a mount at all any more (compose hands the token to
+        # the loop as environment), and the cursor's own mount, /state, is
+        # writable. What the assertion still pins is more general and still
+        # true: whatever the reason a rotation write cannot land -- a
+        # misconfigured mount, a full filesystem reporting EROFS, anything --
+        # losing a rotation cursor is not a reason to fail a filing that has
+        # already reached the glass.
         self.write({"symbols": ["NVDA"], "last": "NVDA"})
         self.write_work({"symbols": ["NVDA"], "last": "AAPL"})
-        # The directory rather than the file: the container mounts the whole
-        # secrets directory read-only, and a rename-based write never opens the
-        # target file at all -- the temp file beside it is what cannot be
+        # The directory rather than the file: a rename-based write never opens
+        # the target file at all -- the temp file beside it is what cannot be
         # created. (The earlier in-place writer was tested with a chmodded
         # file; that write path no longer exists.)
         os.chmod(self.tmp, 0o555)
         self.addCleanup(os.chmod, self.tmp, 0o755)
         self.assertFalse(loop.persist_watchlist(self.settings(), self.work))
         self.assertEqual(self.back()["last"], "NVDA")
+
+    def test_the_file_keeps_its_owner_when_a_root_loop_replaces_it(self):
+        # The loop is root inside the container, and this writes into a
+        # directory the operator owns on the host. Without this the first
+        # rotation advance leaves them a root-owned watchlist.json on any host
+        # that maps uids honestly. os.chown is patched rather than called: this
+        # test does not run as root either.
+        cfg = self.settings()
+        self.write({"symbols": ["AAAA"], "last": "AAAA"})
+        before = os.stat(self.path)
+        self.write_work({"symbols": ["AAAA", "BBBB"], "last": "BBBB"})
+        with mock.patch("os.chown") as chown:
+            self.assertTrue(loop.persist_watchlist(cfg, self.work))
+        chown.assert_called_once()
+        self.assertEqual(chown.call_args.args[1:], (before.st_uid, before.st_gid))
+        # And the rename still happened: the owner is carried across a replace,
+        # not instead of one.
+        self.assertEqual(self.back()["last"], "BBBB")
 
 
 class StandaloneParityTest(unittest.TestCase):
