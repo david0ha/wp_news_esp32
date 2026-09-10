@@ -949,7 +949,7 @@ export const en = {
     publishFailed: 'The desk wouldn’t publish it. {detail}',
     sendFailed: 'That didn’t reach the desk. {detail}',
     retry: 'Send again',
-    forgotten: 'The desk no longer has this message, so there’s no answer to fetch.',
+    forgotten: 'The desk has no record of this message, so there’s no answer to fetch.',
     failed: 'The desk couldn’t answer this. {detail}',
     /** `done` with no notes: the command finished and the worker wrote nothing. */
     noAnswer: 'The desk finished with this but wrote no answer.',

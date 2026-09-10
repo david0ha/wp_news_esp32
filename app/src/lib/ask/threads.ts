@@ -171,11 +171,11 @@ export function nextThreads(prev: Thread[], event: ThreadEvent): Thread[] {
       return mapTurn(prev, byCommand(event.commandId), (t) => ({ ...t, error: event.error }))
 
     case 'forgotten':
-      // FAILED AND NOT LEFT ALONE. `command()` answering `null` means the desk does not have this
-      // id — a desk that was reset, or a database replaced, not a row deleted out from under a
-      // turn that was accepted. Without this case that turn would sit `pending` forever, with a
-      // spinner beside it and a poll asking about an id that will never answer, every five seconds
-      // for the life of the install.
+      // FAILED AND NOT LEFT ALONE. `command()` answering `null` means the desk has no record of
+      // this id — its data was replaced, or the phone is pointed at a different desk — not that a
+      // row was deleted out from under a turn that was accepted. Without this case that turn would
+      // sit `pending` forever, with a spinner beside it and a poll asking about an id that will
+      // never answer, every five seconds for the life of the install.
       return mapTurn(prev, byCommand(event.commandId), (t) => ({
         ...t,
         status: 'failed',

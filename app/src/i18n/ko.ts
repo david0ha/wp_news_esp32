@@ -793,7 +793,7 @@ export const ko: Strings = {
     publishFailed: '데스크가 내보내지 못했습니다. {detail}',
     sendFailed: '데스크에 닿지 못했습니다. {detail}',
     retry: '다시 보내기',
-    forgotten: '데스크에 이 메시지가 남아 있지 않아 답변을 가져올 수 없습니다.',
+    forgotten: '데스크에 이 메시지에 대한 기록이 없어 답변을 가져올 수 없습니다.',
     failed: '데스크가 답하지 못했습니다. {detail}',
     noAnswer: '데스크가 끝냈지만 답변을 쓰지 않았습니다.',
     a11y: {
