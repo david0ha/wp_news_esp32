@@ -621,7 +621,8 @@ class ThreadReadsTest(unittest.TestCase):
     def test_a_command_row_comes_back_whole(self):
         row = {"id": CID, "kind": "ask", "text": "why did it move?",
                "reply_to": None, "lang": "ko", "has_notes": True}
-        desk, opener = self._client((200, json.dumps(row).encode()))
+        desk, opener = self._client(
+            (200, json.dumps({"ok": True, "command": row}).encode()))
         self.assertEqual(desk.command(CID), row)
         self.assertEqual(opener.requests[0].full_url,
                          "http://desk:8080/api/commands/" + CID)

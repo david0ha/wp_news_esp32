@@ -533,7 +533,7 @@ phone-specific subset.
 | GET | `/api/commands/<id>/notes.md` | — | the worker's answer, as `text/markdown` |
 | POST | `/api/publish` | — | put a staged revision up now |
 
-Four things about it a client has to get right, because `app/src/lib/ask/`
+Five things about it a client has to get right, because `app/src/lib/ask/`
 got each one wrong once before it got it right:
 
 - **`result`'s first word is the whole vocabulary.** `answered`, `revised

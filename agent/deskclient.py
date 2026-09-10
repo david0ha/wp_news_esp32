@@ -220,9 +220,10 @@ class DeskClient:
         status, doc = self._json("GET", "/api/commands/%s" % cid)
         if status != 200:
             raise self._fail("command %s" % cid, status, doc)
-        if not isinstance(doc, dict) or "id" not in doc:
+        row = doc.get("command") if isinstance(doc, dict) else None
+        if not isinstance(row, dict) or "id" not in row:
             raise self._fail("command %s answered with no row" % cid, status, doc)
-        return doc
+        return row
 
     def command_notes(self, cid: str) -> str | None:
         """The note filed against a command, or ``None`` when it carries none.
