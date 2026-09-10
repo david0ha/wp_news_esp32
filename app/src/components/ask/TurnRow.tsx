@@ -73,8 +73,13 @@ export function TurnRow({
       ) : null}
 
       {/* The desk's own words for a result this app has no vocabulary for — a worker one release
-          ahead, or a failure message. Drawn rather than swallowed. */}
-      {outcome?.kind === 'other' ? <Text style={type.caption}>{outcome.text}</Text> : null}
+          ahead of it. A `failed` turn's `result` is excluded here: it is the SAME sentence
+          `turn.error` below already carries, wrapped in "The desk couldn't answer this" — drawing
+          both put the worker's raw message on screen twice, once bare and once inside the wrapped
+          sentence, for every failure. */}
+      {outcome?.kind === 'other' && turn.status !== 'failed' ? (
+        <Text style={type.caption}>{outcome.text}</Text>
+      ) : null}
 
       {turn.error !== null ? <Text style={styles.error}>{turn.error}</Text> : null}
 
