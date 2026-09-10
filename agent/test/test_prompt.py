@@ -468,6 +468,25 @@ class AskSectionTest(unittest.TestCase):
         self.assertIn("# The edition's language", out)
         self.assertIn("Write every reader-facing string in Korean", out)
 
+    def test_the_edition_and_the_phone_never_swap_languages(self):
+        # The whole reason `ask_lang` sits beside `lang` rather than replacing
+        # it (spec section 3): a message typed in English must not turn a
+        # Korean edition into an English one. The two tests above each set one
+        # of the pair away from its default and check the other side of the
+        # prompt -- which proves the swap didn't happen only because their
+        # defaults happen to differ, an inference that a changed default would
+        # quietly unmake. This test sets *both* away from their defaults, to
+        # *different* languages, in one call, and checks both halves of the
+        # one prompt that call produced: the edition still asks for Korean,
+        # and the ask section's fallback is the phone's English, in the exact
+        # words `ask_section` would produce for it on its own -- not the word
+        # "English" occurring anywhere in a prompt that also legitimately says
+        # "Korean" a few lines up for an unrelated reason.
+        out = self._prompt(lang="ko", ask_lang="en")
+        self.assertIn("Write every reader-facing string in Korean", out)
+        self.assertIn(prompt.ask_section("en"), out)
+        self.assertNotIn("fall back to Korean", out)
+
 
 class SheetPromptTest(unittest.TestCase):
     """The two prompts that follow a proof."""
