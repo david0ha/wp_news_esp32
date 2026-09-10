@@ -46,12 +46,14 @@ the board. A desk that composed notification copy would be a desk that had
 picked a language, and it has not.
 
 **Every kind in the book can fire, but they share five switches rather than
-eight.** ``prefs`` and ``lead`` are keyed by :data:`claudepost.push.KINDS`: the
-four computed kinds each have their own, and the book's other four --
-``corporate``, ``legal``, ``index``, ``other`` -- share ``researched``.
-:func:`claudepost.push.pref_for` is the one place that mapping lives, so this
-module and any future caller cannot disagree about where a court date's
-preference is kept.
+eight.** ``prefs`` is keyed by :data:`claudepost.push.KINDS` and ``lead`` by
+:data:`claudepost.push.LEAD_KINDS` -- the narrower table, because
+:data:`claudepost.push.ANSWER` has no date and so no lead. Among the book's
+own eight kinds, the four computed ones each have their own switch, and the
+other four -- ``corporate``, ``legal``, ``index``, ``other`` -- share
+``researched``. :func:`claudepost.push.pref_for` is the one place that mapping
+lives, so this module and any future caller cannot disagree about where a
+court date's preference is kept.
 """
 
 from __future__ import annotations
@@ -163,7 +165,7 @@ def _zone(device: Mapping) -> ZoneInfo | None:
         return None
 
 
-def _quiet_release(device: Mapping, when: float) -> float | None:
+def quiet_release(device: Mapping, when: float) -> float | None:
     """The end of the quiet window containing ``when``, or ``None``.
 
     ``None`` is "``when`` is not inside a quiet window", which is also the
@@ -175,6 +177,12 @@ def _quiet_release(device: Mapping, when: float) -> float | None:
     awake. It may wrap midnight -- ``23:00`` to ``07:00`` is the ordinary
     case, and :func:`claudepost.push._quiet` has already refused one with no
     width, which is the only shape this arithmetic could not read.
+
+    Public because it is not only the alert path's question any more: an answer
+    to a typed message arrives whenever the worker finishes, which may be at
+    three in the morning, and the desk holds it for the same window and by the
+    same arithmetic. One function, so a phone cannot be quiet for one kind of
+    notification and awake for another.
     """
     quiet = device.get("quiet")
     if not isinstance(quiet, Mapping) or not quiet:
@@ -220,7 +228,7 @@ def defer_for_quiet(alert: Alert, device: Mapping,
     read at the call site as though the device were being asked about in
     general.
     """
-    return _quiet_release(device, now)
+    return quiet_release(device, now)
 
 
 # --------------------------------------------------------------------------
@@ -306,8 +314,9 @@ def due(book: Mapping | None, devices: Sequence[Mapping] | None,
     """Every alert owed at ``now``, soonest event first. Pure.
 
     ``book`` is a normalised event book and ``devices`` the list out of a
-    normalised push document -- ``prefs`` and ``lead`` carrying every switch in
-    :data:`claudepost.push.KINDS`, which is what
+    normalised push document -- ``prefs`` carrying every switch in
+    :data:`claudepost.push.KINDS` and ``lead`` every switch in the narrower
+    :data:`claudepost.push.LEAD_KINDS`, which is what
     :func:`claudepost.push.parse_devices` guarantees and what lets this read
     them without asking whether a switch was mentioned. An event's switch is
     :func:`claudepost.push.pref_for`'s answer, not its kind: the four researched
@@ -363,13 +372,13 @@ def due(book: Mapping | None, devices: Sequence[Mapping] | None,
                 if seconds is None or (token, event_id, lead) in already:
                     continue
 
-                held = _quiet_release(device, at - seconds)
+                held = quiet_release(device, at - seconds)
                 owed_from = (at - seconds) if held is None else held
                 if owed_from > now:
                     continue                      # not yet, or the window holds it
 
                 passed = at <= now
-                if passed and _quiet_release(device, at) is None:
+                if passed and quiet_release(device, at) is None:
                     continue                      # nobody needs telling about yesterday
 
                 title, body = _copy(event, lang, passed)

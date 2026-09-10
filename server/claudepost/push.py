@@ -147,16 +147,33 @@ PLATFORMS: tuple[str, ...] = ("ios", "android")
 #: Sorted so the stored document is stable across writes.
 RESEARCHED = "researched"
 
-KINDS: tuple[str, ...] = tuple(sorted(COMPUTED_KINDS)) + (RESEARCHED,)
+#: The one push that is not about the event book. It is in :data:`KINDS`
+#: because of the rule this module already states -- a kind with no switch is a
+#: kind the owner cannot turn off -- and it is deliberately **not** in
+#: :data:`LEAD_KINDS`, because a lead is "how long before the date to say this"
+#: and an answer has no date. It happens when the worker finishes.
+ANSWER = "answer"
+
+#: The kinds a *lead* is meaningful for: the alerts, every one of them about a
+#: dated event. :data:`DEFAULT_LEAD` is keyed by these and so is a stored
+#: device's ``lead`` map.
+LEAD_KINDS: tuple[str, ...] = tuple(sorted(COMPUTED_KINDS)) + (RESEARCHED,)
+
+#: Every switch the owner has: the alert kinds, plus :data:`ANSWER`.
+KINDS: tuple[str, ...] = LEAD_KINDS + (ANSWER,)
+
+#: The kinds that carry a switch of their own. The four computed ones and the
+#: answer; everything else in the book shares :data:`RESEARCHED`.
+_OWN_SWITCH = frozenset(COMPUTED_KINDS) | {ANSWER}
 
 
 def pref_for(kind: str) -> str:
-    """Which switch an event of ``kind`` answers to.
+    """Which switch a notification of ``kind`` answers to.
 
-    One function so `alerts.py` and any future caller cannot disagree about
-    where a `corporate` event's preference lives.
+    One function so `alerts.py`, `app.py` and any future caller cannot disagree
+    about where a `corporate` event's preference lives.
     """
-    return kind if kind in COMPUTED_KINDS else RESEARCHED
+    return kind if kind in _OWN_SWITCH else RESEARCHED
 
 #: The closed set, and its arithmetic. See the module docstring for why this is
 #: a table rather than a parser.
@@ -214,6 +231,8 @@ _DEVICE_KEYS = frozenset({
 _QUIET_KEYS = frozenset({"from", "to"})
 
 _KIND_KEYS = frozenset(KINDS)
+
+_LEAD_KEYS = frozenset(LEAD_KINDS)
 
 #: Expo's documented request headers. ``accept-encoding`` is theirs and it is
 #: the one line here with a trap under it: ``urllib`` does not decompress
@@ -398,18 +417,22 @@ def _leads(value: object, path: str, kind: str) -> list[str]:
 
 
 def _lead(value: object, path: str) -> dict:
-    """How far ahead each kind is announced.
+    """How far ahead each *dated* kind is announced.
 
     An omitted kind takes :data:`DEFAULT_LEAD`; a kind named with an empty list
     takes nothing. The two are different on purpose -- see the module
     docstring -- and this is the one place in the document where absence and
     emptiness do not mean the same thing.
+
+    :data:`LEAD_KINDS` rather than :data:`KINDS`, so ``answer`` is refused here
+    as an unknown key: a lead for a notification with no date is a number
+    nothing downstream could read.
     """
     doc = {} if value is None else _obj(value, path)
-    _no_extra_keys(doc, _KIND_KEYS, path)
+    _no_extra_keys(doc, _LEAD_KEYS, path)
     return {kind: (list(DEFAULT_LEAD[kind]) if doc.get(kind) is None
                    else _leads(doc[kind], path, kind))
-            for kind in KINDS}
+            for kind in LEAD_KINDS}
 
 
 def _quiet(value: object, path: str) -> dict | None:
@@ -754,3 +777,67 @@ def prune_unregistered(doc: dict, tickets: Sequence[dict]) -> tuple[dict, list[s
     removed = [one["token"] for one in devices
                if isinstance(one, dict) and one.get("token") in gone]
     return dict(doc, devices=kept), removed
+
+
+# --------------------------------------------------------------------------
+# The answer
+# --------------------------------------------------------------------------
+
+#: The delivery ledger's ``lead`` for an answer. Every alert value in that
+#: column is an ISO-8601 duration, and this deliberately is not one: an answer
+#: has no lead, so ``"0"`` cannot collide with a real value and reads in the
+#: table as what it is.
+ANSWER_LEAD = "0"
+
+#: What an answer's notification is titled. The app's own name rather than the
+#: message's subject, because a lock screen already shows the app and the body
+#: is the only line with room to say something.
+ANSWER_TITLE = "Claude Post"
+
+#: The two sentences an answer can carry, by language and by outcome. A failed
+#: command gets its own sentence rather than the same one: a notification that
+#: promised an answer and opens onto an error is a worse failure than the one
+#: it is reporting. What went wrong is the command's `result`, which the phone
+#: reads from the row -- this is only the knock at the door.
+ANSWER_BODY: dict[str, dict[str, str]] = {
+    "en": {"done": "Your answer is ready",
+           "failed": "The desk could not answer that"},
+    "ko": {"done": "답변이 도착했습니다",
+           "failed": "답변을 만들지 못했어요"},
+}
+
+
+def answer_event_id(cid: str) -> str:
+    """The delivery ledger's ``event_id`` for a command's answer.
+
+    Prefixed, because the ledger's rows are keyed ``(token, event_id, lead)``
+    and the event ids in the same table come from the owner's book. A command id
+    and an event id have different shapes today and a prefix means the promise
+    does not rest on that staying true.
+    """
+    return "cmd:" + cid
+
+
+def answer_message(token: str, cid: str, status: str, result: str,
+                   lang: str | None) -> dict:
+    """The Expo message telling one phone its message has an answer.
+
+    ``data`` carries the command id and the **first word** of ``result`` --
+    `answered`, `revised`, `staged`, or whatever a failure's message begins
+    with. The desk does not parse `result` and this is not it starting to: the
+    first word is what tells the phone which screen to open, and it re-reads the
+    row for everything else.
+
+    An unknown or absent ``lang`` takes English. The caller resolves the
+    fallback it wants before calling -- `Desk` uses the desk's own settings --
+    so this is the last line of defence rather than the policy.
+    """
+    copy = ANSWER_BODY.get(lang or "", ANSWER_BODY["en"])
+    words = (result or "").split()
+    return {
+        "to": token,
+        "title": ANSWER_TITLE,
+        "body": copy["done" if status == "done" else "failed"],
+        "sound": "default",
+        "data": {"command_id": cid, "result": words[0] if words else ""},
+    }
