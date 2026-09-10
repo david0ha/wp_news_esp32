@@ -458,6 +458,12 @@ function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
     pushDevices: async () => ({ devices: [] }),
     registerPushDevice: async () => ({ devices: [] }),
     forgetPushDevice: async () => undefined,
+    postCommand: async () => {
+      throw new Error('not used in this file')
+    },
+    command: async () => null,
+    commandNotes: async () => null,
+    publishNow: async () => 'nothing_staged',
     ...over,
   }
 }
