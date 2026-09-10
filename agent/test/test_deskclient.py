@@ -653,6 +653,23 @@ class ThreadReadsTest(unittest.TestCase):
         desk, _ = self._client((404, b""))
         self.assertIsNone(desk.command_notes(CID))
 
+    def test_a_malformed_command_id_is_refused_before_any_request(self):
+        # cid can arrive as a desk-supplied reply_to rather than this
+        # worker's own claim, so it is gated the way put_notes gates a
+        # caller-supplied id -- before it becomes a path segment. A value
+        # with a "/" in it is the dangerous shape: unchecked, it would walk
+        # the request out of /api/commands/ entirely.
+        desk, opener = self._client()
+        with self.assertRaises(ValueError):
+            desk.command("../../etc/passwd")
+        self.assertEqual(opener.requests, [])
+
+    def test_a_malformed_notes_id_is_refused_before_any_request(self):
+        desk, opener = self._client()
+        with self.assertRaises(ValueError):
+            desk.command_notes("../../etc/passwd")
+        self.assertEqual(opener.requests, [])
+
 
 class PublicPlaneTest(unittest.TestCase):
     """The one read this client makes with no token on it.

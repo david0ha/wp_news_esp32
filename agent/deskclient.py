@@ -201,12 +201,22 @@ class DeskClient:
     def command(self, cid: str) -> dict:
         """One command's row, by its id -- the previous turn of a thread.
 
+        ``cid`` is not always this worker's own claim: :func:`loop.handle`
+        also passes a ``reply_to`` read out of a command row here, which is
+        desk-supplied rather than operator-supplied. So it is checked the way
+        :meth:`put_notes` checks a caller-supplied id, before it becomes a
+        path segment -- an unchecked one is the one shape that can walk out
+        of ``/api/commands/`` entirely.
+
         Raises:
+            ValueError: ``cid`` is not a shape the desk mints.
             RuntimeError: any answer that is not a row. A 404 raises like the
                 rest: a ``reply_to`` the desk has never heard of is not an
                 empty conversation, it is a desk and a phone that disagree
                 about what a thread is, and the caller decides what that costs.
         """
+        if not DESK_ID_RE.match(cid):
+            raise ValueError("command: not a command id: %r" % (cid,))
         status, doc = self._json("GET", "/api/commands/%s" % cid)
         if status != 200:
             raise self._fail("command %s" % cid, status, doc)
@@ -217,6 +227,10 @@ class DeskClient:
     def command_notes(self, cid: str) -> str | None:
         """The note filed against a command, or ``None`` when it carries none.
 
+        ``cid`` is held to the same check :meth:`command` holds it to, and
+        for the same reason -- it too can arrive as a desk-supplied
+        ``reply_to`` rather than this worker's own claim.
+
         Returns:
             The text, cut at :data:`MAX_NOTES_BYTES` and decoded with
             ``"ignore"`` for :func:`loop.read_notes`'s reason -- a cut at an
@@ -226,7 +240,12 @@ class DeskClient:
             ``None`` for a 404, which is the ordinary state of a command whose
             turn wrote nothing: a thread whose first answer failed is still a
             thread, and a follow-up to it is still answerable.
+
+        Raises:
+            ValueError: ``cid`` is not a shape the desk mints.
         """
+        if not DESK_ID_RE.match(cid):
+            raise ValueError("command_notes: not a command id: %r" % (cid,))
         status, raw = self._request("GET", "/api/commands/%s/notes.md" % cid)
         if status == 404:
             return None
