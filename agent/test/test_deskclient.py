@@ -611,5 +611,84 @@ class OwnersDocumentsTest(unittest.TestCase):
         self.assertIn("events[3].source", str(caught.exception))
 
 
+class ThreadReadsTest(unittest.TestCase):
+    """The previous turn of a thread: its row and the answer filed against it."""
+
+    def _client(self, *answers):
+        opener = StubOpener(*answers)
+        return deskclient.DeskClient("http://desk:8080", TOKEN, opener), opener
+
+    def test_a_command_row_comes_back_whole(self):
+        row = {"id": CID, "kind": "ask", "text": "why did it move?",
+               "reply_to": None, "lang": "ko", "has_notes": True}
+        desk, opener = self._client((200, json.dumps(row).encode()))
+        self.assertEqual(desk.command(CID), row)
+        self.assertEqual(opener.requests[0].full_url,
+                         "http://desk:8080/api/commands/" + CID)
+        self.assertEqual(opener.requests[0].get_header("Authorization"),
+                         "Bearer " + TOKEN)
+
+    def test_a_command_that_is_not_there_is_a_failure_and_not_an_empty_row(self):
+        desk, _ = self._client((404, b'{"error":"not_found"}'))
+        with self.assertRaises(RuntimeError):
+            desk.command(CID)
+
+    def test_an_answer_that_is_not_json_is_still_not_a_row(self):
+        # _json turns a proxy's HTML page into an envelope; taking that for a
+        # command would put a gateway's error text in front of the model as the
+        # previous turn of the conversation.
+        desk, _ = self._client((200, b"<html>gateway</html>"))
+        with self.assertRaises(RuntimeError):
+            desk.command(CID)
+
+    def test_the_notes_of_a_command_come_back_as_text(self):
+        desk, opener = self._client((200, "답변입니다\n".encode("utf-8")))
+        self.assertEqual(desk.command_notes(CID), "답변입니다\n")
+        self.assertEqual(opener.requests[0].full_url,
+                         "http://desk:8080/api/commands/%s/notes.md" % CID)
+
+    def test_a_command_carrying_no_notes_is_not_a_failure(self):
+        # A first turn that failed before it wrote anything is an ordinary
+        # thread, and a follow-up to it is still answerable.
+        desk, _ = self._client((404, b""))
+        self.assertIsNone(desk.command_notes(CID))
+
+
+class PublicPlaneTest(unittest.TestCase):
+    """The one read this client makes with no token on it.
+
+    /news.json and /tiles/<id>.bin are served to the board with no
+    authorization, so asking for them as an authenticated producer would put a
+    bearer token on a request that does not need one -- and would hide the day
+    the public plane stops being public.
+    """
+
+    def _client(self, *answers):
+        opener = StubOpener(*answers)
+        return deskclient.DeskClient("http://desk:8080", TOKEN, opener), opener
+
+    def test_the_edition_is_fetched_without_a_bearer_token(self):
+        desk, opener = self._client((200, b'{"lang":"en"}'))
+        self.assertEqual(desk.fetch_public("/news.json"), b'{"lang":"en"}')
+        self.assertEqual(opener.requests[0].full_url, "http://desk:8080/news.json")
+        self.assertIsNone(opener.requests[0].get_header("Authorization"))
+
+    def test_a_desk_serving_no_edition_yet_is_not_a_failure(self):
+        desk, _ = self._client((404, b'{"error":"no edition has been filed yet"}'))
+        self.assertIsNone(desk.fetch_public("/news.json"))
+
+    def test_any_other_answer_raises_with_the_token_redacted(self):
+        desk, _ = self._client((500, ("boom " + TOKEN).encode()))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.fetch_public("/news.json")
+        self.assertNotIn(TOKEN, str(caught.exception))
+
+    def test_a_path_that_is_not_one_is_refused_before_the_socket(self):
+        desk, opener = self._client((200, b""))
+        with self.assertRaises(ValueError):
+            desk.fetch_public("news.json")
+        self.assertEqual(opener.requests, [])
+
+
 if __name__ == "__main__":
     unittest.main()
