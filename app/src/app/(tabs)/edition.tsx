@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
@@ -9,9 +9,11 @@ import { Masonry } from '../../components/edition/Masonry'
 import { EditionUrlProvider } from '../../components/edition/editionUrl'
 import { EditionTypeProvider } from '../../components/edition/typeRamp'
 import { PhotoTile } from '../../components/edition/tiles/PhotoTile'
+import { getDeskToken } from '../../lib/deskToken'
 import { isDemo } from '../../lib/edition/editionState'
 import { useEdition } from '../../lib/edition/useEdition'
 import { freshnessLabel } from '../../lib/edition/freshness'
+import { getDeskBaseUrl } from '../../lib/store'
 import {
   COLUMN_GAP,
   columnWidth,
@@ -49,6 +51,21 @@ export default function EditionScreen() {
   // the selection being thrown away — if tomorrow's edition has photographs again, Photos comes
   // back selected rather than needing a second tap.
   const [chip, setChip] = useState<Chip>('all')
+
+  // Whether asking is possible at all. Both are needed: the control plane sends a credential on
+  // every call, so an address with no token can ask nothing. Read once — a token saved in Settings
+  // while this tab is mounted is picked up on the next mount, which is one tab switch away.
+  const [canAsk, setCanAsk] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const [address, token] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+      if (alive) setCanAsk(Boolean(address) && Boolean(token))
+    })()
+    return () => {
+      alive = false
+    }
+  }, [])
 
   // Keyed on the EDITION and not on the cache entry that carries it. A 304 rebuilds the entry to
   // move `fetchedAt` but keeps the same edition object, so this way the page is cut once and a
@@ -139,6 +156,7 @@ export default function EditionScreen() {
                 if (symbol === '') return
                 router.push(`/market/${encodeURIComponent(symbol)}`)
               }}
+              onAsk={canAsk ? () => router.push('/ask') : undefined}
             />
 
             {/* The band: the lead photograph, too wide for a column, run across the page
