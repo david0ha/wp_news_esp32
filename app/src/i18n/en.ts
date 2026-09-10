@@ -186,6 +186,8 @@ export const en = {
         dividend: 'Dividends',
         econ: 'Economic releases',
         researched: 'Dates found by research',
+        // The sixth, and the only one that is not about a future date — so it takes no lead time.
+        answer: 'Answers to your messages',
       },
       leadLabel: 'How far ahead',
       // A kind can be on with nothing chosen, and it is a real setting rather than a mistake — but
@@ -914,6 +916,45 @@ export const en = {
        */
       researched: 'Date found by research',
       openSchedule: 'Open the full schedule',
+    },
+  },
+  ask: {
+    title: 'Ask the desk',
+    /** The Today header's button. One word, because it sits beside a masthead. */
+    open: 'Ask',
+    placeholder: 'Ask about today’s paper — or say what you want changed.',
+    send: 'Send',
+    newThread: 'New question',
+    /** The screen with nothing on it yet. It says what the two kinds of message do. */
+    empty:
+      'Ask a question about today’s paper and the desk answers it. Ask for a change — “lead with the lawsuit”, “add what the CFO said” — and it rewrites the paper.',
+    needsDesk:
+      'Asking the desk needs its address and an operator token. Add them in Settings, then come back.',
+    /** The composer refuses at the desk's own limit rather than posting something it will refuse. */
+    tooLong: 'That’s longer than the desk takes — {max} characters at most.',
+    // While it is out. Three sentences and not one spinner, because the three are minutes apart
+    // and "still working" with no idea which stage is the state that feels broken.
+    status: {
+      sending: 'Sending…',
+      pending: 'Waiting for the desk to pick this up…',
+      claimed: 'The desk is working on it…',
+      expired: 'Nobody picked this up, so it expired.',
+      cancelled: 'This was cancelled.',
+    },
+    /** The chip on a turn that rewrote the paper. */
+    changed: 'The paper changed',
+    /** A revision the desk wrote and did not publish, and the phone could not publish either. */
+    staged: 'The new paper is written but hasn’t gone out yet.',
+    publish: 'Publish it',
+    publishFailed: 'The desk wouldn’t publish it. {detail}',
+    sendFailed: 'That didn’t reach the desk. {detail}',
+    retry: 'Send again',
+    forgotten: 'The desk no longer has this message, so there’s no answer to fetch.',
+    failed: 'The desk couldn’t answer this. {detail}',
+    /** `done` with no notes: the command finished and the worker wrote nothing. */
+    noAnswer: 'The desk finished with this but wrote no answer.',
+    a11y: {
+      openAsk: 'Ask the desk about this edition',
     },
   },
 }
