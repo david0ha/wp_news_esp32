@@ -173,3 +173,78 @@ class AnswerPushTest(AnswerTestCase):
         command = self.desk.finish(cid, "done", "answered")
         self.assertEqual(command["status"], "done")
         self.assertEqual(self.desk.store.deliveries_since(0), [])
+
+
+class DeferredAnswerTest(AnswerTestCase):
+    """An answer that landed at three in the morning is owed, not lost."""
+
+    #: 02:00 KST on a Wednesday: inside `SEOUL_NIGHT`, and the release is 07:00
+    #: the same morning.
+    NIGHT = ts("2026-11-03T17:00:00Z")
+    MORNING = ts("2026-11-03T22:00:00Z")
+
+    def setUp(self):
+        super().setUp()
+        self.clock.set(self.NIGHT)
+        self.given(dev(tz="Asia/Seoul", quiet=SEOUL_NIGHT))
+
+    def test_nothing_leaves_while_the_phone_is_quiet(self):
+        cid = self.asked(lang="en")
+        self.desk.finish(cid, "done", "answered")
+
+        self.assertEqual(self.expo.calls, [])
+        # Nothing recorded, which is precisely what leaves it owed.
+        self.assertEqual(self.desk.store.deliveries_since(0), [])
+
+    def test_it_goes_on_the_first_housekeeping_pass_after_the_window(self):
+        cid = self.asked(lang="en")
+        self.desk.finish(cid, "done", "answered")
+
+        self.desk.tick()                    # the first pass takes housekeeping
+        self.clock.set(self.MORNING)
+        self.assertIn("answers:1", self.desk.tick())
+
+        [message] = self.sent()
+        self.assertEqual(message["data"]["command_id"], cid)
+        self.assertEqual(message["body"], "Your answer is ready")
+
+    def test_it_goes_once_however_often_the_desk_ticks(self):
+        cid = self.asked(lang="en")
+        self.desk.finish(cid, "done", "answered")
+        self.desk.tick()
+
+        self.clock.set(self.MORNING)
+        self.desk.tick()
+        for _ in range(5):
+            self.clock.advance(HOUSEKEEPING_SECONDS)
+            self.assertNotIn("answers:1", self.desk.tick())
+        self.assertEqual(len(self.sent()), 1, self.sent())
+
+    def test_a_restart_inside_the_window_still_owes_the_answer(self):
+        """The idempotency and the debt are both the ledger, not memory. A
+        restart is exactly when a desk would either forget or repeat."""
+        cid = self.asked(lang="en")
+        self.desk.finish(cid, "done", "answered")
+        self.desk.close()
+
+        self.clock.set(self.MORNING)
+        self.desk = self.a_desk()
+        self.assertEqual(len(self.desk.push_devices["devices"]), 1)
+        self.assertIn("answers:1", self.desk.tick())
+        self.assertEqual(len(self.sent(self.desk.push_fetch)), 1)
+
+    def test_an_answer_older_than_the_window_is_not_owed_forever(self):
+        cid = self.asked(lang="en")
+        self.desk.finish(cid, "done", "answered")
+        self.desk.tick()
+
+        self.clock.advance(ANSWER_WINDOW_SECONDS + HOUSEKEEPING_SECONDS)
+        self.assertNotIn("answers:1", self.desk.tick())
+        self.assertEqual(self.expo.calls, [])
+
+    def test_the_pass_costs_nothing_on_a_desk_with_no_phone(self):
+        self.desk.set_push_devices(P.parse_devices({"devices": []}))
+        cid = self.asked(lang="en")
+        self.desk.finish(cid, "done", "answered")
+        self.clock.set(self.MORNING)
+        self.assertNotIn("answers:1", self.desk.tick())

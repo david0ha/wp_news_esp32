@@ -466,6 +466,29 @@ class Store:
                 "SELECT COUNT(*) FROM commands WHERE status = 'pending'"
             ).fetchone()[0])
 
+    def finished_since(self, t: float, source: str) -> list[dict]:
+        """``done`` and ``failed`` commands from ``source`` that ended after ``t``.
+
+        Oldest first, and bounded on purpose for
+        :meth:`deliveries_since`' reason: the caller decides how far back an
+        answer can still be owed, and an unbounded read would grow with the
+        queue forever over rows nothing can act on. It runs on the scheduler's
+        housekeeping pass, on the connection the publish path writes.
+
+        ``expired`` and ``cancelled`` are excluded because neither is a worker's
+        report: nobody wrote an answer, so there is nothing to announce.
+        """
+        since = epoch_seconds(t, "t")
+        if since is None:
+            raise BadRequest(message="a window starts at an instant")
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM commands "
+                " WHERE source = ? AND finished_at IS NOT NULL "
+                "   AND finished_at >= ? AND status IN ('done', 'failed') "
+                " ORDER BY finished_at ASC", (source, since)).fetchall()
+        return [dict(r) for r in rows]
+
     # -- directives --------------------------------------------------------
 
     def add_directive(self, rule: str, scope: str = "always",

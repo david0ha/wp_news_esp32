@@ -310,6 +310,15 @@ class Desk:
             if swept or pruned or aged:
                 did.append("housekeeping:%d/%d/%d" % (swept, pruned, aged))
 
+            # On the housekeeping pass rather than every tick: what this waits
+            # for is a quiet window ending, which is hour-scale, so ten minutes
+            # of grain costs an answer nothing -- where a query every five
+            # seconds to find nothing all day would be a read on the connection
+            # the publish path writes.
+            owed = self._fire_owed_answers(t)
+            if owed:
+                did.append("answers:%d" % owed)
+
         return did
 
     # -- commands -----------------------------------------------------------
@@ -952,6 +961,35 @@ class Desk:
         self._forget_unregistered(tickets)
         LOG.info("alerts: sent %d of %d owed", sent, len(ready))
         return "alerts:%d" % sent if sent else None
+
+    def _fire_owed_answers(self, t: float) -> int:
+        """Send the answer pushes a quiet window or a restart held back.
+
+        **Every exception is caught**, `_fire_due_alerts`' rule and for its
+        reason: the rest of the housekeeping and the publish run after this
+        line, and the failure it would die on is a network, which is to say a
+        Tuesday. The log line carries the exception's *type* and not its text,
+        because what this path holds in its hands is a list of push tokens.
+        """
+        try:
+            return self._send_owed_answers(t)
+        except Exception as exc:                                   # noqa: BLE001
+            LOG.warning("answers: the pass failed (%s)", type(exc).__name__)
+            return 0
+
+    def _send_owed_answers(self, t: float) -> int:
+        """The pass itself. See :meth:`_fire_owed_answers` for why it is wrapped.
+
+        The cheap question first, as the alert pass asks it: a desk with no
+        phone registered finds that out without opening a read on the database.
+        """
+        if not (self.push_devices or {}).get("devices"):
+            return 0
+        sent = 0
+        for command in self.store.finished_since(t - ANSWER_WINDOW_SECONDS,
+                                                 PHONE_SOURCE):
+            sent += self._send_answer(command, t)
+        return sent
 
     def _forget_unregistered(self, tickets: list[dict]) -> None:
         """Drop the phones Expo says no longer exist.
