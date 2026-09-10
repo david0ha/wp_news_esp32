@@ -33,6 +33,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 
 LOG = logging.getLogger("worker.desk")
 
@@ -195,6 +196,94 @@ class DeskClient:
         verb = "done" if ok else "fail"
         self._json("POST", "/api/commands/%s/%s" % (cid, verb),
                    {"result": self._redact(result)[:4000]})
+
+    # -- threads ------------------------------------------------------------
+    def command(self, cid: str) -> dict:
+        """One command's row, by its id -- the previous turn of a thread.
+
+        ``cid`` is not always this worker's own claim: :func:`loop.handle`
+        also passes a ``reply_to`` read out of a command row here, which is
+        desk-supplied rather than operator-supplied. So it is checked the way
+        :meth:`put_notes` checks a caller-supplied id, before it becomes a
+        path segment -- an unchecked one is the one shape that can walk out
+        of ``/api/commands/`` entirely.
+
+        Raises:
+            ValueError: ``cid`` is not a shape the desk mints.
+            RuntimeError: any answer that is not a row. A 404 raises like the
+                rest: a ``reply_to`` the desk has never heard of is not an
+                empty conversation, it is a desk and a phone that disagree
+                about what a thread is, and the caller decides what that costs.
+        """
+        if not DESK_ID_RE.match(cid):
+            raise ValueError("command: not a command id: %r" % (cid,))
+        status, doc = self._json("GET", "/api/commands/%s" % cid)
+        if status != 200:
+            raise self._fail("command %s" % cid, status, doc)
+        if not isinstance(doc, dict) or "id" not in doc:
+            raise self._fail("command %s answered with no row" % cid, status, doc)
+        return doc
+
+    def command_notes(self, cid: str) -> str | None:
+        """The note filed against a command, or ``None`` when it carries none.
+
+        ``cid`` is held to the same check :meth:`command` holds it to, and
+        for the same reason -- it too can arrive as a desk-supplied
+        ``reply_to`` rather than this worker's own claim.
+
+        Returns:
+            The text, cut at :data:`MAX_NOTES_BYTES` and decoded with
+            ``"ignore"`` for :func:`loop.read_notes`'s reason -- a cut at an
+            exact byte count is not guaranteed to land on a character boundary,
+            and a visible ``�`` is a worse ending than one missing letter.
+
+            ``None`` for a 404, which is the ordinary state of a command whose
+            turn wrote nothing: a thread whose first answer failed is still a
+            thread, and a follow-up to it is still answerable.
+
+        Raises:
+            ValueError: ``cid`` is not a shape the desk mints.
+        """
+        if not DESK_ID_RE.match(cid):
+            raise ValueError("command_notes: not a command id: %r" % (cid,))
+        status, raw = self._request("GET", "/api/commands/%s/notes.md" % cid)
+        if status == 404:
+            return None
+        if status != 200:
+            raise self._fail("notes for %s" % cid, status, raw)
+        return raw[:MAX_NOTES_BYTES].decode("utf-8", "ignore")
+
+    # -- the public plane -------------------------------------------------
+    def fetch_public(self, path: str) -> bytes | None:
+        """One object off the plane the board reads, with **no** bearer token.
+
+        Args:
+            path: an absolute path on the desk -- ``/news.json`` or
+                ``/tiles/<id>.bin``. Anything not starting with ``/`` is a
+                caller's bug and raises before a socket is opened.
+
+        Returns:
+            The bytes, or ``None`` for a 404 -- which is a real state and not a
+            failure: a desk brought up before its first edition answers exactly
+            that, and a tile an edition names may have gone.
+
+        The missing header is the point of this method rather than an
+        omission. These two routes are served to the board with no
+        authorization at all, so asking for them as a producer would put a
+        bearer token on a request that does not need one -- and would hide the
+        day the public plane stopped being public behind a token that made it
+        work anyway.
+        """
+        if not path.startswith("/"):
+            raise ValueError("a public path starts with '/': %r" % path)
+        req = urllib.request.Request(self.base + path, method="GET")
+        try:
+            with self.opener(req, timeout=120) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise self._fail("public %s" % path, e.code, e.read())
 
     # -- drafts -----------------------------------------------------------
     def open_draft(self) -> str:
@@ -506,24 +595,41 @@ class DeskClient:
             raise self._fail("put calendar", status, raw)
 
 
-def read_token(secrets: str) -> str:
-    """The producer token, from the mounted secrets directory.
+def read_token(secrets: str, environ: Mapping[str, str] | None = None) -> str:
+    """The producer token: from the environment, then the mounted directory.
 
     Args:
-        secrets: the directory ``~/.claudepost`` is mounted at, read-only.
+        secrets: the directory ``~/.claudepost`` is mounted at, when it is.
+        environ: the process environment; ``os.environ`` by default. An
+            argument so that a test can state one rather than patch one.
 
-    Two shapes are accepted because two things write them: ``agent.env`` is what
-    a human edits, ``tokens.json`` is what the desk reads. ``agent.env`` wins
-    when both hold one, because it is the one somebody edited last.
+    Three shapes are accepted because three things write them, and the order is
+    "what this process was started with" before "what somebody wrote once" --
+    which is also ``agent/run-host.sh``'s rule for its own ``.env``.
+
+    The environment is first because it is the container's route and the only
+    one that holds. ``agent/compose.yaml`` reads ``~/.claudepost/agent.env`` on
+    the HOST, through ``env_file``, and the file is not mounted at all: a
+    bind-mounted file's mode is not enforced on Docker Desktop for Mac -- a
+    0600 file mounted in was read straight out by an unprivileged container user
+    when this was measured -- so ``model`` could open a mounted ``agent.env``
+    however it was chmodded. It cannot open ``/proc/<loop>/environ``, because
+    that is a different uid and the kernel does enforce that one.
+
+    ``agent.env`` and ``tokens.json`` follow, for a host run where neither is a
+    problem: there the turn runs as the operator anyway.
 
     Neither is ever logged, and a missing token is a hard exit rather than a
-    loop that retries forever against a 401 -- a worker that cannot
-    authenticate will not start being able to, and a container that exits is a
-    container somebody notices.
+    loop that retries forever against a 401.
 
     Raises:
         SystemExit: with code 2, when there is no producer token to be had.
     """
+    env = os.environ if environ is None else environ
+    token = env.get("CLAUDEPOST_TOKEN")
+    if token:
+        return token
+
     env_path = os.path.join(secrets, "agent.env")
     token = _read_env_file(env_path).get("CLAUDEPOST_TOKEN")
     if token:
@@ -537,8 +643,9 @@ def read_token(secrets: str) -> str:
             if entry.get("scope") == "producer":
                 return entry["token"]
 
-    LOG.error("no producer token: put CLAUDEPOST_TOKEN in %s, or a producer entry in %s",
-              env_path, tokens_path)
+    LOG.error("no producer token: set CLAUDEPOST_TOKEN in this process's "
+              "environment (agent/compose.yaml's env_file does it), or put it "
+              "in %s, or a producer entry in %s", env_path, tokens_path)
     raise SystemExit(2)
 
 

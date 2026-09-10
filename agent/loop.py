@@ -48,6 +48,7 @@ import datetime
 import json
 import logging
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -109,6 +110,45 @@ MAX_WATCHLIST_BYTES = 64 * 1024
 #: The command kind that files the event book instead of a page. It is the one
 #: kind that decides the whole shape of a run by itself -- see :func:`handle`.
 CALENDAR_KIND = "calendar"
+
+#: The command kind the phone posts: a message about the paper, answered in
+#: `answer.md`, which becomes an edition only if the model decided the message
+#: asked for one. Like `custom`, the disk decides -- see :func:`handle`.
+ASK_KIND = "ask"
+
+#: Where the edition the message is about is put. A directory rather than a
+#: bare file because the payload names its pictures by id, and a model asked
+#: whether the photograph suits the story cannot answer that from an id.
+CURRENT_DIR = "current"
+
+#: The reply to a person. A second file beside ``notes.md`` rather than the same
+#: one, because an `ask` that rewrites the paper writes both: the dossier goes
+#: on the draft and the answer goes on the command, where the phone reads it.
+ANSWER_NAME = "answer.md"
+
+#: One turn of the conversation behind this message. One, not the thread: the
+#: desk keeps every turn and the phone shows them, and the prompt gets the one
+#: that matters.
+PREVIOUS_NAME = "previous.md"
+
+#: What a commit's state is called back to the phone. ``unchanged`` is
+#: ``revised`` on purpose: the owner asked for a change, the desk decided the
+#: result was byte-identical to what was already current, and the honest answer
+#: to the person waiting is still "I changed the paper" -- the answer.md says
+#: what was done. Anything else is passed through under its own name rather
+#: than guessed at.
+ASK_STATES = {"published": "revised", "unchanged": "revised", "staged": "staged"}
+
+#: ``tiles.TILE_ID_RE`` on the desk's side of the token, which is ``ui_tile.c``'s
+#: ``id_ok()`` restated. Checked here because an id off the wire becomes a URL
+#: and then a filename -- :func:`fetch_sheets`' argument, on the other document.
+TILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,15}\Z")
+
+#: ``tiles.MAX_PAYLOAD_BYTES`` and ``tiles.MAX_TILE_BYTES``, duplicated for
+#: :data:`MAX_POSITIONS_BYTES`'s reason: what these bound is not the socket but
+#: what is written into a directory a language model is about to read.
+MAX_PUBLIC_PAYLOAD_BYTES = 300 * 1024
+MAX_PUBLIC_TILE_BYTES = 960_000
 
 #: What ``tools/edition/CALENDAR.md`` calls the three files a calendar run is
 #: given beside the watch list, in the directory where its input table says
@@ -186,10 +226,21 @@ SYSTEM_NOTE = _SOLO_NOTE.format(job="filing one newspaper edition", work="pages"
 CALENDAR_SYSTEM_NOTE = _SOLO_NOTE.format(job="compiling one event book",
                                          work="entries")
 
+#: The same note for the third job. "Answer" rather than "pages", because a
+#: turn told it is filing a newspaper and then handed rules under which most
+#: messages file nothing has been nudged toward writing the very ``news.json``
+#: rule 2 declined -- the same mistake the calendar note was split out to fix.
+ASK_SYSTEM_NOTE = _SOLO_NOTE.format(job="answering one message about the newspaper",
+                                    work="answer")
+
 
 def system_note(kind: str) -> str:
-    """Which solo note this run gets. One `if`, in one place."""
-    return CALENDAR_SYSTEM_NOTE if kind == "calendar" else SYSTEM_NOTE
+    """Which solo note this run gets. One decision, in one place."""
+    if kind == CALENDAR_KIND:
+        return CALENDAR_SYSTEM_NOTE
+    if kind == ASK_KIND:
+        return ASK_SYSTEM_NOTE
+    return SYSTEM_NOTE
 
 #: The ceiling on the claim backoff. Five minutes is long enough that a desk
 #: down overnight costs a handful of log lines rather than thousands, and short
@@ -224,6 +275,10 @@ class Settings:
     use_api_key: bool
     tools: str
     log_level: str
+    #: The user every `claude` turn is spawned as, or "" for "do not switch".
+    #: Set to `model` by the image; empty under agent/run-host.sh, where the
+    #: turn runs as the operator and there is nobody to switch to.
+    run_as: str
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":
@@ -241,11 +296,11 @@ class Settings:
             secrets=secrets,
             repo=env.get("CLAUDEPOST_REPO", "/repo"),
             scratch=env.get("CLAUDEPOST_SCRATCH", "/scratch"),
-            # Beside the token rather than in the scratch: the scratch is made
-            # fresh per command, and the rotation is the one piece of state that
-            # has to outlive both a command and a container.
-            watchlist=(env.get("CLAUDEPOST_WATCHLIST")
-                       or os.path.join(secrets, WATCHLIST_NAME)),
+            # /state rather than beside the token: the secrets are not a mount
+            # any more, and the rotation needs a writable one. Nothing
+            # confidential goes here -- the watch list is seeded into the
+            # workdir in front of the model on purpose.
+            watchlist=(env.get("CLAUDEPOST_WATCHLIST") or "/state/watchlist.json"),
             context_dir=env.get("AGENT_CONTEXT_DIR") or None,
             write_briefs=env.get("AGENT_WRITE_BRIEFS", "0").strip().lower() in _TRUTHY,
             once=env.get("CLAUDEPOST_ONCE", "0").strip().lower() in _TRUTHY,
@@ -264,6 +319,10 @@ class Settings:
             # never what anybody meant -- it is a worker that can do nothing.
             tools=env.get("AGENT_TOOLS") or DEFAULT_TOOLS,
             log_level=env.get("CLAUDEPOST_LOG_LEVEL", "INFO"),
+            # Empty means "run the turn as this process's own user", which is
+            # what a host run wants and what a container without the second
+            # user can do. The image sets it; nothing else does.
+            run_as=env.get("AGENT_RUN_AS", "").strip(),
         )
 
 
@@ -345,7 +404,63 @@ def claude_argv(cfg: Settings, workdir: str, kind: str = "file_edition") -> list
     argv += ["--append-system-prompt", system_note(kind),
              "--disallowedTools", DENY_TOOLS,
              "--allowedTools", cfg.tools.format(repo=cfg.repo)]
+    # gosu rather than a setuid anything, and root rather than a preference:
+    # this prefix only works because the loop is uid 0. A process that is not
+    # root cannot change uid at all -- gosu is not setuid and compose sets
+    # `no-new-privileges:true` -- which is why `main` refuses to start a
+    # non-root loop with this set rather than discovering it here, one claim in.
+    if cfg.run_as:
+        argv = ["gosu", cfg.run_as] + argv
     return argv
+
+
+def run_as_home(user: str) -> str:
+    """The home directory of the user a turn is handed to.
+
+    ``claude`` writes its own configuration under ``$HOME``, so a child that
+    keeps the loop's ``HOME`` fails on its first write into a directory it does
+    not own -- with a message about a config file rather than about a uid.
+
+    A user this machine does not have answers ``/home/<user>`` rather than
+    raising: this is a pure function so that the argv and env tests can assert
+    it anywhere, and the place a missing user is actually caught is
+    :func:`own_workdir`, which has to look it up for real.
+    """
+    try:
+        return pwd.getpwnam(user).pw_dir
+    except KeyError:
+        return os.path.join("/home", user)
+
+
+def own_workdir(cfg: Settings, workdir: str) -> None:
+    """Hand the command's directory to the user the turn will run as.
+
+    Called once, after every seeded file is written and before the first turn.
+    After, because the loop writes those files and the contract asks the model
+    to rewrite ``watchlist.json`` in place; before, because the turn is what
+    needs to write there at all.
+
+    Does nothing when no user is being switched to, which is every host run.
+
+    Raises:
+        RuntimeError: ``AGENT_RUN_AS`` names a user this image does not have.
+            :func:`main` has already refused to start a loop that is not root,
+            so the remaining way to get here is a typo, and a command that fails
+            by name beats a turn that runs as the loop with the wall silently
+            absent.
+    """
+    if not cfg.run_as:
+        return
+    try:
+        ent = pwd.getpwnam(cfg.run_as)
+    except KeyError:
+        raise RuntimeError(
+            "AGENT_RUN_AS=%s is not a user in this image; the turn has nobody "
+            "to be handed to" % cfg.run_as)
+    for root, dirs, files in os.walk(workdir):
+        for name in dirs + files:
+            os.chown(os.path.join(root, name), ent.pw_uid, ent.pw_gid)
+    os.chown(workdir, ent.pw_uid, ent.pw_gid)
 
 
 def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = None) -> dict:
@@ -381,10 +496,9 @@ def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = N
     # `GET /api/positions`, which is the owner's strikes, sizes and entry
     # prices, where before this branch it read editions.
     if env.pop("CLAUDEPOST_TOKEN", None) is not None:
-        LOG.warning("CLAUDEPOST_TOKEN was in this process's environment; "
-                    "keeping it out of the child. The worker reads it from "
-                    "%s and the child has no use for it.",
-                    os.path.join(cfg.secrets, "agent.env"))
+        LOG.debug("the desk token is in this process's environment, which is "
+                  "where compose's env_file puts it; keeping it out of the "
+                  "child, which has no use for it.")
     # The metered key comes out when the subscription can pay instead.
     # run-host.sh unsets it from its own environment, but agent.env -- the file
     # a container operator is told to keep, and the file run-host.sh advertises
@@ -398,6 +512,13 @@ def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = N
         LOG.warning("ANTHROPIC_API_KEY is set beside a CLI login; keeping it "
                     "out of the child so the subscription pays. "
                     "CLAUDEPOST_USE_API_KEY=1 spends the key instead.")
+    # The child is about to become somebody else, so its home moves with it.
+    # Left at the loop's, `claude` writes its configuration into a directory it
+    # does not own and the turn fails on something that reads like a bad
+    # install.
+    if cfg.run_as:
+        env["HOME"] = run_as_home(cfg.run_as)
+        env["USER"] = env["LOGNAME"] = cfg.run_as
     return env
 
 
@@ -409,7 +530,16 @@ def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict,
     the default because they are always about an edition -- there is no proof
     sheet to look at on a calendar run.
     """
-    env = child_env(cfg, workdir, extra_env)
+    # The credential probe inside child_env has to look at the home the child
+    # will actually run with, not the loop's -- when a turn is handed to
+    # another user, that is run_as_home(cfg.run_as), the same value child_env
+    # itself writes into the child's HOME a few lines later. Left at None here,
+    # the probe would keep checking the loop's own home (`/root` in the image)
+    # forever, and a CLI login placed under the model user's home would never
+    # be found: ANTHROPIC_API_KEY would stay in the child's environment and the
+    # metered key would silently win over the subscription.
+    env = child_env(cfg, workdir, extra_env,
+                     home=run_as_home(cfg.run_as) if cfg.run_as else None)
 
     argv = claude_argv(cfg, workdir, kind)
     prompt_text = text + "\n\nThe repository is at %s. The edition directory is %s." % (
@@ -429,8 +559,8 @@ def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict,
     return proc.returncode
 
 
-def read_notes(workdir: str) -> str | None:
-    """``workdir/notes.md`` -- the dossier behind whatever else the run wrote.
+def _read_workdir_text(workdir: str, name: str) -> str | None:
+    """One text file out of the workdir, capped and decoded forgivingly.
 
     Capped at :data:`deskclient.MAX_NOTES_BYTES`, the same quarter-megabyte
     the desk itself refuses past: reading further into memory only to have
@@ -441,42 +571,52 @@ def read_notes(workdir: str) -> str | None:
     land on a UTF-8 character boundary, and a visible ``�`` at the cut is a
     worse ending than the one dropped character silently missing.
 
-    Returns:
-        The note's text, or ``None`` when there is no ``notes.md``. That is
-        the ordinary case rather than a failure -- a turn with nothing worth
-        writing down left nothing behind, the way an edition with no picture
-        is still a normal edition. Never raises: a directory that vanished
-        between the write and this read is not a reason to lose the payload
-        it sits beside.
+    Never raises: a directory that vanished between the write and this read
+    is not a reason to lose the payload beside it.
     """
     try:
-        with open(os.path.join(workdir, "notes.md"), "rb") as f:
+        with open(os.path.join(workdir, name), "rb") as f:
             data = f.read(MAX_NOTES_BYTES)
     except OSError:
         return None
     return data.decode("utf-8", "ignore")
 
 
-def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
-               command: str | None = None) -> None:
-    """File ``workdir/notes.md`` on a draft or a command, best effort.
+def read_notes(workdir: str) -> str | None:
+    """``workdir/notes.md`` -- the dossier behind whatever else the run wrote.
+
+    Returns:
+        The note's text, or ``None`` when there is no ``notes.md``. That is
+        the ordinary case rather than a failure -- a turn with nothing worth
+        writing down left nothing behind, the way an edition with no picture
+        is still a normal edition.
+    """
+    return _read_workdir_text(workdir, "notes.md")
+
+
+def read_answer(workdir: str) -> str | None:
+    """``workdir/answer.md`` -- the reply an `ask` writes to a person.
+
+    Separate from :func:`read_notes` because they are separate documents: a
+    message that changes the paper produces a dossier about the page *and* a
+    reply about the change, and they go to different places.
+    """
+    return _read_workdir_text(workdir, ANSWER_NAME)
+
+
+def put_notes_best_effort(desk: DeskClient, text: str | None, *,
+                          draft: str | None = None,
+                          command: str | None = None) -> None:
+    """File one piece of text as a note, best effort.
 
     Best effort is the whole of it. A note is evidence about a page, not the
     page: a desk that refused one -- too large, some transient failure -- is
     not a reason to hold back an edition that has already passed every gate
-    that matters, nor to report a turn that did the work as failed. So the
-    refusal is a log line and nothing else, and a turn that wrote no
-    ``notes.md`` is the ordinary case rather than a failure to report.
-
-    One function rather than the same shape at each of the two places a note is
-    filed, because "best effort" is a *policy*, and a policy written down twice
-    is one that can be half-changed -- the two would then disagree about
-    whether a refused note costs the work it was filed beside.
+    that matters, nor to report a turn that did the work as failed.
 
     ``ValueError`` is deliberately not caught: naming both or neither of
     ``draft``/``command`` is a bug in this file, not a desk that said no.
     """
-    text = read_notes(workdir)
     if not text:
         return
     try:
@@ -484,6 +624,18 @@ def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
     except RuntimeError as e:
         owner = f"draft {draft}" if draft is not None else f"command {command}"
         LOG.warning("could not file notes on %s: %s", owner, e)
+
+
+def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
+               command: str | None = None) -> None:
+    """File ``workdir/notes.md`` on a draft or a command, best effort.
+
+    One function rather than the same shape at each of the two places a note is
+    filed, because "best effort" is a *policy*, and a policy written down twice
+    is one that can be half-changed -- the two would then disagree about
+    whether a refused note costs the work it was filed beside.
+    """
+    put_notes_best_effort(desk, read_notes(workdir), draft=draft, command=command)
 
 
 def upload(desk: DeskClient, workdir: str) -> str:
@@ -598,10 +750,9 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
     empty list or a truncated write would end the rotation permanently and
     silently, which is a worse failure than the run having advanced nothing.
 
-    A read-only secrets directory -- which is how ``agent/compose.yaml`` mounts
-    it, correctly, because it holds the token -- is a warning and not a failure.
-    Losing a cursor is not a reason to fail a filing that already reached the
-    glass.
+    A directory the loop cannot write into -- a misconfigured mount, a full
+    filesystem -- is a warning and not a failure. Losing a cursor is not a
+    reason to fail a filing that already reached the glass.
     """
     path = os.path.join(workdir, WATCHLIST_NAME)
     data = _read_watchlist(path, "the watch list came back too large to be "
@@ -626,6 +777,16 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
     try:
         with open(tmp, "wb") as f:
             f.write(data)
+        # The loop is root inside the container and this file is the operator's,
+        # on a mount they own. Carry the owner across rather than leaving them a
+        # root-owned watch list after the first rotation advance. Best effort:
+        # on a host where the loop is not root this is a no-op that raises, and
+        # a cursor is not worth failing a filing over.
+        try:
+            before = os.stat(cfg.watchlist)
+            os.chown(tmp, before.st_uid, before.st_gid)
+        except OSError:
+            pass
         os.replace(tmp, cfg.watchlist)
     except OSError as e:
         try:
@@ -760,6 +921,132 @@ def seed_econ(desk: DeskClient, workdir: str,
                        "events": events},
                       workdir, ECON_NAME, MAX_ECON_BYTES,
                       "the economic window")
+
+
+def _current_tile_ids(doc) -> list[str]:
+    """Every tile the served edition can ask for: the photographs and the thumbs.
+
+    The same two places ``tools/mock_news_server.py``'s ``_tile_problems``
+    looks, and an id that is not one is dropped here rather than fetched: it
+    becomes a URL and then a filename.
+    """
+    ids = []
+    if not isinstance(doc, dict):
+        return ids
+    for story in doc.get("stories") or []:
+        if not isinstance(story, dict):
+            continue
+        photo = story.get("photo")
+        tid = photo.get("id") if isinstance(photo, dict) else None
+        if isinstance(tid, str) and TILE_ID_RE.match(tid):
+            ids.append(tid)
+    for thumb in doc.get("thumbs") or []:
+        if not isinstance(thumb, dict):
+            continue
+        tid = thumb.get("id")
+        if isinstance(tid, str) and TILE_ID_RE.match(tid):
+            ids.append(tid)
+    return sorted(set(ids))
+
+
+def seed_current(desk: DeskClient, workdir: str) -> bool:
+    """Put the edition the desk is serving now in the workdir. **`ask` runs only.**
+
+    Returns:
+        True if the paper was written, False when the desk is serving none --
+        the documented first run, exactly as a missing watch list is. A message
+        is still answerable then ("what is EPS"); what is not possible is a
+        revision, because the prompt's rule 3 revises by copying a file that is
+        not there.
+
+    Raises:
+        RuntimeError: the desk answered with something that is not an edition.
+            A precondition rather than an enrichment, and the line is the same
+            one :meth:`deskclient.DeskClient.positions` draws: a run that
+            rewrote the paper while it could not read the paper would replace a
+            good edition with one written from nothing.
+
+    Fetched off the **public** plane, with no token on the request. That is not
+    a shortcut around the control plane -- it is the same bytes the board reads,
+    which is what the message is about.
+    """
+    raw = desk.fetch_public("/news.json")
+    if raw is None:
+        LOG.info("the desk is serving no edition yet; this message is about a "
+                 "paper that does not exist")
+        return False
+    if len(raw) > MAX_PUBLIC_PAYLOAD_BYTES:
+        raise RuntimeError("the served edition is %d bytes, past the %d a payload "
+                           "may be" % (len(raw), MAX_PUBLIC_PAYLOAD_BYTES))
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        raise RuntimeError("the desk served an edition that is not JSON: %s" % e)
+
+    into = os.path.join(workdir, CURRENT_DIR)
+    os.makedirs(os.path.join(into, "tiles"), exist_ok=True)
+    with open(os.path.join(into, "news.json"), "wb") as f:
+        f.write(raw)
+
+    kept = 0
+    for tid in _current_tile_ids(doc):
+        path = "/tiles/%s.bin" % tid
+        try:
+            data = desk.fetch_public(path)
+        except RuntimeError as e:
+            LOG.warning("could not fetch %s: %s", path, e)
+            continue
+        if data is None:
+            LOG.warning("the edition names %s and the desk does not hold it", path)
+            continue
+        if len(data) > MAX_PUBLIC_TILE_BYTES:
+            LOG.warning("%s is %d bytes; not seeded", path, len(data))
+            continue
+        with open(os.path.join(into, "tiles", tid + ".bin"), "wb") as f:
+            f.write(data)
+        kept += 1
+
+    LOG.info("the current edition: %d bytes and %d tile(s)", len(raw), kept)
+    return True
+
+
+def seed_previous(desk: DeskClient, workdir: str, reply_to: str) -> bool:
+    """Put the turn this message answers in the workdir. **`ask` runs only.**
+
+    Returns:
+        True if a file was written, False when the earlier turn could not be
+        read at all -- including a ``reply_to`` that is not a command id,
+        which :meth:`deskclient.DeskClient.command` refuses with a
+        ``ValueError`` before it ever becomes a URL.
+
+    An **enrichment**, not a precondition -- :meth:`deskclient.DeskClient.directives`'
+    posture rather than :meth:`positions`'. Losing the earlier turn costs the
+    conversation, not the answer: the message itself is still in the prompt, so
+    the worst case is a reply that does not remember rather than a command that
+    fails. That is also why a malformed ``reply_to`` is folded into the same
+    outcome rather than checked here first: this file carries no id pattern of
+    its own -- ``deskclient.DESK_ID_RE`` is the one rule for what a command id
+    looks like, and :meth:`command`/:meth:`command_notes` already enforce it,
+    as a ``ValueError``, before either call reaches a URL.
+
+    One turn back, not the thread. The desk keeps every turn and the phone shows
+    them; what the prompt gets is the one that this message is a follow-up to.
+    """
+    try:
+        row = desk.command(reply_to)
+        answer = desk.command_notes(reply_to)
+    except (RuntimeError, ValueError) as e:
+        LOG.warning("could not read the turn before this one (%s); answering "
+                    "without it", e)
+        return False
+    text = "".join([
+        "# The turn before this one\n\n",
+        "## What was asked\n\n%s\n" % (row.get("text") or "(nothing was recorded)"),
+        "\n## What you answered\n\n%s\n" % (answer or "(no answer was filed)"),
+    ])
+    with open(os.path.join(workdir, PREVIOUS_NAME), "w", encoding="utf-8") as f:
+        f.write(text)
+    return True
 
 
 def upload_calendar(desk: DeskClient, workdir: str) -> dict:
@@ -909,10 +1196,19 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
       would be an edition written by the one turn holding the owner's option
       positions, published at a URL with no authorization on it. So the disk
       is consulted and the answer is a refusal -- see :func:`upload_calendar`.
+    - ``"ask"`` is a message from the phone, and it decides the way ``custom``
+      does -- from the disk. It is seeded with the edition the desk is serving
+      and with one turn of the conversation behind it; its ``answer.md`` is
+      required whatever else the turn produced, because somebody is waiting for
+      a reply and a page is not a reply; and a ``news.json`` beside it means
+      the model judged that the message asked for the paper to change. That
+      judgement is the model's, per the design, and this loop does not
+      second-guess it.
     """
     cid = command["id"]
     kind = command.get("kind", "file_edition")
     calendar = kind == CALENDAR_KIND
+    ask = kind == ASK_KIND
     workdir = os.path.join(cfg.scratch, cid)
     shutil.rmtree(workdir, ignore_errors=True)
     # No ``tiles/`` on the calendar path. Nothing would ever upload one, so an
@@ -928,6 +1224,19 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         seed_positions(desk, workdir)
         seed_calendar(desk, workdir)
         seed_econ(desk, workdir)
+
+    if ask:
+        # Before the turn, and in this order: the paper the message is about,
+        # then the turn it answers. The first is a precondition -- a desk that
+        # cannot say what it is serving fails here rather than after a revision
+        # written from nothing -- and the second is not.
+        seed_current(desk, workdir)
+        if command.get("reply_to"):
+            seed_previous(desk, workdir, command["reply_to"])
+    # Last, after every seeded file is on disk: the model owns this directory
+    # for the length of the turn, and one of the files it is handed is a watch
+    # list the contract asks it to rewrite in place.
+    own_workdir(cfg, workdir)
 
     def file_and_proof(fetch_back: bool = True):
         """Put what is on disk in front of the gates. Returns (draft, report, sheets).
@@ -977,7 +1286,8 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         desk.directives(),
         command.get("text", ""),
         kind=kind,
-        lang=desk.settings().get("lang", "en"))
+        lang=desk.settings().get("lang", "en"),
+        ask_lang=command.get("lang"))
     status = run_claude(cfg, text, workdir, agent_env, kind)
     if status != 0:
         desk.finish(cid, False, "claude exited %d" % status)
@@ -1012,6 +1322,25 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         desk.finish(cid, True, "the book: %d event(s)%s" % (
             len(book["events"]), ". %s" % shortfall if shortfall else ""))
         return
+
+    answer = None
+    if ask:
+        answer = read_answer(workdir)
+        if not answer:
+            # Whatever else it produced. Somebody is waiting for a reply and a
+            # page is not a reply -- and a page filed with no answer beside it
+            # would change the paper on the wall with nobody told why.
+            desk.finish(cid, False, "no answer written")
+            return
+        if not os.path.exists(os.path.join(workdir, "news.json")):
+            put_notes_best_effort(desk, answer, command=cid)
+            desk.finish(cid, True, "answered")
+            return
+        # Otherwise the message asked for the paper to change, and the rest of
+        # this function is exactly the path a morning edition takes: the same
+        # five gates, the same two revisions, the same look at the sheets. A
+        # revised edition that does not typeset fails the command and leaves
+        # the current one standing -- the firmware's own failure semantics.
 
     if kind == "custom" and not os.path.exists(os.path.join(workdir, "news.json")):
         note_on_command()
@@ -1054,6 +1383,22 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     persist_watchlist(cfg, workdir)
     write_brief(cfg, time.strftime("%Y-%m-%d"), command, result,
                 report.get("validate", ""))
+
+    if ask:
+        # Re-read: the revision and look turns may have rewritten the reply
+        # along with the page, and what goes to the person is what the run
+        # finished believing rather than its first draft.
+        answer = read_answer(workdir) or answer
+        # The command, always: that is where the phone reads the answer. And
+        # the draft too when the turn left no dossier of its own, so an edition
+        # is never filed with nothing beside it saying why it changed.
+        put_notes_best_effort(desk, answer, command=cid)
+        if not read_notes(workdir):
+            put_notes_best_effort(desk, answer, draft=draft)
+        state = ASK_STATES.get(result.get("state"), result.get("state") or "revised")
+        desk.finish(cid, True, "%s %s" % (state, result.get("edition_id")))
+        return
+
     desk.finish(cid, True, "%s %s" % (result.get("state"), result.get("edition_id")))
 
 
@@ -1063,6 +1408,28 @@ def main() -> int:
     logging.basicConfig(
         level=cfg.log_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+    if cfg.run_as and os.geteuid() != 0:
+        # Not a warning: a loop that cannot switch user would run the model as
+        # itself, with the desk token in its own environment, and file paper
+        # perfectly while the wall this setting names was never there.
+        LOG.error("AGENT_RUN_AS=%s, but this loop is uid %d rather than root. "
+                  "gosu is not setuid and no-new-privileges is set, so only "
+                  "root can hand a turn to another user. Unset AGENT_RUN_AS to "
+                  "run the model as this user instead.", cfg.run_as, os.geteuid())
+        return 2
+    if not cfg.run_as and os.geteuid() == 0:
+        # The symmetric case: a loop running as root with nobody to hand the
+        # turn to runs the model as root with the desk token in its own
+        # environment -- it files paper perfectly and the wall this setting
+        # names was never there. Set AGENT_RUN_AS, or run this loop as an
+        # ordinary user.
+        LOG.error("this loop is uid 0 but AGENT_RUN_AS is unset, so every "
+                  "turn would run as root with this loop's own environment -- "
+                  "the desk token included. Set AGENT_RUN_AS to a user the "
+                  "image has, or run this loop as an ordinary user instead of "
+                  "root.")
+        return 2
 
     desk = DeskClient(cfg.desk, read_token(cfg.secrets))
     agent_env = load_agent_env(cfg.secrets)

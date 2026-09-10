@@ -426,24 +426,52 @@ class SecretsTest(unittest.TestCase):
 
     def test_agent_env_is_preferred(self):
         # Two files can hold a token and they can disagree. agent.env is the one
-        # a human edited last, so it wins.
+        # a human edited last, so it wins. environ={} is explicit here -- these
+        # cases are about the FILE, and a bare read_token(self.tmp) would let a
+        # developer's own CLAUDEPOST_TOKEN in their shell win instead and change
+        # what this test is exercising.
         self.write("agent.env", 'ANTHROPIC_API_KEY=sk-x\nCLAUDEPOST_TOKEN="from-env"\n')
         self.write("tokens.json", json.dumps(
             {"tokens": [{"scope": "producer", "token": "from-json"}]}))
-        self.assertEqual(deskclient.read_token(self.tmp), "from-env")
+        self.assertEqual(deskclient.read_token(self.tmp, {}), "from-env")
 
     def test_tokens_json_is_the_fallback(self):
         self.write("tokens.json", json.dumps(
             {"tokens": [{"scope": "operator", "token": "op"},
                         {"scope": "producer", "token": "from-json"}]}))
-        self.assertEqual(deskclient.read_token(self.tmp), "from-json")
+        self.assertEqual(deskclient.read_token(self.tmp, {}), "from-json")
 
     def test_neither_is_a_hard_exit(self):
         # Not a retry loop: a worker that cannot authenticate will not start
         # being able to, and a container that exits is a container somebody sees.
         with self.assertRaises(SystemExit) as caught:
-            deskclient.read_token(self.tmp)
+            deskclient.read_token(self.tmp, {})
         self.assertEqual(caught.exception.code, 2)
+
+    def test_the_token_can_arrive_as_the_environment(self):
+        # The container arrangement: ~/.claudepost/agent.env is read by compose
+        # ON THE HOST and handed to the loop as environment. It is not mounted,
+        # because a bind mount's mode is not enforced on Docker Desktop for Mac
+        # -- a 0600 file mounted in was read straight out by an unprivileged
+        # user when this was measured. The environment is the one place the
+        # kernel does keep another uid out.
+        self.assertEqual(
+            deskclient.read_token(self.tmp, {"CLAUDEPOST_TOKEN": "from-the-env"}),
+            "from-the-env")
+
+    def test_the_environment_wins_over_a_file(self):
+        # "What this process was started with" beats "what somebody wrote once",
+        # which is agent/run-host.sh's rule for its own .env as well.
+        with open(os.path.join(self.tmp, "agent.env"), "w") as f:
+            f.write("CLAUDEPOST_TOKEN=from-the-file\n")
+        self.assertEqual(
+            deskclient.read_token(self.tmp, {"CLAUDEPOST_TOKEN": "from-the-env"}),
+            "from-the-env")
+
+    def test_a_host_run_still_reads_the_file(self):
+        with open(os.path.join(self.tmp, "agent.env"), "w") as f:
+            f.write("CLAUDEPOST_TOKEN=from-the-file\n")
+        self.assertEqual(deskclient.read_token(self.tmp, {}), "from-the-file")
 
     def test_the_child_environment_excludes_the_desk_token(self):
         # The token authorises writing to the desk. The child process is a model
@@ -581,6 +609,102 @@ class OwnersDocumentsTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             desk.put_calendar(b"{}")
         self.assertIn("events[3].source", str(caught.exception))
+
+
+class ThreadReadsTest(unittest.TestCase):
+    """The previous turn of a thread: its row and the answer filed against it."""
+
+    def _client(self, *answers):
+        opener = StubOpener(*answers)
+        return deskclient.DeskClient("http://desk:8080", TOKEN, opener), opener
+
+    def test_a_command_row_comes_back_whole(self):
+        row = {"id": CID, "kind": "ask", "text": "why did it move?",
+               "reply_to": None, "lang": "ko", "has_notes": True}
+        desk, opener = self._client((200, json.dumps(row).encode()))
+        self.assertEqual(desk.command(CID), row)
+        self.assertEqual(opener.requests[0].full_url,
+                         "http://desk:8080/api/commands/" + CID)
+        self.assertEqual(opener.requests[0].get_header("Authorization"),
+                         "Bearer " + TOKEN)
+
+    def test_a_command_that_is_not_there_is_a_failure_and_not_an_empty_row(self):
+        desk, _ = self._client((404, b'{"error":"not_found"}'))
+        with self.assertRaises(RuntimeError):
+            desk.command(CID)
+
+    def test_an_answer_that_is_not_json_is_still_not_a_row(self):
+        # _json turns a proxy's HTML page into an envelope; taking that for a
+        # command would put a gateway's error text in front of the model as the
+        # previous turn of the conversation.
+        desk, _ = self._client((200, b"<html>gateway</html>"))
+        with self.assertRaises(RuntimeError):
+            desk.command(CID)
+
+    def test_the_notes_of_a_command_come_back_as_text(self):
+        desk, opener = self._client((200, "답변입니다\n".encode("utf-8")))
+        self.assertEqual(desk.command_notes(CID), "답변입니다\n")
+        self.assertEqual(opener.requests[0].full_url,
+                         "http://desk:8080/api/commands/%s/notes.md" % CID)
+
+    def test_a_command_carrying_no_notes_is_not_a_failure(self):
+        # A first turn that failed before it wrote anything is an ordinary
+        # thread, and a follow-up to it is still answerable.
+        desk, _ = self._client((404, b""))
+        self.assertIsNone(desk.command_notes(CID))
+
+    def test_a_malformed_command_id_is_refused_before_any_request(self):
+        # cid can arrive as a desk-supplied reply_to rather than this
+        # worker's own claim, so it is gated the way put_notes gates a
+        # caller-supplied id -- before it becomes a path segment. A value
+        # with a "/" in it is the dangerous shape: unchecked, it would walk
+        # the request out of /api/commands/ entirely.
+        desk, opener = self._client()
+        with self.assertRaises(ValueError):
+            desk.command("../../etc/passwd")
+        self.assertEqual(opener.requests, [])
+
+    def test_a_malformed_notes_id_is_refused_before_any_request(self):
+        desk, opener = self._client()
+        with self.assertRaises(ValueError):
+            desk.command_notes("../../etc/passwd")
+        self.assertEqual(opener.requests, [])
+
+
+class PublicPlaneTest(unittest.TestCase):
+    """The one read this client makes with no token on it.
+
+    /news.json and /tiles/<id>.bin are served to the board with no
+    authorization, so asking for them as an authenticated producer would put a
+    bearer token on a request that does not need one -- and would hide the day
+    the public plane stops being public.
+    """
+
+    def _client(self, *answers):
+        opener = StubOpener(*answers)
+        return deskclient.DeskClient("http://desk:8080", TOKEN, opener), opener
+
+    def test_the_edition_is_fetched_without_a_bearer_token(self):
+        desk, opener = self._client((200, b'{"lang":"en"}'))
+        self.assertEqual(desk.fetch_public("/news.json"), b'{"lang":"en"}')
+        self.assertEqual(opener.requests[0].full_url, "http://desk:8080/news.json")
+        self.assertIsNone(opener.requests[0].get_header("Authorization"))
+
+    def test_a_desk_serving_no_edition_yet_is_not_a_failure(self):
+        desk, _ = self._client((404, b'{"error":"no edition has been filed yet"}'))
+        self.assertIsNone(desk.fetch_public("/news.json"))
+
+    def test_any_other_answer_raises_with_the_token_redacted(self):
+        desk, _ = self._client((500, ("boom " + TOKEN).encode()))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.fetch_public("/news.json")
+        self.assertNotIn(TOKEN, str(caught.exception))
+
+    def test_a_path_that_is_not_one_is_refused_before_the_socket(self):
+        desk, opener = self._client((200, b""))
+        with self.assertRaises(ValueError):
+            desk.fetch_public("news.json")
+        self.assertEqual(opener.requests, [])
 
 
 if __name__ == "__main__":

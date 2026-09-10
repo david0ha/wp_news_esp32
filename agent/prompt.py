@@ -111,11 +111,53 @@ _CALENDAR_TAIL = (
     "writes one fails having done the work twice.\n"
 )
 
+#: The section an ``"ask"`` gets, between the standing instructions and the
+#: message. ``%s`` is the fallback clause, empty when the phone sent no
+#: language -- see :func:`ask_section`.
+#:
+#: It opens by contradicting the contract above it, which is deliberate and is
+#: the reason it exists at all: ``PROMPT.md`` is written as "you are filing an
+#: edition today", and most messages file nothing. Saying so once, plainly, in
+#: the place the model reads it is cheaper than hoping the contract's own
+#: hedges carry.
+_ASK_SECTION = (
+    "\n\n---\n\n# You are answering a message, not filing an edition\n\n"
+    "The contract above describes filing an edition. Today that is something you MAY\n"
+    "do, not something you are doing. What is in the edition directory:\n\n"
+    "- `current/news.json` — the edition the desk is serving now, and `current/tiles/`,\n"
+    "  the pictures it names. This is the paper the message is about; read it first.\n"
+    "- `previous.md` — the turn before this one, when the message is a follow-up.\n\n"
+    "Three rules, in order:\n\n"
+    "1. Answer the message in the language it was written in%s. Write the answer to\n"
+    "   `answer.md`. It is the whole reply; keep it to what was asked.\n"
+    "2. Decide whether the message asks for the paper to change. Questions, opinions,\n"
+    "   \"why did it move\", \"what is EPS\" do not. \"Change\", \"add\", \"lead with\",\n"
+    "   \"drop\", \"replace the photo\", and the Korean equivalents do.\n"
+    "3. Only if it does: copy `current/news.json` to `news.json`, re-research what the\n"
+    "   change needs, rewrite the affected parts under the same contract and budgets,\n"
+    "   produce any new tiles, and say in `answer.md` what changed and why in two or\n"
+    "   three sentences. Do not touch parts the message did not ask about. Do not write\n"
+    "   `news.json` for an answer-only message.\n"
+)
+
+#: The tail for an ``"ask"``. Two files with two different conditions on them,
+#: said at the one place a model reads last. ``answer.md`` is unconditional
+#: because ``loop.handle`` fails the command without one, and ``news.json`` is
+#: conditional because writing one *is* the decision rule 2 asked for -- the
+#: loop does not second-guess it and reads the disk.
+_ASK_TAIL = (
+    "\nWrite $EDITION_DIR/answer.md — always, whatever else you do; a turn that ends\n"
+    "with no answer.md has failed. Write news.json and tiles/<id>.bin ONLY if rule 2\n"
+    "said the message asks for the paper to change, and then write news.json LAST. Do\n"
+    "not try to publish it — the desk validates, typesets and publishes; your job ends\n"
+    "when the files are on disk.\n"
+)
+
 #: Which tail each kind ends on. The default is the filing one, and it is the
 #: default for the reason ``build_prompt`` gives: a ``custom`` instruction may
 #: or may not turn into a page, and what decides that is what lands in the
 #: workdir rather than a prompt that guessed.
-_TAILS = {"research": _RESEARCH_TAIL, "calendar": _CALENDAR_TAIL}
+_TAILS = {"research": _RESEARCH_TAIL, "calendar": _CALENDAR_TAIL, "ask": _ASK_TAIL}
 
 
 def contract_name(kind: str) -> str:
@@ -279,9 +321,33 @@ def _calendar_language_section(lang: str, name: str) -> str:
     ])
 
 
+def ask_section(ask_lang: str | None = None) -> str:
+    """The three rules an ``"ask"`` is answered under.
+
+    Args:
+        ask_lang: the language the phone was in when the message was typed, or
+            ``None``. It is a **fallback**, not an instruction: rule 1 is "the
+            language it was written in", and this only decides a message that
+            says nothing either way -- a ticker alone, a number. An unlisted tag
+            is named by its tag, the way :func:`language_section` does it.
+
+    Pure, and separate from :func:`language_section` because they are two
+    different settings that a reader will otherwise conflate. ``lang`` is the
+    *paper's* language and comes from the desk's settings; this is the
+    *conversation's* and comes from the command. A revision does not change the
+    edition's language because the message happened to be typed in English.
+    """
+    fallback = ""
+    if ask_lang:
+        fallback = (" (fall back to %s when the message is ambiguous — a ticker "
+                    "alone, a number)" % LANGUAGE_NAMES.get(ask_lang, ask_lang))
+    return _ASK_SECTION % fallback
+
+
 def build_prompt(contract: str, context: list[tuple[str, str]],
                  directives: list[dict], command_text: str,
-                 kind: str = "file_edition", lang: str = "en") -> str:
+                 kind: str = "file_edition", lang: str = "en",
+                 ask_lang: str | None = None) -> str:
     """Assemble one turn's prompt.
 
     Args:
@@ -291,23 +357,32 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
             dict with a ``rule``.
         command_text: the instruction the operator queued, passed through
             untouched.
-        kind: the command's kind. ``"research"`` gets :data:`_RESEARCH_TAIL`
-            and ``"calendar"`` gets :data:`_CALENDAR_TAIL`; every other value,
-            including the default, gets the ordinary :data:`_TAIL` -- this
-            function does not validate `kind` against ``store.COMMAND_KINDS``,
-            the same way ``loop.handle`` treats a kind it does not recognise
-            as ``"file_edition"`` rather than raising over it. It also selects
-            which language section is spliced in, because the book's
-            reader-facing fields are not a page's.
+        kind: the command's kind. ``"research"`` gets :data:`_RESEARCH_TAIL`,
+            ``"calendar"`` gets :data:`_CALENDAR_TAIL` and ``"ask"`` gets
+            :data:`_ASK_TAIL`, preceded by :func:`ask_section`; every other
+            value, including the default, gets the ordinary :data:`_TAIL` --
+            this function does not validate `kind` against
+            ``store.COMMAND_KINDS``, the same way ``loop.handle`` treats a
+            kind it does not recognise as ``"file_edition"`` rather than
+            raising over it. It also selects which language section is
+            spliced in, because the book's reader-facing fields are not a
+            page's.
         lang: the edition's language, from the desk's settings. ``"en"`` --
             the default, and what an unset or unreadable setting reads as --
             leaves this prompt byte-identical to the one this worker has
             always sent; anything else adds :func:`language_section`.
+        ask_lang: for ``"ask"`` only -- the language the phone was in, passed
+            to :func:`ask_section` as a fallback. Ignored by every other kind.
+            Two languages rather than one because they are two things: `lang`
+            is what the paper is written in, this is what the conversation is
+            in, and a message typed in English about a Korean paper must not
+            turn the paper into an English one.
 
     Returns:
         The contract first, then the language section when there is one, then
         the operator's files under their own names, then the directives as
-        bullets, then today's instruction, then the tail `kind` selects.
+        bullets, then the ask section for an ``"ask"``, then today's
+        instruction, then the tail `kind` selects.
 
     The order is the argument. The contract is first because everything after it
     is somebody's opinion and an opinion must not be able to push the length
@@ -329,6 +404,9 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
         parts.append("\n## Standing directives, most recent first\n\n")
         for directive in directives:
             parts.append("- %s\n" % directive.get("rule", ""))
+
+    if kind == "ask":
+        parts.append(ask_section(ask_lang))
 
     parts.append("\n---\n\n# Today's instruction\n\n%s\n" % command_text)
     parts.append(_TAILS.get(kind, _TAIL))
