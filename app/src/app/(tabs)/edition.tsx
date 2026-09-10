@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masthead } from '../../components/edition/Masthead'
@@ -53,19 +53,27 @@ export default function EditionScreen() {
   const [chip, setChip] = useState<Chip>('all')
 
   // Whether asking is possible at all. Both are needed: the control plane sends a credential on
-  // every call, so an address with no token can ask nothing. Read once — a token saved in Settings
-  // while this tab is mounted is picked up on the next mount, which is one tab switch away.
+  // every call, so an address with no token can ask nothing. `useFocusEffect`, not a mount effect
+  // — this screen is registered first and mounts at app boot, before Settings has necessarily
+  // been touched, and the ordinary first run is Today (mounted) -> Settings (save address and
+  // token) -> back to Today. `expo-router`'s tab navigator keeps Today mounted across that trip,
+  // so a plain `useEffect` runs once at boot and never again; the button would stay hidden until
+  // the app is killed and relaunched. `useEdition.ts` and `board.tsx` hit the identical class of
+  // bug and both settled on `useFocusEffect`, which fires on mount as well as on every later
+  // return to the tab.
   const [canAsk, setCanAsk] = useState(false)
-  useEffect(() => {
-    let alive = true
-    void (async () => {
-      const [address, token] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
-      if (alive) setCanAsk(Boolean(address) && Boolean(token))
-    })()
-    return () => {
-      alive = false
-    }
-  }, [])
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true
+      void (async () => {
+        const [address, token] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+        if (alive) setCanAsk(Boolean(address) && Boolean(token))
+      })()
+      return () => {
+        alive = false
+      }
+    }, []),
+  )
 
   // Keyed on the EDITION and not on the cache entry that carries it. A 304 rebuilds the entry to
   // move `fetchedAt` but keeps the same edition object, so this way the page is cut once and a
@@ -123,6 +131,10 @@ export default function EditionScreen() {
   // Which edition this page is drawing. Every mounted tile carries it, so a new edition is a
   // remount rather than a reuse — see `editionKey`.
   const key = editionKey(state.cached)
+  // `demo` gates the Ask button as well as the demo chip below: the bundled edition has no desk
+  // behind it, so a phone that HAS set up a desk address and token for Board control but has not
+  // yet set a news URL must still see no Ask button over the demo edition it is reading instead.
+  const demo = isDemo(state.cached)
 
   return (
     <Screen edges={['top']}>
@@ -144,7 +156,7 @@ export default function EditionScreen() {
           >
             <Masthead
               edition={state.cached.edition}
-              demo={isDemo(state.cached)}
+              demo={demo}
               freshness={freshnessLabel(state.cached.fetchedAt, Date.now())}
               error={state.error}
               onRetry={onRefresh}
@@ -156,7 +168,7 @@ export default function EditionScreen() {
                 if (symbol === '') return
                 router.push(`/market/${encodeURIComponent(symbol)}`)
               }}
-              onAsk={canAsk ? () => router.push('/ask') : undefined}
+              onAsk={!demo && canAsk ? () => router.push('/ask') : undefined}
             />
 
             {/* The band: the lead photograph, too wide for a column, run across the page
