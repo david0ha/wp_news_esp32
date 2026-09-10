@@ -9,6 +9,7 @@ day nobody is watching.
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -67,6 +68,119 @@ class SchemaTest(StoreTestCase):
         s = Store(nested, FixedClock(T0))
         self.addCleanup(s.close)
         self.assertTrue(os.path.exists(nested))
+
+
+class AskTest(StoreTestCase):
+    """The kind the phone files, and the two columns that make it a thread."""
+
+    def ask(self, text="왜 그 회사예요?", **kw):
+        return self.store.add_command("ask", text, **kw)
+
+    def test_ask_is_a_kind_the_queue_takes(self):
+        row = self.ask()
+        self.assertEqual(row["kind"], "ask")
+        self.assertEqual(row["status"], "pending")
+        self.assertIsNone(row["reply_to"])
+        self.assertIsNone(row["lang"])
+
+    def test_both_columns_round_trip_through_the_database(self):
+        first = self.ask(lang="ko", source="app")
+        second = self.ask("그럼 실적은요?", reply_to=first["id"], lang="ko")
+
+        back = self.store.get_command(second["id"])
+        self.assertEqual(back["reply_to"], first["id"])
+        self.assertEqual(back["lang"], "ko")
+        self.assertEqual(self.store.get_command(first["id"])["reply_to"], None)
+
+    def test_a_reply_to_that_names_nothing_is_refused(self):
+        # The worker will fetch that row and put the earlier turn in front of
+        # the model. An id naming nothing is a thread silently missing a turn.
+        with self.assertRaises(BadRequest) as caught:
+            self.ask(reply_to="0" * 32)
+        self.assertIn("reply to", caught.exception.message)
+
+    def test_a_reply_to_that_is_not_an_id_at_all_is_refused(self):
+        for bad in ("../etc/passwd", "NOT-HEX", "abc", 17):
+            with self.subTest(reply_to=bad):
+                with self.assertRaises(BadRequest):
+                    self.ask(reply_to=bad)
+
+    def test_lang_is_a_language_the_board_can_print(self):
+        self.assertEqual(self.ask(lang="en")["lang"], "en")
+        with self.assertRaises(BadRequest) as caught:
+            self.ask(lang="ja")
+        self.assertIn("en, ko", caught.exception.message)
+
+    def test_the_four_older_kinds_still_work_and_carry_the_columns(self):
+        row = self.file_edition()
+        self.assertIsNone(row["reply_to"])
+        self.assertIsNone(row["lang"])
+        self.assertEqual(self.store.get_command(row["id"])["kind"],
+                         "file_edition")
+
+
+class MigrationTest(unittest.TestCase):
+    """A desk that has been running since August opens the new schema.
+
+    The old table is written out by hand rather than made by dropping columns
+    from the new one: `ALTER TABLE ... DROP COLUMN` needs SQLite 3.35, and a
+    test whose subject is "what happens on an old database" should not itself
+    require a new library.
+    """
+
+    #: `commands` exactly as it stood before this feature -- the shape a desk
+    #: deployed in August still has on disk.
+    OLD = """
+    CREATE TABLE commands (
+        id          TEXT PRIMARY KEY,
+        kind        TEXT    NOT NULL,
+        text        TEXT    NOT NULL,
+        priority    INTEGER NOT NULL,
+        status      TEXT    NOT NULL,
+        source      TEXT    NOT NULL DEFAULT '',
+        created_at  REAL    NOT NULL,
+        deadline_at REAL,
+        claimed_by  TEXT,
+        claimed_at  REAL,
+        finished_at REAL,
+        attempts    INTEGER NOT NULL DEFAULT 0,
+        result      TEXT    NOT NULL DEFAULT ''
+    );
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = os.path.join(self.dir.name, "desk.sqlite")
+
+    def test_the_columns_are_added_to_a_database_that_predates_them(self):
+        # The failure this prevents is not a startup error, which somebody
+        # would notice. It is `no such column: reply_to` on the first message
+        # sent from the phone, weeks after the deploy.
+        old = sqlite3.connect(self.path)
+        old.executescript(self.OLD)
+        old.execute("INSERT INTO commands (id, kind, text, priority, status, "
+                    "created_at) VALUES (?, 'custom', 'old', 5, "
+                    "'pending', ?)", ("a" * 32, T0))
+        old.commit()
+        old.close()
+
+        store = Store(self.path, FixedClock(T0))
+        self.addCleanup(store.close)
+        # The row that was already there survives, without the new fields set.
+        self.assertIsNone(store.get_command("a" * 32)["reply_to"])
+        row = store.add_command("ask", "다시 물어봐요", lang="ko")
+        self.assertEqual(store.get_command(row["id"])["lang"], "ko")
+
+    def test_opening_twice_adds_nothing_twice(self):
+        first = Store(self.path, FixedClock(T0))
+        self.addCleanup(first.close)
+        second = Store(self.path, FixedClock(T0))
+        self.addCleanup(second.close)
+        names = [r["name"] for r
+                 in second._db.execute("PRAGMA table_info(commands)")]
+        self.assertEqual(names.count("reply_to"), 1)
+        self.assertEqual(names.count("lang"), 1)
 
 
 class AddCommandTest(StoreTestCase):

@@ -17,7 +17,6 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-import re
 import threading
 from dataclasses import dataclass
 from typing import Mapping
@@ -30,15 +29,12 @@ from .clock import Clock
 from .editions import EditionStore
 from .gates import Gates, SubprocessGates
 from .notes import NoteStore
-from .store import Store
-
-#: The shape of a command id: `commands` table ids, the `NoteStore` this desk
-#: hands their notes to, and every `/api/commands/<cid>/...` route in
-#: `http.py` -- which imports this constant and builds its routes from it
-#: rather than spelling `[0-9a-f]{8,64}` a second time, so the three cannot
-#: drift apart. Editions' shape, because a command shares the queue's table
-#: with nothing that has a shorter or longer id.
-COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
+# `COMMAND_ID_RE` is imported rather than defined here, and re-exported by being
+# imported: `http.py` says `from .app import COMMAND_ID_RE` and `Desk.notes` is
+# built from it, so the route's pattern, the note store's and the queue's are one
+# regex. It moved to `store` because `add_command` now checks a `reply_to`
+# against it, and `store` cannot import `app` -- `app` imports `store`.
+from .store import COMMAND_ID_RE, Store
 
 LOG = logging.getLogger("claudepost.app")
 
