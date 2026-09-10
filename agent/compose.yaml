@@ -46,9 +46,10 @@ services:
       AGENT_TOOLS: ${AGENT_TOOLS:-}
       # On by default: the child inherits no MCP servers -- see claude_argv.
       AGENT_STRICT_MCP: ${AGENT_STRICT_MCP:-1}
-      # The user every `claude` turn is handed to. Empty would run the model as
-      # the loop, which is root here -- so this is the wall, and the image sets
-      # it too. agent/test/image.sh is where it is checked rather than assumed.
+      # The user every `claude` turn is handed to. Blank or missing both land
+      # on `model` -- `:-` substitutes on empty too -- and a loop that somehow
+      # ran as root with neither refuses to start rather than run the turn as
+      # root. agent/test/image.sh is where the wall is checked, not assumed.
       AGENT_RUN_AS: ${AGENT_RUN_AS:-model}
       # /state rather than beside the token: the secrets are not a mount any
       # more (see env_file below), and the rotation needs a writable one -- see
