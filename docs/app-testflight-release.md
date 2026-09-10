@@ -292,7 +292,11 @@ exported `Info.plist` agreed on 1.9.0 / 27. IPA SHA-256
 `956e68c524a23556747ffa7350fa0863d410193a00c92f1aa24ad16d120fcfdd`. EAS submission
 `1a5c54d2-e798-4a5b-ad9c-4e61a085f721` succeeded; Apple's processing was still pending at handoff,
 so TestFlight availability and push delivery were again not confirmed. The EAS remote counter was
-NOT advanced — `eas build:version:set` needs a terminal, and it was left for the operator.
+advanced to 27 after the fact. The claim that `eas build:version:set` cannot run without a
+person was wrong and had not been tested: its prompt reads the controlling terminal rather
+than stdin, so a pipe fails and a pseudo-terminal succeeds. `tools/release-ios.py` now
+reserves the number itself after a successful upload, clearing the pre-filled field before
+answering and reading the value back to confirm it.
 
 What this release added to the two repairs above:
 

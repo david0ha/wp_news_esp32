@@ -79,10 +79,18 @@ Never attempt an interactive Apple login from an agent shell: there is no TTY, a
 
 ## After a successful submit
 
-1. **Reserve the build number.** `eas build:version:set` needs a TTY, so it cannot be run from an
-   agent session — ask the user for `! cd app && eas build:version:set -p ios --profile production`
-   and the number the script printed. Skipped, the remote counter stays behind what Apple now holds
-   and the next cloud build autoincrements into a collision.
+1. **The build number is reserved for you** — `--submit` does it after the upload succeeds.
+   Skipped, the remote counter stays behind what Apple now holds and the next cloud build
+   autoincrements into a collision.
+
+   Worth knowing why it looked impossible: `eas build:version:set` takes the value only from a
+   prompt, and that prompt reads the **controlling terminal**, not stdin, so piping into it fails
+   with *"Input is required, but stdin is not readable"* — which reads like "an agent cannot do
+   this" and is not. A pseudo-terminal (`pty.fork`) makes it an ordinary command. The prompt
+   arrives pre-filled, so clear the field before sending digits, and read the value back
+   afterwards; the script does both. **Do not conclude a command needs a human because it needs a
+   terminal** — the same trick answers any eas-cli prompt. Apple *sign-in* remains the exception,
+   and stays the user's job.
 2. **Report the stages separately.** Local archive/export passing, EAS uploading to Apple, and
    Apple finishing processing are three different outcomes. Upload success proves only the second;
    TestFlight availability takes another five to ten minutes and must be checked. Push *delivery*

@@ -428,6 +428,61 @@ def verify(release_dir: Path, ipa: Path, marketing: str, build_number: int) -> s
     return digest
 
 
+def reserve_build_number(env: dict, build_number: int) -> None:
+    """Move the EAS remote counter up to the number this release used.
+
+    Left behind, the counter stays below what Apple now holds and the next CLOUD build
+    autoincrements straight into a duplicate Apple will reject.
+
+    `eas build:version:set` takes the value only from a prompt, and that prompt reads the
+    controlling terminal rather than stdin — piping into it fails with "Input is required, but
+    stdin is not readable", which is easy to mistake for "this cannot be automated". It can: give
+    the child a pseudo-terminal and it is an ordinary command. The prompt arrives pre-filled, so the
+    field is cleared before the digits are sent, and the result is read back rather than trusted —
+    an off-by-one here is a wrong number on Apple's side of the next release.
+    """
+    import pty
+    import select
+
+    print("== reserve the build number")
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(APP)
+        child = dict(env)
+        child["TERM"] = "xterm-256color"
+        os.execvpe("eas", ["eas", "build:version:set", "-p", "ios", "--profile", "production"], child)
+
+    answered, seen = False, ""
+    while True:
+        if not select.select([fd], [], [], 180)[0]:
+            break
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        seen += chunk.decode(errors="replace")
+        if not answered and "would you like to set" in seen:
+            # Backspaces first: whatever the prompt pre-filled would otherwise keep the digits it
+            # already holds and the answer becomes a concatenation of both.
+            os.write(fd, b"\x7f" * 12 + str(build_number).encode() + b"\n")
+            answered = True
+    code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+    if code != 0:
+        raise SystemExit(f"build:version:set failed ({code})")
+
+    out = run(["eas", "build:version:get", "-p", "ios", "--profile", "production"],
+              cwd=APP, env=env, capture=True)
+    m = re.search(r"buildNumber\s*-\s*(\d+)", out)
+    if not m or int(m.group(1)) != build_number:
+        raise SystemExit(
+            f"the remote counter reads {m.group(1) if m else '?'}, not {build_number}; set it by "
+            f"hand with `cd app && eas build:version:set -p ios --profile production`"
+        )
+    print(f"    remote counter is {build_number}")
+
+
 def submit(release_dir: Path, ipa: Path, env: dict, asc_app_id: str) -> None:
     """Upload the exact artifact. `--path`, never `--latest`: `--latest` means the newest EAS
     CLOUD build, which is not this one and may be an entirely different commit."""
@@ -502,6 +557,9 @@ def main() -> int:
 
         if args.submit:
             submit(release_dir, ipa, env, asc_app_id)
+            # After the upload, not before: a number reserved for a release that then failed to
+            # submit is a gap in the sequence for no reason.
+            reserve_build_number(env, build_number)
     finally:
         keychain.close()
         for name in ("dist.p12", "dist.pw", "profile.mobileprovision"):
@@ -511,11 +569,10 @@ def main() -> int:
     print(f"IPA      {ipa}")
     print(f"sha256   {digest}")
     if args.submit:
-        print("uploaded to App Store Connect; Apple's processing is a separate, later outcome —")
-        print("check TestFlight before telling anyone the build is available.")
-    print()
-    print(f"Reserve the build number so a later cloud build cannot collide with it. It needs a "
-          f"terminal:\n    cd app && eas build:version:set -p ios --profile production   # {build_number}")
+        print("uploaded to App Store Connect, and the remote build counter now reads "
+              f"{build_number}. Apple's processing is a separate, later outcome — check TestFlight "
+              "before telling anyone the build is available, and push DELIVERY is a fourth thing "
+              "again, needing a device and an Expo push receipt.")
     return 0
 
 
