@@ -511,6 +511,103 @@ transcribed from
 the only place the split is actually decided, as it stood on this branch;
 `_ROUTES` is what to read when this and the desk disagree.
 
+**The phone posts to the queue, and that is new.** The paragraph above is
+still true of `claim` and of `done`/`fail` — those stay the worker's. It is no
+longer true of the queue's other end: the owner can type a message on the
+phone, and the desk answers it. Four routes, reached through the same token
+the phone already has stored — a `producer` token can send and read three of
+them, and only `/api/publish` needs `operator`, exactly as the scope tables
+below already say. `app/src/lib/desk.ts` is again the whole client —
+`postCommand`, `command`, `commandNotes` and `publishNow`, plus `Command`,
+`CommandStatus` and `MAX_COMMAND_TEXT` (2000, the composer's own limit so a
+long message is refused on screen rather than as a 400 the client has to
+translate). `CommandStatus` is exactly six values: `pending`, `claimed`,
+`done`, `failed`, `expired`, `cancelled` — the same six the worker's side of
+the queue uses, because this is one queue with one status column, not a
+phone-specific subset.
+
+| Method | Path | Body | What the phone does with it |
+|---|---|---|---|
+| POST | `/api/commands` | `{"kind":"ask","text":…,"lang":"ko","reply_to":…,"source":"app"}` | send a message; the answer is the row the desk created |
+| GET | `/api/commands/<id>` | — | poll one open turn every 5 s while it is `pending` or `claimed` |
+| GET | `/api/commands/<id>/notes.md` | — | the worker's answer, as `text/markdown` |
+| POST | `/api/publish` | — | put a staged revision up now |
+
+Four things about it a client has to get right, because `app/src/lib/ask/`
+got each one wrong once before it got it right:
+
+- **`result`'s first word is the whole vocabulary.** `answered`, `revised
+  <edition_id>` or `staged <edition_id>` — the worker's, and the desk does not
+  police it. `readResult` in `app/src/lib/ask/threads.ts` parses the first
+  word and keeps anything else as an opaque sentence, so a worker one release
+  ahead of the app degrades to a line of text on screen rather than a crash.
+- **A 404 is a state on three of the four, not a failure.** An unknown command
+  id on `GET /api/commands/<id>` is an id the desk has never held under any
+  status — `get_command()` returns a row regardless of what state it finished
+  in, so an id that 404s was never valid on this desk at all, rather than one
+  that expired or was cleaned up; a copy-pasted id, or a phone still pointed
+  at a desk it was reset against, are the ordinary ways to get here. A missing
+  `notes.md` is "it finished and filed no answer"; `nothing is staged` on
+  `POST /api/publish` is "the staged edition already went out" — published by
+  the owner's own tooling, or by a second phone answering the same push. None
+  of the three is a failure a retry fixes, so `desk.ts` answers `null` (or,
+  for publish, the outcome `nothing_staged`) rather than throwing — the same
+  rule `forgetPushDevice` already held for a push token the desk had already
+  forgotten.
+- **`expired` and `cancelled` are the two statuses that never reach a phone
+  that isn't looking.** The desk's push batch only ever selects `done` and
+  `failed` rows, because those are the two a worker actually wrote a report
+  for — an expired deadline or a cancelled instruction has no answer to
+  announce, so neither rings anybody. The phone's own poll agrees, stopping
+  only on the four terminal statuses rather than the two working ones. So a
+  message that lapses past its deadline, or one the owner cancels from
+  another phone, changes silently: the only way to learn it did is to have
+  the thread open, or to reopen it later and see the row `TurnRow.tsx` draws
+  for that status. No notification is coming.
+- **`reply_to` is the whole thread.** There is no server-side thread object.
+  `app/src/lib/ask/threads.ts` keeps the grouping — one AsyncStorage record
+  under `claudepost.threads`, a pure reducer over the desk's rows, and a
+  turn's `reply_to` naming the *previous turn that actually reached the desk*,
+  never one still `sending` or `unsent`. A `staged` result is `useAskThread`'s
+  own act, not the owner's: the poll calls `publishNow()` the moment it sees
+  one, because the owner already asked for the change by starting the
+  conversation. The Ask screen's publish button only ever appears after that
+  automatic attempt has failed, to retry it — `POST /api/publish` never
+  otherwise waits on a tap.
+- **A revision invalidates the Today tab, and nothing else changes.**
+  `revised <edition_id>`, or a `staged <edition_id>` the phone just published,
+  calls `markEditionStale()`, which sets one module-scope flag read by the
+  Today tab's own five-minute throttle on its next focus — not a cache wipe,
+  because the edition on screen is still good until the fetch that flag
+  triggers actually lands. The board is not involved: a revision reaches it
+  exactly as a morning edition does, on its own poll.
+
+**The `answer` push is the first that is not a calendar alert.** `PUSH_KINDS`
+in `app/src/lib/notify.ts` gains a sixth entry, `answer`, beside the five
+date-driven kinds; `LEAD_KINDS` stays five, because a lead is "how far ahead
+of a date to say something" and an answer has no date ahead of it — it fires
+when the work finishes. That split is load-bearing on the wire: `deviceBody`
+sends `prefs` over all six kinds (the desk's kind allowlist takes all six) but
+`lead` over the five in `LEAD_KINDS` only, because the desk's own lead
+validator rejects a document naming a kind it does not expect a lead for. This
+was a shipped bug caught in review — mapping `lead` over all six kinds would
+put an empty `answer` entry in front of a validator that has never heard of
+one, and every push registration from that build would 400.
+
+The push carries `data: {"command_id": …, "result": <the first word>}`.
+`commandIdOfPush` reads the id, `askRouteForPush` turns it into
+`/ask?command=<id>` — naming the command rather than a thread, because that
+is what the push actually carries; which conversation it belongs to is a
+lookup the Ask screen does itself, over the threads it already has, once it
+opens. `addNotificationTapListener` wires that route to both the live tap
+listener and `getLastNotificationResponse()`, read once at mount, so a tap
+that launched a killed process is not lost to a listener that subscribed a
+moment too late; both paths are de-duplicated by the notification's own
+`identifier` so a cold launch cannot route twice.
+
+The design is
+[docs/superpowers/specs/2026-09-10-ask-the-desk-design.md](superpowers/specs/2026-09-10-ask-the-desk-design.md).
+
 **Two tokens, and the split is real.** `producer` reads everything below and
 may queue an instruction or file a note; `operator` additionally changes what
 the desk does with nothing in front of it — the schedule, the standing
@@ -560,7 +657,7 @@ phone would offer:
 | `PUT /api/settings` | set the language the edition is written in — `{"lang": "ko"}`, and an unknown key is refused whole with `bad_settings` |
 | `PUT /api/positions` | rewrite what the owner holds |
 | `GET /api/push/devices` · `POST /api/push/devices` · `DELETE /api/push/devices/<token>` | the phones the desk notifies |
-| `POST /api/publish` · `POST /api/hold` | force the staged edition up, or hold the wall |
+| `POST /api/publish` · `POST /api/hold` | put a staged edition up now, or hold the wall — the ask flow calls the first one itself; see [above](#the-desk-from-the-phone) |
 
 **`/api/positions` is the one pair whose two verbs sit in different scopes, and
 `/api/push/devices` is the one document where even the read is `operator`.**

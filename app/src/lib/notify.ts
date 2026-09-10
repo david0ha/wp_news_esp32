@@ -46,19 +46,42 @@ export type { PushDevice, PushDoc, PushDeviceBody } from './desk'
 // ---------------------------------------------------------------------------
 
 /**
- * The five switches, in the order they are drawn.
+ * SIX, NOT FIVE. Five are about a DATE — four `calendar.COMPUTED_KINDS` plus `researched`, the
+ * one switch over everything a research run found — and the sixth is not about a date at all.
  *
- * FIVE, NOT FOUR. Four are `calendar.COMPUTED_KINDS` — a date a machine worked out — and the
- * fifth, `researched`, is shared by the book's other four kinds (`corporate`, `legal`, `index`,
- * `other`), the ones somebody had to go and find. `push.pref_for` is where that mapping lives and
- * this app does not re-derive it: nothing here ever sees an event's kind, only the switch it
- * answers to, so there is no second place for the two to disagree.
+ * `answer` is the desk telling this phone that a message it sent has been answered. It is the
+ * first push here that is not a calendar alert, which is why it is a switch of its own: somebody
+ * who wants to know about their earnings dates and not about their own messages can say so.
  *
  * The order is editorial rather than the desk's alphabetical one: the two dates an owner marks in
- * a diary first, then the two a calendar generates, then everything a morning's research turned up.
+ * a diary first, then the two a calendar generates, then everything a morning's research turned
+ * up, then their own conversation with the desk.
  */
-export const PUSH_KINDS = ['earnings', 'expiry', 'dividend', 'econ', 'researched'] as const
+export const PUSH_KINDS = [
+  'earnings',
+  'expiry',
+  'dividend',
+  'econ',
+  'researched',
+  'answer',
+] as const
 export type PushKind = (typeof PUSH_KINDS)[number]
+
+/**
+ * The kinds a lead time means anything for.
+ *
+ * A lead is "how far ahead of the date to say something", and `answer` has no date ahead of it —
+ * it fires when the work finished. So it registers with an empty lead list and the Settings
+ * section draws no selector under it. A list here rather than a `kind !== 'answer'` at the two
+ * call sites, because the two would then be free to disagree about it.
+ */
+export const LEAD_KINDS: readonly PushKind[] = [
+  'earnings',
+  'expiry',
+  'dividend',
+  'econ',
+  'researched',
+]
 
 /**
  * The six lead times, longest first — the order the desk stores them in and the order they fire.
@@ -94,6 +117,8 @@ export const DEFAULT_LEAD: Record<PushKind, Lead[]> = {
   // Three hours: a day's notice of a number nobody can act on is noise.
   econ: ['PT3H'],
   researched: ['P1D'],
+  /** Empty, and it is not an omission: see `LEAD_KINDS`. */
+  answer: [],
 }
 
 /** A window in which nothing is delivered. May wrap midnight — 23:00 to 07:00 is the ordinary one. */
@@ -124,7 +149,14 @@ export interface NotifyPrefs {
  * they do.
  */
 export const DEFAULT_PREFS: NotifyPrefs = {
-  prefs: { earnings: true, expiry: true, dividend: true, econ: true, researched: true },
+  prefs: {
+    earnings: true,
+    expiry: true,
+    dividend: true,
+    econ: true,
+    researched: true,
+    answer: true,
+  },
   lead: DEFAULT_LEAD,
   quiet: null,
 }
@@ -210,6 +242,14 @@ export function findRegistration(doc: PushDoc, token: string): NotifyPrefs | nul
  * document over one key it does not know, and a GET's entry carries `last_seen` — which the desk
  * stamps itself — so echoing one back is a 400 the owner would read as their switch not working.
  * `quiet` is OMITTED rather than sent as null when there is none, matching what the desk writes.
+ *
+ * `prefs` spans all of `PUSH_KINDS` — the desk's `_KIND_KEYS` allowlist takes all six, `answer`
+ * included. `lead` spans only `LEAD_KINDS` — the desk's `_lead()` validates that document against
+ * `_LEAD_KEYS`, five keys with `answer` deliberately excluded, and refuses the whole document over
+ * one key it does not know. Mapping `lead` over `PUSH_KINDS` instead would put `answer: []` in
+ * every registration and every preference change, from every phone, and turn each one into a
+ * `bad_push` 400 — the two fields answer to two different allowlists on the desk and must be
+ * built from two different lists here.
  */
 export function deviceBody(
   token: string,
@@ -222,7 +262,7 @@ export function deviceBody(
     platform,
     tz,
     prefs: { ...prefs.prefs },
-    lead: Object.fromEntries(PUSH_KINDS.map((k) => [k, [...prefs.lead[k]]])),
+    lead: Object.fromEntries(LEAD_KINDS.map((k) => [k, [...prefs.lead[k]]])),
   }
   if (prefs.quiet) body.quiet = { ...prefs.quiet }
   return body
@@ -911,4 +951,67 @@ export function phoneZone(): string {
   } catch {
     return deviceZone(undefined)
   }
+}
+
+// ---------------------------------------------------------------------------
+// A tap on a notification
+// ---------------------------------------------------------------------------
+//
+// THE FIRST RESPONSE LISTENER THIS APP HAS HAD. Every push before this one was a calendar alert
+// whose only job was to put a line on a lock screen; a tap opened the app and that was the whole
+// interaction. An answer is different — there is a specific screen it belongs to, and arriving on
+// whatever tab was last open is arriving nowhere.
+//
+// THE PUSH CARRIES A COMMAND ID, NOT A THREAD ID. A thread is the phone's own grouping and the
+// desk has never heard of one, so the route names the command and the ask screen looks up which
+// conversation it belongs to. That is also what makes the link survive a reinstall gracefully: a
+// command this phone has no thread for opens a new question rather than a broken screen.
+
+/** The command a push is about, or `null` for a push that is not about one — every alert. */
+export function commandIdOfPush(data: unknown): string | null {
+  if (data === null || typeof data !== 'object') return null
+  const id = (data as Record<string, unknown>).command_id
+  return typeof id === 'string' && id.trim() !== '' ? id : null
+}
+
+/** Where a tap on that push should land, or `null` for one this app has no screen for. */
+export function askRouteForPush(data: unknown): string | null {
+  const id = commandIdOfPush(data)
+  return id === null ? null : `/ask?command=${encodeURIComponent(id)}`
+}
+
+/**
+ * Subscribe to taps. Returns the unsubscribe, so a caller can be an effect.
+ *
+ * The routing decision is `askRouteForPush`'s and is pure and tested; this is the thin wrapper
+ * around the library, the same shape as `readPermission` and `fetchPushToken` above and for the
+ * same reason — nothing in this app can render a screen under test, so nothing decided inside a
+ * listener would be argued anywhere but in prose.
+ *
+ * COVERS TWO DELIVERY PATHS, NOT ONE. `addNotificationResponseReceivedListener` alone misses the
+ * tap that matters most: the one that launches a killed process. That response can be delivered
+ * by the OS before this effect has subscribed, and the listener does not replay it — the library's
+ * own mitigation is `getLastNotificationResponse()`, read once, synchronously, at the same moment
+ * the listener is attached. Both paths are wired through the same `routeOnce`, keyed on the
+ * response's own `identifier`, because on some platforms the response that launched the app is
+ * ALSO re-delivered to the listener once it is registered — without the guard, a cold-launch tap
+ * would route twice.
+ */
+export function addNotificationTapListener(go: (route: string) => void): () => void {
+  const routed = new Set<string>()
+
+  const routeOnce = (response: Notifications.NotificationResponse) => {
+    const id = response.notification.request.identifier
+    if (routed.has(id)) return
+    const route = askRouteForPush(response.notification.request.content.data)
+    if (route === null) return
+    routed.add(id)
+    go(route)
+  }
+
+  const last = Notifications.getLastNotificationResponse()
+  if (last) routeOnce(last)
+
+  const sub = Notifications.addNotificationResponseReceivedListener(routeOnce)
+  return () => sub.remove()
 }

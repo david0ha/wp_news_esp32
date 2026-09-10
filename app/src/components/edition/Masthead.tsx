@@ -30,6 +30,7 @@ export function Masthead({
   error,
   onRetry,
   onPressSymbol,
+  onAsk,
 }: {
   edition: Edition
   demo: boolean
@@ -38,6 +39,12 @@ export function Masthead({
   error: string | null
   onRetry: () => void
   onPressSymbol: () => void
+  /**
+   * Open the ask screen. ABSENT when there is nowhere for the tap to go — the bundled demo, or a
+   * phone with no desk address and no token. A button that is drawn and does nothing is worse
+   * than one that is not there, which is the argument the symbol row above already makes.
+   */
+  onAsk?: () => void
 }) {
   const t = useStrings()
   const ty = useEditionType()
@@ -46,9 +53,22 @@ export function Masthead({
 
   return (
     <View style={styles.root}>
-      <Text style={ty.headingLg} numberOfLines={2}>
-        {s.name !== '' ? s.name : s.symbol}
-      </Text>
+      <View style={styles.titleRow}>
+        <Text style={[ty.headingLg, styles.name]} numberOfLines={2}>
+          {s.name !== '' ? s.name : s.symbol}
+        </Text>
+        {onAsk !== undefined ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t.ask.a11y.openAsk}
+            onPress={onAsk}
+            hitSlop={8}
+            style={({ pressed }) => [styles.ask, pressed && styles.askPressed]}
+          >
+            <Text style={styles.askLabel}>{t.ask.open}</Text>
+          </Pressable>
+        ) : null}
+      </View>
 
       {s.symbol !== '' ? (
         <Pressable
@@ -123,6 +143,16 @@ const styles = StyleSheet.create({
     paddingTop: space.sm,
     gap: space.xs,
   },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.md },
+  name: { flex: 1 },
+  ask: {
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentDim,
+  },
+  askPressed: { opacity: 0.7 },
+  askLabel: { fontFamily: fonts.semibold, fontSize: 13, color: colors.accent },
   symbolRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
