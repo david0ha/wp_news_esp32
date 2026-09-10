@@ -36,6 +36,7 @@ import datetime
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -1309,6 +1310,57 @@ class MainRefusesTest(unittest.TestCase):
              self.assertLogs("worker", level="ERROR") as caught:
             self.assertEqual(loop.main(), 2)
         self.assertIn("AGENT_RUN_AS", caught.output[0])
+
+
+class RunClaudeCredentialProbeTest(unittest.TestCase):
+    """`run_claude` must hand `child_env` the CHILD's home, not the loop's.
+
+    Dormant today -- nothing mounts a CLI login under the model user's home --
+    but the day one exists, checking the wrong home leaves the metered key in
+    the child's environment and the subscription silently stops paying.
+    """
+
+    def test_the_credential_probe_looks_at_the_child_s_home_when_switching_user(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model",
+                                       "CLAUDEPOST_REPO": "/repo"})
+        child_home = loop.run_as_home("model")
+        credentials = os.path.join(child_home, ".claude", ".credentials.json")
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["env"] = kwargs["env"]
+            return subprocess.CompletedProcess(argv, 0, stdout=b"")
+
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}), \
+             mock.patch("os.path.exists", side_effect=lambda p: p == credentials), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            loop.run_claude(cfg, "prompt text", "/work", {})
+
+        # A login under the child's home was found, so the metered key comes
+        # out -- which only happens if the probe looked there rather than at
+        # the loop's own home, where this fake filesystem has nothing at all.
+        self.assertNotIn("ANTHROPIC_API_KEY", captured["env"])
+
+    def test_a_host_run_still_probes_its_own_home(self):
+        # run_as is "" on a host, so the fallback to os.path.expanduser("~")
+        # in child_env must still be reached -- this pins that the fix does
+        # not change behaviour when nobody is being switched to.
+        cfg = loop.Settings.from_env({"CLAUDEPOST_REPO": "/repo"})
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["env"] = kwargs["env"]
+            return subprocess.CompletedProcess(argv, 0, stdout=b"")
+
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test",
+                                          "HOME": "/home/operator"}), \
+             mock.patch("os.path.exists", return_value=False) as exists, \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            loop.run_claude(cfg, "prompt text", "/work", {})
+
+        exists.assert_called_once_with(
+            os.path.join("/home/operator", ".claude", ".credentials.json"))
+        self.assertIn("ANTHROPIC_API_KEY", captured["env"])
 
 
 class WatchlistTest(unittest.TestCase):

@@ -481,7 +481,16 @@ def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict,
     the default because they are always about an edition -- there is no proof
     sheet to look at on a calendar run.
     """
-    env = child_env(cfg, workdir, extra_env)
+    # The credential probe inside child_env has to look at the home the child
+    # will actually run with, not the loop's -- when a turn is handed to
+    # another user, that is run_as_home(cfg.run_as), the same value child_env
+    # itself writes into the child's HOME a few lines later. Left at None here,
+    # the probe would keep checking the loop's own home (`/root` in the image)
+    # forever, and a CLI login placed under the model user's home would never
+    # be found: ANTHROPIC_API_KEY would stay in the child's environment and the
+    # metered key would silently win over the subscription.
+    env = child_env(cfg, workdir, extra_env,
+                     home=run_as_home(cfg.run_as) if cfg.run_as else None)
 
     argv = claude_argv(cfg, workdir, kind)
     prompt_text = text + "\n\nThe repository is at %s. The edition directory is %s." % (
