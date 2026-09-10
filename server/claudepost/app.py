@@ -313,6 +313,20 @@ class Desk:
             row["has_notes"] = self.notes.has(row["id"])
         return rows
 
+    def command(self, cid: str) -> dict | None:
+        """One command, carrying whether it has a note attached, or ``None``.
+
+        :meth:`commands`' answer for one row, and it exists rather than being
+        left to the caller for that method's reason: `has_notes` is decided in
+        one place, so the queue's list, `state()`'s `queue.recent` and the
+        phone's poll of a single thread cannot answer the question three ways.
+        """
+        row = self.store.get_command(cid)
+        if row is None:
+            return None
+        row["has_notes"] = self.notes.has(cid)
+        return row
+
     # -- state ------------------------------------------------------------
     def state(self) -> dict:
         """The ``GET /api/state`` document: what the desk is doing, not what the paper says.

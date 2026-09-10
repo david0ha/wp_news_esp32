@@ -2240,6 +2240,52 @@ class TickTest(DeskTestCase):
         self.assertIsNone(doc["command"]["reply_to"])
         self.assertIsNone(doc["command"]["lang"])
 
+    def test_one_command_is_readable_without_listing_the_queue(self):
+        # The phone polls one thread while it is open. Making it fetch the
+        # whole queue to find one row would put every other instruction the
+        # desk holds on a phone that asked about its own message.
+        status, doc = self.api("POST", "/api/commands",
+                               {"kind": "ask", "text": "왜 그 회사예요?",
+                                "lang": "ko", "source": "app"}, "producer")
+        cid = doc["command"]["id"]
+
+        status, doc = self.api("GET", "/api/commands/" + cid, None, "producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["command"]["id"], cid)
+        self.assertEqual(doc["command"]["lang"], "ko")
+        self.assertFalse(doc["command"]["has_notes"])
+
+    def test_the_one_command_read_reports_a_note_the_way_the_list_does(self):
+        status, doc = self.api("POST", "/api/commands",
+                               {"kind": "ask", "text": "hello",
+                                "source": "app"}, "producer")
+        cid = doc["command"]["id"]
+        self.assertIsNotNone(self.desk.store.claim_command("w"))
+
+        status, _, _ = self.call("PUT", "/api/commands/%s/notes.md" % cid,
+                                 b"# the answer\n", self.tokens["producer"],
+                                 "text/markdown")
+        self.assertEqual(status, 200)
+
+        _, doc = self.api("GET", "/api/commands/" + cid, None, "producer")
+        self.assertTrue(doc["command"]["has_notes"])
+
+    def test_an_unknown_command_is_a_404(self):
+        status, doc = self.api("GET", "/api/commands/" + "a" * 32,
+                               None, "producer")
+        self.assertEqual(status, 404, doc)
+
+    def test_the_one_command_read_is_producer_scope(self):
+        status, doc = self.api("POST", "/api/commands",
+                               {"text": "look at the tape"}, "producer")
+        cid = doc["command"]["id"]
+        # An operator token is strictly stronger and must also work; the point
+        # of the row is that the worker's own token is enough.
+        for scope in ("producer", "operator"):
+            with self.subTest(scope=scope):
+                status, _ = self.api("GET", "/api/commands/" + cid, None, scope)
+                self.assertEqual(status, 200)
+
 
 class AuditTest(DeskTestCase):
     """`GET /api/audit`: the same `store.audit()` calls the other routes already make."""

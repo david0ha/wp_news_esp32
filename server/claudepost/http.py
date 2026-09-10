@@ -678,6 +678,18 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         """The note filed on a command, as the markdown a worker filed it as."""
         self._send_notes(self.desk.notes.get(match.group("cid")))
 
+    def h_get_command(self, match, _query) -> None:
+        """One command by id -- the phone's poll of an open thread.
+
+        The queue's list would answer this too, and does not: a phone asking
+        after its own message would be handed every other instruction the desk
+        is holding, which is a list of what the operator has asked for lately.
+        """
+        command = self.desk.command(match.group("cid"))
+        if command is None:
+            raise NotFound(message="no command %s" % match.group("cid"))
+        self._send_json(200, {"ok": True, "command": command})
+
     def h_cancel(self, match, _query) -> None:
         if not self.desk.store.cancel_command(match.group("cid")):
             raise NotFound(message="no such pending command")
@@ -1253,6 +1265,7 @@ _ROUTES = [
     (re.compile(r"^/api/commands/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_claim)}),
     (re.compile(r"^/api/commands/(?P<cid>%s)\Z" % _CID), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_command),
         "DELETE": ("operator", DeskHTTPRequestHandler.h_cancel)}),
     (re.compile(r"^/api/commands/(?P<cid>%s)/(?P<verb>done|fail)\Z" % _CID), {
         "POST": ("producer", DeskHTTPRequestHandler.h_finish)}),
