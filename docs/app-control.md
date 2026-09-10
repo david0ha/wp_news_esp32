@@ -526,8 +526,9 @@ rules.
 | `GET /api/editions` · `GET /api/editions/<id>` | the editorial history, and one edition's record |
 | `GET /api/editions/<id>/proof/<name>` | that edition's own proof sheets |
 | `GET /api/editions/<id>/notes.md` | the dossier filed with it, if there is one |
-| `GET /api/commands` · `POST /api/commands` | the queue, and asking it for something |
-| `GET/PUT /api/commands/<id>/notes.md` | the note on one instruction |
+| `GET /api/commands` · `POST /api/commands` | the queue, and asking it for something — including `{"kind": "ask"}`, a message typed on the phone |
+| `GET /api/commands/<id>` | one instruction, with `has_notes` — what the Ask screen polls while a thread is open |
+| `GET/PUT /api/commands/<id>/notes.md` | the note on one instruction, which for an `ask` is the answer itself |
 | `GET /api/directives` | the standing rules in force — adding one is `operator` |
 | `GET /api/schedule` · `GET /api/schedule/next` | the schedule, and what it does next — editing it is `operator` |
 | `GET /api/watchlist` | the vault's grades, reasons and thesis notes — editing it is `operator` |

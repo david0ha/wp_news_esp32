@@ -17,7 +17,6 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-import re
 import threading
 from dataclasses import dataclass
 from typing import Mapping
@@ -30,15 +29,12 @@ from .clock import Clock
 from .editions import EditionStore
 from .gates import Gates, SubprocessGates
 from .notes import NoteStore
-from .store import Store
-
-#: The shape of a command id: `commands` table ids, the `NoteStore` this desk
-#: hands their notes to, and every `/api/commands/<cid>/...` route in
-#: `http.py` -- which imports this constant and builds its routes from it
-#: rather than spelling `[0-9a-f]{8,64}` a second time, so the three cannot
-#: drift apart. Editions' shape, because a command shares the queue's table
-#: with nothing that has a shorter or longer id.
-COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
+# `COMMAND_ID_RE` is imported rather than defined here, and re-exported by being
+# imported: `http.py` says `from .app import COMMAND_ID_RE` and `Desk.notes` is
+# built from it, so the route's pattern, the note store's and the queue's are one
+# regex. It moved to `store` because `add_command` now checks a `reply_to`
+# against it, and `store` cannot import `app` -- `app` imports `store`.
+from .store import COMMAND_ID_RE, Store
 
 LOG = logging.getLogger("claudepost.app")
 
@@ -56,6 +52,22 @@ WAKE_GRACE_SECONDS = 30 * 60
 #: tick rate -- what they measure is hour-scale -- and doing them there would
 #: put a directory scan and a transaction between the clock and a publish.
 HOUSEKEEPING_SECONDS = 600
+
+#: The ``source`` a command carries when the phone filed it, and the only source
+#: whose finish rings anybody. ``source`` is free text on every other path --
+#: ``api``, ``schedule``, whatever a curl said -- so this is a convention rather
+#: than an enum, and it is stated once here because the app writes it and the
+#: finish path reads it. A typo in either is a notification that never arrives
+#: and nothing anywhere that says why.
+PHONE_SOURCE = "app"
+
+#: How far back the answer pass looks, and how far back its ledger read goes.
+#: Derived rather than chosen: the longest a quiet window can hold an answer is
+#: a minute short of a day (`push._quiet` refuses a window with no width), and
+#: the slack is for a desk that was down across one. Past this the notification
+#: expires -- never the answer, which the phone polls while its thread is open
+#: and reads from the command on its next launch besides.
+ANSWER_WINDOW_SECONDS = 36 * 3600
 
 
 @dataclass
@@ -298,6 +310,15 @@ class Desk:
             if swept or pruned or aged:
                 did.append("housekeeping:%d/%d/%d" % (swept, pruned, aged))
 
+            # On the housekeeping pass rather than every tick: what this waits
+            # for is a quiet window ending, which is hour-scale, so ten minutes
+            # of grain costs an answer nothing -- where a query every five
+            # seconds to find nothing all day would be a read on the connection
+            # the publish path writes.
+            owed = self._fire_owed_answers(t)
+            if owed:
+                did.append("answers:%d" % owed)
+
         return did
 
     # -- commands -----------------------------------------------------------
@@ -316,6 +337,95 @@ class Desk:
         for row in rows:
             row["has_notes"] = self.notes.has(row["id"])
         return rows
+
+    def command(self, cid: str) -> dict | None:
+        """One command, carrying whether it has a note attached, or ``None``.
+
+        :meth:`commands`' answer for one row, and it exists rather than being
+        left to the caller for that method's reason: `has_notes` is decided in
+        one place, so the queue's list, `state()`'s `queue.recent` and the
+        phone's poll of a single thread cannot answer the question three ways.
+        """
+        row = self.store.get_command(cid)
+        if row is None:
+            return None
+        row["has_notes"] = self.notes.has(cid)
+        return row
+
+    def finish(self, cid: str, status: str, result: str = "") -> dict:
+        """Report a claimed command ``done`` or ``failed``, and tell the phone.
+
+        The store settles the row; the push is this method's whole reason for
+        existing, and it is **wrapped**. The caller is the worker's own
+        ``POST /api/commands/<id>/done``, and the 200 it gets back is what stops
+        the worker retrying: a phone that does not ring costs an answer somebody
+        opens the app for, where a ``done`` that 500s costs the entire command
+        run a second time -- which on an `ask` that revised the paper means the
+        paper revised twice.
+        """
+        command = self.store.finish_command(cid, status, result)
+        if command.get("source") == PHONE_SOURCE:
+            try:
+                self._send_answer(command, self.clock.now())
+            except Exception as exc:                               # noqa: BLE001
+                # `push.send` has already logged the redacted detail. Nothing
+                # is recorded, so this stays owed and `_send_owed_answers`
+                # picks it up on the next housekeeping pass.
+                LOG.warning("answer: the push for %s did not go (%s)",
+                            cid, type(exc).__name__)
+        return command
+
+    def _send_answer(self, command: Mapping, t: float) -> int:
+        """Tell every phone that wants it that this command has an answer.
+
+        Returns how many left. Idempotent through the same delivery ledger the
+        alerts use, keyed ``(token, "cmd:"+cid, "0")`` -- so a desk that
+        restarted between the finish and the sweep, or a sweep overlapping a
+        finish, sends one notification rather than two.
+
+        A device inside its quiet window is skipped and **nothing is recorded
+        for it**, which is exactly what leaves it owed: `_send_owed_answers`
+        picks it up once the window ends. Deferred, never dropped, the rule
+        `alerts.quiet_release`'s callers already hold for an alert.
+        """
+        cid = command["id"]
+        event_id = push.answer_event_id(cid)
+        devices = (self.push_devices or {}).get("devices") or []
+        if not devices:
+            return 0
+
+        already = {row["token"] for row
+                   in self.store.deliveries_since(t - ANSWER_WINDOW_SECONDS)
+                   if row["event_id"] == event_id}
+        ready = [one for one in devices
+                 if one["token"] not in already
+                 and one["prefs"].get(push.ANSWER, True)
+                 and alerts.quiet_release(one, t) is None]
+        if not ready:
+            return 0
+
+        # `lang` is NULL when the phone did not say, which means "the language
+        # of the message itself" -- something only the model that read it can
+        # know. The desk's own setting is the nearest thing it has, and it is
+        # already the language the paper is written in.
+        lang = command.get("lang") or self.settings.get("lang")
+        messages = [push.answer_message(one["token"], cid, command["status"],
+                                        command.get("result") or "", lang)
+                    for one in ready]
+        tickets = push.send(messages, fetch=self.push_fetch)
+
+        sent = 0
+        for one, ticket in zip(ready, tickets):
+            token = one["token"]
+            if not (isinstance(ticket, dict) and ticket.get("status") == "ok"):
+                self.push_failures[token] = self.push_failures.get(token, 0) + 1
+                continue
+            self.push_failures.pop(token, None)
+            self.store.record_delivery(token, event_id, push.ANSWER_LEAD, t)
+            sent += 1
+
+        self._forget_unregistered(tickets)
+        return sent
 
     # -- state ------------------------------------------------------------
     def state(self) -> dict:
@@ -852,6 +962,35 @@ class Desk:
         LOG.info("alerts: sent %d of %d owed", sent, len(ready))
         return "alerts:%d" % sent if sent else None
 
+    def _fire_owed_answers(self, t: float) -> int:
+        """Send the answer pushes a quiet window or a restart held back.
+
+        **Every exception is caught**, `_fire_due_alerts`' rule and for its
+        reason: the rest of the housekeeping and the publish run after this
+        line, and the failure it would die on is a network, which is to say a
+        Tuesday. The log line carries the exception's *type* and not its text,
+        because what this path holds in its hands is a list of push tokens.
+        """
+        try:
+            return self._send_owed_answers(t)
+        except Exception as exc:                                   # noqa: BLE001
+            LOG.warning("answers: the pass failed (%s)", type(exc).__name__)
+            return 0
+
+    def _send_owed_answers(self, t: float) -> int:
+        """The pass itself. See :meth:`_fire_owed_answers` for why it is wrapped.
+
+        The cheap question first, as the alert pass asks it: a desk with no
+        phone registered finds that out without opening a read on the database.
+        """
+        if not (self.push_devices or {}).get("devices"):
+            return 0
+        sent = 0
+        for command in self.store.finished_since(t - ANSWER_WINDOW_SECONDS,
+                                                 PHONE_SOURCE):
+            sent += self._send_answer(command, t)
+        return sent
+
     def _forget_unregistered(self, tickets: list[dict]) -> None:
         """Drop the phones Expo says no longer exist.
 
@@ -880,10 +1019,13 @@ class Desk:
                 self.push_failures.pop(token, None)
 
     def enqueue(self, kind: str, text: str, priority: int = 5,
-                deadline_at: float | None = None, source: str = "api") -> dict:
+                deadline_at: float | None = None, source: str = "api",
+                reply_to: str | None = None,
+                lang: str | None = None) -> dict:
         """Add a command and wake anything parked on a long poll."""
         command = self.store.add_command(kind, text, priority=priority,
-                                         deadline_at=deadline_at, source=source)
+                                         deadline_at=deadline_at, source=source,
+                                         reply_to=reply_to, lang=lang)
         with self.queue_event:
             self.queue_event.notify_all()
         return command
