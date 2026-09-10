@@ -625,10 +625,12 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
 
     async command(id: string): Promise<Command | null> {
       const res = await send(`/api/commands/${encodeURIComponent(id)}`, { method: 'GET' })
-      // A 404 IS AN ANSWER. The desk reaps its queue, so a thread left open for long enough asks
-      // about an id that is genuinely gone — a state the turn renders, not a transport failure
-      // that a retry would fix. `forgetPushDevice` takes a 404 the same way and for the same
-      // reason: the status describes the world, not the request.
+      // A 404 IS AN ANSWER, and not the one an earlier version of this comment claimed. Rows are
+      // never deleted — `reap()` only ever UPDATEs a command's status, and an expired one still
+      // answers 200 with `status: "expired"`. So a 404 here means exactly one thing: an id the
+      // desk never held at all, not one that lapsed away. A state the turn renders either way, not
+      // a transport failure that a retry would fix. `forgetPushDevice` takes a 404 the same way
+      // and for the same reason: the status describes the world, not the request.
       if (res.status === 404) return null
       return commandOf(res, 'commands')
     },
