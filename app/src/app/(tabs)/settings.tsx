@@ -47,6 +47,7 @@ import {
   DEFAULT_QUIET,
   fetchPushToken,
   findRegistration,
+  LEAD_KINDS,
   LEADS,
   notifyView,
   phoneZone,
@@ -1283,8 +1284,8 @@ function NotifySection({
         <>
           {/*
             A hairline above each row, which is also a hairline under the master switch — and that
-            is the one that matters. Without it the six switches are a flat list of equals, and
-            they are not: the five here answer to the one above, and nothing else on the row tells
+            is the one that matters. Without it the seven switches are a flat list of equals, and
+            they are not: the six here answer to the one above, and nothing else on the row tells
             them apart. Same shape, same type, same control, one after another.
           */}
           {PUSH_KINDS.map((kind) => (
@@ -1302,7 +1303,7 @@ function NotifySection({
                   ios_backgroundColor={colors.surfaceAlt}
                 />
               </View>
-              {prefs.prefs[kind] ? (
+              {prefs.prefs[kind] && LEAD_KINDS.includes(kind) ? (
                 <>
                   <View style={styles.chipRow} accessibilityLabel={t.leadLabel}>
                     {LEADS.map((lead) => (

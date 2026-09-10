@@ -4,9 +4,12 @@ import {
   DEFAULT_LEAD,
   DEFAULT_PREFS,
   DEFAULT_QUIET,
+  LEAD_KINDS,
   LEADS,
   PUSH_KINDS,
   applyNotifyPrefs,
+  askRouteForPush,
+  commandIdOfPush,
   decideNotify,
   deviceBody,
   deviceZone,
@@ -129,10 +132,18 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('the switches', () => {
-  it('is the desk’s five, not the book’s eight', () => {
-    // `push.KINDS` — the four computed kinds, and `researched` shared by the four the agent had
-    // to go and find. A sixth switch here would be one the desk has nowhere to put.
-    expect([...PUSH_KINDS].sort()).toEqual(['dividend', 'earnings', 'econ', 'expiry', 'researched'])
+  it('is the desk’s six, not the book’s eight', () => {
+    // `push.KINDS` — the four computed kinds, `researched` shared by the four the agent had to go
+    // and find, and `answer`, the one that is not a calendar alert at all. A seventh switch here
+    // would be one the desk has nowhere to put.
+    expect([...PUSH_KINDS].sort()).toEqual([
+      'answer',
+      'dividend',
+      'earnings',
+      'econ',
+      'expiry',
+      'researched',
+    ])
   })
 
   it('offers exactly the six lead times the desk can schedule', () => {
@@ -955,5 +966,59 @@ describe('the push token goes to the desk and nowhere else', () => {
     expect(logged.join('\n')).not.toContain('ExponentPushToken')
     expect(written).toHaveLength(0)
     expect(logged).toHaveLength(0)
+  })
+})
+
+describe('the answer kind', () => {
+  it('is a sixth switch beside the five calendar ones', () => {
+    expect([...PUSH_KINDS]).toEqual([
+      'earnings',
+      'expiry',
+      'dividend',
+      'econ',
+      'researched',
+      'answer',
+    ])
+  })
+
+  it('takes no lead time, because it is about something that already happened', () => {
+    // A lead is "how far ahead of a date". An answer has no date ahead of it, and a lead selector
+    // under this switch would be asking a question with no answer.
+    expect([...LEAD_KINDS]).toEqual(['earnings', 'expiry', 'dividend', 'econ', 'researched'])
+    expect(DEFAULT_LEAD.answer).toEqual([])
+  })
+
+  it('registers with an empty lead list, which the desk takes', () => {
+    const body = deviceBody(TOKEN, 'ios', 'Asia/Seoul', DEFAULT_PREFS)
+    expect(body.prefs.answer).toBe(true)
+    expect(body.lead.answer).toEqual([])
+  })
+})
+
+describe('routing a notification tap', () => {
+  it('finds the command id in the push’s data', () => {
+    expect(commandIdOfPush({ command_id: 'c0ffee00', result: 'answered' })).toBe('c0ffee00')
+  })
+
+  it('ignores a push carrying no command id — every calendar alert is one', () => {
+    expect(commandIdOfPush({ event_id: 'evt1' })).toBeNull()
+    expect(commandIdOfPush(null)).toBeNull()
+    expect(commandIdOfPush({ command_id: 42 })).toBeNull()
+    expect(commandIdOfPush({ command_id: '' })).toBeNull()
+  })
+
+  it('routes to the ask screen with the command as the parameter', () => {
+    // The push carries a COMMAND id and the screen opens a THREAD; the lookup is the ask hook's,
+    // over what it reads off disk. Routing by command id is what makes the link work on a phone
+    // whose thread list was written by a different launch.
+    expect(askRouteForPush({ command_id: 'c0ffee00' })).toBe('/ask?command=c0ffee00')
+  })
+
+  it('percent-encodes an id that would otherwise break the query', () => {
+    expect(askRouteForPush({ command_id: 'a&b' })).toBe('/ask?command=a%26b')
+  })
+
+  it('routes nothing for a push that is not about a command', () => {
+    expect(askRouteForPush({ event_id: 'evt1' })).toBeNull()
   })
 })

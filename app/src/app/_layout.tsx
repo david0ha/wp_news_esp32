@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
-import { Stack } from 'expo-router'
+import { Stack, useRouter } from 'expo-router'
 import {
   useFonts,
   Inter_400Regular,
@@ -12,6 +12,7 @@ import {
 } from '@expo-google-fonts/inter'
 import * as SplashScreen from 'expo-splash-screen'
 import { DeviceProvider } from '../lib/device'
+import { addNotificationTapListener } from '../lib/notify'
 import { LanguageProvider } from '../i18n'
 import { colors } from '../theme'
 
@@ -28,10 +29,16 @@ export default function RootLayout() {
     Inter_700Bold,
     Inter_800ExtraBold,
   })
+  const router = useRouter()
 
   useEffect(() => {
     if (fontsLoaded || fontError) SplashScreen.hideAsync().catch(() => {})
   }, [fontsLoaded, fontError])
+
+  // A tap on the desk's "your answer is ready" opens the conversation it is about. Mounted at the
+  // ROOT and not on a screen: the tap that matters most is the one on a cold process, where no
+  // screen is mounted yet and the notification is the reason the app is starting at all.
+  useEffect(() => addNotificationTapListener((route) => router.push(route)), [router])
 
   if (!fontsLoaded && !fontError) return null
 

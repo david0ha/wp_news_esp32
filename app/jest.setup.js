@@ -55,6 +55,10 @@ jest.mock('expo-notifications', () => ({
     throw new Error('no device to issue a push token for')
   },
   setNotificationChannelAsync: async () => undefined,
+  // The response listener the ask feature mounts. Nothing in this suite exercises delivery — a tap
+  // cannot happen under Jest — so this hands back a subscription that removes cleanly and never
+  // fires, which is what `_layout.tsx`'s effect needs to mount and unmount.
+  addNotificationResponseReceivedListener: () => ({ remove: () => undefined }),
   IosAuthorizationStatus: {
     NOT_DETERMINED: 0,
     DENIED: 1,
