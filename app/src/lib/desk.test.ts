@@ -401,3 +401,139 @@ describe('deskClient.forgetPushDevice', () => {
     await expect(c.forgetPushDevice(PUSH)).rejects.toMatchObject({ code: 'unauthorized' })
   })
 })
+
+const commandRow = (over: Record<string, unknown> = {}) => ({
+  id: 'c0ffee00',
+  kind: 'ask',
+  text: 'why did it move?',
+  status: 'pending',
+  result: null,
+  reply_to: null,
+  lang: 'ko',
+  source: 'app',
+  created_at: '2026-09-10T01:02:03Z',
+  has_notes: false,
+  ...over,
+})
+
+const commandBody = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({ ok: true, command: commandRow(over) })
+
+describe('deskClient.postCommand', () => {
+  it('POSTs exactly the four fields the desk takes, and reads the row back', async () => {
+    const { client: c, calls } = client([{ text: commandBody() }])
+    const row = await c.postCommand({ text: 'why did it move?', lang: 'ko' })
+    expect(calls[0].url).toBe('https://desk.example.dev/api/commands')
+    expect(calls[0].init?.method).toBe('POST')
+    expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
+    // As bytes, like every other body in this file: the desk refuses an unknown key whole, and
+    // `reply_to` is ABSENT rather than null on a first turn — a null reply_to is a claim about a
+    // previous command, and there is not one.
+    expect(calls[0].init?.body).toBe(
+      '{"kind":"ask","text":"why did it move?","lang":"ko","source":"app"}',
+    )
+    expect(row).toEqual({
+      id: 'c0ffee00',
+      kind: 'ask',
+      text: 'why did it move?',
+      status: 'pending',
+      result: null,
+      replyTo: null,
+      lang: 'ko',
+      source: 'app',
+      createdAt: '2026-09-10T01:02:03Z',
+      hasNotes: false,
+    })
+  })
+
+  it('carries reply_to when this is a follow-up', async () => {
+    const { client: c, calls } = client([{ text: commandBody({ reply_to: 'deadbeef' }) }])
+    await c.postCommand({ text: 'and the CFO?', lang: 'en', replyTo: 'deadbeef' })
+    expect(calls[0].init?.body).toBe(
+      '{"kind":"ask","text":"and the CFO?","lang":"en","reply_to":"deadbeef","source":"app"}',
+    )
+  })
+
+  it('surfaces the desk’s own reason for refusing a message', async () => {
+    const { client: c } = client([
+      { status: 400, text: '{"ok":false,"error":"bad_command","detail":"text: too long"}' },
+    ])
+    await expect(c.postCommand({ text: 'x'.repeat(3000), lang: 'en' })).rejects.toMatchObject({
+      code: 'http',
+      error: 'bad_command',
+      detail: 'text: too long',
+    })
+  })
+})
+
+describe('deskClient.command', () => {
+  it('GETs one command and maps the wire names to the app’s', async () => {
+    const { client: c, calls } = client([
+      { text: commandBody({ status: 'done', result: 'revised abc123', has_notes: true }) },
+    ])
+    const row = await c.command('c0ffee00')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/commands/c0ffee00')
+    expect(calls[0].init?.method).toBe('GET')
+    expect(row).toMatchObject({ status: 'done', result: 'revised abc123', hasNotes: true })
+  })
+
+  it('reads a 404 as “the desk no longer has this”, not as a failure', async () => {
+    // A command the desk has forgotten is a state the thread renders. Throwing would put a
+    // network error card over a turn whose only real problem is that it is gone.
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"not_found"}' }])
+    expect(await c.command('c0ffee00')).toBeNull()
+  })
+
+  it('refuses a status this app cannot classify', async () => {
+    // The poll stops on `done` or `failed` and on nothing else, so a status it does not know is
+    // one it would wait on forever.
+    const { client: c } = client([{ text: commandBody({ status: 'reticulating' }) }])
+    await expect(c.command('c0ffee00')).rejects.toMatchObject({ code: 'bad_json' })
+  })
+
+  it('percent-encodes the id into the path', async () => {
+    const { client: c, calls } = client([{ text: commandBody() }])
+    await c.command('a/b')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/commands/a%2Fb')
+  })
+})
+
+describe('deskClient.commandNotes', () => {
+  it('GETs the markdown as text, not as JSON', async () => {
+    const { client: c, calls } = client([{ text: '# Why it moved\n\nThe guide.\n' }])
+    expect(await c.commandNotes('c0ffee00')).toBe('# Why it moved\n\nThe guide.\n')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/commands/c0ffee00/notes.md')
+  })
+
+  it('reads a 404 as “no answer was written”', async () => {
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"not_found"}' }])
+    expect(await c.commandNotes('c0ffee00')).toBeNull()
+  })
+
+  it('does not swallow a refusal that is not a 404', async () => {
+    const { client: c } = client([{ status: 403, text: '{"ok":false,"error":"forbidden"}' }])
+    await expect(c.commandNotes('c0ffee00')).rejects.toMatchObject({ code: 'unauthorized' })
+  })
+})
+
+describe('deskClient.publishNow', () => {
+  it('POSTs /api/publish with no body at all', async () => {
+    const { client: c, calls } = client([{ text: '{"ok":true,"edition":"abc123"}' }])
+    expect(await c.publishNow()).toBe('published')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/publish')
+    expect(calls[0].init?.method).toBe('POST')
+    expect(calls[0].init?.body).toBeUndefined()
+  })
+
+  it('reads “nothing is staged” as an outcome rather than an error', async () => {
+    // The staged edition went out some other way — the owner's own tooling, or a second phone.
+    // The paper still changed, which is the fact the screen is about to act on.
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"nothing is staged"}' }])
+    expect(await c.publishNow()).toBe('nothing_staged')
+  })
+
+  it('turns a 403 into unauthorized, like every other route', async () => {
+    const { client: c } = client([{ status: 403, text: '{"ok":false,"error":"forbidden"}' }])
+    await expect(c.publishNow()).rejects.toMatchObject({ code: 'unauthorized', status: 403 })
+  })
+})
