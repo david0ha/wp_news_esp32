@@ -1200,6 +1200,93 @@ class ArgvTest(unittest.TestCase):
                       loop.claude_argv(cfg, "/work")[-1])
 
 
+class RunAsTest(unittest.TestCase):
+    """Handing one turn to a second user, which is the whole of the wall.
+
+    The mechanism is not a preference and the tests say so: gosu is not setuid,
+    compose sets no-new-privileges, and a process that is not root cannot change
+    uid. So the loop is root in the container and every `claude` is `model` --
+    and on a host, where AGENT_RUN_AS is unset, nothing switches at all and the
+    command line is byte-identical to the one this worker has always run.
+    """
+
+    def test_a_host_run_switches_nobody(self):
+        cfg = loop.Settings.from_env({})
+        self.assertEqual(cfg.run_as, "")
+        self.assertEqual(loop.claude_argv(cfg, "/work")[0], "claude")
+
+    def test_the_model_user_is_prefixed_before_the_cli(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model"})
+        argv = loop.claude_argv(cfg, "/work")
+        self.assertEqual(argv[:3], ["gosu", "model", "claude"])
+        # And the allow-list is still last with nothing after its value: gosu
+        # must not push the prompt back onto the command line.
+        self.assertEqual(argv[-2], "--allowedTools")
+
+    def test_the_child_gets_that_users_home_and_not_the_loops(self):
+        # `claude` writes its own configuration into $HOME. Left at the loop's,
+        # every turn fails on its first write into a directory it does not own,
+        # and the message is about a config file rather than about a uid.
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model"})
+        env = loop.child_env(cfg, "/work", {})
+        self.assertEqual(env["HOME"], loop.run_as_home("model"))
+        self.assertEqual(env["USER"], "model")
+        self.assertEqual(env["LOGNAME"], "model")
+
+    def test_an_unset_run_as_leaves_home_alone(self):
+        cfg = loop.Settings.from_env({})
+        with mock.patch.dict(os.environ, {"HOME": "/home/somebody"}):
+            env = loop.child_env(cfg, "/work", {})
+        self.assertEqual(env["HOME"], "/home/somebody")
+
+    def test_a_user_this_image_does_not_have_still_yields_a_home(self):
+        # Pure, so a test can assert it on a machine with no `model` user.
+        self.assertEqual(loop.run_as_home("nobody-here-at-all"),
+                         "/home/nobody-here-at-all")
+
+
+class OwnWorkdirTest(unittest.TestCase):
+    """The workdir is the only writable path the model has, so it has to own it.
+
+    Handed over AFTER the seeding and before the turn: the seeded files are
+    written by the loop, and `watchlist.json` is one the contract asks the model
+    to rewrite in place.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        os.makedirs(os.path.join(self.tmp, "tiles"))
+        with open(os.path.join(self.tmp, "watchlist.json"), "w") as f:
+            f.write("{}")
+
+    def test_nothing_is_chowned_when_nobody_is_being_switched_to(self):
+        cfg = loop.Settings.from_env({})
+        with mock.patch("os.chown") as chown:
+            loop.own_workdir(cfg, self.tmp)
+        chown.assert_not_called()
+
+    def test_every_path_in_the_workdir_is_handed_over(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "model"})
+        with mock.patch("os.chown") as chown, \
+             mock.patch("loop.pwd.getpwnam") as getpwnam:
+            getpwnam.return_value = mock.Mock(pw_uid=10001, pw_gid=10001)
+            loop.own_workdir(cfg, self.tmp)
+        handed = sorted(call.args[0] for call in chown.call_args_list)
+        self.assertEqual(handed, sorted([
+            self.tmp,
+            os.path.join(self.tmp, "tiles"),
+            os.path.join(self.tmp, "watchlist.json")]))
+        for call in chown.call_args_list:
+            self.assertEqual(call.args[1:], (10001, 10001))
+
+    def test_a_user_the_image_does_not_have_fails_the_command_by_name(self):
+        cfg = loop.Settings.from_env({"AGENT_RUN_AS": "ghost"})
+        with self.assertRaises(RuntimeError) as caught:
+            loop.own_workdir(cfg, self.tmp)
+        self.assertIn("ghost", str(caught.exception))
+
+
 class WatchlistTest(unittest.TestCase):
     """The universe and the rotation cursor, across a scratch directory that dies.
 

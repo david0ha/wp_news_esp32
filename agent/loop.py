@@ -48,6 +48,7 @@ import datetime
 import json
 import logging
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -224,6 +225,10 @@ class Settings:
     use_api_key: bool
     tools: str
     log_level: str
+    #: The user every `claude` turn is spawned as, or "" for "do not switch".
+    #: Set to `model` by the image; empty under agent/run-host.sh, where the
+    #: turn runs as the operator and there is nobody to switch to.
+    run_as: str
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":
@@ -264,6 +269,10 @@ class Settings:
             # never what anybody meant -- it is a worker that can do nothing.
             tools=env.get("AGENT_TOOLS") or DEFAULT_TOOLS,
             log_level=env.get("CLAUDEPOST_LOG_LEVEL", "INFO"),
+            # Empty means "run the turn as this process's own user", which is
+            # what a host run wants and what a container without the second
+            # user can do. The image sets it; nothing else does.
+            run_as=env.get("AGENT_RUN_AS", "").strip(),
         )
 
 
@@ -345,7 +354,63 @@ def claude_argv(cfg: Settings, workdir: str, kind: str = "file_edition") -> list
     argv += ["--append-system-prompt", system_note(kind),
              "--disallowedTools", DENY_TOOLS,
              "--allowedTools", cfg.tools.format(repo=cfg.repo)]
+    # gosu rather than a setuid anything, and root rather than a preference:
+    # this prefix only works because the loop is uid 0. A process that is not
+    # root cannot change uid at all -- gosu is not setuid and compose sets
+    # `no-new-privileges:true` -- which is why `main` refuses to start a
+    # non-root loop with this set rather than discovering it here, one claim in.
+    if cfg.run_as:
+        argv = ["gosu", cfg.run_as] + argv
     return argv
+
+
+def run_as_home(user: str) -> str:
+    """The home directory of the user a turn is handed to.
+
+    ``claude`` writes its own configuration under ``$HOME``, so a child that
+    keeps the loop's ``HOME`` fails on its first write into a directory it does
+    not own -- with a message about a config file rather than about a uid.
+
+    A user this machine does not have answers ``/home/<user>`` rather than
+    raising: this is a pure function so that the argv and env tests can assert
+    it anywhere, and the place a missing user is actually caught is
+    :func:`own_workdir`, which has to look it up for real.
+    """
+    try:
+        return pwd.getpwnam(user).pw_dir
+    except KeyError:
+        return os.path.join("/home", user)
+
+
+def own_workdir(cfg: Settings, workdir: str) -> None:
+    """Hand the command's directory to the user the turn will run as.
+
+    Called once, after every seeded file is written and before the first turn.
+    After, because the loop writes those files and the contract asks the model
+    to rewrite ``watchlist.json`` in place; before, because the turn is what
+    needs to write there at all.
+
+    Does nothing when no user is being switched to, which is every host run.
+
+    Raises:
+        RuntimeError: ``AGENT_RUN_AS`` names a user this image does not have.
+            :func:`main` has already refused to start a loop that is not root,
+            so the remaining way to get here is a typo, and a command that fails
+            by name beats a turn that runs as the loop with the wall silently
+            absent.
+    """
+    if not cfg.run_as:
+        return
+    try:
+        ent = pwd.getpwnam(cfg.run_as)
+    except KeyError:
+        raise RuntimeError(
+            "AGENT_RUN_AS=%s is not a user in this image; the turn has nobody "
+            "to be handed to" % cfg.run_as)
+    for root, dirs, files in os.walk(workdir):
+        for name in dirs + files:
+            os.chown(os.path.join(root, name), ent.pw_uid, ent.pw_gid)
+    os.chown(workdir, ent.pw_uid, ent.pw_gid)
 
 
 def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = None) -> dict:
@@ -398,6 +463,13 @@ def child_env(cfg: Settings, workdir: str, extra_env: dict, home: str | None = N
         LOG.warning("ANTHROPIC_API_KEY is set beside a CLI login; keeping it "
                     "out of the child so the subscription pays. "
                     "CLAUDEPOST_USE_API_KEY=1 spends the key instead.")
+    # The child is about to become somebody else, so its home moves with it.
+    # Left at the loop's, `claude` writes its configuration into a directory it
+    # does not own and the turn fails on something that reads like a bad
+    # install.
+    if cfg.run_as:
+        env["HOME"] = run_as_home(cfg.run_as)
+        env["USER"] = env["LOGNAME"] = cfg.run_as
     return env
 
 
@@ -1063,6 +1135,28 @@ def main() -> int:
     logging.basicConfig(
         level=cfg.log_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+    if cfg.run_as and os.geteuid() != 0:
+        # Not a warning: a loop that cannot switch user would run the model as
+        # itself, with the desk token in its own environment, and file paper
+        # perfectly while the wall this setting names was never there.
+        LOG.error("AGENT_RUN_AS=%s, but this loop is uid %d rather than root. "
+                  "gosu is not setuid and no-new-privileges is set, so only "
+                  "root can hand a turn to another user. Unset AGENT_RUN_AS to "
+                  "run the model as this user instead.", cfg.run_as, os.geteuid())
+        return 2
+    if not cfg.run_as and os.geteuid() == 0:
+        # The symmetric case: a loop running as root with nobody to hand the
+        # turn to runs the model as root with the desk token in its own
+        # environment -- it files paper perfectly and the wall this setting
+        # names was never there. Set AGENT_RUN_AS, or run this loop as an
+        # ordinary user.
+        LOG.error("this loop is uid 0 but AGENT_RUN_AS is unset, so every "
+                  "turn would run as root with this loop's own environment -- "
+                  "the desk token included. Set AGENT_RUN_AS to a user the "
+                  "image has, or run this loop as an ordinary user instead of "
+                  "root.")
+        return 2
 
     desk = DeskClient(cfg.desk, read_token(cfg.secrets))
     agent_env = load_agent_env(cfg.secrets)
