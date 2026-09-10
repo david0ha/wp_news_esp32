@@ -163,7 +163,7 @@ def _zone(device: Mapping) -> ZoneInfo | None:
         return None
 
 
-def _quiet_release(device: Mapping, when: float) -> float | None:
+def quiet_release(device: Mapping, when: float) -> float | None:
     """The end of the quiet window containing ``when``, or ``None``.
 
     ``None`` is "``when`` is not inside a quiet window", which is also the
@@ -175,6 +175,12 @@ def _quiet_release(device: Mapping, when: float) -> float | None:
     awake. It may wrap midnight -- ``23:00`` to ``07:00`` is the ordinary
     case, and :func:`claudepost.push._quiet` has already refused one with no
     width, which is the only shape this arithmetic could not read.
+
+    Public because it is not only the alert path's question any more: an answer
+    to a typed message arrives whenever the worker finishes, which may be at
+    three in the morning, and the desk holds it for the same window and by the
+    same arithmetic. One function, so a phone cannot be quiet for one kind of
+    notification and awake for another.
     """
     quiet = device.get("quiet")
     if not isinstance(quiet, Mapping) or not quiet:
@@ -220,7 +226,7 @@ def defer_for_quiet(alert: Alert, device: Mapping,
     read at the call site as though the device were being asked about in
     general.
     """
-    return _quiet_release(device, now)
+    return quiet_release(device, now)
 
 
 # --------------------------------------------------------------------------
@@ -363,13 +369,13 @@ def due(book: Mapping | None, devices: Sequence[Mapping] | None,
                 if seconds is None or (token, event_id, lead) in already:
                     continue
 
-                held = _quiet_release(device, at - seconds)
+                held = quiet_release(device, at - seconds)
                 owed_from = (at - seconds) if held is None else held
                 if owed_from > now:
                     continue                      # not yet, or the window holds it
 
                 passed = at <= now
-                if passed and _quiet_release(device, at) is None:
+                if passed and quiet_release(device, at) is None:
                     continue                      # nobody needs telling about yesterday
 
                 title, body = _copy(event, lang, passed)

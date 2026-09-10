@@ -53,6 +53,22 @@ WAKE_GRACE_SECONDS = 30 * 60
 #: put a directory scan and a transaction between the clock and a publish.
 HOUSEKEEPING_SECONDS = 600
 
+#: The ``source`` a command carries when the phone filed it, and the only source
+#: whose finish rings anybody. ``source`` is free text on every other path --
+#: ``api``, ``schedule``, whatever a curl said -- so this is a convention rather
+#: than an enum, and it is stated once here because the app writes it and the
+#: finish path reads it. A typo in either is a notification that never arrives
+#: and nothing anywhere that says why.
+PHONE_SOURCE = "app"
+
+#: How far back the answer pass looks, and how far back its ledger read goes.
+#: Derived rather than chosen: the longest a quiet window can hold an answer is
+#: a minute short of a day (`push._quiet` refuses a window with no width), and
+#: the slack is for a desk that was down across one. Past this the notification
+#: expires -- never the answer, which the phone polls while its thread is open
+#: and reads from the command on its next launch besides.
+ANSWER_WINDOW_SECONDS = 36 * 3600
+
 
 @dataclass
 class Config:
@@ -326,6 +342,81 @@ class Desk:
             return None
         row["has_notes"] = self.notes.has(cid)
         return row
+
+    def finish(self, cid: str, status: str, result: str = "") -> dict:
+        """Report a claimed command ``done`` or ``failed``, and tell the phone.
+
+        The store settles the row; the push is this method's whole reason for
+        existing, and it is **wrapped**. The caller is the worker's own
+        ``POST /api/commands/<id>/done``, and the 200 it gets back is what stops
+        the worker retrying: a phone that does not ring costs an answer somebody
+        opens the app for, where a ``done`` that 500s costs the entire command
+        run a second time -- which on an `ask` that revised the paper means the
+        paper revised twice.
+        """
+        command = self.store.finish_command(cid, status, result)
+        if command.get("source") == PHONE_SOURCE:
+            try:
+                self._send_answer(command, self.clock.now())
+            except Exception as exc:                               # noqa: BLE001
+                # `push.send` has already logged the redacted detail. Nothing
+                # is recorded, so this stays owed and `_send_owed_answers`
+                # picks it up on the next housekeeping pass.
+                LOG.warning("answer: the push for %s did not go (%s)",
+                            cid, type(exc).__name__)
+        return command
+
+    def _send_answer(self, command: Mapping, t: float) -> int:
+        """Tell every phone that wants it that this command has an answer.
+
+        Returns how many left. Idempotent through the same delivery ledger the
+        alerts use, keyed ``(token, "cmd:"+cid, "0")`` -- so a desk that
+        restarted between the finish and the sweep, or a sweep overlapping a
+        finish, sends one notification rather than two.
+
+        A device inside its quiet window is skipped and **nothing is recorded
+        for it**, which is exactly what leaves it owed: `_send_owed_answers`
+        picks it up once the window ends. Deferred, never dropped, the rule
+        `alerts.quiet_release`'s callers already hold for an alert.
+        """
+        cid = command["id"]
+        event_id = push.answer_event_id(cid)
+        devices = (self.push_devices or {}).get("devices") or []
+        if not devices:
+            return 0
+
+        already = {row["token"] for row
+                   in self.store.deliveries_since(t - ANSWER_WINDOW_SECONDS)
+                   if row["event_id"] == event_id}
+        ready = [one for one in devices
+                 if one["token"] not in already
+                 and one["prefs"].get(push.ANSWER, True)
+                 and alerts.quiet_release(one, t) is None]
+        if not ready:
+            return 0
+
+        # `lang` is NULL when the phone did not say, which means "the language
+        # of the message itself" -- something only the model that read it can
+        # know. The desk's own setting is the nearest thing it has, and it is
+        # already the language the paper is written in.
+        lang = command.get("lang") or self.settings.get("lang")
+        messages = [push.answer_message(one["token"], cid, command["status"],
+                                        command.get("result") or "", lang)
+                    for one in ready]
+        tickets = push.send(messages, fetch=self.push_fetch)
+
+        sent = 0
+        for one, ticket in zip(ready, tickets):
+            token = one["token"]
+            if not (isinstance(ticket, dict) and ticket.get("status") == "ok"):
+                self.push_failures[token] = self.push_failures.get(token, 0) + 1
+                continue
+            self.push_failures.pop(token, None)
+            self.store.record_delivery(token, event_id, push.ANSWER_LEAD, t)
+            sent += 1
+
+        self._forget_unregistered(tickets)
+        return sent
 
     # -- state ------------------------------------------------------------
     def state(self) -> dict:

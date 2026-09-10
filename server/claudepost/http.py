@@ -646,7 +646,10 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def h_finish(self, match, _query) -> None:
         doc = self._json_body(required=False)
         status = "done" if match.group("verb") == "done" else "failed"
-        command = self.desk.store.finish_command(
+        # `Desk.finish` rather than the store directly: a command the phone
+        # filed rings the phone, and that decision belongs beside the desk's
+        # other push rather than in a route handler.
+        command = self.desk.finish(
             match.group("cid"), status, str(doc.get("result", ""))[:4000])
         self._send_json(200, {"ok": True, "command": command})
 
