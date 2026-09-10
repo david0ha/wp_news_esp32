@@ -29,6 +29,7 @@ import { useFocusEffect } from 'expo-router'
 import { getDeskBaseUrl, getNewsUrl } from '../store'
 import { editionUrl } from './source'
 import { editionClient, humanEditionError } from './client'
+import { takeEditionStale } from './invalidate'
 import {
   demoCache,
   FOCUS_REFRESH_AFTER_MS,
@@ -204,12 +205,19 @@ export function useEdition(): {
       cold ? readCachedEdition() : Promise.resolve(null),
     ])
     if (!alive()) return
+    // TAKEN BEFORE THE BRANCH, not inside it. `adopt` fetches unconditionally, so consuming the
+    // flag on that path costs nothing and leaving it set would spend an unconditional fetch on
+    // the next focus as well — a mark is one refetch, whichever way the address went.
+    const forced = takeEditionStale()
     const url = editionUrl(stored, desk)
     if (url !== machineRef.current.url) {
       await adopt(url, cold ? cached : undefined)
       return
     }
-    await refresh()
+    // `fresh` when the desk has just rewritten the paper: the five-minute throttle would
+    // otherwise hold a revision the owner asked for and was told about, on the one screen it is
+    // about, for up to five minutes.
+    await refresh(forced ? { fresh: true } : {})
   }, [adopt, refresh])
 
   // On every focus, including the mount.
