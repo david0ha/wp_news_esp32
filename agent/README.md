@@ -287,12 +287,13 @@ same setting from the desk instead.
 | `CLAUDEPOST_SECRETS` | `/run/secrets` | `~/.claudepost`, read directly by `agent/run-host.sh` on the host. `agent/compose.yaml` mounts nothing here any more — `agent.env` reaches the loop through `env_file` instead — so in a container this path is empty unless you add your own mount, in which case a `tokens.json` there is still read as a fallback |
 | `CLAUDEPOST_REPO` | `/repo` | the repository in the image — `PROMPT.md` and `tools/` |
 | `CLAUDEPOST_SCRATCH` | `/scratch` | one workdir per command: the payload, the tiles, the sheets fetched back |
-| `CLAUDEPOST_WATCHLIST` | `<secrets>/watchlist.json` | the candidates and the rotation cursor. Seeded into each edition directory and taken back after a commit — see below |
+| `CLAUDEPOST_WATCHLIST` | `/state/watchlist.json` | the candidates and the rotation cursor. Seeded into each edition directory and taken back after a commit — see below. `/state` is the writable mount of `~/.claudepost/state`; `agent/run-host.sh` sets this to a host path beside the token instead |
 | `CLAUDEPOST_ONCE` | `0` | handle one instruction (or one empty queue) and exit, instead of staying resident |
 | `AGENT_CONTEXT_DIR` | unset | your context directory. Unset, missing or empty are all "no context". That is a **host** path in `agent/.env` or a bare run; under `docker compose` the container always sees `/context`, so there the commented volume line is the switch and this variable is what it mounts |
 | `AGENT_WRITE_BRIEFS` | `0` | whether the worker may append to `<context>/briefs/`. Needs a context directory too |
 | `AGENT_TOOLS` | see above | the `claude --print` allowlist. Empty means the default |
 | `AGENT_STRICT_MCP` | `1` | keep this machine's own MCP servers out of the child. Set `0` to let them in for market data, and then name each tool in `AGENT_TOOLS` |
+| `AGENT_RUN_AS` | `model` under `docker compose` (`${AGENT_RUN_AS:-model}`, blank or missing both landing there); empty under `agent/run-host.sh`, which pins it | the user every `claude` turn is handed to, through `gosu`. The loop must be root to hand a turn to anybody, and refuses to start rather than run a turn as root if the two disagree either way — see "Two users in one container" above |
 | `CLAUDEPOST_KEEP_PLUGINS` | `0` | leave the operator's plugins/orchestration layer in force inside the child instead of setting `DISABLE_OMC` |
 | `CLAUDEPOST_USE_API_KEY` | `0` | spend the metered key even when a CLI login is present; otherwise the key is kept out of the child so the subscription pays |
 | `CLAUDEPOST_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |
