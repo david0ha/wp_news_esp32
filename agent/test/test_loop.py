@@ -1287,6 +1287,30 @@ class OwnWorkdirTest(unittest.TestCase):
         self.assertIn("ghost", str(caught.exception))
 
 
+class MainRefusesTest(unittest.TestCase):
+    """The two ways this setting and this uid can disagree, both fatal.
+
+    Both guards sit right after `logging.basicConfig` and both `return 2`
+    before `main` builds a `DeskClient` or reaches the network -- so calling
+    `loop.main()` directly, with the environment and the euid patched, is
+    still layer 0: nothing here opens a socket.
+    """
+
+    def test_a_non_root_loop_may_not_switch_user(self):
+        with mock.patch.dict(os.environ, {"AGENT_RUN_AS": "model"}, clear=True), \
+             mock.patch("os.geteuid", return_value=10001), \
+             self.assertLogs("worker", level="ERROR") as caught:
+            self.assertEqual(loop.main(), 2)
+        self.assertIn("AGENT_RUN_AS", caught.output[0])
+
+    def test_a_root_loop_may_not_skip_switching_user(self):
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("os.geteuid", return_value=0), \
+             self.assertLogs("worker", level="ERROR") as caught:
+            self.assertEqual(loop.main(), 2)
+        self.assertIn("AGENT_RUN_AS", caught.output[0])
+
+
 class WatchlistTest(unittest.TestCase):
     """The universe and the rotation cursor, across a scratch directory that dies.
 
