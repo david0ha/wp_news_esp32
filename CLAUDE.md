@@ -110,6 +110,9 @@ python3 tools/mock_news_server.py --check
 python3 tools/test_mock_etag.py
 python3 tools/test_validate_lang.py
 python3 tools/test_calendar_brief.py
+# the worker image, when Docker is on this machine: two users, no readable
+# secret, Pillow present. Skips with exit 0 when docker is not on PATH.
+sh agent/test/image.sh
 
 # 3) the real UI at the real resolution in six inks -> BMP/PNG, plus the layout,
 #    glyph and colour assertions

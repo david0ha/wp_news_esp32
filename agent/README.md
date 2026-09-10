@@ -98,17 +98,43 @@ ANTHROPIC_API_KEY=sk-ant-...          # or CLAUDE_CODE_OAUTH_TOKEN from `claude 
 CLAUDEPOST_TOKEN=<a producer token>   # server/tools/mint-token.sh producer agent
 ```
 
-Headless Claude Code in a container will not find a desktop login session, so
-the worker warns at startup if neither of the first two is set rather than
-letting you discover it at 06:00.
+That file is **not mounted into the container**. `agent/compose.yaml` reads it
+on the host, through `env_file`, and the loop gets it as its environment. The
+reason is measured rather than assumed: on Docker Desktop for Mac a
+bind-mounted file reported as `-rw------- 0 0` is readable by an unprivileged
+container user anyway, so a mounted `agent.env` would be readable by the very
+user the model runs as. `/proc/<loop pid>/environ` is not — different uid, and
+the kernel enforces that one. `agent/test/image.sh` checks both.
 
 **3. Up.**
 
 ```sh
-cp agent/.env.example agent/.env      # then fill it in
-docker compose -f agent/compose.yaml up -d
+./agent/install-docker.sh       # build, check the wall, stand launchd down, up -d
 docker compose -f agent/compose.yaml logs -f
 ```
+
+### Two users in one container
+
+The loop runs as **root**; every `claude` turn runs as **`model`** (uid 10001)
+through `gosu`, and the workdir is handed to that user for the length of the
+turn. Root is not a preference: `gosu` is not setuid, compose sets
+`no-new-privileges:true`, and a process that is not root cannot change uid at
+all — so a non-root loop could not hand a turn to anybody.
+
+What the split buys is one sentence: **the model cannot read the desk token**,
+because the token exists only in the loop's environment and the kernel keeps
+another uid out of `/proc/<pid>/environ`. That is stronger than the old
+arrangement, where the token was stripped from the child's environment but a
+`Bash` tool could in principle have read the parent's.
+
+What it does not buy: the container has ordinary outbound internet, because
+`WebSearch` and `WebFetch` are the point. It is not an egress allowlist. The
+desk's `/api/*` is reachable from inside and still needs a bearer token; the
+public plane (`/news.json`, `/tiles/<id>.bin`) is public by design and is
+exactly what an `ask` is seeded from.
+
+`agent/run-host.sh` switches nobody: out there the turn runs as the operator,
+which is the same trade that script has always been.
 
 Order does not matter. There is no `depends_on` across compose files, and none
 is needed: the claim loop backs off from one second to five minutes and stays
@@ -150,6 +176,22 @@ is the operator's own text and can be either — a `news.json` in the workdir
 means it was an order and the note follows the draft, no `news.json` means it
 was a look and the note follows the command. Leaving no `notes.md` files
 nothing; that is the ordinary case, not a gap.
+
+A fourth kind, `ask`, is a message from the phone. It is seeded with the
+edition the desk is serving now (`current/news.json` and `current/tiles/`,
+fetched off the public plane) and, when the message is a follow-up, with the
+turn before it (`previous.md`). The turn writes `answer.md` — always; a turn
+that answered nobody has failed — and writes `news.json` only if it judged that
+the message asked for the paper to change. That judgement is the model's and
+this loop does not second-guess it: a `news.json` in the workdir means "revise",
+exactly as it does for `custom`.
+
+The answer goes on the command, at `PUT /api/commands/<id>/notes.md`, which is
+where the phone reads it. The command's result is `answered`, `revised <edition
+id>` or `staged <edition id>` — the first word is what the phone branches on. A
+revision that fails a gate fails the command and leaves the current edition
+standing, which is the firmware's own failure semantics: a stale paper beats an
+empty one.
 
 ## The second job: the event book
 
@@ -278,6 +320,13 @@ to fail a filing that already reached the glass.
 Both ends write that file and neither owns it: you add what you are watching,
 the worker adds what it found.
 
+In a container it lives at `/state/watchlist.json`, which is
+`~/.claudepost/state/` on the host — a mount of its own, and **writable**,
+where the old read-only secrets mount meant a container could seed the rotation
+and never advance it. `agent/install-docker.sh` moves an existing
+`~/.claudepost/watchlist.json` there for you. Under `agent/run-host.sh` it
+stays beside the token, where it always was.
+
 ## Verifying
 
 Standard library, no Docker, no network, no API key:
@@ -292,6 +341,12 @@ is total — and the HTTP client, including the one property that is not about
 correctness at all, that **a bearer token never reaches an exception message**.
 Those strings are handed to `POST /api/commands/<id>/fail`, where the desk
 stores them and an operator reads them later.
+
+```sh
+sh agent/test/run.sh        # layer 0: no Docker, no network, no API key
+sh agent/test/image.sh      # layer 2: builds the image and checks the wall.
+                            # Skips with exit 0 when Docker is not on PATH.
+```
 
 ## The other paths
 
