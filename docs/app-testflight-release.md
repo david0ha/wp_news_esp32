@@ -8,6 +8,30 @@ Run commands from `app/`. Replace placeholders with values verified for this rel
 keep local paths, Apple identifiers and credentials outside the repository. This is a
 runbook, not an unattended script: stop at failed checks and preserve the relevant log.
 
+**`tools/release-ios.py` now performs this whole sequence**, including both repairs below, and
+refuses to submit an artifact whose own signature is not what was asked for:
+
+```sh
+tools/release-ios.py                          # archive, export, verify
+ASC_APP_ID=<numeric app id> tools/release-ios.py --submit
+```
+
+Prefer it. This page remains the account of *why* each step is there and is what to read when the
+script fails; `.claude/skills/release-ios/SKILL.md` is the same procedure in the shape an agent
+picks up. Two things the script settles that this page left to the operator:
+
+- **The credentials need no interactive session.** The App Store provisioning profile and the
+  distribution certificate — p12 and password — can be read from EAS over its GraphQL API with the
+  Expo session already on disk, so the temporary-keychain repair below runs unattended. `eas
+  credentials` is not the only route to them.
+- **Two environment variables belong on every `eas` invocation here.** `EXPO_NO_KEYCHAIN=1`,
+  because this machine's login keychain refuses non-interactive access and every Apple sign-in
+  otherwise dies at `Security returned a non-successful error code: 36` — which is `security
+  add-generic-password`'s status truncated to a byte (`errSecInteractionNotAllowed`, −25308) and
+  reads like a wrong password. And `EXPO_APPLE_TEAM_ID=<team>`, because the ASC API key stored on
+  EAS records no team: without it eas-cli prompts, fails, and then **silently skips validating the
+  provisioning profile on Apple's servers**.
+
 ## Prepare the source, native project and build number
 
 Record `git rev-parse HEAD`, `git status --short`, `xcode-select -p` and `xcodebuild -version`.
@@ -258,3 +282,31 @@ The comparison IPA **1.7.0 (20)** was already signed for **production APNs**, bu
 that all previous releases used sandbox APNs, or that Xcode 26.5 could not build this
 project were incorrect. Source `aps-environment=development` alone cannot establish the
 environment of an exported distribution signature.
+
+## Verified incident: 2026-09-10
+
+Version **1.9.0 (27)** from `9cf593c18fb61e61ffb91c63b84ed4eb6513de46`, Xcode 26.5 (17F42), 43
+Jest suites / 1006 tests and TypeScript passing. The exported executable's own signature carried
+`aps-environment=production`, `get-task-allow=false` and the expected team; the archive and the
+exported `Info.plist` agreed on 1.9.0 / 27. IPA SHA-256
+`956e68c524a23556747ffa7350fa0863d410193a00c92f1aa24ad16d120fcfdd`. EAS submission
+`1a5c54d2-e798-4a5b-ad9c-4e61a085f721` succeeded; Apple's processing was still pending at handoff,
+so TestFlight availability and push delivery were again not confirmed. The EAS remote counter was
+NOT advanced — `eas build:version:set` needs a terminal, and it was left for the operator.
+
+What this release added to the two repairs above:
+
+1. The capability-cache quarantine from 2026-09-09 was still in force and no push-capability
+   rejection appeared, which is the first evidence that the repair holds across releases rather
+   than having been a one-off.
+2. Framework signing failed with `errSecInternalComponent` again, exactly as documented — the
+   temporary keychain is not a one-time fix but a step of every local release on this machine,
+   because the previous one is deleted during cleanup by design.
+
+And one mistake worth the next reader's time. The first attempt piped `xcodebuild` through
+`tee | tail`. A pipeline's exit status is its **last** command's, so `set -e` never fired, the
+archive's signing failure was swallowed, and the run continued to the export — which reported
+`archive not found at path …`. Fifty thousand log lines separated the message from its cause, and
+the message described a missing file for what was a signing failure. This page already said
+`set -o pipefail`; that line is load-bearing, and `tools/release-ios.py` avoids pipelines for
+`xcodebuild` entirely rather than relying on remembering it.

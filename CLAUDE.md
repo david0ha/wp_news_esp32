@@ -529,6 +529,7 @@ agent/                    an example worker that files into the desk, plus the s
 - [docs/pinout.md](docs/pinout.md) — GPIO assignments and the four traps
 - [docs/board-hardware.md](docs/board-hardware.md) — hardware notes
 - [docs/app-control.md](docs/app-control.md) — the companion-app HTTP/JSON contract
+- [docs/app-testflight-release.md](docs/app-testflight-release.md) — shipping the companion app from this Mac: `tools/release-ios.py` does it in one command, and this is why each step is there. EAS meters cloud *builds*, not submissions, so a local archive ships a release when the monthly allowance is spent. [.claude/skills/release-ios/SKILL.md](.claude/skills/release-ios/SKILL.md) is the same thing an agent picks up; [AGENTS.md](AGENTS.md) is the entry point for the ones that do not read this file
 - [docs/app-testflight-release.md](docs/app-testflight-release.md) — local iOS archive, signing recovery, version checks, and EAS Submit; read before releasing the companion app
 - [docs/simulator.md](docs/simulator.md) — the desktop simulator and what it asserts
 - [docs/esp-idf-development.md](docs/esp-idf-development.md) — install / build / flash / menuconfig
