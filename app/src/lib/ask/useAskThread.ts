@@ -24,6 +24,7 @@ import { markEditionStale } from '../edition/invalidate'
 import {
   isWorking,
   lastCommandId,
+  MAX_THREADS,
   newTurnId,
   nextThreads,
   readResult,
@@ -63,6 +64,19 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
   const threadsRef = useRef<Thread[]>(threads)
   threadsRef.current = threads
 
+  // The same mirror, for `openId`. `send()` needs the CURRENT open thread, not the one its own
+  // render closed over: two sends issued before a re-render commits would otherwise both read
+  // `openId === null` and each open its own thread instead of the second joining the first's.
+  // `open()` below is the one place that writes both the ref and the state, synchronously and
+  // together, which is what makes the ref trustworthy inside the same tick a caller wrote it.
+  const openIdRef = useRef<string | null>(openId)
+  openIdRef.current = openId
+
+  const open = useCallback((id: string | null) => {
+    openIdRef.current = id
+    setOpenId(id)
+  }, [])
+
   // Two ids that would collide inside one millisecond, kept apart.
   const seq = useRef(0)
 
@@ -97,22 +111,54 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
     return createDeskClient({ baseUrl: address, token })
   }, [])
 
+  // Whether the initial disk read has happened. Only that FIRST read may treat `readThreads()` as
+  // authoritative and replace the in-memory list wholesale.
+  const loadedOnce = useRef(false)
+
   // The conversations off disk, once, plus whether there is a desk to talk to at all.
   useEffect(() => {
     void (async () => {
+      if (!loadedOnce.current) {
+        const stored = await readThreads()
+        if (!alive.current) return
+        loadedOnce.current = true
+        threadsRef.current = stored
+        setThreads(stored)
+        // A push routes by COMMAND id; the thread it belongs to is a lookup over what was just
+        // read.
+        if (opts.commandId) {
+          const found = threadOfCommand(stored, opts.commandId)
+          if (found !== null) open(found.id)
+        }
+        await clientFor()
+        return
+      }
+      // A later fire: this instance is already loaded and `opts.commandId` changed under it — the
+      // screen was re-opened by a second push without unmounting. `writeThreads()` is
+      // fire-and-forget, so a turn this very screen just sent may not be on disk yet; reading it
+      // back unconditionally here would risk clobbering it with a stale copy. The thread a push
+      // names is almost always already in memory, so look there FIRST and only ask the disk when
+      // memory genuinely does not have it — and even then, only fold in the one thread that was
+      // asked for, never the whole list.
+      if (!opts.commandId) return
+      const inMemory = threadOfCommand(threadsRef.current, opts.commandId)
+      if (inMemory !== null) {
+        open(inMemory.id)
+        return
+      }
       const stored = await readThreads()
       if (!alive.current) return
-      threadsRef.current = stored
-      setThreads(stored)
-      // A push routes by COMMAND id; the thread it belongs to is a lookup over what was just read.
-      if (opts.commandId) {
-        const found = threadOfCommand(stored, opts.commandId)
-        if (found !== null) setOpenId(found.id)
+      const found = threadOfCommand(stored, opts.commandId)
+      if (found === null) return
+      open(found.id)
+      if (!threadsRef.current.some((th) => th.id === found.id)) {
+        const merged = [found, ...threadsRef.current].slice(0, MAX_THREADS)
+        threadsRef.current = merged
+        setThreads(merged)
       }
-      await clientFor()
     })()
     // `opts.commandId` is a route param and changes only when the screen is re-opened by a push.
-  }, [clientFor, opts.commandId])
+  }, [clientFor, open, opts.commandId])
 
   const thread = threads.find((th) => th.id === openId) ?? null
 
@@ -153,14 +199,14 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
       if (trimmed === '' || trimmed.length > MAX_COMMAND_TEXT) return
       const now = Date.now()
       const turnId = newTurnId(now, seq.current++)
-      // A new conversation takes the turn's own id — see `threads.ts`'s header on why the thread
-      // id is not a command id.
-      const threadId = openId ?? turnId
+      // The REF, not the state — see the note above `openIdRef`. Two sends issued back to back,
+      // before either's `open()` call has been through a render, must still see the first one.
+      const threadId = openIdRef.current ?? turnId
       dispatch({ type: 'typed', threadId, turnId, text: trimmed, lang, at: now })
-      if (openId === null) setOpenId(threadId)
+      if (openIdRef.current === null) open(threadId)
       await post(threadId, turnId, trimmed, lang)
     },
-    [dispatch, lang, openId, post],
+    [dispatch, lang, open, post],
   )
 
   const retry = useCallback(
@@ -205,60 +251,74 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
   // Waiting
   // ---------------------------------------------------------------------------
 
+  // Guards against two overlapping ticks. A tick's per-turn awaits (`client.command`, and
+  // conditionally `client.commandNotes`) run sequentially, and enough working turns against a slow
+  // desk can make one tick outlast `ASK_POLL_MS` — without this, the next `setInterval` fire would
+  // start a second tick over the same `threadsRef.current` snapshot, up to and including calling
+  // `publish()` twice concurrently for a command that reads `staged` in both. `finally` clears it
+  // even when a tick throws, so one bad tick cannot wedge every one after it.
+  const pollInFlight = useRef(false)
+
   const poll = useCallback(async () => {
-    const working = threadsRef.current
-      .flatMap((th) => th.turns)
-      .filter((x) => x.commandId !== null && isWorking(x) && x.status !== 'sending')
-    if (working.length === 0) return
-    const client = await clientFor()
-    if (client === null) return
-    for (const turn of working) {
-      const cid = turn.commandId as string
-      let row
-      try {
-        row = await client.command(cid)
-      } catch {
-        // A poll that failed says nothing about the command. The turn stays where it is and the
-        // next tick asks again; raising an error card over a conversation that is simply still
-        // out would be the app reporting its own network as the desk's answer.
-        continue
-      }
-      if (row === null) {
-        dispatch({ type: 'forgotten', commandId: cid, error: t.ask.forgotten })
-        continue
-      }
-      dispatch({ type: 'polled', commandId: cid, status: row.status, result: row.result })
-      if (row.status !== 'done' && row.status !== 'failed') continue
-
-      if (row.hasNotes) {
+    if (pollInFlight.current) return
+    pollInFlight.current = true
+    try {
+      const working = threadsRef.current
+        .flatMap((th) => th.turns)
+        .filter((x) => x.commandId !== null && isWorking(x) && x.status !== 'sending')
+      if (working.length === 0) return
+      const client = await clientFor()
+      if (client === null) return
+      for (const turn of working) {
+        const cid = turn.commandId as string
+        let row
         try {
-          const notes = await client.commandNotes(cid)
-          if (notes !== null && notes !== '') {
-            dispatch({ type: 'answered', commandId: cid, answer: notes })
-          }
+          row = await client.command(cid)
         } catch {
-          // The answer is on the desk and this turn is terminal, so the next open fetches it
-          // again. Losing the text is recoverable; a failed fetch is not worth a sentence.
+          // A poll that failed says nothing about the command. The turn stays where it is and the
+          // next tick asks again; raising an error card over a conversation that is simply still
+          // out would be the app reporting its own network as the desk's answer.
+          continue
         }
-      }
+        if (row === null) {
+          dispatch({ type: 'forgotten', commandId: cid, error: t.ask.forgotten })
+          continue
+        }
+        dispatch({ type: 'polled', commandId: cid, status: row.status, result: row.result })
+        if (row.status !== 'done' && row.status !== 'failed') continue
 
-      const outcome = readResult(row.result)
-      if (row.status === 'failed') {
-        dispatch({
-          type: 'error',
-          commandId: cid,
-          error: fill(t.ask.failed, { detail: row.result ?? '' }),
-        })
-        continue
+        if (row.hasNotes) {
+          try {
+            const notes = await client.commandNotes(cid)
+            if (notes !== null && notes !== '') {
+              dispatch({ type: 'answered', commandId: cid, answer: notes })
+            }
+          } catch {
+            // The answer is on the desk and this turn is terminal, so the next open fetches it
+            // again. Losing the text is recoverable; a failed fetch is not worth a sentence.
+          }
+        }
+
+        const outcome = readResult(row.result)
+        if (row.status === 'failed') {
+          dispatch({
+            type: 'error',
+            commandId: cid,
+            error: fill(t.ask.failed, { detail: row.result ?? '' }),
+          })
+          continue
+        }
+        if (outcome === null || outcome.kind === 'answered') continue
+        if (outcome.kind === 'staged') {
+          // The owner asked for the change, so the phone finishes the act rather than leaving a
+          // button to press. `publish` marks the edition stale on its way through.
+          await publish(cid)
+          continue
+        }
+        if (outcome.kind === 'revised') markEditionStale()
       }
-      if (outcome === null || outcome.kind === 'answered') continue
-      if (outcome.kind === 'staged') {
-        // The owner asked for the change, so the phone finishes the act rather than leaving a
-        // button to press. `publish` marks the edition stale on its way through.
-        await publish(cid)
-        continue
-      }
-      if (outcome.kind === 'revised') markEditionStale()
+    } finally {
+      pollInFlight.current = false
     }
   }, [clientFor, dispatch, publish, t])
 
@@ -277,5 +337,5 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
     }, [poll]),
   )
 
-  return { ready, threads, thread, open: setOpenId, send, retry, publish }
+  return { ready, threads, thread, open, send, retry, publish }
 }
