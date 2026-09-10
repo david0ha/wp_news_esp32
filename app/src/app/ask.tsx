@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,9 +24,15 @@ import { colors, fonts, layout, radius, space, type } from '../theme'
  * Ask the desk — one conversation, and the composer under it.
  *
  * Reached two ways, and the parameter says which: from the Today header with nothing, which opens
- * a new question, or from a notification tap with `command=<id>`, which opens the thread that
- * command belongs to. The route param is the DESK's id because that is what the push carries; the
- * thread it belongs to is a lookup the hook does over what it read off disk.
+ * the MOST RECENT conversation, or from a notification tap with `command=<id>`, which opens the
+ * thread that command belongs to. The route param is the DESK's id because that is what the push
+ * carries; the thread it belongs to is a lookup the hook does over what it read off disk.
+ *
+ * THE DEFAULT IS THE EXCHANGE SO FAR, NOT A BLANK COMPOSER. The spec has the phone keep the
+ * threads and show the conversation, and a screen that opened empty from its own entry point made
+ * every stored conversation reachable only by tapping a push — and made every message from Today a
+ * new thread with no `reply_to`. The header's "new question" is how a fresh thread gets started on
+ * purpose, which is the rarer of the two acts and the one worth a button.
  *
  * Everything decided about a turn is `threads.ts`'s; everything decided about the loop is
  * `useAskThread`'s. What is left here is layout.
@@ -34,8 +41,24 @@ export default function AskScreen() {
   const router = useRouter()
   const t = useStrings()
   const { command } = useLocalSearchParams<{ command?: string }>()
-  const { ready, thread, send, retry, publish } = useAskThread({ commandId: command ?? null })
+  const { ready, thread, open, send, retry, publish } = useAskThread({
+    commandId: command ?? null,
+  })
   const [draft, setDraft] = useState('')
+
+  // THE NEWEST TURN IS THE ONE BEING READ. An opened conversation starts scrolled to its top,
+  // which puts the answer that was just pushed — and the question just typed — below the fold.
+  // Keyed on the thread AND on how many turns it has, so it fires on an open and again on every
+  // send. `scrollToEnd` on a `ScrollView` whose content has not laid out yet is a no-op, so the
+  // frame's worth of delay is what makes the first one land.
+  const scroller = useRef<ScrollView>(null)
+  const threadId = thread?.id ?? null
+  const turnCount = thread?.turns.length ?? 0
+  useEffect(() => {
+    if (turnCount === 0) return
+    const id = setTimeout(() => scroller.current?.scrollToEnd({ animated: false }), 0)
+    return () => clearTimeout(id)
+  }, [threadId, turnCount])
 
   const onSend = useCallback(() => {
     const text = draft.trim()
@@ -51,7 +74,22 @@ export default function AskScreen() {
     <View style={styles.titleRow}>
       <BackButton onPress={() => (router.canGoBack() ? router.back() : router.replace('/edition'))} />
       <Text style={styles.title}>{t.ask.title}</Text>
-      <View style={styles.backSpacer} />
+      {/* Only when there is a conversation to leave. On an empty screen the composer already
+          starts a new thread, and a button that repeats what the screen is already doing is one
+          more thing to read. */}
+      {thread !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.ask.newThread}
+          onPress={() => open(null)}
+          hitSlop={8}
+          style={({ pressed }) => [styles.newThread, pressed && styles.newThreadPressed]}
+        >
+          <Text style={styles.newThreadLabel}>{t.ask.newThread}</Text>
+        </Pressable>
+      ) : (
+        <View style={styles.backSpacer} />
+      )}
     </View>
   )
 
@@ -87,7 +125,7 @@ export default function AskScreen() {
         style={styles.fill}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView ref={scroller} contentContainerStyle={styles.scroll}>
           {thread === null ? (
             <Text style={[type.body, styles.empty]}>{t.ask.empty}</Text>
           ) : (
@@ -135,6 +173,15 @@ const styles = StyleSheet.create({
   },
   title: { ...type.heading, flex: 1, textAlign: 'center' },
   backSpacer: { width: 40 },
+  // The Masthead's own "Ask" pill, the other end of this journey, drawn the same way.
+  newThread: {
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentDim,
+  },
+  newThreadPressed: { opacity: 0.7 },
+  newThreadLabel: { fontFamily: fonts.semibold, fontSize: 13, color: colors.accent },
   scroll: { paddingHorizontal: layout.gutter, paddingBottom: space.xl },
   empty: { color: colors.textDim, paddingTop: space.xl },
   composer: {

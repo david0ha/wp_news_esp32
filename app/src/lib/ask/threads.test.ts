@@ -342,6 +342,30 @@ describe('sanitizeThreads — what survives a read off disk', () => {
     expect(sanitizeThreads(raw)[0].turns).toHaveLength(1)
   })
 
+  it('reads a stored `sending` back as `unsent`, because the POST it named is gone', () => {
+    // The one status this function rewrites. `sending` means a request is in flight, and a
+    // request cannot outlive the process that issued it — so a `sending` turn on disk belongs to
+    // a process that died mid-POST. Left alone it is unrecoverable: the poll's working set skips
+    // `sending` and `TurnRow` draws its retry button on `unsent` alone, which is a row reading
+    // "Sending…" forever with nothing to press. This test would catch anyone restoring it
+    // verbatim again.
+    const typed = nextThreads([], {
+      type: 'typed',
+      threadId: 'th9',
+      turnId: 'th9',
+      text: 'lead with the lawsuit',
+      lang: 'en',
+      at: 2000,
+    })
+    expect(only(typed).status).toBe('sending')
+    const back = sanitizeThreads(JSON.parse(JSON.stringify(typed)))
+    expect(only(back).status).toBe('unsent')
+    // Nothing else about the turn moves: the text is still there to retry, and the retry button
+    // is the only thing this rewrite is for.
+    expect(only(back).text).toBe('lead with the lawsuit')
+    expect(only(back).commandId).toBe(null)
+  })
+
   it('drops a thread left with no turns at all', () => {
     expect(sanitizeThreads([{ id: 'th1', turns: [] }])).toEqual([])
   })

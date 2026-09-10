@@ -292,7 +292,14 @@ function sanitizeTurn(raw: unknown): Turn | null {
     text: o.text,
     lang: typeof o.lang === 'string' ? o.lang : '',
     sentAt: typeof o.sentAt === 'number' && Number.isFinite(o.sentAt) ? o.sentAt : 0,
-    status: o.status,
+    // A RESTORED `sending` IS A LIE, AND IT IS THE ONE STATUS THIS FUNCTION REWRITES. `sending`
+    // means a POST is in flight, and a POST cannot outlive the process that issued it: a turn read
+    // back off disk in that state belongs to a process that was killed mid-request, and nothing
+    // will ever answer for it. Left as it was, it is unrecoverable by construction — the poll's
+    // working set excludes `sending`, so nothing asks about it, and `TurnRow` draws the retry
+    // button on `unsent` alone, so there is nothing to press. `unsent` is the truth about it and
+    // is also the state that offers the way out.
+    status: o.status === 'sending' ? 'unsent' : o.status,
     result: typeof o.result === 'string' ? o.result : null,
     answer: typeof o.answer === 'string' ? o.answer : null,
     error: typeof o.error === 'string' ? o.error : null,

@@ -605,9 +605,13 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
     },
 
     async postCommand(body: AskBody): Promise<Command> {
-      // Field by field, in the order the desk's own document lists them, for the reason every
-      // other body in this file is built by hand: an unknown key is refused whole. `reply_to` is
-      // spread in only when there is one — see `AskBody`.
+      // Field by field, and NOT for the reason the push device body is: `h_enqueue` reads what it
+      // wants with `doc.get` and ignores everything else, so an unknown key here is dropped in
+      // silence rather than refused. That is the weaker contract of the two and the reason to be
+      // deliberate about the field set anyway — the keys this route DOES read include `priority`,
+      // `deadline_at` and `source`, so a body assembled by spreading some caller's object could
+      // hand the desk instructions nobody wrote, with no 400 to say so. Naming the four fields is
+      // what makes that impossible. `reply_to` is spread in only when there is one — see `AskBody`.
       const wire = {
         kind: 'ask',
         text: body.text,

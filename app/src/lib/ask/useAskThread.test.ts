@@ -11,11 +11,21 @@
 // never exposes a `fetchFn` seam the way `desk.ts`'s own tests use, so there is no way to reach
 // `desk.test.ts`'s `fakeFetch` idiom through the hook's public surface.
 //
-// Exactly the four behaviours named in the fix-round-1 review are covered here, and nothing more:
-// (a) the optimistic send lifecycle through to a done answer with notes, and the poll going quiet
-// once a turn is terminal; (b) the `poll()` re-entrancy guard — `publishNow()` called once, even
-// when a slow tick overlaps the next timer fire; (c) a `revised` result marking the edition stale;
-// (d) an `expired` turn dropping out of the poll with no error rendered.
+// The four behaviours named in the fix-round-1 review are covered here: (a) the optimistic send
+// lifecycle through to a done answer with notes, and the poll going quiet once a turn is terminal;
+// (b) the `poll()` re-entrancy guard — `publishNow()` called once, even when a slow tick overlaps
+// the next timer fire; (c) a `revised` result marking the edition stale; (d) an `expired` turn
+// dropping out of the poll with no error rendered.
+//
+// The final review added two more, both about a seam only this file can reach: (e) a send with no
+// desk left to send to must FAIL the turn rather than return in silence, and (f) opening the
+// screen with no `commandId` must open the most recent conversation, so a follow-up carries that
+// thread's `reply_to`. `lastCommandId` is pure and tested next door; what was untested — and what
+// produced the defect — is the hook's WIRING of it.
+//
+// EVERY TEST STARTS WITH AN EMPTY THREAD STORE. The AsyncStorage mock is one Map for the whole
+// file, and (f) makes the hook read it on mount and act on what it finds: without the reset in
+// `beforeEach`, one test's conversation would be the next test's opened thread.
 
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals'
 import React from 'react'
@@ -24,8 +34,9 @@ import { useAskThread, ASK_POLL_MS, type AskThread } from './useAskThread'
 import { createDeskClient, type Command, type DeskClient } from '../desk'
 import { LanguageProvider } from '../../i18n'
 import { saveDeskBaseUrl } from '../store'
-import { saveDeskToken } from '../deskToken'
+import { clearDeskToken, saveDeskToken } from '../deskToken'
 import { takeEditionStale, __resetEditionStaleForTests } from '../edition/invalidate'
+import { writeThreads, type Thread } from './threads'
 
 jest.mock('expo-router', () => {
   // `require`d inside the factory, not imported at the top of the file — Jest hoists `jest.mock`
@@ -158,6 +169,9 @@ async function mount(opts: { commandId?: string | null } = {}): Promise<{ curren
 describe('useAskThread', () => {
   beforeEach(async () => {
     jest.useFakeTimers()
+    // The threads store is one shared Map across this file; test (f) mounts a hook that READS it
+    // and opens what it finds, so a leftover conversation would silently join the next test's.
+    await writeThreads([])
     // Both saved, so `clientFor()` finds a desk and every call below can actually run.
     await saveDeskBaseUrl(BASE)
     await saveDeskToken(TOKEN)
@@ -172,7 +186,13 @@ describe('useAskThread', () => {
       renderer = null
     }
     jest.useRealTimers()
-    jest.resetAllMocks()
+    // THE ONE MOCK THIS FILE OWNS, AND NOT `jest.resetAllMocks()`. The blanket reset also strips
+    // the implementations off the shared AsyncStorage mock, whose every method is a `jest.fn`
+    // carrying one — after which `setItem` stores nothing and `getItem` answers `undefined` for
+    // the rest of the file. That went unnoticed while nothing here read the disk back: `store.ts`
+    // caches the desk address in memory, so `clientFor()` kept working from the cache. Test (f)
+    // does read it back, and the reset is what made it pass alone and fail in the suite.
+    mockCreateDeskClient.mockReset()
   })
 
   it('a. send walks a turn from sending to a done answer with notes, then the poll goes quiet', async () => {
@@ -307,5 +327,96 @@ describe('useAskThread', () => {
     // Terminal, the same way `done` is in test (a): the next tick has nothing left to ask about.
     await tick(ASK_POLL_MS)
     expect(command).toHaveBeenCalledTimes(1)
+  })
+
+  it('e. a send with no desk left to send to fails the turn instead of stranding it', async () => {
+    const { client, postCommand } = makeFakeClient()
+    mockCreateDeskClient.mockReturnValue(client)
+
+    // Mounted with a desk, so `ready` is true and the composer is on screen...
+    const out = await mount()
+    // ...and then the token is cleared in Settings while this screen stays mounted.
+    await clearDeskToken()
+
+    await act(async () => {
+      await out.current!.send('what moved the stock today')
+    })
+    await flush()
+
+    // Never posted, because there was nothing to post with.
+    expect(postCommand).not.toHaveBeenCalled()
+    // And NOT left at `sending`, which is the strand: nothing polls a `sending` turn and `TurnRow`
+    // offers its retry on `unsent` alone, so the silent return this replaces left a row reading
+    // "Sending…" with no way out of it.
+    const turn = out.current!.threads[0].turns[0]
+    expect(turn.status).toBe('unsent')
+    expect(turn.error).not.toBe(null)
+  })
+
+  it('f. opened with no command id, the newest thread opens and a send replies to its last command', async () => {
+    // Two conversations already on disk, newest first — the order `nextThreads` keeps.
+    const stored: Thread[] = [
+      {
+        id: 'newest',
+        turns: [
+          {
+            id: 'newest',
+            commandId: 'c-new-1',
+            text: 'why did it move?',
+            lang: 'en',
+            sentAt: 2000,
+            status: 'done',
+            result: 'answered',
+            answer: 'Because of the guidance cut.',
+            error: null,
+          },
+        ],
+      },
+      {
+        id: 'older',
+        turns: [
+          {
+            id: 'older',
+            commandId: 'c-old-1',
+            text: 'what is EPS?',
+            lang: 'en',
+            sentAt: 1000,
+            status: 'done',
+            result: 'answered',
+            answer: 'Earnings per share.',
+            error: null,
+          },
+        ],
+      },
+    ]
+    await writeThreads(stored)
+
+    const { client, postCommand } = makeFakeClient()
+    mockCreateDeskClient.mockReturnValue(client)
+    postCommand.mockResolvedValue(row({ id: 'c-new-2', status: 'pending' }))
+
+    // No `commandId`: this is the Today pill, not a push tap.
+    const out = await mount()
+
+    // The exchange so far, not a blank composer.
+    expect(out.current!.thread!.id).toBe('newest')
+
+    await act(async () => {
+      await out.current!.send('and what did the CFO say about it')
+    })
+    await flush()
+
+    // THE SEAM THIS TEST EXISTS FOR: the follow-up joined the opened thread and carried that
+    // thread's last command id. A blank composer would have started a third thread with no
+    // `replyTo` at all, which is exactly the defect the whole-branch review found.
+    expect(postCommand).toHaveBeenCalledWith({
+      text: 'and what did the CFO say about it',
+      lang: 'en',
+      replyTo: 'c-new-1',
+    })
+    expect(out.current!.thread!.id).toBe('newest')
+    expect(out.current!.thread!.turns).toHaveLength(2)
+    // The older conversation is still kept, and still closed.
+    expect(out.current!.threads).toHaveLength(2)
   })
 })

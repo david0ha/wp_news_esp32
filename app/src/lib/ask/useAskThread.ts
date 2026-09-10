@@ -129,6 +129,16 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
         if (opts.commandId) {
           const found = threadOfCommand(stored, opts.commandId)
           if (found !== null) open(found.id)
+        } else if (openIdRef.current === null && stored.length > 0) {
+          // NO COMMAND ID MEANS THE OWNER CAME FROM TODAY, AND THE EXCHANGE SO FAR IS WHAT THEY
+          // CAME FOR. Opening a blank composer here made every stored conversation invisible the
+          // moment its notification was dismissed, and made every message from this entry point a
+          // NEW thread with no `reply_to` — so the follow-up machinery the desk, the worker and
+          // `lastCommandId` all implement was reachable only by tapping a push. The list is kept
+          // newest-first (`nextThreads` prepends a new thread), so index 0 is the most recent
+          // conversation. `open(null)` from the "new question" affordance is how a fresh thread is
+          // started deliberately.
+          open(stored[0].id)
         }
         await clientFor()
         return
@@ -170,7 +180,15 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
   const post = useCallback(
     async (threadId: string, turnId: string, text: string, turnLang: string) => {
       const client = await clientFor()
-      if (client === null) return
+      if (client === null) {
+        // NO DESK IS A FAILED SEND, NOT A NO-OP. The address or the token was cleared in Settings
+        // while this screen stayed mounted, so the POST is never going to leave. Returning here in
+        // silence would strand the turn at `sending` — a row reading "Sending…" with no poll
+        // watching it and no retry button under it, which is the same unrecoverable state a
+        // restored `sending` used to be. `unsent` says what happened and offers the way out.
+        dispatch({ type: 'send_failed', turnId, error: t.ask.needsDesk })
+        return
+      }
       // `reply_to` is the last turn that ACTUALLY REACHED the desk — an unsent one has no row
       // there, and the desk validates that the id exists.
       const current = threadsRef.current.find((th) => th.id === threadId) ?? null
@@ -299,7 +317,6 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
           }
         }
 
-        const outcome = readResult(row.result)
         if (row.status === 'failed') {
           dispatch({
             type: 'error',
@@ -308,6 +325,9 @@ export function useAskThread(opts: { commandId?: string | null } = {}): AskThrea
           })
           continue
         }
+        // Below the `failed` return, because a failed command's `result` is the worker's message
+        // and not a member of the outcome vocabulary — reading it there decided nothing.
+        const outcome = readResult(row.result)
         if (outcome === null || outcome.kind === 'answered') continue
         if (outcome.kind === 'staged') {
           // The owner asked for the change, so the phone finishes the act rather than leaving a
