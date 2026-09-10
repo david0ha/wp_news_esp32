@@ -3,25 +3,31 @@
 // worth arguing about lives there and has a test; the effects below are deliberately dull,
 // because there is no component test runner in this app to hold them to anything.
 //
-// ONE DRIVER, AND IT IS THE FOCUS CALLBACK. `useFocusEffect` fires on mount — the screen starts
-// focused — as well as on every later return to the tab, so a separate mount effect is a second
-// driver for the same event, and the two then have to be serialised by hand. The version this
-// replaces did that with a `bootedRef` the focus callback checked before doing anything, which
-// meant every focus DURING the first fetch was dropped rather than deferred: a URL saved in
-// Settings while the old address was still burning its fifteen-second timeout was picked up only
-// on the tab switch AFTER the one the user made, with nothing on screen to say why the save had
-// no effect. Now the focus callback is the whole loop — read the stored URL, adopt it when it
-// moved (or when this is the first run), otherwise ask `refresh()` for its silent, throttled
-// re-check — and a save is adopted on the very next focus, always.
+// ONE LOOP, TWO TRIGGERS. `load()` is the whole of it — read the address in force, adopt it when
+// it moved (or when this is the first run), otherwise ask `refresh()` for its silent, throttled
+// re-check. It is not a mount effect: `useFocusEffect` fires on mount as well as on every later
+// return to the tab, so a separate mount effect would be a second driver for the same event and
+// the two would have to be serialised by hand. The version this replaces did that with a
+// `bootedRef` the focus callback checked before doing anything, which meant every focus DURING the
+// first fetch was dropped rather than deferred: a URL saved in Settings while the old address was
+// still burning its fifteen-second timeout was picked up only on the tab switch AFTER the one the
+// user made, with nothing on screen to say why the save had no effect.
+//
+// The second trigger is the app returning to the FOREGROUND, which is a different event and was
+// missing. A reader who leaves the app standing on Today and opens it again the next morning never
+// changes tabs, so the focus callback does not fire and the page stays on yesterday's paper —
+// exactly the failure this tab exists to avoid. Both triggers call the same `load()`.
 //
 // THERE IS NO INTERVAL. The edition changes about once a day and the desk answers a conditional
 // GET with a 304 for the rest of it, so a poll loop here would be a request every thirty seconds
 // to be told nothing for twenty-three hours. A focus refresh older than five minutes, plus
 // pull-to-refresh, is the whole cadence.
 
-import { useCallback, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useReducer, useRef } from 'react'
+import { AppState } from 'react-native'
 import { useFocusEffect } from 'expo-router'
-import { getNewsUrl } from '../store'
+import { getDeskBaseUrl, getNewsUrl } from '../store'
+import { editionUrl } from './source'
 import { editionClient, humanEditionError } from './client'
 import {
   demoCache,
@@ -145,7 +151,7 @@ export function useEdition(): {
         // throttled focus re-check still does nothing: the focus callback already re-reads the
         // address itself, and doing it twice per focus buys a second disk read and no fact.
         if (!opts.fresh) return
-        const stored = (await getNewsUrl()) ?? ''
+        const stored = editionUrl(await getNewsUrl(), await getDeskBaseUrl())
         if (stored !== '' && stored !== machineRef.current.url) await adopt(stored)
         return
       }
@@ -175,37 +181,67 @@ export function useEdition(): {
     [adopt, runFetch],
   )
 
-  // The whole loop, on every focus including the mount. Either the stored address is not the one
-  // this hook is showing — a cold start, or a save made in Settings — and it is adopted, or it is
-  // and `refresh()` applies its own silent, throttled re-check, the same rule a bare `refresh()`
-  // call gets from anywhere.
+  /**
+   * The whole loop: read the address in force, adopt it if it moved, otherwise ask `refresh()` for
+   * its silent, throttled re-check.
+   *
+   * THE ADDRESS IS TWO SETTINGS, NOT ONE. `editionUrl` prefers the edition address the reader
+   * typed and falls back to the desk's own — `news.json` sits on the desk's host, unauthenticated,
+   * so a phone that has been given a desk already knows where the paper is. Reading both here
+   * rather than in the reducer keeps the machine's `url` what it has always been: the one address
+   * being fetched, whatever decided it.
+   */
+  const load = useCallback(async (alive: () => boolean) => {
+    // THE FIRST RUN READS THE DISK CACHE ALONGSIDE THE URL. The cache is not filed under the
+    // URL on disk, so nothing here needs the URL to arrive before the other read can start,
+    // and doing them one after another would cost a second AsyncStorage round trip on every
+    // cold launch. Later runs skip it: `adopt` reads the cache itself on the rare one that
+    // finds the address changed, and the common one does not need it at all.
+    const cold = machineRef.current.url === null
+    const [stored, desk, cached] = await Promise.all([
+      getNewsUrl(),
+      getDeskBaseUrl(),
+      cold ? readCachedEdition() : Promise.resolve(null),
+    ])
+    if (!alive()) return
+    const url = editionUrl(stored, desk)
+    if (url !== machineRef.current.url) {
+      await adopt(url, cold ? cached : undefined)
+      return
+    }
+    await refresh()
+  }, [adopt, refresh])
+
+  // On every focus, including the mount.
   useFocusEffect(
     useCallback(() => {
       let alive = true
-      void (async () => {
-        // THE FIRST RUN READS THE DISK CACHE ALONGSIDE THE URL. The cache is not filed under the
-        // URL on disk, so nothing here needs the URL to arrive before the other read can start,
-        // and doing them one after another would cost a second AsyncStorage round trip on every
-        // cold launch. Later focuses skip it: `adopt` reads the cache itself on the rare one that
-        // finds the address changed, and the common focus does not need it at all.
-        const cold = machineRef.current.url === null
-        const [stored, cached] = await Promise.all([
-          getNewsUrl(),
-          cold ? readCachedEdition() : Promise.resolve(null),
-        ])
-        if (!alive) return
-        const url = stored ?? ''
-        if (url !== machineRef.current.url) {
-          await adopt(url, cold ? cached : undefined)
-          return
-        }
-        await refresh()
-      })()
+      void load(() => alive)
       return () => {
         alive = false
       }
-    }, [adopt, refresh]),
+    }, [load]),
   )
+
+  // AND ON EVERY RETURN TO THE FOREGROUND, which is not the same event and was the gap.
+  // `useFocusEffect` fires when this SCREEN becomes focused; a reader who leaves the app standing
+  // on Today and comes back the next morning never changes tabs, so nothing re-fired and the page
+  // stayed on yesterday's paper until they pulled it down by hand. The throttle inside `refresh()`
+  // is what keeps this from being a request every time the app is glanced at.
+  //
+  // Not gated on focus: `load` reads the address and either adopts or defers to that throttle, so
+  // running it while another tab is on top costs one storage read and, past five minutes, one
+  // conditional GET the desk answers with a 304.
+  useEffect(() => {
+    let alive = true
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void load(() => alive)
+    })
+    return () => {
+      alive = false
+      sub.remove()
+    }
+  }, [load])
 
   return { state: machine.state, refresh }
 }

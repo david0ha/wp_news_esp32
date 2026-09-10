@@ -79,6 +79,7 @@ export const ko: Strings = {
       polls: '확인 주기',
       saveAddress: '주소 저장',
       clearAndDemo: '비우고 데모 데이터 사용',
+      derived: '비어 있어서 오늘 탭은 {url} 주소를 읽습니다 — 아래 데스크 주소에서 온 것입니다. 여기에 주소를 넣으면 그쪽이 우선합니다.',
       pendingNoBoard: '오늘 탭이 이 주소를 읽습니다. 나중에 설정하는 보드에도 전달됩니다.',
       pendingWithBoard: '아직 보드에 전달되지 않았습니다. 다음에 보드와 연결될 때 전송됩니다.',
       saved: {
@@ -602,7 +603,7 @@ export const ko: Strings = {
     notInEdition: '오늘 에디션에 없는 항목입니다.',
     more: '이 에디션의 다른 꼭지',
     demoChip: '데모 에디션',
-    demoNote: '에디션 주소가 아직 없습니다. 설정에서 추가하면 오늘자를 읽습니다.',
+    demoNote: '에디션 주소가 아직 없습니다. 설정에서 에디션 주소나 데스크 주소를 추가하면 오늘자를 읽습니다.',
     chips: {
       all: '전체',
       stories: '기사',
