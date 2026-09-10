@@ -607,11 +607,15 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         text = doc.get("text")
         if not isinstance(text, str) or not text.strip():
             raise BadRequest(message="a command needs text")
+        # `reply_to` and `lang` are passed through as they arrived, `None` and
+        # all: `store.add_command` is where both are checked, so the shape a
+        # `curl` can file and the shape the phone can file are one rule.
         command = self.desk.enqueue(
             doc.get("kind", "custom"), text,
             priority=_int_field(doc, "priority", 5, 0, 9),
             deadline_at=_epoch_field(doc, "deadline_at"),
-            source=str(doc.get("source", "api"))[:64])
+            source=str(doc.get("source", "api"))[:64],
+            reply_to=doc.get("reply_to"), lang=doc.get("lang"))
         self._send_json(200, {"ok": True, "command": command})
 
     def h_claim(self, _match, query) -> None:

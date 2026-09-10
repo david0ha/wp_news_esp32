@@ -2198,6 +2198,48 @@ class TickTest(DeskTestCase):
         self.api("PUT", "/api/schedule", doc)
         self.assertEqual(self.file_edition()["state"], "published")
 
+    def test_a_message_from_the_phone_round_trips_with_its_thread(self):
+        status, doc = self.api("POST", "/api/commands",
+                               {"kind": "ask", "text": "왜 그 회사예요?",
+                                "lang": "ko", "source": "app"}, "producer")
+        self.assertEqual(status, 200, doc)
+        first = doc["command"]
+        self.assertEqual(first["kind"], "ask")
+        self.assertEqual(first["lang"], "ko")
+        self.assertEqual(first["source"], "app")
+        self.assertIsNone(first["reply_to"])
+
+        status, doc = self.api("POST", "/api/commands",
+                               {"kind": "ask", "text": "그럼 실적은요?",
+                                "reply_to": first["id"], "lang": "ko",
+                                "source": "app"}, "producer")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["command"]["reply_to"], first["id"])
+
+        # And the queue's own list carries them, because `/api/commands` is
+        # `SELECT *` and the app reads a thread's status from it.
+        self.assertEqual(self.command(doc["command"]["id"])["reply_to"],
+                         first["id"])
+
+    def test_a_reply_to_nothing_and_an_unprintable_language_are_refused(self):
+        status, doc = self.api("POST", "/api/commands",
+                               {"kind": "ask", "text": "hello",
+                                "reply_to": "0" * 32}, "producer")
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(doc["error"], "bad_request")
+
+        status, doc = self.api("POST", "/api/commands",
+                               {"kind": "ask", "text": "hello",
+                                "lang": "ja"}, "producer")
+        self.assertEqual(status, 400, doc)
+
+    def test_a_command_with_no_thread_still_carries_the_fields_as_null(self):
+        status, doc = self.api("POST", "/api/commands",
+                               {"text": "look at the tape"}, "producer")
+        self.assertEqual(status, 200, doc)
+        self.assertIsNone(doc["command"]["reply_to"])
+        self.assertIsNone(doc["command"]["lang"])
+
 
 class AuditTest(DeskTestCase):
     """`GET /api/audit`: the same `store.audit()` calls the other routes already make."""
