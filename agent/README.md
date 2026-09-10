@@ -284,7 +284,7 @@ same setting from the desk instead.
 | Variable | Default | What it is |
 |---|---|---|
 | `CLAUDEPOST_DESK` | `http://desk:8080` | the desk. `http://host.docker.internal:8790` on Docker Desktop against a local desk; `https://your-hostname/` through the tunnel from another machine |
-| `CLAUDEPOST_SECRETS` | `/run/secrets` | where `~/.claudepost` is mounted: `agent.env`, or `tokens.json` as a fallback |
+| `CLAUDEPOST_SECRETS` | `/run/secrets` | `~/.claudepost`, read directly by `agent/run-host.sh` on the host. `agent/compose.yaml` mounts nothing here any more — `agent.env` reaches the loop through `env_file` instead — so in a container this path is empty unless you add your own mount, in which case a `tokens.json` there is still read as a fallback |
 | `CLAUDEPOST_REPO` | `/repo` | the repository in the image — `PROMPT.md` and `tools/` |
 | `CLAUDEPOST_SCRATCH` | `/scratch` | one workdir per command: the payload, the tiles, the sheets fetched back |
 | `CLAUDEPOST_WATCHLIST` | `<secrets>/watchlist.json` | the candidates and the rotation cursor. Seeded into each edition directory and taken back after a commit — see below |

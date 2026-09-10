@@ -52,8 +52,8 @@ services:
       AGENT_RUN_AS: ${AGENT_RUN_AS:-model}
       # /state rather than beside the token: the secrets are not a mount any
       # more (see env_file below), and the rotation needs a writable one -- see
-      # the /state volume below.
-      CLAUDEPOST_WATCHLIST: /state/watchlist.json
+      # the /state volume below, which is what makes this default writable.
+      CLAUDEPOST_WATCHLIST: ${CLAUDEPOST_WATCHLIST:-/state/watchlist.json}
       CLAUDEPOST_ONCE: ${CLAUDEPOST_ONCE:-0}
       CLAUDEPOST_LOG_LEVEL: ${CLAUDEPOST_LOG_LEVEL:-INFO}
       TZ: ${TZ:-UTC}

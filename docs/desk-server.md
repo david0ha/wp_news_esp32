@@ -268,7 +268,7 @@ whole deliverable there.
 | Root | Where | Holds |
 |---|---|---|
 | **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json`, `settings.json`, and `0600`: `positions.json`, `calendar.json`, `push.json` |
-| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` |
+| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` — `agent.env` is no longer in the *agent* container's view of this mount; it reaches that loop through `env_file` instead |
 
 **Secrets are not in the repository, the image, or any synced directory.**
 `~/.claudepost/` sits outside all three — the repository is public and git history
