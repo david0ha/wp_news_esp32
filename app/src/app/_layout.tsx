@@ -58,6 +58,9 @@ export default function RootLayout() {
               <Stack.Screen name="market/[symbol]" />
               {/* The event book, opened from the Markets tab's next-three block. */}
               <Stack.Screen name="schedule" />
+              {/* A message to the desk and its answer. Opened from Today's header, or by a tap on
+                  the push that says an answer arrived. */}
+              <Stack.Screen name="ask" />
               {/* One tile of today's edition, opened. Named `tile` and not `edition` so it does
                   not share a URL prefix with the Today tab, which is `(tabs)/edition.tsx`. */}
               <Stack.Screen name="tile/[id]" />
