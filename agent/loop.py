@@ -604,6 +604,52 @@ def read_answer(workdir: str) -> str | None:
     return _read_workdir_text(workdir, ANSWER_NAME)
 
 
+def answer_as_notes(workdir: str, answer: str) -> bool:
+    """Let the reply stand in as the dossier, unless the turn wrote one itself.
+
+    **`ask` runs that revise the paper only**, and called *before the draft path
+    begins* -- which is the whole of it, and the reason it is a function with a
+    docstring rather than three lines beside the commit.
+
+    :func:`upload` files whatever ``notes.md`` holds onto every draft it opens,
+    the revision loop opens a fresh draft on each pass, and the desk copies a
+    draft's note into the edition **inside** ``commit`` -- so a note put on the
+    draft after ``desk.commit()`` returns lands on a draft nobody will read
+    again and never reaches the edition at all. Writing it here instead puts it
+    on the first draft and every one after it for free, which is also the order
+    the design gives: open the draft, put the payload and the tiles, put the
+    answer as the draft's notes too, then proof.
+
+    Returns:
+        True if the reply was written as the note, False when the turn left a
+        ``notes.md`` of its own -- which wins, being about the page where the
+        answer is about the person -- or when the write failed.
+
+    Never raises: a note is evidence about a page, not the page, and
+    :func:`put_notes_best_effort` makes the same argument one document further
+    on.
+
+    One nuance under :func:`own_workdir`, where the turn runs as another user:
+    this file is written by the loop, so it belongs to the loop rather than to
+    the model, and a *revision* turn that decided to write a dossier it did not
+    write in the first turn may not be able to replace it. Accepted rather than
+    worked around. The contract asks for ``notes.md`` in the turn that writes
+    the page, so a run that reaches here has already declined once; the reply
+    is on the draft either way; and the cost of the remote case is an edition
+    whose note is the answer instead of a late dossier, which is the thing this
+    function is for.
+    """
+    if read_notes(workdir):
+        return False
+    try:
+        with open(os.path.join(workdir, "notes.md"), "w", encoding="utf-8") as f:
+            f.write(answer)
+    except OSError as e:
+        LOG.warning("could not write the answer as the draft's notes: %s", e)
+        return False
+    return True
+
+
 def put_notes_best_effort(desk: DeskClient, text: str | None, *,
                           draft: str | None = None,
                           command: str | None = None) -> None:
@@ -1341,6 +1387,12 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         # five gates, the same two revisions, the same look at the sheets. A
         # revised edition that does not typeset fails the command and leaves
         # the current one standing -- the firmware's own failure semantics.
+        #
+        # One thing goes ahead of it: an edition must not be filed with nothing
+        # beside it saying why it changed, and the reply is that account when
+        # the turn wrote no dossier of its own. Here rather than beside the
+        # commit, because the desk reads a draft's note *inside* commit.
+        answer_as_notes(workdir, answer)
 
     if kind == "custom" and not os.path.exists(os.path.join(workdir, "news.json")):
         note_on_command()
@@ -1389,12 +1441,11 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         # along with the page, and what goes to the person is what the run
         # finished believing rather than its first draft.
         answer = read_answer(workdir) or answer
-        # The command, always: that is where the phone reads the answer. And
-        # the draft too when the turn left no dossier of its own, so an edition
-        # is never filed with nothing beside it saying why it changed.
+        # The command: that is where the phone reads the answer, and before the
+        # finish that pushes to it. The draft already has its note -- put there
+        # by :func:`upload`, from the file :func:`answer_as_notes` wrote before
+        # the first one was ever opened.
         put_notes_best_effort(desk, answer, command=cid)
-        if not read_notes(workdir):
-            put_notes_best_effort(desk, answer, draft=draft)
         state = ASK_STATES.get(result.get("state"), result.get("state") or "revised")
         desk.finish(cid, True, "%s %s" % (state, result.get("edition_id")))
         return

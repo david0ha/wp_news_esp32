@@ -1318,6 +1318,93 @@ class HandleAskTest(unittest.TestCase):
         loop.handle(self.cfg, desk, {"id": "0" * 32, "kind": "ask", "text": "hello"}, {})
         self.assertEqual(asked, [])
 
+    class NotingDesk(Desk):
+        """A desk that remembers what each draft's note was **at the instant of
+        the commit**, which is the only moment the question is about.
+
+        The desk copies a draft's note into the edition inside ``commit``
+        (``editions._commit``), so "was ``put_notes`` called at some point"
+        is the wrong question -- the version of this loop that filed the note
+        after ``desk.commit()`` returned called it, and the edition still went
+        out with nothing beside it. Each draft gets its own id so that a note
+        that rode only the first upload can be told from one that rode the
+        draft that survived the revision loop.
+        """
+
+        def __init__(self, state="published", proofs=None):
+            super().__init__(state=state)
+            self._proofs = list(proofs or [])
+            self.draft_notes = {}
+            self.note_at_commit = None
+            self.drafts = []
+
+        def open_draft(self):
+            self.drafts.append("%032d" % len(self.drafts))
+            return self.drafts[-1]
+
+        def put_notes(self, text, *, draft=None, command=None):
+            super().put_notes(text, draft=draft, command=command)
+            if draft is not None:
+                self.draft_notes[draft] = text
+
+        def proof(self, draft):
+            return self._proofs.pop(0) if self._proofs else {"ok": True, "sheets": []}
+
+        def commit(self, draft):
+            self.note_at_commit = self.draft_notes.get(draft)
+            return super().commit(draft)
+
+    def test_the_draft_has_the_answer_as_its_note_when_the_commit_reads_it(self):
+        # The defect this test exists for. A note filed after `desk.commit()`
+        # returns is on a draft nobody reads again: the desk copies the note
+        # into the edition *inside* the commit. So the assertion is about the
+        # draft at that instant, not about `put_notes` having been called --
+        # the broken version called it.
+        self._patch_run_claude(self._writes(answer__md="Led with the lawsuit.\n",
+                                            news__json="{}"))
+        desk = self.NotingDesk()
+        loop.handle(self.cfg, desk,
+                    {"id": "1" * 32, "kind": "ask", "text": "lead with the lawsuit"}, {})
+        self.assertEqual(desk.note_at_commit, "Led with the lawsuit.\n")
+
+    def test_a_dossier_of_the_turns_own_is_the_draft_note_and_the_answer_is_not(self):
+        # The reply stands in only where nothing stands already: notes.md is
+        # about the page, answer.md is about the person, and a turn that wrote
+        # both gets both filed where each belongs.
+        self._patch_run_claude(self._writes(answer__md="Led with the lawsuit.\n",
+                                            news__json="{}",
+                                            notes__md="Three sources, one dropped.\n"))
+        desk = self.NotingDesk()
+        cid = "2" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "lead with it"}, {})
+        self.assertEqual(desk.note_at_commit, "Three sources, one dropped.\n")
+        self.assertIn({"text": "Led with the lawsuit.\n", "draft": None, "command": cid},
+                      desk.notes_calls)
+
+    def test_the_note_rides_the_draft_the_revision_loop_ends_on(self):
+        # `upload()` opens a fresh draft on every pass, so the draft that
+        # reaches the commit is not the one the note was first filed on. It is
+        # on disk in the workdir rather than on a draft, which is what makes
+        # that free.
+        self._patch_run_claude(self._writes(answer__md="Rewrote the lead.\n",
+                                            news__json="{}"))
+        desk = self.NotingDesk(proofs=[{"ok": False, "sheets": [], "validate": "no"},
+                                       {"ok": True, "sheets": []}])
+        loop.handle(self.cfg, desk, {"id": "3" * 32, "kind": "ask", "text": "rewrite"}, {})
+        self.assertEqual(len(desk.drafts), 2)
+        self.assertEqual(desk.commits, [desk.drafts[-1]])
+        self.assertEqual(desk.note_at_commit, "Rewrote the lead.\n")
+
+    def test_a_question_that_files_nothing_writes_no_notes_md(self):
+        # The stand-in belongs to the revise path alone. There is no draft to
+        # put a dossier on, and a notes.md in the workdir afterwards would be
+        # this loop inventing one.
+        self._patch_run_claude(self._writes(answer__md="EPS is earnings per share.\n"))
+        loop.handle(self.cfg, self.Desk(),
+                    {"id": "4" * 32, "kind": "ask", "text": "what is EPS?"}, {})
+        self.assertFalse(os.path.exists(
+            os.path.join(self.tmp, "4" * 32, "notes.md")))
+
     def test_a_turn_that_exited_nonzero_never_reaches_the_desk(self):
         self._patch_run_claude(lambda *a, **k: 3)
         desk = self.Desk()
