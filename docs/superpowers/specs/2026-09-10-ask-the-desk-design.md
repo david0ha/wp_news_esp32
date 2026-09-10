@@ -45,25 +45,41 @@ sandbox as a phone message. What it costs is that the desk token, the context
 directory and the Claude login are all inside the one container, which is why
 the next layer exists.
 
-**Two users inside the container.** The loop runs as `worker` (uid 10001, as
-now). Every `claude` invocation is spawned as a second user, `model`, through
-`gosu`. The container starts as root only long enough for the entrypoint to
-own the scratch volume and drop to `worker`; `gosu` is what lets `worker`
-change user without a setuid binary. Concretely:
+**Two users inside the container.** The loop runs as **root** inside the
+container. Every `claude` invocation is spawned as an unprivileged user,
+`model` (uid 10001), through `gosu`. Root is not a shortcut: it is the only
+identity that can hand a turn to another user at all. `gosu` is not setuid,
+and `compose.yaml`'s `no-new-privileges:true` would defeat a setuid or
+file-capability version of it — measured, not reasoned: from uid 10001 in the
+image, `gosu root id -u` answers `operation not permitted`. The loop has no
+business being root outside the container, so `main()` refuses `AGENT_RUN_AS`
+when it is not root, and refuses to run as root when `AGENT_RUN_AS` is unset.
+Concretely:
 
-- `/run/secrets` is bind-mounted from `~/.claudepost` with mode `0640`, group
-  `worker`. `model` is not in that group and cannot open `agent.env`.
+- **The secrets are not a file inside the container.** Compose reads
+  `~/.claudepost/agent.env` on the Mac through `env_file` and hands it to the
+  loop as environment; the `/run/secrets` bind mount is gone. This is also
+  measured: a file bind-mounted from this Mac, reported inside the container
+  as `-rw------- 1 0 0`, was read straight out by an unprivileged container
+  user, because Docker Desktop's VirtioFS does not enforce bind-mount modes.
+  A file mode is not a wall here. The environment is the one boundary the
+  kernel enforces between two uids.
 - `model` cannot read `/proc/<loop pid>/environ`, because the loop is a
-  different uid. The desk token therefore does not exist anywhere `model` can
+  different uid (`gosu model cat /proc/1/environ` → `Permission denied`,
+  measured). The desk token therefore does not exist anywhere `model` can
   reach, which is a stronger statement than today's "stripped from the child
   env", where a Bash tool could in principle read the parent's environment.
-- The workdir `/scratch/<cid>` is created by the loop and `chown`ed to
-  `model` before the run. It is the only writable path the model has.
+- The workdir `/scratch/<cid>` is created and seeded by the loop, then
+  `chown`ed to `model` before the run. It is the only writable path the model
+  has.
 - `/context` (the operator's directory) mounts read-only and world-readable,
   because the prompt is *meant* to read it.
 - The Claude login token is the one secret that must reach `model`, because
   `claude` needs it. It is passed in that child's environment and nowhere
   else.
+- The watchlist rotation cursor, which today lives beside the secrets, moves
+  to its own writable `/state` volume. The read-only secrets mount meant a
+  container could seed the watchlist and never advance it.
 
 **The tool allowlist is unchanged.** `DEFAULT_TOOLS` in `agent/loop.py`
 stays `Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Bash(make_tile.py),
@@ -82,20 +98,24 @@ desk's `/api/*` behind it still needs a bearer token, and the public plane
 implying a network wall that is not there.
 
 **Image changes.** `agent/Dockerfile` gains `gosu` and Pillow (`make_tile.py`
-exits without it — the trap that bit the host install), adds the `model`
-user, and ships an entrypoint that fixes ownership of `/scratch` and execs the
-loop as `worker`. `agent/install-docker.sh` does on the Mac what
-`agent/install-host.sh` does today: build the image from the repo mirror,
-`launchctl bootout` the launchd worker, `docker compose up -d`. The morning
-order job (`com.claudepost.order`) is not a worker and stays on the host.
+exits without it — the trap that bit the host install) and the `model` user.
+No entrypoint script: with a root loop there is nothing for one to do, and
+each workdir is chowned per command. `agent/install-docker.sh` (new; there is
+no `install-host.sh` in this repository, only `run-host.sh`) builds the image
+from the repo mirror, `launchctl bootout`s the launchd worker, and runs
+`docker compose up -d`. The morning order job (`com.claudepost.order`) is not
+a worker and stays on the host.
 
 ## 2. Desk
 
 **Kind.** `COMMAND_KINDS` gains `ask`. `MAX_COMMAND_TEXT` stays 2000; a phone
 message is short.
 
-**Columns.** Two nullable columns on `commands`, added by the existing
-migration path in `store.py`: `reply_to TEXT` (a command id, the previous turn
+**Columns.** Two nullable columns on `commands`. `store.py` has no migration
+path today — its schema is `CREATE TABLE IF NOT EXISTS` only — so this adds
+one (`ALTER TABLE … ADD COLUMN` when `PRAGMA table_info` lacks the column),
+tested against a hand-written pre-feature table, because the deployed desk
+would otherwise raise `no such column` on the first message. `reply_to TEXT` (a command id, the previous turn
 of the same thread, validated against `COMMAND_ID_RE` and required to exist)
 and `lang TEXT` (`en` / `ko`, the language the phone was in when the message
 was typed; `NULL` means "the language of the message itself"). Both round-trip
@@ -118,9 +138,18 @@ phone's read.
 title "Claude Post", body "답변이 도착했습니다" or "Your answer is ready"
 by the command's `lang`, `data: {"command_id": cid, "result": <first word>}`.
 It goes through `push.send` with a new ledger key `(token, "cmd:"+cid, 0)`
-so a restart cannot send it twice, and it respects the device's quiet hours
-the way alert pushes do. This is the first push that is not a calendar alert;
-`push.KINDS` gains `answer` so a phone can turn it off separately.
+so a restart cannot send it twice. A failed command gets its own body rather
+than a promise of an answer. `lang` null falls back to the desk's
+`settings.lang`, the nearest thing the desk has to the message's language.
+Quiet hours are respected, and because `finish` is one-shot where an alert is
+retried by a tick, a housekeeping sweep (`Store.finished_since`, bounded at
+36 hours) sends a deferred answer once the window ends rather than dropping
+it. This is the first push that is not a calendar alert; `push.KINDS` gains
+`answer` so a phone can turn it off separately, and `LEAD_KINDS` (the kinds
+that carry a lead time) is split from `KINDS`, since an answer has no date.
+The app's `PUSH_KINDS` must not learn `answer` before the desk does: the desk
+refuses an unknown key over the whole device document, which would turn every
+notification registration into a 400. Both ship in one PR, desk first.
 
 ## 3. Worker
 
@@ -128,7 +157,14 @@ the way alert pushes do. This is the first push that is not a calendar alert;
 path is compose. `Settings.from_env` gains `AGENT_RUN_AS` (a username, empty
 means "do not switch user"), and `claude_argv` prefixes `gosu <user>` when it
 is set. `child_env` is unchanged in what it strips; the uid split is what
-makes the strip unnecessary rather than what replaces it.
+makes the strip unnecessary rather than what replaces it. `read_token`
+accepts `CLAUDEPOST_TOKEN` from the environment as well as from `agent.env`,
+which is how the compose path delivers it.
+
+**Two languages, not one.** `build_prompt` takes `ask_lang` (the command's
+`lang`) beside `lang` (the desk's edition language). The paper's language and
+the conversation's are different settings: a message typed in English must
+not turn a Korean edition into an English one.
 
 **Seeding an `ask`.** Beside the usual `watchlist.json`, the loop writes:
 
@@ -174,7 +210,8 @@ The five gates apply unchanged. A revised edition that fails validation fails
 the command, and the previous edition stays current — the same failure
 semantics as the firmware's.
 
-**Deskclient.** Gains `command(cid)` (for `reply_to` seeding) and
+**Deskclient.** Gains `command(cid)` and `command_notes(cid)` (for
+`reply_to` seeding: the earlier question and its answer) and
 `fetch_public(path)` for the public plane. Still no `publish`: the worker's
 token is producer scope and forcing a publish is the operator's act.
 
