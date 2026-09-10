@@ -131,6 +131,14 @@ ANSWER_NAME = "answer.md"
 #: that matters.
 PREVIOUS_NAME = "previous.md"
 
+#: What a commit's state is called back to the phone. ``unchanged`` is
+#: ``revised`` on purpose: the owner asked for a change, the desk decided the
+#: result was byte-identical to what was already current, and the honest answer
+#: to the person waiting is still "I changed the paper" -- the answer.md says
+#: what was done. Anything else is passed through under its own name rather
+#: than guessed at.
+ASK_STATES = {"published": "revised", "unchanged": "revised", "staged": "staged"}
+
 #: ``tiles.TILE_ID_RE`` on the desk's side of the token, which is ``ui_tile.c``'s
 #: ``id_ok()`` restated. Checked here because an id off the wire becomes a URL
 #: and then a filename -- :func:`fetch_sheets`' argument, on the other document.
@@ -1188,10 +1196,19 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
       would be an edition written by the one turn holding the owner's option
       positions, published at a URL with no authorization on it. So the disk
       is consulted and the answer is a refusal -- see :func:`upload_calendar`.
+    - ``"ask"`` is a message from the phone, and it decides the way ``custom``
+      does -- from the disk. It is seeded with the edition the desk is serving
+      and with one turn of the conversation behind it; its ``answer.md`` is
+      required whatever else the turn produced, because somebody is waiting for
+      a reply and a page is not a reply; and a ``news.json`` beside it means
+      the model judged that the message asked for the paper to change. That
+      judgement is the model's, per the design, and this loop does not
+      second-guess it.
     """
     cid = command["id"]
     kind = command.get("kind", "file_edition")
     calendar = kind == CALENDAR_KIND
+    ask = kind == ASK_KIND
     workdir = os.path.join(cfg.scratch, cid)
     shutil.rmtree(workdir, ignore_errors=True)
     # No ``tiles/`` on the calendar path. Nothing would ever upload one, so an
@@ -1207,6 +1224,19 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         seed_positions(desk, workdir)
         seed_calendar(desk, workdir)
         seed_econ(desk, workdir)
+
+    if ask:
+        # Before the turn, and in this order: the paper the message is about,
+        # then the turn it answers. The first is a precondition -- a desk that
+        # cannot say what it is serving fails here rather than after a revision
+        # written from nothing -- and the second is not.
+        seed_current(desk, workdir)
+        if command.get("reply_to"):
+            seed_previous(desk, workdir, command["reply_to"])
+    # Last, after every seeded file is on disk: the model owns this directory
+    # for the length of the turn, and one of the files it is handed is a watch
+    # list the contract asks it to rewrite in place.
+    own_workdir(cfg, workdir)
 
     def file_and_proof(fetch_back: bool = True):
         """Put what is on disk in front of the gates. Returns (draft, report, sheets).
@@ -1256,7 +1286,8 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         desk.directives(),
         command.get("text", ""),
         kind=kind,
-        lang=desk.settings().get("lang", "en"))
+        lang=desk.settings().get("lang", "en"),
+        ask_lang=command.get("lang"))
     status = run_claude(cfg, text, workdir, agent_env, kind)
     if status != 0:
         desk.finish(cid, False, "claude exited %d" % status)
@@ -1291,6 +1322,25 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         desk.finish(cid, True, "the book: %d event(s)%s" % (
             len(book["events"]), ". %s" % shortfall if shortfall else ""))
         return
+
+    answer = None
+    if ask:
+        answer = read_answer(workdir)
+        if not answer:
+            # Whatever else it produced. Somebody is waiting for a reply and a
+            # page is not a reply -- and a page filed with no answer beside it
+            # would change the paper on the wall with nobody told why.
+            desk.finish(cid, False, "no answer written")
+            return
+        if not os.path.exists(os.path.join(workdir, "news.json")):
+            put_notes_best_effort(desk, answer, command=cid)
+            desk.finish(cid, True, "answered")
+            return
+        # Otherwise the message asked for the paper to change, and the rest of
+        # this function is exactly the path a morning edition takes: the same
+        # five gates, the same two revisions, the same look at the sheets. A
+        # revised edition that does not typeset fails the command and leaves
+        # the current one standing -- the firmware's own failure semantics.
 
     if kind == "custom" and not os.path.exists(os.path.join(workdir, "news.json")):
         note_on_command()
@@ -1333,6 +1383,22 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     persist_watchlist(cfg, workdir)
     write_brief(cfg, time.strftime("%Y-%m-%d"), command, result,
                 report.get("validate", ""))
+
+    if ask:
+        # Re-read: the revision and look turns may have rewritten the reply
+        # along with the page, and what goes to the person is what the run
+        # finished believing rather than its first draft.
+        answer = read_answer(workdir) or answer
+        # The command, always: that is where the phone reads the answer. And
+        # the draft too when the turn left no dossier of its own, so an edition
+        # is never filed with nothing beside it saying why it changed.
+        put_notes_best_effort(desk, answer, command=cid)
+        if not read_notes(workdir):
+            put_notes_best_effort(desk, answer, draft=draft)
+        state = ASK_STATES.get(result.get("state"), result.get("state") or "revised")
+        desk.finish(cid, True, "%s %s" % (state, result.get("edition_id")))
+        return
+
     desk.finish(cid, True, "%s %s" % (result.get("state"), result.get("edition_id")))
 
 

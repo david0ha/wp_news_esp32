@@ -537,6 +537,10 @@ class CalendarDesk:
     def put_calendar(self, data):
         self.books.append(data)
 
+    # the public plane, which only an `ask` reads
+    def fetch_public(self, path):
+        return b'{"lang": "en"}' if path == "/news.json" else None
+
     # the draft path
     def open_draft(self):
         return "d" * 32
@@ -606,10 +610,10 @@ class SeedingSplitTest(unittest.TestCase):
         so an assertion about ``positions.json`` afterwards is an assertion
         about the directory the child was started in.
         """
-        deliverable = {"research": "notes.md", "calendar": "calendar.json"}.get(
-            kind, "news.json")
-        contents = ('{"events": [], "shortfall": null}'
-                    if kind == "calendar" else "{}")
+        deliverable = {"research": "notes.md", "calendar": "calendar.json",
+                       "ask": "answer.md"}.get(kind, "news.json")
+        contents = {"calendar": '{"events": [], "shortfall": null}',
+                    "ask": "answered\n"}.get(kind, "{}")
 
         def fake_run_claude(cfg, text, workdir, extra_env, *_):
             with open(os.path.join(workdir, deliverable), "w",
@@ -630,7 +634,7 @@ class SeedingSplitTest(unittest.TestCase):
         # The newspaper's producer never has the file. This is the structural
         # half of the rule that positions do not reach news.json; the edition
         # validator is the other half, and neither is sufficient alone.
-        for kind in ("file_edition", "research", "custom"):
+        for kind in ("file_edition", "research", "custom", "ask"):
             with self.subTest(kind=kind):
                 workdir = self.run_seeding(kind)
                 self.assertFalse(
@@ -642,11 +646,24 @@ class SeedingSplitTest(unittest.TestCase):
         # Yesterday's book and the economic window are not secrets the way the
         # positions are, but a newspaper run has no use for either, and a file
         # in front of a model is an invitation to read it.
-        for kind in ("file_edition", "research", "custom"):
+        for kind in ("file_edition", "research", "custom", "ask"):
             for name in ("positions.json", "calendar.json", "econ.json"):
                 with self.subTest(kind=kind, name=name):
                     workdir = self.run_seeding(kind)
                     self.assertFalse(os.path.exists(os.path.join(workdir, name)))
+
+    def test_the_paper_is_seeded_for_an_ask_and_for_no_other_kind(self):
+        # The mirror of the positions split, and a weaker property on purpose:
+        # /news.json is public, so seeding it into a morning run leaks nothing.
+        # It is still wrong -- a filing run handed yesterday's paper edits it
+        # instead of writing today's -- and an absence has to be looked for
+        # everywhere it could be.
+        for kind in ("file_edition", "research", "custom", "calendar"):
+            with self.subTest(kind=kind):
+                workdir = self.run_seeding(kind)
+                self.assertFalse(os.path.exists(os.path.join(workdir, "current")))
+        workdir = self.run_seeding("ask")
+        self.assertTrue(os.path.exists(os.path.join(workdir, "current", "news.json")))
 
     def test_the_watch_list_is_seeded_for_every_kind_including_the_book(self):
         # The one file both jobs get: it is the universe the paper rotates
@@ -1134,6 +1151,180 @@ class HandleCalendarTest(unittest.TestCase):
         # got wrong later.
         (_, _, result), = desk.finished
         self.assertIn("여섯 개였어요", result)
+
+
+class HandleAskTest(unittest.TestCase):
+    """`handle()`'s fourth case, and its outcomes are the phone's whole contract.
+
+    Like `custom`, the disk decides: a `news.json` after the turn means the
+    model judged that the message asked for the paper to change. Unlike
+    `custom`, `answer.md` is required either way -- a turn that answered
+    nobody has failed, whatever else it produced.
+    """
+
+    class Desk:
+        """Enough of DeskClient for an ask, either way it goes."""
+
+        def __init__(self, state="published", edition=b'{"lang":"en"}'):
+            self.state = state
+            self.edition = edition
+            self.notes_calls = []
+            self.finished = []
+            self.commits = []
+            self.payloads = []
+
+        def directives(self):
+            return []
+
+        def settings(self):
+            return {"lang": "en"}
+
+        def fetch_public(self, path):
+            return self.edition if path == "/news.json" else None
+
+        def command(self, cid):
+            return {"id": cid, "text": "why did it move?"}
+
+        def command_notes(self, cid):
+            return "Because the guide beat the whisper number.\n"
+
+        def open_draft(self):
+            return "d" * 32
+
+        def put_payload(self, draft, data):
+            self.payloads.append((draft, data))
+
+        def put_tile(self, draft, tile_id, data):
+            pass
+
+        def put_notes(self, text, *, draft=None, command=None):
+            self.notes_calls.append({"text": text, "draft": draft, "command": command})
+
+        def proof(self, draft):
+            return {"ok": True, "sheets": []}
+
+        def commit(self, draft):
+            self.commits.append(draft)
+            return {"state": self.state, "edition_id": "e" * 32}
+
+        def finish(self, cid, ok, result):
+            self.finished.append((cid, ok, result))
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
+        self._real_read_contract = loop.read_contract
+        loop.read_contract = lambda repo, kind="file_edition": "the contract"
+        self.addCleanup(setattr, loop, "read_contract", self._real_read_contract)
+
+    def _patch_run_claude(self, fn):
+        real = loop.run_claude
+        loop.run_claude = fn
+        self.addCleanup(setattr, loop, "run_claude", real)
+
+    def _writes(self, **files):
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            for name, body in files.items():
+                path = os.path.join(workdir, name.replace("__", "."))
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(body)
+            return 0
+        return fake_run_claude
+
+    def test_a_question_is_answered_and_nothing_is_filed(self):
+        self._patch_run_claude(self._writes(answer__md="EPS is earnings per share.\n"))
+        desk = self.Desk()
+        cid = "a" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "what is EPS?"}, {})
+
+        self.assertEqual(desk.commits, [])
+        self.assertEqual(desk.notes_calls, [{"text": "EPS is earnings per share.\n",
+                                             "draft": None, "command": cid}])
+        self.assertEqual(desk.finished, [(cid, True, "answered")])
+
+    def test_a_message_that_changes_the_paper_files_it_and_says_which(self):
+        self._patch_run_claude(self._writes(answer__md="Led with the lawsuit.\n",
+                                            news__json="{}"))
+        desk = self.Desk(state="published")
+        cid = "b" * 32
+        loop.handle(self.cfg, desk,
+                    {"id": cid, "kind": "ask", "text": "lead with the lawsuit"}, {})
+
+        self.assertEqual(desk.commits, ["d" * 32])
+        self.assertEqual(desk.finished, [(cid, True, "revised " + "e" * 32)])
+        # The answer is on the COMMAND whatever else happened: that is where
+        # the phone reads it, at GET /api/commands/<cid>/notes.md.
+        self.assertIn({"text": "Led with the lawsuit.\n", "draft": None, "command": cid},
+                      desk.notes_calls)
+
+    def test_an_edit_that_changed_nothing_is_still_an_answer(self):
+        self._patch_run_claude(self._writes(answer__md="Nothing needed changing.\n",
+                                            news__json="{}"))
+        desk = self.Desk(state="unchanged")
+        cid = "c" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "add the CFO quote"}, {})
+        self.assertEqual(desk.finished, [(cid, True, "revised " + "e" * 32)])
+
+    def test_a_held_desk_says_staged_so_the_phone_can_offer_to_publish(self):
+        self._patch_run_claude(self._writes(answer__md="Rewrote the lead.\n",
+                                            news__json="{}"))
+        desk = self.Desk(state="staged")
+        cid = "d" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "rewrite the lead"}, {})
+        self.assertEqual(desk.finished, [(cid, True, "staged " + "e" * 32)])
+
+    def test_a_turn_that_answered_nobody_failed(self):
+        # Even one that wrote a perfectly good page: the message came from a
+        # person waiting for a reply, and a paper is not a reply.
+        self._patch_run_claude(self._writes(news__json="{}"))
+        desk = self.Desk()
+        cid = "e" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "lead with the lawsuit"}, {})
+        self.assertEqual(desk.commits, [])
+        self.assertEqual(desk.finished, [(cid, False, "no answer written")])
+
+    def test_the_paper_and_the_thread_are_in_the_directory_before_the_turn(self):
+        seen = {}
+
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            seen["current"] = os.path.exists(os.path.join(workdir, "current", "news.json"))
+            seen["previous"] = os.path.exists(os.path.join(workdir, "previous.md"))
+            seen["prompt"] = text
+            with open(os.path.join(workdir, "answer.md"), "w") as f:
+                f.write("ok\n")
+            return 0
+
+        self._patch_run_claude(fake_run_claude)
+        desk = self.Desk()
+        loop.handle(self.cfg, desk,
+                    {"id": "f" * 32, "kind": "ask", "text": "and the buyback?",
+                     "reply_to": "a" * 32, "lang": "ko"}, {})
+        self.assertTrue(seen["current"])
+        self.assertTrue(seen["previous"])
+        # The phone's language reached the prompt as the fallback it is.
+        self.assertIn("fall back to Korean", seen["prompt"])
+
+    def test_a_first_turn_has_no_previous_and_asks_for_none(self):
+        asked = []
+
+        class Desk(self.Desk):
+            def command(self, cid):
+                asked.append(cid)
+                return {"id": cid, "text": "t"}
+
+        self._patch_run_claude(self._writes(answer__md="ok\n"))
+        desk = Desk()
+        loop.handle(self.cfg, desk, {"id": "0" * 32, "kind": "ask", "text": "hello"}, {})
+        self.assertEqual(asked, [])
+
+    def test_a_turn_that_exited_nonzero_never_reaches_the_desk(self):
+        self._patch_run_claude(lambda *a, **k: 3)
+        desk = self.Desk()
+        cid = "9" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "ask", "text": "hi"}, {})
+        self.assertEqual(desk.notes_calls, [])
+        self.assertEqual(desk.finished, [(cid, False, "claude exited 3")])
 
 
 class AuthRouteTest(unittest.TestCase):
