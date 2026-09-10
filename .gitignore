@@ -29,8 +29,12 @@ dependencies.lock
 sim/shots/
 shots/
 
-# Claude Code local state / git worktree — not for committing
-.claude/
+# Claude Code local state and its git worktrees — not for committing. Spelled `.claude/*`
+# rather than `.claude/`, because git does not descend into an excluded DIRECTORY and the
+# negation below would never be reached: project-scoped skills are the repository's own and
+# are meant to travel with it.
+.claude/*
+!.claude/skills/
 
 # clangd / editor index caches
 .cache/
