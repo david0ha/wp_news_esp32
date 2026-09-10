@@ -268,9 +268,11 @@ The type ramp follows the app's UI language, not the edition's.
   nothing; `prompt.build_prompt` for `ask` contains the three-rule section and
   the contract's `## The language` heading.
 - **Image**: `docker build` succeeds; `docker run --rm claudepost-agent
-  gosu model id` prints uid ≠ 10001; `gosu model cat /run/secrets/agent.env`
-  is denied. These are a shell test in `agent/test/run.sh` guarded by `docker`
-  being on `PATH`.
+  id -u` prints 0 and `gosu model id -u` prints 10001; no `agent.env` exists
+  anywhere in the image (the credential arrives as environment, §1); Pillow
+  imports; and `gosu model cat /proc/1/environ` is denied — the one check the
+  kernel enforces. These are `agent/test/image.sh`, which exits 0 without
+  building when `docker` is not on `PATH` or not running.
 - **App** (`app/`): client method request shapes; thread reducer transitions
   (pending → claimed → done with each result; failed; retry); `entryRouteFor`
   unaffected.
