@@ -1430,9 +1430,15 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
 
     result = desk.commit(draft)
     LOG.info("committed %s: %s", result.get("edition_id"), result.get("state"))
-    # After the commit and not before: a rotation that advanced past a company
-    # whose page never reached the desk skips it for a whole cycle.
-    persist_watchlist(cfg, workdir)
+    if not ask:
+        # After the commit and not before: a rotation that advanced past a
+        # company whose page never reached the desk skips it for a whole
+        # cycle. Not on this path for an `ask`: the file in the workdir is
+        # seeded so the same prompt can be shared, not because a revision
+        # from the phone is the rotation's business, and moving the cursor
+        # here would advance tomorrow's edition past whatever company the
+        # phone happened to be asking about.
+        persist_watchlist(cfg, workdir)
     write_brief(cfg, time.strftime("%Y-%m-%d"), command, result,
                 report.get("validate", ""))
 

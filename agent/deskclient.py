@@ -653,7 +653,11 @@ def load_agent_env(secrets: str) -> dict:
     """Everything in ``agent.env`` except the desk token, for the child process.
 
     Args:
-        secrets: the directory ``~/.claudepost`` is mounted at, read-only.
+        secrets: ``~/.claudepost``, the directory ``agent.env`` lives in. The
+            container gets the file's variables from compose's ``env_file``
+            directive rather than this directory being mounted into it; this
+            call is what reads the directory directly, for
+            ``agent/run-host.sh``, which runs the loop on the host itself.
 
     Returns:
         The file's ``KEY=value`` pairs, minus ``CLAUDEPOST_TOKEN``. Empty when there

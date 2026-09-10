@@ -1413,6 +1413,72 @@ class HandleAskTest(unittest.TestCase):
         self.assertEqual(desk.notes_calls, [])
         self.assertEqual(desk.finished, [(cid, False, "claude exited 3")])
 
+    def test_a_revision_from_the_phone_does_not_move_the_rotation(self):
+        # watchlist.json is seeded into every kind's workdir so the prompt can
+        # be shared, but persist_watchlist's whole reason to exist is "after
+        # the commit, a company that reached the desk" -- and the company an
+        # `ask` revises was chosen by a filing run days ago, not by this turn.
+        # A phone message that happens to also rewrite watchlist.json (because
+        # the file sits right there in the directory) must not be allowed to
+        # advance tomorrow's rotation out from under the operator.
+        path = os.path.join(self.tmp, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["AAAA", "BBBB"], "last": "AAAA"}, f)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp,
+                                           "CLAUDEPOST_WATCHLIST": path})
+
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            with open(os.path.join(workdir, "answer.md"), "w",
+                      encoding="utf-8") as f:
+                f.write("Led with the lawsuit.\n")
+            with open(os.path.join(workdir, "news.json"), "w",
+                      encoding="utf-8") as f:
+                f.write("{}")
+            # As if the model had also moved the cursor, the way a filing run
+            # legitimately does.
+            with open(os.path.join(workdir, "watchlist.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump({"symbols": ["AAAA", "BBBB"], "last": "BBBB"}, f)
+            return 0
+
+        self._patch_run_claude(fake_run_claude)
+        desk = self.Desk(state="published")
+        cid = "5" * 32
+        loop.handle(self.cfg, desk,
+                    {"id": cid, "kind": "ask", "text": "lead with the lawsuit"}, {})
+
+        self.assertEqual(desk.commits, ["d" * 32])
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["last"], "AAAA")
+
+    def test_an_ordinary_filing_run_still_moves_the_rotation(self):
+        # The contrast that pins the exemption to `ask` alone: an ordinary
+        # morning edition is exactly the case persist_watchlist exists for,
+        # and it must still fire once the ask path stops sharing its call.
+        path = os.path.join(self.tmp, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["AAAA", "BBBB"], "last": "AAAA"}, f)
+        cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp,
+                                      "CLAUDEPOST_WATCHLIST": path})
+
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            with open(os.path.join(workdir, "news.json"), "w",
+                      encoding="utf-8") as f:
+                f.write("{}")
+            with open(os.path.join(workdir, "watchlist.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump({"symbols": ["AAAA", "BBBB"], "last": "BBBB"}, f)
+            return 0
+
+        self._patch_run_claude(fake_run_claude)
+        desk = CalendarDesk()
+        loop.handle(cfg, desk,
+                    {"id": "6" * 32, "kind": "file_edition", "text": "go"}, {})
+
+        self.assertEqual(desk.commits, ["d" * 32])
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["last"], "BBBB")
+
 
 class AuthRouteTest(unittest.TestCase):
     """Which credentials `claude --print` can start from, and the expensive tie.

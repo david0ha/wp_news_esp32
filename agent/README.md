@@ -45,7 +45,10 @@ cp agent/.env.example agent/.env      # CLAUDEPOST_DESK=http://127.0.0.1:8790, A
 
 Same `loop.py`, same desk, same gates; only the process boundary moves. The
 script sets the four paths the image's defaults get wrong (`/repo`, `/scratch`,
-`/run/secrets`, `http://desk:8080`), refuses to start if this machine is not
+`/run/secrets`, `http://desk:8080`) and a fifth thing besides — it pins
+`AGENT_RUN_AS` empty, because there is nobody on a host run to hand a turn to
+and a bare default would still let a value left in `agent/.env` for the
+container through. It refuses to start if this machine is not
 signed in, and **unsets `ANTHROPIC_API_KEY`** unless `CLAUDEPOST_USE_API_KEY=1`
 — a key beside a login is the one failure nothing downstream can see, because
 `claude` starts either way and the difference is a statement four weeks later.
@@ -177,7 +180,7 @@ means it was an order and the note follows the draft, no `news.json` means it
 was a look and the note follows the command. Leaving no `notes.md` files
 nothing; that is the ordinary case, not a gap.
 
-A fourth kind, `ask`, is a message from the phone. It is seeded with the
+A fifth kind, `ask`, is a message from the phone. It is seeded with the
 edition the desk is serving now (`current/news.json` and `current/tiles/`,
 fetched off the public plane) and, when the message is a follow-up, with the
 turn before it (`previous.md`). The turn writes `answer.md` — always; a turn
