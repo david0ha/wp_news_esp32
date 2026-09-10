@@ -940,6 +940,123 @@ class ReadAnswerTest(unittest.TestCase):
         self.assertEqual(loop.read_notes(self.tmp), "the dossier\n")
 
 
+@unittest.skipUnless(hasattr(os, "symlink"), "no symlinks on this platform")
+class SymlinkGuardTest(unittest.TestCase):
+    """`own_workdir` hands the command's directory to the turn's own user
+    before the turn runs, so every file read back out of it afterwards was,
+    for the length of the turn, writable by that user rather than by this
+    loop. `_open_regular` is the one place every such read-back goes through,
+    and what it refuses is a symlink standing in for the plain file the
+    contract asked for -- unreachable while the turn's shell allowlist has no
+    `Bash`, reachable the day `AGENT_TOOLS` is ever widened to include one.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        # Stands in for a file the model's turn has no business reading --
+        # /etc/shadow in spirit, a plain file in the test.
+        self.secret = os.path.join(self.tmp, "secret.txt")
+        with open(self.secret, "w", encoding="utf-8") as f:
+            f.write("root-only, in spirit\n")
+        self.work = os.path.join(self.tmp, "work")
+        os.makedirs(self.work)
+
+    def test_a_symlink_is_refused_and_named_in_the_log(self):
+        link = os.path.join(self.work, "notes.md")
+        os.symlink(self.secret, link)
+        with self.assertLogs("worker", level="WARNING") as caught:
+            with self.assertRaises(OSError):
+                loop._open_regular(link)
+        self.assertTrue(any(link in line for line in caught.output),
+                        caught.output)
+
+    def test_a_plain_file_is_unaffected(self):
+        path = os.path.join(self.work, "notes.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("the dossier\n")
+        with loop._open_regular(path) as f:
+            self.assertEqual(f.read(), b"the dossier\n")
+
+    def test_read_notes_refuses_a_symlinked_notes_file(self):
+        os.symlink(self.secret, os.path.join(self.work, "notes.md"))
+        with self.assertLogs("worker", level="WARNING"):
+            self.assertIsNone(loop.read_notes(self.work))
+
+    def test_read_answer_refuses_a_symlinked_answer_file(self):
+        os.symlink(self.secret, os.path.join(self.work, loop.ANSWER_NAME))
+        with self.assertLogs("worker", level="WARNING"):
+            self.assertIsNone(loop.read_answer(self.work))
+
+    def test_upload_refuses_a_symlinked_payload(self):
+        os.symlink(self.secret, os.path.join(self.work, "news.json"))
+
+        class Desk:
+            def open_draft(self):
+                raise AssertionError(
+                    "a symlinked payload must never reach open_draft")
+
+        with self.assertLogs("worker", level="WARNING"):
+            with self.assertRaises(RuntimeError):
+                loop.upload(Desk(), self.work)
+
+    def test_upload_refuses_a_symlinked_tile_and_never_puts_it(self):
+        with open(os.path.join(self.work, "news.json"), "w",
+                  encoding="utf-8") as f:
+            f.write("{}")
+        tiles = os.path.join(self.work, "tiles")
+        os.makedirs(tiles)
+        os.symlink(self.secret, os.path.join(tiles, "a.bin"))
+
+        class Desk:
+            def __init__(self):
+                self.tiles = []
+
+            def open_draft(self):
+                return "d" * 32
+
+            def put_payload(self, draft, data):
+                pass
+
+            def put_tile(self, draft, tile_id, data):
+                self.tiles.append((tile_id, data))
+
+            def put_notes(self, *a, **k):
+                pass
+
+        desk = Desk()
+        with self.assertLogs("worker", level="WARNING"):
+            with self.assertRaises(OSError):
+                loop.upload(desk, self.work)
+        self.assertEqual(desk.tiles, [])
+
+    def test_persist_watchlist_refuses_a_symlinked_watchlist(self):
+        cfg = loop.Settings.from_env(
+            {"CLAUDEPOST_WATCHLIST": os.path.join(self.tmp, "watchlist.json")})
+        os.symlink(self.secret, os.path.join(self.work, loop.WATCHLIST_NAME))
+        with self.assertLogs("worker", level="WARNING"):
+            self.assertFalse(loop.persist_watchlist(cfg, self.work))
+
+    def test_seed_watchlist_does_not_guard_the_operators_own_file(self):
+        # The contrast: seed_watchlist reads cfg.watchlist, the operator's
+        # own file, never touched by a turn -- so it is never routed through
+        # the guard, and a symlink there (the operator's own choice) is still
+        # honoured rather than refused.
+        target = os.path.join(self.tmp, "elsewhere.json")
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["AAAA"], "last": "AAAA"}, f)
+        link = os.path.join(self.tmp, "watchlist.json")
+        os.symlink(target, link)
+        cfg = loop.Settings.from_env({"CLAUDEPOST_WATCHLIST": link})
+        self.assertTrue(loop.seed_watchlist(cfg, self.work))
+
+    def test_upload_calendar_refuses_a_symlinked_book(self):
+        os.symlink(self.secret, os.path.join(self.work, loop.CALENDAR_NAME))
+        with self.assertLogs("worker", level="WARNING"):
+            with self.assertRaises(RuntimeError):
+                loop.upload_calendar(None, self.work)
+
+
 class UploadCalendarTest(unittest.TestCase):
     """What is filed, and the one thing that is refused instead of filed."""
 

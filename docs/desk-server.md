@@ -1263,8 +1263,8 @@ on it is set larger than a deck, a photograph that halftoned to mush.
 
 Two revisions, then it reports the failure with the validator's own words.
 
-**`kind` decides where the turn's `notes.md` goes, and one of the five kinds
-decides it from the disk rather than from itself.** `"file_edition"` always
+**`kind` decides where the turn's `notes.md` goes, and two of the five kinds
+decide it from the disk rather than from themselves.** `"file_edition"` always
 takes the draft path above, and if the run left a `notes.md` in its workdir it
 rides beside the draft (`PUT .../notes.md`) — the dossier behind the page,
 filed the same way whether or not one seemed worth writing. `"research"`

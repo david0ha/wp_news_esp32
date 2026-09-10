@@ -107,7 +107,12 @@ reason is measured rather than assumed: on Docker Desktop for Mac a
 bind-mounted file reported as `-rw------- 0 0` is readable by an unprivileged
 container user anyway, so a mounted `agent.env` would be readable by the very
 user the model runs as. `/proc/<loop pid>/environ` is not — different uid, and
-the kernel enforces that one. `agent/test/image.sh` checks both.
+the kernel enforces that one. Only that second property is one
+`agent/test/image.sh` can check: the bind-mount claim above was measured by
+hand, once, against Docker Desktop for Mac, and there is no longer a mounted
+`agent.env` in this arrangement for a test to check the mode of. What the
+script actually asserts is that no file named `agent.env` exists anywhere in
+the built image, and that `gosu model` cannot read `/proc/<loop pid>/environ`.
 
 **3. Up.**
 

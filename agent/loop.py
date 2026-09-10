@@ -51,6 +51,7 @@ import os
 import pwd
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -559,6 +560,40 @@ def run_claude(cfg: Settings, text: str, workdir: str, extra_env: dict,
     return proc.returncode
 
 
+def _open_regular(path: str):
+    """Open ``path`` for reading, refusing anything ``os.lstat`` does not call
+    a plain file.
+
+    Every read this loop does *back out of* a workdir happens after
+    :func:`own_workdir` has chowned that directory to the turn's own user, so
+    every one of these files was, for the length of the turn, writable by the
+    model rather than by this process. The turn's shell allowlist has no
+    ``Bash`` today, so planting a symlink there is not reachable in practice --
+    but a directory a subprocess owns should not depend on that staying true,
+    and the read side is the cheap place to hold the line: a symlink at
+    ``notes.md`` pointing at, say, ``/etc/shadow`` would otherwise have this
+    root loop open exactly that file and hand its bytes to the desk or the log.
+
+    ``lstat`` rather than ``stat``, on purpose -- ``stat`` follows the
+    symlink and reports on whatever it points at, which is the one thing this
+    check must not do. A regular file's own bytes are read normally; anything
+    else -- a symlink, a fifo, a socket, a device node -- is refused before a
+    single byte of it is touched.
+
+    Raises:
+        OSError: for a missing path, exactly as ``open`` would, and also for a
+            path that exists but is not a regular file -- one exception type,
+            so no caller needs a second branch to tell the two apart.
+    """
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode):
+        LOG.warning("refusing to read %s: not a regular file -- a symlink or "
+                    "other special file was found where the turn's own "
+                    "output was expected", path)
+        raise OSError("refusing to read a non-regular file: %s" % path)
+    return open(path, "rb")
+
+
 def _read_workdir_text(workdir: str, name: str) -> str | None:
     """One text file out of the workdir, capped and decoded forgivingly.
 
@@ -575,7 +610,7 @@ def _read_workdir_text(workdir: str, name: str) -> str | None:
     is not a reason to lose the payload beside it.
     """
     try:
-        with open(os.path.join(workdir, name), "rb") as f:
+        with _open_regular(os.path.join(workdir, name)) as f:
             data = f.read(MAX_NOTES_BYTES)
     except OSError:
         return None
@@ -687,23 +722,29 @@ def file_notes(desk: DeskClient, workdir: str, *, draft: str | None = None,
 def upload(desk: DeskClient, workdir: str) -> str:
     """Open a draft and PUT the payload, every tile, and any notes beside it."""
     payload_path = os.path.join(workdir, "news.json")
-    if not os.path.exists(payload_path):
-        raise RuntimeError("no news.json was produced")
-
-    with open(payload_path, "rb") as f:
-        payload = f.read()
+    try:
+        with _open_regular(payload_path) as f:
+            payload = f.read()
+    except OSError:
+        raise RuntimeError("no news.json was produced") from None
 
     draft = desk.open_draft()
     desk.put_payload(draft, payload)
 
     tiles_dir = os.path.join(workdir, "tiles")
     count = 0
-    if os.path.isdir(tiles_dir):
+    if os.path.isdir(tiles_dir) and not os.path.islink(tiles_dir):
         for name in sorted(os.listdir(tiles_dir)):
             if not name.endswith(".bin"):
                 continue
-            with open(os.path.join(tiles_dir, name), "rb") as f:
-                desk.put_tile(draft, name[:-4], f.read())
+            # Not caught: a tile this loop cannot read is not a photograph
+            # missing from the edition, it is a turn that planted something
+            # where a tile belonged, and the command should fail loudly on it
+            # the same way a missing news.json does, rather than file a page
+            # quietly short one picture.
+            with _open_regular(os.path.join(tiles_dir, name)) as f:
+                tile = f.read()
+            desk.put_tile(draft, name[:-4], tile)
             count += 1
 
     file_notes(desk, workdir, draft=draft)
@@ -740,16 +781,29 @@ def fetch_sheets(desk: DeskClient, draft: str, names, into: str):
     return paths
 
 
-def _read_watchlist(path: str, oversize_msg: str) -> "bytes | None":
+def _read_watchlist(path: str, oversize_msg: str, *,
+                    guard_symlink: bool = False) -> "bytes | None":
     """One capped read of a watch-list file; None when unreadable or oversized.
 
     Unreadable is silent -- a missing file is the documented first run on the
     seed side and no rotation at all on the persist side, and neither is worth
     a warning. Oversized is warned, in the caller's words.
+
+    Args:
+        guard_symlink: True from :func:`persist_watchlist` alone. That call
+            reads ``path`` back out of a workdir :func:`own_workdir` has
+            chowned to the turn's own user, so it is read through
+            :func:`_open_regular` rather than a bare ``open``; the seed side
+            reads the operator's own file, never touched by the turn, and has
+            no need of the check.
     """
     try:
-        with open(path, "rb") as f:
-            data = f.read(MAX_WATCHLIST_BYTES + 1)
+        if guard_symlink:
+            with _open_regular(path) as f:
+                data = f.read(MAX_WATCHLIST_BYTES + 1)
+        else:
+            with open(path, "rb") as f:
+                data = f.read(MAX_WATCHLIST_BYTES + 1)
     except OSError:
         return None
     if len(data) > MAX_WATCHLIST_BYTES:
@@ -802,7 +856,7 @@ def persist_watchlist(cfg: Settings, workdir: str) -> bool:
     """
     path = os.path.join(workdir, WATCHLIST_NAME)
     data = _read_watchlist(path, "the watch list came back too large to be "
-                           "one; not kept")
+                           "one; not kept", guard_symlink=True)
     if data is None:
         return False
     try:
@@ -1134,7 +1188,7 @@ def upload_calendar(desk: DeskClient, workdir: str) -> dict:
 
     path = os.path.join(workdir, CALENDAR_NAME)
     try:
-        with open(path, "rb") as f:
+        with _open_regular(path) as f:
             data = f.read(MAX_CALENDAR_BYTES + 1)
     except OSError:
         raise RuntimeError("no calendar.json was produced") from None
