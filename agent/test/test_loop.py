@@ -1231,6 +1231,17 @@ class ArgvTest(unittest.TestCase):
         self.assertFalse(cfg.strict_mcp)
         self.assertNotIn("--strict-mcp-config", loop.claude_argv(cfg, "/work"))
 
+    def test_an_answer_only_turn_is_not_told_it_is_filing_a_newspaper(self):
+        # The calendar note's argument, on the third job: a turn told "you are
+        # filing one newspaper edition" and then handed rules that say most
+        # messages file nothing is a nudge toward writing the news.json that
+        # rule 2 just refused.
+        argv = loop.claude_argv(loop.Settings.from_env({}), "/work", "ask")
+        note = argv[argv.index("--append-system-prompt") + 1]
+        self.assertIn("answering one message about the newspaper", note)
+        self.assertNotIn("filing one newspaper edition", note)
+        self.assertIn("Do not dispatch subagents", note)
+
     def test_the_child_may_not_delegate(self):
         # The third live run failed here and produced nothing but a skeleton:
         # the child read the operator's own global CLAUDE.md -- which is about

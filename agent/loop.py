@@ -218,10 +218,21 @@ SYSTEM_NOTE = _SOLO_NOTE.format(job="filing one newspaper edition", work="pages"
 CALENDAR_SYSTEM_NOTE = _SOLO_NOTE.format(job="compiling one event book",
                                          work="entries")
 
+#: The same note for the third job. "Answer" rather than "pages", because a
+#: turn told it is filing a newspaper and then handed rules under which most
+#: messages file nothing has been nudged toward writing the very ``news.json``
+#: rule 2 declined -- the same mistake the calendar note was split out to fix.
+ASK_SYSTEM_NOTE = _SOLO_NOTE.format(job="answering one message about the newspaper",
+                                    work="answer")
+
 
 def system_note(kind: str) -> str:
-    """Which solo note this run gets. One `if`, in one place."""
-    return CALENDAR_SYSTEM_NOTE if kind == "calendar" else SYSTEM_NOTE
+    """Which solo note this run gets. One decision, in one place."""
+    if kind == CALENDAR_KIND:
+        return CALENDAR_SYSTEM_NOTE
+    if kind == ASK_KIND:
+        return ASK_SYSTEM_NOTE
+    return SYSTEM_NOTE
 
 #: The ceiling on the claim backoff. Five minutes is long enough that a desk
 #: down overnight costs a handful of log lines rather than thousands, and short

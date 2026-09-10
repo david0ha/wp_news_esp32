@@ -390,6 +390,85 @@ class CalendarLanguageSectionTest(unittest.TestCase):
         self.assertIn("$EDITION_DIR/calendar.json", text)
 
 
+class AskSectionTest(unittest.TestCase):
+    """The three rules, and where they sit.
+
+    Where matters as much as what. The section is below the contract, so the
+    length budgets are read first and a message cannot argue with them; below
+    the operator's standing instructions, so a house style still applies; and
+    above the message, because the message is the thing being answered and a
+    model reading a long prompt answers the end of it.
+    """
+
+    CONTRACT = "# The contract\n\n## The language\n\nwrite in the edition's language\n"
+
+    def _prompt(self, text="why did it move?", **kw):
+        return prompt.build_prompt(self.CONTRACT, [], [], text, kind="ask", **kw)
+
+    def test_the_three_rules_are_all_there(self):
+        out = self._prompt()
+        self.assertIn("Write the answer to\n   `answer.md`", out)
+        self.assertIn("Decide whether the message asks for the paper to change", out)
+        self.assertIn("copy `current/news.json` to `news.json`", out)
+        self.assertIn("Do not write\n   `news.json` for an answer-only message.", out)
+
+    def test_the_files_it_was_given_are_named(self):
+        out = self._prompt()
+        self.assertIn("current/news.json", out)
+        self.assertIn("current/tiles/", out)
+        self.assertIn("previous.md", out)
+
+    def test_the_order_is_contract_then_rules_then_message(self):
+        out = prompt.build_prompt(self.CONTRACT, [("house.md", "keep it dry")],
+                                  [{"rule": "never lead on a rumour"}],
+                                  "lead with the lawsuit", kind="ask")
+        self.assertLess(out.index("# The contract"), out.index("keep it dry"))
+        self.assertLess(out.index("keep it dry"), out.index("never lead on a rumour"))
+        self.assertLess(out.index("never lead on a rumour"),
+                        out.index("answering a message"))
+        self.assertLess(out.index("answering a message"),
+                        out.index("lead with the lawsuit"))
+
+    def test_the_contract_still_comes_first_and_whole(self):
+        # The test the spec asks for by name: the contract's own "## The
+        # language" section has to be in there, because rule 3 rewrites under
+        # the same budgets as a morning edition.
+        self.assertIn("## The language", self._prompt())
+
+    def test_the_phones_language_is_a_fallback_and_not_an_instruction(self):
+        # Rule 1 is "the language it was written in". `lang` is what the phone
+        # was in, which only decides a message that says nothing either way --
+        # a ticker alone, a number.
+        out = self._prompt(ask_lang="ko")
+        self.assertIn("the language it was written in", out)
+        self.assertIn("fall back to Korean (한국어)", out)
+
+    def test_no_phone_language_leaves_the_sentence_alone(self):
+        out = self._prompt()
+        self.assertIn("Answer the message in the language it was written in.", out)
+        self.assertNotIn("fall back to", out)
+
+    def test_the_tail_asks_for_the_answer_always_and_the_page_conditionally(self):
+        out = self._prompt()
+        self.assertIn("answer.md -- always", out.replace("—", "--"))
+        self.assertIn("ONLY if", out)
+        self.assertIn("write news.json LAST", out)
+
+    def test_no_other_kind_gets_any_of_this(self):
+        for kind in ("file_edition", "research", "custom", "calendar"):
+            out = prompt.build_prompt(self.CONTRACT, [], [], "t", kind=kind)
+            self.assertNotIn("answer.md", out, kind)
+            self.assertNotIn("current/news.json", out, kind)
+
+    def test_an_edition_written_in_korean_still_gets_its_own_section(self):
+        # `lang` (the paper's) and `ask_lang` (the phone's) are two settings and
+        # a revision uses the first: the paper does not change language because
+        # the message was typed in English.
+        out = self._prompt(lang="ko", ask_lang="en")
+        self.assertIn("# The edition's language", out)
+        self.assertIn("Write every reader-facing string in Korean", out)
+
+
 class SheetPromptTest(unittest.TestCase):
     """The two prompts that follow a proof."""
 
