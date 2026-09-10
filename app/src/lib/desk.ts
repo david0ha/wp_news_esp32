@@ -358,7 +358,7 @@ export interface DeskClient {
   forgetPushDevice(token: string): Promise<void>
   /** Put a message on the desk's queue. Answers the row the desk created. */
   postCommand(body: AskBody): Promise<Command>
-  /** One row, or `null` for an id the desk no longer has. */
+  /** One row, or `null` for an id the desk has never held under any status. */
   command(id: string): Promise<Command | null>
   /** The worker's answer, as markdown — or `null` for a command that finished without writing one. */
   commandNotes(id: string): Promise<string | null>
