@@ -37,7 +37,9 @@ export default function RootLayout() {
 
   // A tap on the desk's "your answer is ready" opens the conversation it is about. Mounted at the
   // ROOT and not on a screen: the tap that matters most is the one on a cold process, where no
-  // screen is mounted yet and the notification is the reason the app is starting at all.
+  // screen is mounted yet and the notification is the reason the app is starting at all —
+  // `addNotificationTapListener` covers exactly that case by also checking the library's
+  // last-response snapshot, not just the live event.
   useEffect(() => addNotificationTapListener((route) => router.push(route)), [router])
 
   if (!fontsLoaded && !fontError) return null

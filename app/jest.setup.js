@@ -39,6 +39,11 @@ jest.mock('expo-localization', () => ({
 // notification flow drives `turnOnNotifications` with its own fakes, so what is asserted is which
 // call was made and what the switch did with the answer — never that a notification arrived.
 jest.mock('expo-notifications', () => ({
+  // Without this, Babel's CJS interop clones a separate namespace object for every file that does
+  // `import * as Notifications from 'expo-notifications'`, so `jest.spyOn(Notifications, ...)` in
+  // a test file mutates a copy `notify.ts`'s own import never sees. `__esModule: true` tells the
+  // interop this object IS the module already, so every importer shares the one object.
+  __esModule: true,
   getPermissionsAsync: async () => ({
     status: 'undetermined',
     granted: false,
@@ -59,6 +64,9 @@ jest.mock('expo-notifications', () => ({
   // cannot happen under Jest — so this hands back a subscription that removes cleanly and never
   // fires, which is what `_layout.tsx`'s effect needs to mount and unmount.
   addNotificationResponseReceivedListener: () => ({ remove: () => undefined }),
+  // The cold-launch read `addNotificationTapListener` makes alongside the listener above. `null`
+  // is the honest answer under Jest: no process was ever launched by a notification here.
+  getLastNotificationResponse: () => null,
   IosAuthorizationStatus: {
     NOT_DETERMINED: 0,
     DENIED: 1,

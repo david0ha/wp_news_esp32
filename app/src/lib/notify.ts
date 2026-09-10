@@ -242,6 +242,14 @@ export function findRegistration(doc: PushDoc, token: string): NotifyPrefs | nul
  * document over one key it does not know, and a GET's entry carries `last_seen` — which the desk
  * stamps itself — so echoing one back is a 400 the owner would read as their switch not working.
  * `quiet` is OMITTED rather than sent as null when there is none, matching what the desk writes.
+ *
+ * `prefs` spans all of `PUSH_KINDS` — the desk's `_KIND_KEYS` allowlist takes all six, `answer`
+ * included. `lead` spans only `LEAD_KINDS` — the desk's `_lead()` validates that document against
+ * `_LEAD_KEYS`, five keys with `answer` deliberately excluded, and refuses the whole document over
+ * one key it does not know. Mapping `lead` over `PUSH_KINDS` instead would put `answer: []` in
+ * every registration and every preference change, from every phone, and turn each one into a
+ * `bad_push` 400 — the two fields answer to two different allowlists on the desk and must be
+ * built from two different lists here.
  */
 export function deviceBody(
   token: string,
@@ -254,7 +262,7 @@ export function deviceBody(
     platform,
     tz,
     prefs: { ...prefs.prefs },
-    lead: Object.fromEntries(PUSH_KINDS.map((k) => [k, [...prefs.lead[k]]])),
+    lead: Object.fromEntries(LEAD_KINDS.map((k) => [k, [...prefs.lead[k]]])),
   }
   if (prefs.quiet) body.quiet = { ...prefs.quiet }
   return body
@@ -963,7 +971,7 @@ export function phoneZone(): string {
 export function commandIdOfPush(data: unknown): string | null {
   if (data === null || typeof data !== 'object') return null
   const id = (data as Record<string, unknown>).command_id
-  return typeof id === 'string' && id !== '' ? id : null
+  return typeof id === 'string' && id.trim() !== '' ? id : null
 }
 
 /** Where a tap on that push should land, or `null` for one this app has no screen for. */
@@ -979,11 +987,31 @@ export function askRouteForPush(data: unknown): string | null {
  * around the library, the same shape as `readPermission` and `fetchPushToken` above and for the
  * same reason — nothing in this app can render a screen under test, so nothing decided inside a
  * listener would be argued anywhere but in prose.
+ *
+ * COVERS TWO DELIVERY PATHS, NOT ONE. `addNotificationResponseReceivedListener` alone misses the
+ * tap that matters most: the one that launches a killed process. That response can be delivered
+ * by the OS before this effect has subscribed, and the listener does not replay it — the library's
+ * own mitigation is `getLastNotificationResponse()`, read once, synchronously, at the same moment
+ * the listener is attached. Both paths are wired through the same `routeOnce`, keyed on the
+ * response's own `identifier`, because on some platforms the response that launched the app is
+ * ALSO re-delivered to the listener once it is registered — without the guard, a cold-launch tap
+ * would route twice.
  */
 export function addNotificationTapListener(go: (route: string) => void): () => void {
-  const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+  const routed = new Set<string>()
+
+  const routeOnce = (response: Notifications.NotificationResponse) => {
+    const id = response.notification.request.identifier
+    if (routed.has(id)) return
     const route = askRouteForPush(response.notification.request.content.data)
-    if (route !== null) go(route)
-  })
+    if (route === null) return
+    routed.add(id)
+    go(route)
+  }
+
+  const last = Notifications.getLastNotificationResponse()
+  if (last) routeOnce(last)
+
+  const sub = Notifications.addNotificationResponseReceivedListener(routeOnce)
   return () => sub.remove()
 }
