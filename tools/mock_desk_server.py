@@ -11,7 +11,7 @@ fixture, the tile directory and the ETag recipe the real desk uses; a second
 snapshot here would be a second thing to keep in step with news_mock.c, which
 is the one equivalence this repository tests for in both directions.
 
-    python3 tools/mock_desk_server.py --port 8080 --token dev-operator-token
+    python3 tools/mock_desk_server.py --port 8199 --token dev-operator-token
     python3 tools/mock_desk_server.py --fail-symbol TSLA   # one page fails
 
 Not a test and not a server anybody should point a board at: there is no
@@ -232,7 +232,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8080)
+    # 8199, not 8080: this machine's live desk already holds 127.0.0.1:8080, and binding
+    # 0.0.0.0:8080 here would succeed silently while every request still reached that other
+    # server first — see task-14-report.md's tooling notes.
+    ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="dev-operator-token")
     ap.add_argument("--fail-symbol", default=None,

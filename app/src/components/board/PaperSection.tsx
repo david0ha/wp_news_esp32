@@ -8,8 +8,13 @@ import { getDeskToken } from '../../lib/deskToken'
 import { getDeskBaseUrl } from '../../lib/store'
 import { markEditionStale } from '../../lib/edition/invalidate'
 import { loadPapers, usePapers } from '../../lib/papers/list'
-import { isPaperRowDisabled, orderPapers, paperAgeLabel } from '../../lib/papers/order'
-import { runPaperPublish } from '../../lib/papers/publish'
+import { isPaperRowDisabled, orderPapers, paperStatusLine } from '../../lib/papers/order'
+import {
+  publishNoteText,
+  publishNoteTone,
+  runPaperPublish,
+  type PublishNote,
+} from '../../lib/papers/publish'
 import { fill, useStrings } from '../../i18n'
 import { colors, fonts, layout, space, tabular } from '../../theme'
 
@@ -29,7 +34,9 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
   const t = useStrings()
   const { ready, doc } = usePapers()
   const [busy, setBusy] = useState<string | null>(null)
-  const [note, setNote] = useState<{ tone: 'ok' | 'error'; message: string } | null>(null)
+  // THE OUTCOME, NOT ITS SENTENCE — see `publishNoteText`. A resolved string here would keep
+  // speaking whatever language was active at the moment of the publish.
+  const [note, setNote] = useState<PublishNote | null>(null)
 
   // The list rides this tab's focus as well as Today's. `loadPapers` reads its own throttle, so
   // the second caller costs one storage read inside the window.
@@ -54,14 +61,14 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
       })
       setBusy(null)
       if (result.kind === 'published') {
-        setNote({ tone: 'ok', message: fill(t.papers.board.published, { symbol: paper.symbol }) })
+        setNote({ kind: 'published', symbol: paper.symbol })
       } else if (result.kind === 'no_paper') {
-        setNote({ tone: 'error', message: fill(t.papers.board.gone, { symbol: paper.symbol }) })
+        setNote({ kind: 'no_paper', symbol: paper.symbol })
       } else {
-        setNote({ tone: 'error', message: fill(t.papers.board.failed, { detail: result.error }) })
+        setNote({ kind: 'failed', detail: result.error })
       }
     },
-    [busy, pollBoard, t],
+    [busy, pollBoard],
   )
 
   const confirm = useCallback(
@@ -94,18 +101,18 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
       <Text style={styles.sectionTitle}>{t.papers.board.title}</Text>
       <Card style={styles.rows}>
         {papers.map((paper, i) => {
-          const age = paperAgeLabel(paper.createdAt, now)
-          const none = paper.editionId === null
+          const status = paperStatusLine(paper, now, t)
           const disabled = isPaperRowDisabled(paper, busy)
           return (
             <Pressable
               key={paper.symbol}
               accessibilityRole="button"
               accessibilityState={{ disabled, selected: paper.onBoard }}
-              accessibilityLabel={fill(
-                paper.onBoard ? t.papers.board.a11y.onBoard : t.papers.board.a11y.row,
-                { name: paper.name || paper.symbol, age: age ?? '' },
-              )}
+              accessibilityLabel={
+                paper.onBoard
+                  ? fill(t.papers.board.a11y.onBoard, { name: paper.name || paper.symbol })
+                  : status.a11y
+              }
               // A row with no paper is DRAWN AND DEAD. Dropping it would make a company that is on
               // the owner's watchlist absent from a list titled after their watchlist.
               disabled={disabled}
@@ -115,7 +122,7 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
               <View style={styles.rowText}>
                 <Text style={styles.symbol}>{paper.symbol}</Text>
                 <Text style={styles.meta} numberOfLines={1}>
-                  {none ? t.papers.board.noPaper : [paper.name, age].filter(Boolean).join(' · ')}
+                  {status.text}
                 </Text>
               </View>
               {paper.onBoard ? (
@@ -127,7 +134,9 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
       </Card>
       <Text style={styles.note}>{t.papers.board.help}</Text>
       {note !== null ? (
-        <Text style={[styles.note, note.tone === 'error' && styles.error]}>{note.message}</Text>
+        <Text style={[styles.note, publishNoteTone(note) === 'error' && styles.error]}>
+          {publishNoteText(note, t)}
+        </Text>
       ) : null}
     </View>
   )

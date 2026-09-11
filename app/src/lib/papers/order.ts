@@ -6,6 +6,7 @@
 
 import { formatAge } from '../format'
 import { type Paper, type PapersDoc } from '../desk'
+import { fill, type Strings } from '../../i18n'
 
 /**
  * Pager order: the board's paper first, then the desk's order untouched.
@@ -115,4 +116,50 @@ export function paperKey(paper: Paper): string {
  */
 export function isPaperRowDisabled(paper: Paper, busy: string | null): boolean {
   return paper.editionId === null || paper.onBoard || busy !== null
+}
+
+/**
+ * The one fact about a paper's freshness, and the one sentence a screen reader is given for it —
+ * a row with no edition yet, and a row whose paper exists but carries no timestamp, are two
+ * different states and each gets exactly ONE phrasing, used by both the pager header
+ * (`PaperPageHeader`) and the Board tab's row (`PaperSection`). Before this existed the two
+ * surfaces drifted: the pager called a paper-less row's date "unknown" — which claims a paper
+ * exists and its date was lost — while the Board tab correctly said the paper was never written;
+ * and the Board row's own accessibility label filled `{age}` with an empty string for that same
+ * row, reading as an unfinished sentence to VoiceOver. Both bugs were the same root cause — no
+ * shared place decided what "no paper" sounds like — so there is now exactly one.
+ *
+ * `text` is what appears on screen: `papers.board.noPaper` alone for a paper-less row (matching
+ * the Board tab's existing full replacement, not a name prefixed onto it), otherwise the name and
+ * age (or `papers.page.noAge`) joined the way both surfaces already join them.
+ *
+ * `a11y` is the sentence read aloud for a NORMAL row (not the one on the board — that keeps its
+ * own `a11y.onBoard` phrasing, which was never broken). It reuses the exact same words as `text`
+ * rather than inventing a second way to say "not written yet".
+ */
+export function paperStatusLine(
+  paper: Paper,
+  now: number,
+  t: Strings,
+): { text: string; a11y: string } {
+  const name = paper.name || paper.symbol
+  if (paper.editionId === null) {
+    return { text: t.papers.board.noPaper, a11y: [name, t.papers.board.noPaper].join(', ') }
+  }
+  const age = paperAgeLabel(paper.createdAt, now) ?? t.papers.page.noAge
+  return {
+    text: [paper.name, age].filter(Boolean).join(' · '),
+    a11y: fill(t.papers.board.a11y.row, { name, age }),
+  }
+}
+
+/**
+ * Which chips a paper's header may show. `on_board` and `stale` are independent facts (the spec's
+ * §5 wire shape carries both as separate booleans) and the currently-printed paper can be older
+ * than the desk's own cadence — that is the ONE case a reader most needs the stale chip, and it
+ * was being hidden by the on-board chip's presence. The one thing that overrides `stale` outright
+ * is having no paper at all: "due a refresh" is a claim about a paper that exists.
+ */
+export function paperHeaderChips(paper: Paper): { onBoard: boolean; stale: boolean } {
+  return { onBoard: paper.onBoard, stale: paper.editionId !== null && paper.stale }
 }

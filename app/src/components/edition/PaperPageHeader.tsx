@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { Chip } from '../Chip'
-import { paperAgeLabel } from '../../lib/papers/order'
+import { paperHeaderChips, paperStatusLine } from '../../lib/papers/order'
 import { type Paper } from '../../lib/desk'
 import { useStrings } from '../../i18n'
 import { colors, fonts, layout, space, tabular } from '../../theme'
@@ -20,22 +20,23 @@ import { colors, fonts, layout, space, tabular } from '../../theme'
  */
 export function PaperPageHeader({ paper, now }: { paper: Paper; now: number }) {
   const t = useStrings()
-  const age = paperAgeLabel(paper.createdAt, now)
+  const status = paperStatusLine(paper, now, t)
+  const chips = paperHeaderChips(paper)
 
   return (
     <View style={styles.root}>
       <View style={styles.row}>
         <Text style={styles.symbol}>{paper.symbol}</Text>
-        {paper.onBoard ? <Chip label={t.papers.page.onBoard} icon="tv" tone="accent" /> : null}
+        {chips.onBoard ? <Chip label={t.papers.page.onBoard} icon="tv" tone="accent" /> : null}
         {/* The DESK's judgement about whether this paper is due a rewrite, carried through rather
             than recomputed: the phone does not know the cadence the desk is pacing at, and a
-            second opinion here could contradict the row on the Board tab. */}
-        {paper.stale && !paper.onBoard ? (
-          <Chip label={t.papers.page.stale} icon="time" tone="warn" />
-        ) : null}
+            second opinion here could contradict the row on the Board tab. Independent of the
+            on-board chip above — a paper can be both the one on the glass AND overdue for a
+            rewrite, and a reader looking at the current page is exactly who needs to know that. */}
+        {chips.stale ? <Chip label={t.papers.page.stale} icon="time" tone="warn" /> : null}
       </View>
       <Text style={styles.meta} numberOfLines={1}>
-        {[paper.name, age ?? t.papers.page.noAge].filter(Boolean).join(' · ')}
+        {status.text}
       </Text>
     </View>
   )

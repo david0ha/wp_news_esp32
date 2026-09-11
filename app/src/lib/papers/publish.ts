@@ -7,6 +7,7 @@
 // a thing that already happened, and the owner's next act would be to tap it again.
 
 import { humanDeskError, type DeskClient } from '../desk'
+import { fill, type Strings } from '../../i18n'
 
 export type PaperPublishResult =
   | { kind: 'published'; editionId: string }
@@ -65,4 +66,38 @@ export async function runPaperPublish(
   if (deps.pollBoard !== null) await deps.pollBoard().catch(() => undefined)
 
   return { kind: 'published', editionId: outcome.editionId }
+}
+
+/**
+ * What `PaperSection` shows after a publish attempt, held as the fact plus its params rather than
+ * as an already-rendered sentence.
+ *
+ * THE BUG THIS REPLACES: the section used to call `fill(t.papers.board.published, {symbol})` at
+ * the moment the publish settled and keep the RESULT in `useState`. A component's state survives a
+ * language switch; a plain string inside it does not follow one. Reading in Korean minutes after a
+ * publish in English kept showing the English sentence beside otherwise-Korean copy. Holding the
+ * outcome instead — `symbol`/`detail`, not a sentence — and resolving through `publishNoteText` at
+ * every render fixes it the same way `desk.ts`'s `note` / `cadenceNote` fields already do: those
+ * are a bare discriminant too, resolved to words only where the current `Strings` is in scope.
+ */
+export type PublishNote =
+  | { kind: 'published'; symbol: string }
+  | { kind: 'no_paper'; symbol: string }
+  | { kind: 'failed'; detail: string }
+
+/** `'ok'` only for a completed publish — `no_paper` and `failed` are both something to fix. */
+export function publishNoteTone(note: PublishNote): 'ok' | 'error' {
+  return note.kind === 'published' ? 'ok' : 'error'
+}
+
+/** The sentence for a `PublishNote`, in whatever language `t` currently is. */
+export function publishNoteText(note: PublishNote, t: Strings): string {
+  switch (note.kind) {
+    case 'published':
+      return fill(t.papers.board.published, { symbol: note.symbol })
+    case 'no_paper':
+      return fill(t.papers.board.gone, { symbol: note.symbol })
+    case 'failed':
+      return fill(t.papers.board.failed, { detail: note.detail })
+  }
 }

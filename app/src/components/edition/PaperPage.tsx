@@ -68,7 +68,9 @@ export function PaperPage({
   onOpenTile: (tile: Tile) => void
 }) {
   const t = useStrings()
-  const page = usePaperPage(paper, nearby)
+  // Bumped by the failed page's own "Try again" — see `usePaperPage`'s comment on `retryToken`.
+  const [retryToken, setRetryToken] = useState(0)
+  const page = usePaperPage(paper, nearby, retryToken)
   const [chip, setChip] = useState<ChipName>('all')
 
   const edition = page.status === 'ready' ? page.cached.edition : null
@@ -129,7 +131,10 @@ export function PaperPage({
     return (
       <View style={[styles.page, { width }]}>
         <PaperPageHeader paper={paper} now={Date.now()} />
-        <ScreenMessage error={fill(t.papers.pageFailed, { detail: page.error })} />
+        <ScreenMessage
+          error={fill(t.papers.pageFailed, { detail: page.error })}
+          onRetry={() => setRetryToken((n) => n + 1)}
+        />
       </View>
     )
   }
@@ -191,6 +196,11 @@ export function PaperPage({
 const styles = StyleSheet.create({
   page: {
     flex: 1,
+    // Each page is one `FlatList` item at a fixed `width`, side by side with its neighbours in the
+    // same row — without this, a child that renders even a pixel past that width (the chip row's
+    // horizontal `ScrollView`, at rest, on some layouts) paints into the page beside it rather than
+    // being cut at the boundary the pager itself promises every page.
+    overflow: 'hidden',
   },
   scroll: {
     paddingBottom: space.xxl,

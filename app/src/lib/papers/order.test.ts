@@ -4,10 +4,14 @@ import {
   isPaperRowDisabled,
   orderPapers,
   paperAgeLabel,
+  paperHeaderChips,
   paperKey,
+  paperStatusLine,
   papersPagerView,
 } from './order'
 import { setActiveLanguage } from '../../i18n'
+import { en } from '../../i18n/en'
+import { ko } from '../../i18n/ko'
 import { type Paper, type PapersDoc } from '../desk'
 
 const paper = (over: Partial<Paper> = {}): Paper => ({
@@ -184,5 +188,87 @@ describe('isPaperRowDisabled', () => {
 
   it('is enabled for an ordinary tappable row', () => {
     expect(isPaperRowDisabled(paper(), null)).toBe(false)
+  })
+})
+
+describe('paperStatusLine', () => {
+  const NOW = 1_757_021_600_000
+
+  it('names a real paper as name and age, joined', () => {
+    expect(paperStatusLine(paper({ createdAt: NOW - 6 * 3600_000 }), NOW, en)).toEqual({
+      text: 'SanDisk · 6h ago',
+      a11y: 'SanDisk, paper written 6h ago',
+    })
+  })
+
+  // D1 / D1b / D1c — a symbol with no paper yet is a real, expected state (§5), and it must say
+  // the SAME thing the Board tab already says for it: `papers.board.noPaper`, in both the pager
+  // header's text AND the Board row's accessibility sentence. Before this helper existed the
+  // header said "Written at an unknown time" — which claims a paper exists and its date was
+  // lost — and the Board row's a11y label filled `{age}` with an empty string, reading as an
+  // unfinished sentence to VoiceOver.
+  it('says exactly "Not written yet" for a paper-less row — no name prefix, matching the Board tab', () => {
+    const row = paper({ editionId: null, createdAt: null })
+    expect(paperStatusLine(row, NOW, en).text).toBe(en.papers.board.noPaper)
+    expect(paperStatusLine(row, NOW, en).text).not.toMatch(/unknown/i)
+  })
+
+  it('finishes the accessibility sentence for a paper-less row instead of trailing off', () => {
+    const row = paper({ editionId: null, createdAt: null })
+    expect(paperStatusLine(row, NOW, en).a11y).toBe('SanDisk, Not written yet')
+    expect(paperStatusLine(row, NOW, en).a11y.endsWith(' ')).toBe(false)
+  })
+
+  it('reuses the exact Korean noPaper phrase, not a second translation', () => {
+    const row = paper({ editionId: null, createdAt: null })
+    expect(paperStatusLine(row, NOW, ko).text).toBe(ko.papers.board.noPaper)
+    expect(paperStatusLine(row, NOW, ko).a11y).toBe(`SanDisk, ${ko.papers.board.noPaper}`)
+  })
+
+  it('falls back to the symbol when the desk sent no name, for a paper-less row too', () => {
+    const row = paper({ name: '', editionId: null, createdAt: null })
+    expect(paperStatusLine(row, NOW, en).a11y).toBe('SNDK, Not written yet')
+  })
+
+  it('still says "written at an unknown time" for a paper that exists but carries no timestamp', () => {
+    // Different from a paper-less row: this company HAS a paper, the desk just sent no
+    // `created_at` for it. That is `paperAgeLabel`'s existing `noAge` case and stays as it was.
+    const row = paper({ createdAt: null })
+    expect(paperStatusLine(row, NOW, en).text).toBe('SanDisk · Written at an unknown time')
+  })
+})
+
+describe('paperHeaderChips', () => {
+  it('shows on-board alone for a fresh paper that is on the board', () => {
+    expect(paperHeaderChips(paper({ onBoard: true, stale: false }))).toEqual({
+      onBoard: true,
+      stale: false,
+    })
+  })
+
+  // D3 — on_board and stale are independent facts (spec §5) and a paper can be both the one on
+  // the glass AND overdue for a rewrite. The header used to hide the stale chip whenever on-board
+  // was true, which meant the one page actually on the panel could never tell you it was stale.
+  it('shows BOTH chips when a paper is on the board and also stale', () => {
+    expect(paperHeaderChips(paper({ onBoard: true, stale: true }))).toEqual({
+      onBoard: true,
+      stale: true,
+    })
+  })
+
+  it('shows stale alone for an overdue paper that is not on the board', () => {
+    expect(paperHeaderChips(paper({ onBoard: false, stale: true }))).toEqual({
+      onBoard: false,
+      stale: true,
+    })
+  })
+
+  // D1c — "due a refresh" is a claim about a paper that exists. A row with no edition must never
+  // show it, whatever the desk happened to send in `stale` for that row.
+  it('never shows the stale chip for a symbol with no paper, even if the desk marked it stale', () => {
+    expect(paperHeaderChips(paper({ editionId: null, stale: true }))).toEqual({
+      onBoard: false,
+      stale: false,
+    })
   })
 })

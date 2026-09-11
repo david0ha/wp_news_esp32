@@ -587,6 +587,19 @@ function LanguagePicker() {
 type Toned = { tone: 'ok' | 'info' | 'error'; message: string }
 
 /**
+ * `langMsg`'s own shape, and not `Toned`: the two SUCCESS notes it carries — a language write and
+ * a cadence write — are fixed sentences with no data of their own, so the `ok` arm names which one
+ * happened (`kind`) rather than the sentence itself. A resolved string in `useState` does not
+ * follow a language switch — `s` at the moment of the write is not `s` a screen re-render later —
+ * which is exactly the bug this shape rules out: read at every render through the CURRENT `s`,
+ * the same way `note` and `cadenceNote` below already resolve their own discriminants at draw
+ * time rather than at the moment the desk answered. The `error` arm keeps a plain message because
+ * `humanDeskError` already resolves through the desk's own error catalogue at throw time — a
+ * different, unreported concern than the one these two notes had.
+ */
+type LangMsg = { tone: 'ok'; kind: 'language' | 'cadence' } | { tone: 'error'; message: string }
+
+/**
  * The desk: its address, an operator token, and the language the NEWSPAPER is written in.
  *
  * This is the app's first authenticated call to anything (`lib/desk.ts`). Everything else the app
@@ -637,7 +650,7 @@ function DeskSection({
   const [settings, setSettings] = useState<DeskSettings | null>(null)
   const lang = settings?.lang ?? null
   const [busy, setBusy] = useState(false)
-  const [langMsg, setLangMsg] = useState<Toned | null>(null)
+  const [langMsg, setLangMsg] = useState<LangMsg | null>(null)
   /**
    * WHICH control has already reported that this phone could not be taken off the desk's list.
    *
@@ -850,7 +863,7 @@ function DeskSection({
       })
       if (!alive.current) return
       setSettings(written)
-      setLangMsg({ tone: 'ok', message: s.settings.desk.languageSaved })
+      setLangMsg({ tone: 'ok', kind: 'language' })
     } catch (e) {
       if (alive.current) setLangMsg({ tone: 'error', message: humanDeskError(e) })
     } finally {
@@ -873,7 +886,7 @@ function DeskSection({
       })
       if (!alive.current) return
       setSettings(next)
-      setLangMsg({ tone: 'ok', message: s.settings.desk.paperRefreshSaved })
+      setLangMsg({ tone: 'ok', kind: 'cadence' })
     } catch (e) {
       if (alive.current) setLangMsg({ tone: 'error', message: humanDeskError(e) })
     } finally {
@@ -1010,7 +1023,15 @@ function DeskSection({
         ))}
       </View>
       {cadenceNote !== null ? <Text style={styles.help}>{cadenceNote}</Text> : null}
-      {langMsg ? <Text style={TONE[langMsg.tone]}>{langMsg.message}</Text> : null}
+      {langMsg ? (
+        <Text style={TONE[langMsg.tone]}>
+          {langMsg.tone === 'ok'
+            ? langMsg.kind === 'language'
+              ? s.settings.desk.languageSaved
+              : s.settings.desk.paperRefreshSaved
+            : langMsg.message}
+        </Text>
+      ) : null}
     </Section>
   )
 }

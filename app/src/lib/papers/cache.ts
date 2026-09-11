@@ -89,8 +89,15 @@ export function paperPageOf(input: {
  *
  * The fetch is skipped outright when the cache already holds this edition — see the header: an
  * edition id is a content fingerprint, so there is nothing a revalidation could learn.
+ *
+ * `retryToken` exists for exactly one caller — the "Try again" the failed-page branch of
+ * `PaperPage` now offers, matching the retry every other failure surface in this app already has
+ * (the single-page Today, the Board tab, the desk row in Settings). Nothing else in this hook
+ * depends on it: `editionId`/`active` unchanged means the cache is still a miss and the previous
+ * attempt is still the answer, so a retry has to be a genuine, distinct dependency to make the
+ * effect run again rather than a `useState` this hook would have to reset on its own.
  */
-export function usePaperPage(paper: Paper, active: boolean): PaperPageState {
+export function usePaperPage(paper: Paper, active: boolean, retryToken = 0): PaperPageState {
   const editionId = paper.editionId
   const [cached, setCached] = useState<CachedEdition | null>(() =>
     editionId === null ? null : readPaperCache(editionId),
@@ -150,7 +157,7 @@ export function usePaperPage(paper: Paper, active: boolean): PaperPageState {
     return () => {
       alive = false
     }
-  }, [editionId, active])
+  }, [editionId, active, retryToken])
 
   return paperPageOf({ paper, cached, error })
 }
