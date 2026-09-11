@@ -52,6 +52,12 @@ CLAIM_WAIT = 60
 #: before a trailing newline, and that is not a directory name.
 DESK_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
+#: The commit target that records an edition without touching the board's
+#: pointers. One word, in one place, because `loop` passes it and this module
+#: sends it -- a literal in both files is a typo that reaches the desk as a
+#: board commit, which publishes to the glass.
+PAPER_TARGET = "paper"
+
 #: The desk's own cap on a note, from ``notes.MAX_NOTES_BYTES`` -- a quarter of
 #: a megabyte, because a phone fetches the whole of it through a tunnel in one
 #: go. Duplicated rather than imported: the worker and the desk are two ends
@@ -383,9 +389,43 @@ class DeskClient:
             raise self._fail("proof", status, doc)
         return doc
 
-    def commit(self, draft: str):
-        """Turn a proofed draft into an edition. Returns what the desk did with it."""
-        status, doc = self._json("POST", "/api/drafts/%s/commit" % draft, {}, timeout=900)
+    def commit(self, draft: str, *, target: str | None = None,
+               symbol: str | None = None):
+        """Turn a proofed draft into an edition. Returns what the desk did with it.
+
+        Args:
+            target: :data:`PAPER_TARGET` to file this edition as the newest
+                paper for ``symbol`` -- recorded, readable, and **neither
+                published nor staged**. ``None`` is the board commit this
+                method has always been, and it sends the same empty body it
+                always sent, so a desk that has never heard of a target sees no
+                change at all.
+            symbol: the company a paper commit claims. The desk compares it
+                against the draft's ``subject.symbol`` and answers 409
+                ``commit_symbol_mismatch`` when they differ -- the wall that
+                keeps a turn which drifted to another company from filing its
+                page under this name, because the index is derived from the
+                subject rather than from the order.
+
+        Raises:
+            ValueError: a paper commit with no symbol, or a symbol with no
+                target. Both are the caller's mistake rather than a desk
+                answer, so neither reaches the wire -- :meth:`put_notes`
+                refuses an owner it cannot name the same way. The second is the
+                dangerous one: without it, a caller that forgot the target
+                sends a *board* commit and publishes one company's paper to the
+                glass.
+            RuntimeError: the desk answered anything but 200, redacted and
+                short.
+        """
+        if target == PAPER_TARGET and not symbol:
+            raise ValueError("commit: a paper commit must name its company")
+        if symbol and target != PAPER_TARGET:
+            raise ValueError("commit: a symbol means nothing without "
+                             "target=%r" % PAPER_TARGET)
+        body = {"target": target, "symbol": symbol} if target else {}
+        status, doc = self._json("POST", "/api/drafts/%s/commit" % draft, body,
+                                 timeout=900)
         if status != 200:
             raise self._fail("commit", status, doc)
         return doc

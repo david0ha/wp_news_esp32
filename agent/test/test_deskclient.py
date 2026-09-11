@@ -349,6 +349,67 @@ class ErrorTest(unittest.TestCase):
             self.assertNotIn(TOKEN, str(caught.exception))
 
 
+class CommitTest(unittest.TestCase):
+    """What a commit says it is for.
+
+    The board's commit is the one this client has always sent and it must stay
+    byte-identical: a desk that has never heard of a target sees exactly what
+    it saw before. A paper commit adds the two fields the desk's index is built
+    from, and the second of them -- the symbol -- is the wall: the desk refuses
+    (409) when the draft's subject is another company, which is what keeps a
+    turn that drifted from filing its page under this name.
+    """
+
+    DRAFT = "d" * 32
+
+    def test_a_board_commit_sends_the_empty_body_it_always_sent(self):
+        desk, opener = client((200, b'{"ok":true,"state":"published",'
+                                    b'"edition_id":"' + b"e" * 32 + b'"}'))
+        out = desk.commit(self.DRAFT)
+        req = opener.requests[0]
+        self.assertEqual(req.full_url,
+                         "http://desk:8080/api/drafts/%s/commit" % self.DRAFT)
+        self.assertEqual(req.data, b"{}")
+        self.assertEqual(out["state"], "published")
+
+    def test_a_paper_commit_names_the_target_and_the_company(self):
+        desk, opener = client((200, b'{"ok":true,"state":"paper",'
+                                    b'"edition_id":"' + b"e" * 32 + b'"}'))
+        out = desk.commit(self.DRAFT, target=deskclient.PAPER_TARGET,
+                          symbol="SNDK")
+        self.assertEqual(json.loads(opener.requests[0].data),
+                         {"target": "paper", "symbol": "SNDK"})
+        self.assertEqual(out["state"], "paper")
+
+    def test_a_paper_commit_with_no_company_never_reaches_the_wire(self):
+        # A caller's mistake, not a desk answer -- put_notes refuses naming
+        # both or neither owners the same way and for the same reason.
+        desk, opener = client()
+        with self.assertRaises(ValueError):
+            desk.commit(self.DRAFT, target=deskclient.PAPER_TARGET)
+        self.assertEqual(opener.requests, [])
+
+    def test_a_company_with_no_target_never_reaches_the_wire_either(self):
+        # The dangerous half: this would otherwise be a board commit that
+        # publishes to the glass while the caller believed it was filing a
+        # paper for one company.
+        desk, opener = client()
+        with self.assertRaises(ValueError):
+            desk.commit(self.DRAFT, symbol="SNDK")
+        self.assertEqual(opener.requests, [])
+
+    def test_a_refused_subject_comes_back_as_a_failure_that_says_why(self):
+        # Spec section 6's first row: the run fails with the reason in the
+        # queue, where an operator reads it, and rotation orders it again.
+        desk, _ = client((409, b'{"ok":false,"error":"commit_symbol_mismatch",'
+                               b'"detail":"draft subject is AAPL, not SNDK"}'))
+        with self.assertRaises(RuntimeError) as caught:
+            desk.commit(self.DRAFT, target=deskclient.PAPER_TARGET,
+                        symbol="SNDK")
+        self.assertIn("409", str(caught.exception))
+        self.assertIn("commit_symbol_mismatch", str(caught.exception))
+
+
 class PutNotesTest(unittest.TestCase):
     """The dossier: a markdown note filed beside a draft or a command.
 
