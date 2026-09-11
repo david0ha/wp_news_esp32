@@ -182,6 +182,45 @@ class EditionReadTest(PaperTestCase):
         self.assertEqual(raw, self.TILE)
         self.assertEqual(headers["Content-Type"], "application/octet-stream")
 
+    def test_a_paper_reads_byte_identical_to_what_the_board_polls(self):
+        """The promise the phone's reader is built on, held to the byte.
+
+        The Today reader parses ONE shape whichever route fed it -- the desk's
+        per-edition read or the board's own ``/news.json`` -- so a phone never
+        needs a second parser. That is a claim about bytes, and the only thing
+        that can hold the desk to it is a test that compares them: both routes
+        end in ``_send_edition_payload``, and this is what fails if a second
+        spelling of that sequence ever grows beside it.
+
+        The ETags too, because they are derived from the spliced bytes rather
+        than from the stored payload. Equal bodies under different validators
+        would still be two answers to a cache and to a conditional request.
+        """
+        eid = self.paper("SNDK")
+        status, doc = self.api("POST", "/api/editions/%s/promote" % eid, {})
+        self.assertEqual(status, 200, doc)
+
+        # The policy block is computed per request against the clock, so bodies
+        # fetched at different instants would legitimately differ. Nothing on
+        # either path moves a FixedClock -- it advances only on `advance` and
+        # on `sleep`, and neither GET sleeps -- but the assertion is cheaper
+        # than the assumption, and it is what says *why* the comparison below
+        # is fair if it ever stops being.
+        before = self.clock.now()
+        status, mine, headers = self.call(
+            "GET", "/api/editions/%s/news.json" % eid, None,
+            self.tokens["producer"])
+        self.assertEqual(status, 200, mine)
+        # No token: the board's own plane, exactly as it polls it.
+        status, board, board_headers = self.call("GET", "/news.json")
+        self.assertEqual(status, 200, board)
+        self.assertEqual(self.clock.now(), before, "the clock moved mid-test")
+
+        self.assertEqual(mine, board)
+        self.assertEqual(headers["ETag"], board_headers["ETag"])
+        self.assertEqual(headers["Content-Type"],
+                         board_headers["Content-Type"])
+
     def test_an_edition_that_is_not_there_is_a_404(self):
         status, _, _ = self.call("GET", "/api/editions/%s/news.json" % ("0" * 16),
                                  None, self.tokens["producer"])

@@ -418,10 +418,10 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def _serve_edition(self, _match, head: bool) -> None:
         """The current edition, with the policy block spliced in at serve time.
 
-        Computed per request rather than stored because ``next_change`` is an
-        instant: baked into a file, it is wrong the moment the schedule changes.
-        It costs one parse and one serialise of a document the device caps at
-        320 KB, against a board that asks every fifteen minutes.
+        Which edition, and nothing else: everything from the stored bytes to
+        the response is :meth:`_send_edition_payload`, which the control
+        plane's read-by-id calls as well so that the two answers cannot drift
+        apart.
         """
         desk = self.desk
         eid = desk.editions.current_id()
@@ -432,26 +432,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             # it handles an unreachable server: it keeps whatever is on the
             # glass and badges it.
             raise NotFound(message="no edition has been filed yet")
-
-        body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
-
-        # Over the spliced bytes rather than over the stored payload, so the
-        # tag answers the only question the board is asking -- is what I have
-        # what you would send me -- and moves when the cadence in the policy
-        # block moves. Within a schedule window those bytes are constant (both
-        # numbers are step functions of the clock, and `next_change` is
-        # truncated to a whole second), so an ordinary poll is a 304 and a
-        # schedule transition is a full edition. That is the mechanism a
-        # sleeping board's cadence rests on: a 304 across a transition would
-        # leave it polling at the wrong rate until something else changed.
-        tag = _etag(body)
-        # get_all(), not get(): a repeated field may arrive as several lines
-        # (RFC 9110 5.3) and `Message.get` returns only the first, so a proxy
-        # that split the list would cost the board a full edition per poll.
-        if _if_none_match(", ".join(self.headers.get_all("If-None-Match") or []), tag):
-            self._send_not_modified(tag)
-            return
-        self._send_bytes(200, body, "application/json", head=head, etag=tag)
+        self._send_edition_payload(payload, head=head)
 
     def _serve_tile(self, match, head: bool) -> None:
         desk = self.desk
@@ -633,30 +614,21 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def h_edition_payload(self, match, _query) -> None:
         """One edition's payload, by id, with the policy block spliced in.
 
-        The same bytes ``/news.json`` would serve if this edition were current,
-        and deliberately so: the phone's reader is the board's reader, and a
-        second shape here would be a second parser on the phone. The splice is
-        what makes them identical -- see :mod:`~claudepost.policy` for why the
-        block is computed per request and never stored.
+        The same bytes ``/news.json`` would serve if this edition were current
+        -- not as a promise but as one call: both routes end in
+        :meth:`_send_edition_payload`, which is the whole of the answer. That
+        is what lets the phone's reader be the board's reader instead of a
+        second parser written against a shape that might drift.
 
         ``producer`` scope and not the device plane. The device plane is three
         paths, and a per-edition read that leaked onto it would put every paper
         the desk holds -- including companies the board never prints -- behind
         no credential at all.
         """
-        desk = self.desk
-        payload = desk.editions.read_payload(match.group("eid"))
+        payload = self.desk.editions.read_payload(match.group("eid"))
         if payload is None:
             raise NotFound()
-        body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
-        tag = _etag(body)
-        # get_all(), not get(): a repeated field may arrive as several lines
-        # (RFC 9110 5.3), the same reason `_serve_edition` reads it this way.
-        if _if_none_match(", ".join(self.headers.get_all("If-None-Match") or []),
-                          tag):
-            self._send_not_modified(tag)
-            return
-        self._send_bytes(200, body, "application/json", etag=tag)
+        self._send_edition_payload(payload)
 
     def h_edition_tile(self, match, _query) -> None:
         """One tile of one edition, verbatim.
@@ -1222,6 +1194,50 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(doc, dict):
             raise BadRequest("bad_json", "the body must be a JSON object")
         return doc
+
+    def _send_edition_payload(self, payload: bytes, head: bool = False) -> None:
+        """One edition's stored bytes, as both planes answer with them.
+
+        Everything that happens to a payload between the disk and the wire:
+        splice the policy block, derive the validator from the spliced bytes,
+        honour ``If-None-Match``, send the 304 or the edition. Two routes end
+        here -- the device plane's current edition and the control plane's
+        read of one by id -- and that is what this exists for. The phone's
+        reader is the board's reader, so those two answers must be the same
+        bytes under the same tag; two spellings of this sequence would be a
+        promise instead of a mechanism, and the day one drifted from the other
+        nothing would fail.
+
+        It knows nothing about scopes or about which route called it. Which
+        edition, and who may ask for it, are the caller's two decisions and its
+        only two.
+
+        The policy block is computed per request rather than stored because
+        ``next_change`` is an instant: baked into a file, it is wrong the
+        moment the schedule changes. It costs one parse and one serialise of a
+        document the device caps at 320 KB, against a board that asks every
+        fifteen minutes.
+        """
+        desk = self.desk
+        body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
+
+        # Over the spliced bytes rather than over the stored payload, so the
+        # tag answers the only question the board is asking -- is what I have
+        # what you would send me -- and moves when the cadence in the policy
+        # block moves. Within a schedule window those bytes are constant (both
+        # numbers are step functions of the clock, and `next_change` is
+        # truncated to a whole second), so an ordinary poll is a 304 and a
+        # schedule transition is a full edition. That is the mechanism a
+        # sleeping board's cadence rests on: a 304 across a transition would
+        # leave it polling at the wrong rate until something else changed.
+        tag = _etag(body)
+        # get_all(), not get(): a repeated field may arrive as several lines
+        # (RFC 9110 5.3) and `Message.get` returns only the first, so a proxy
+        # that split the list would cost the board a full edition per poll.
+        if _if_none_match(", ".join(self.headers.get_all("If-None-Match") or []), tag):
+            self._send_not_modified(tag)
+            return
+        self._send_bytes(200, body, "application/json", head=head, etag=tag)
 
     def _send_commit(self, result: CommitResult) -> None:
         """What became of an edition, in the one shape its three doors answer in.
