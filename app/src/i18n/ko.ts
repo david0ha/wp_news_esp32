@@ -139,6 +139,12 @@ export const ko: Strings = {
       needsSetup: '이 설정을 바꾸려면 데스크 주소와 operator 토큰을 입력해 주세요.',
       unsupported: '데스크가 이 앱에서 제공하지 않는 언어({lang})로 설정되어 있어요. 위에서 하나를 고르면 그 언어로 바뀌어요.',
       languageSaved: '데스크가 다음 에디션부터 이 언어로 작성해요.',
+      paperRefresh: '지면 갱신 주기',
+      paperRefreshHelp:
+        '데스크가 관심 목록의 회사마다 지면을 다시 쓰는 주기예요. 한 번 쓸 때마다 30분쯤 걸리니 기본값은 12시간이고, 관심 목록이 짧을 때만 더 짧게 둘 만해요.',
+      paperRefreshSaved: '이제부터 이 주기로 지면을 다시 써요.',
+      paperRefreshAbsent: '이 데스크는 아직 지면 기능이 없어요. 데스크를 업데이트하면 이 항목이 동작해요.',
+      paperRefreshCustom: '지금은 {hours}시간으로 돼 있어요. 위 선택지에는 없는 값이에요.',
     },
     // 알림. 보내는 쪽은 데스크이고, 이 블록은 받을 휴대폰을 등록하고 데스크가 읽을 설정을 고치는
     // 자리다. 위의 `desk`, `positionSheet`, `schedule`과 같은 해요체를 쓴다 — 이 기능 줄에서
@@ -798,6 +804,34 @@ export const ko: Strings = {
     noAnswer: '데스크가 끝냈지만 답변을 쓰지 않았습니다.',
     a11y: {
       openAsk: '이 신문에 대해 데스크에 묻기',
+    },
+  },
+  papers: {
+    page: {
+      onBoard: '보드에 걸린 지면',
+      stale: '갱신할 때가 됐어요',
+      noAge: '작성 시각을 알 수 없어요',
+    },
+    placeholder: {
+      title: '{symbol} 지면은 아직 없어요',
+      body: '관심 목록에 있으니 데스크가 다음 한가한 시간에 만들어요. 만들어지면 이 면이 채워져요.',
+    },
+    pageFailed: '이 지면을 불러오지 못했어요. {detail}',
+    board: {
+      title: '보드에 걸 지면',
+      help: '데스크는 관심 목록의 회사마다 최신 지면을 하나씩 들고 있어요. 눌러서 보드에 걸 수 있고, 내일 고른 회사가 다시 덮어써요.',
+      noPaper: '아직 안 만들었어요',
+      confirmTitle: '{symbol}을(를) 인쇄할까요?',
+      confirmBody: '보드가 화면 전체를 다시 그려서 30초쯤 걸려요. 내일 고른 회사가 평소대로 다시 덮어써요.',
+      confirm: '보드에 걸기',
+      cancel: '취소',
+      published: '{symbol}을(를) 보드에 걸었어요. 화면이 다시 그려지는 데 30초쯤 걸려요.',
+      gone: '데스크에 {symbol} 지면이 더 이상 없어요.',
+      failed: '보드에 걸지 못했어요. {detail}',
+      a11y: {
+        row: '{name}, {age} 작성',
+        onBoard: '{name}, 지금 보드에 걸려 있음',
+      },
     },
   },
 }

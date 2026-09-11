@@ -134,6 +134,16 @@ export const en = {
       needsSetup: 'Add the desk’s address and an operator token to change this.',
       unsupported: 'The desk is set to a language this app doesn’t offer ({lang}). Choosing one above replaces it.',
       languageSaved: 'The desk will write the next edition in this language.',
+      /** How often the desk rewrites each company's paper. `settings.py`'s 1..72 hours. */
+      paperRefresh: 'Paper refresh',
+      paperRefreshHelp:
+        'How often the desk rewrites each watched company’s paper. Every run costs the desk about half an hour of work, so twelve hours is the default and shorter is only worth it for a short watchlist.',
+      paperRefreshSaved: 'The desk paces its papers at this from now on.',
+      /** The desk answered, and its settings carry no cadence: an older desk. */
+      paperRefreshAbsent:
+        'This desk doesn’t keep papers yet. Update it and this row starts working.',
+      /** A cadence in force that is not one of the chips — set by hand, or by another client. */
+      paperRefreshCustom: 'Set to {hours}h, which isn’t one of the choices above.',
     },
     // Notifications. The desk sends them; this section registers the phone that receives them and
     // edits the preferences the desk reads. Its own block, below the desk's, because every
@@ -955,6 +965,47 @@ export const en = {
     noAnswer: 'The desk finished with this but wrote no answer.',
     a11y: {
       openAsk: 'Ask the desk about this edition',
+    },
+  },
+  // The papers: one current newspaper per company on the desk's watchlist. Today pages through
+  // them, the Board tab puts one on the glass, and Settings paces how often the desk rewrites one.
+  papers: {
+    /** The page header, above the masthead: which company this page is. */
+    page: {
+      /** Beside the symbol on the page that is currently on the board. */
+      onBoard: 'On the board',
+      /** The desk thinks this one is due a rewrite. Its own judgement, not the phone's. */
+      stale: 'Due a refresh',
+      /** The age line when the desk gave no `created_at` at all. */
+      noAge: 'Written at an unknown time',
+    },
+    /** A watchlist symbol the desk has not written a paper for yet. */
+    placeholder: {
+      title: 'No paper for {symbol} yet',
+      body: 'It’s on the watchlist, so the desk writes one on its next quiet pass. This page fills in when it does.',
+    },
+    /** A page whose payload would not load, with nothing cached behind it. */
+    pageFailed: 'This paper wouldn’t load. {detail}',
+    /** The Board tab's section. */
+    board: {
+      title: 'Paper on the board',
+      help: 'The desk keeps a current paper for every company you watch. Tap one to print it — tomorrow’s own pick replaces it.',
+      /** A row for a symbol with no paper. The row is drawn and is not tappable. */
+      noPaper: 'Not written yet',
+      /** The confirmation, because this spends twenty-five seconds of the panel. */
+      confirmTitle: 'Print {symbol}?',
+      confirmBody: 'The board redraws the whole sheet, which takes about half a minute. Tomorrow’s pick replaces it in the normal way.',
+      confirm: 'Put it on the board',
+      cancel: 'Cancel',
+      /** After a successful publish. */
+      published: '{symbol} is on the board. The panel takes about half a minute to redraw.',
+      /** The desk no longer has a paper for this symbol — it was pruned since the list arrived. */
+      gone: 'The desk has no paper for {symbol} any more.',
+      failed: 'That didn’t go on the board. {detail}',
+      a11y: {
+        row: '{name}, paper written {age}',
+        onBoard: '{name}, on the board now',
+      },
     },
   },
 }
