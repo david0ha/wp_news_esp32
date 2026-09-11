@@ -514,6 +514,7 @@ class CalendarDesk:
         self.notes_calls = []
         self.finished = []
         self.commits = []
+        self.commit_calls = []
         self.econ_windows = []
 
     # the prompt
@@ -554,8 +555,10 @@ class CalendarDesk:
     def proof(self, draft):
         return {"ok": True, "sheets": []}
 
-    def commit(self, draft):
+    def commit(self, draft, *, target=None, symbol=None):
         self.commits.append(draft)
+        self.commit_calls.append({"draft": draft, "target": target,
+                                  "symbol": symbol})
         return {"state": "staged", "edition_id": "e" * 32}
 
     # both paths
@@ -627,14 +630,20 @@ class SeedingSplitTest(unittest.TestCase):
 
         cid = ("%s" % kind).ljust(32, "0")[:32]
         desk = CalendarDesk(positions=self.POSITIONS, calendar=None, econ=[])
-        loop.handle(self.cfg, desk, {"id": cid, "kind": kind, "text": "go"}, {})
+        command = {"id": cid, "kind": kind, "text": "go"}
+        if kind == "paper":
+            # The desk never posts one without it, and `handle` refuses a
+            # command that arrives without one -- so a sweep that left it out
+            # would be measuring the refusal rather than the seeding.
+            command["symbol"] = "AAAA"
+        loop.handle(self.cfg, desk, command, {})
         return os.path.join(self.tmp, cid)
 
     def test_seed_positions_runs_only_for_the_calendar_kind(self):
         # The newspaper's producer never has the file. This is the structural
         # half of the rule that positions do not reach news.json; the edition
         # validator is the other half, and neither is sufficient alone.
-        for kind in ("file_edition", "research", "custom", "ask"):
+        for kind in ("file_edition", "research", "custom", "ask", "paper"):
             with self.subTest(kind=kind):
                 workdir = self.run_seeding(kind)
                 self.assertFalse(
@@ -646,30 +655,36 @@ class SeedingSplitTest(unittest.TestCase):
         # Yesterday's book and the economic window are not secrets the way the
         # positions are, but a newspaper run has no use for either, and a file
         # in front of a model is an invitation to read it.
-        for kind in ("file_edition", "research", "custom", "ask"):
+        for kind in ("file_edition", "research", "custom", "ask", "paper"):
             for name in ("positions.json", "calendar.json", "econ.json"):
                 with self.subTest(kind=kind, name=name):
                     workdir = self.run_seeding(kind)
                     self.assertFalse(os.path.exists(os.path.join(workdir, name)))
 
-    def test_the_paper_is_seeded_for_an_ask_and_for_no_other_kind(self):
+    def test_the_served_edition_is_seeded_for_an_ask_and_for_no_other_kind(self):
         # The mirror of the positions split, and a weaker property on purpose:
         # /news.json is public, so seeding it into a morning run leaks nothing.
         # It is still wrong -- a filing run handed yesterday's paper edits it
         # instead of writing today's -- and an absence has to be looked for
         # everywhere it could be.
-        for kind in ("file_edition", "research", "custom", "calendar"):
+        for kind in ("file_edition", "research", "custom", "calendar", "paper"):
             with self.subTest(kind=kind):
                 workdir = self.run_seeding(kind)
                 self.assertFalse(os.path.exists(os.path.join(workdir, "current")))
         workdir = self.run_seeding("ask")
         self.assertTrue(os.path.exists(os.path.join(workdir, "current", "news.json")))
 
-    def test_the_watch_list_is_seeded_for_every_kind_including_the_book(self):
-        # The one file both jobs get: it is the universe the paper rotates
-        # through and, for the book, where else to look for a date. It is
+    def test_the_watch_list_is_seeded_for_every_kind_but_a_paper(self):
+        # It is the universe the paper rotates through and, for the book, one
+        # more place to look for a date -- so both jobs get it, and it is
         # seeded from the operator's own directory rather than from the desk,
-        # so it is not part of the split.
+        # which is why it is not part of the positions split.
+        #
+        # A `paper` is the exception and the reason is the rotation itself: the
+        # company is already chosen, so the file has nothing to offer the turn
+        # and one thing to cost it -- a model handed a cursor it was told to
+        # update will update it, and tomorrow's board edition would skip a
+        # company because a paper run advanced past it overnight.
         path = os.path.join(self.tmp, "watchlist.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"symbols": ["AAAA"], "last": "AAAA"}, f)
@@ -680,6 +695,8 @@ class SeedingSplitTest(unittest.TestCase):
                 workdir = self.run_seeding(kind)
                 self.assertTrue(
                     os.path.exists(os.path.join(workdir, "watchlist.json")))
+        workdir = self.run_seeding("paper")
+        self.assertFalse(os.path.exists(os.path.join(workdir, "watchlist.json")))
 
     def test_a_calendar_run_is_given_the_four_files_its_brief_names(self):
         # tools/edition/CALENDAR.md's input table promises exactly these, and
@@ -1595,6 +1612,193 @@ class HandleAskTest(unittest.TestCase):
         self.assertEqual(desk.commits, ["d" * 32])
         with open(path, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["last"], "BBBB")
+
+
+class HandlePaperTest(unittest.TestCase):
+    """`handle()`'s sixth kind: the filing run with the company given.
+
+    Three differences from `file_edition` and deliberately no fourth -- the
+    context directory, the directives, the draft, the proof, the two revisions
+    and the look at the sheets are the same code reached the same way, because
+    a paper is a complete newspaper through the same gates rather than a
+    lighter dossier.
+    """
+
+    class Desk(CalendarDesk):
+        """CalendarDesk with a commit state this test chooses."""
+
+        def __init__(self, state="paper"):
+            super().__init__()
+            self.state = state
+
+        def commit(self, draft, *, target=None, symbol=None):
+            self.commits.append(draft)
+            self.commit_calls.append({"draft": draft, "target": target,
+                                      "symbol": symbol})
+            return {"state": self.state, "edition_id": "e" * 32}
+
+    class RefusingDesk(Desk):
+        """A desk that will not file this page under this name."""
+
+        def commit(self, draft, *, target=None, symbol=None):
+            raise RuntimeError("commit: 409 {'error': 'commit_symbol_mismatch'}")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp})
+        real = loop.read_contract
+        loop.read_contract = lambda repo, kind="file_edition": "the contract"
+        self.addCleanup(setattr, loop, "read_contract", real)
+        self.seen = {}
+
+    def _patch_run_claude(self, fn):
+        real = loop.run_claude
+        loop.run_claude = fn
+        self.addCleanup(setattr, loop, "run_claude", real)
+
+    def _files_a_page(self, also_moves_the_cursor=False):
+        def fake_run_claude(cfg, text, workdir, extra_env, *_):
+            self.seen["prompt"] = text
+            self.seen["watchlist"] = os.path.exists(
+                os.path.join(workdir, "watchlist.json"))
+            with open(os.path.join(workdir, "news.json"), "w",
+                      encoding="utf-8") as f:
+                f.write('{"subject": {"symbol": "SNDK"}}')
+            if also_moves_the_cursor:
+                # As if the model had written one anyway. It has no reason to
+                # -- nothing seeded one and the prompt does not mention it --
+                # but the operator's cursor must not depend on that.
+                with open(os.path.join(workdir, "watchlist.json"), "w",
+                          encoding="utf-8") as f:
+                    json.dump({"symbols": ["AAAA", "BBBB"], "last": "BBBB"}, f)
+            return 0
+        return fake_run_claude
+
+    def _command(self, cid="1" * 32, symbol="SNDK"):
+        return {"id": cid, "kind": "paper", "symbol": symbol,
+                "text": "Refresh the paper for %s. The company is given; "
+                        "research it and write both pages." % symbol}
+
+    def test_the_turn_is_told_which_company_it_is_writing_about(self):
+        # Against phrases only the tail carries: the order's own text names
+        # the company too, so "SNDK is in the prompt" would pass with no tail.
+        self._patch_run_claude(self._files_a_page())
+        loop.handle(self.cfg, self.Desk(), self._command(), {})
+        self.assertIn("does not apply to this run", self.seen["prompt"])
+        self.assertIn("for no other company", self.seen["prompt"])
+
+    def test_the_rotation_file_is_not_in_the_directory_at_all(self):
+        path = os.path.join(self.tmp, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["AAAA", "BBBB"], "last": "AAAA"}, f)
+        cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp,
+                                      "CLAUDEPOST_WATCHLIST": path})
+        self._patch_run_claude(self._files_a_page())
+        loop.handle(cfg, self.Desk(), self._command(), {})
+        self.assertFalse(self.seen["watchlist"])
+
+    def test_the_cursor_is_where_the_operator_left_it(self):
+        # The rotation is the BOARD's, and tomorrow's morning order reads it.
+        # A paper run that advanced it would make the board skip a company
+        # because something unrelated was refreshed overnight -- and at the
+        # default cadence there are more paper runs in a day than editions.
+        path = os.path.join(self.tmp, "watchlist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"symbols": ["AAAA", "BBBB"], "last": "AAAA"}, f)
+        cfg = loop.Settings.from_env({"CLAUDEPOST_SCRATCH": self.tmp,
+                                      "CLAUDEPOST_WATCHLIST": path})
+        self._patch_run_claude(self._files_a_page(also_moves_the_cursor=True))
+        desk = self.Desk()
+        loop.handle(cfg, desk, self._command(), {})
+        self.assertEqual(desk.commits, ["d" * 32])
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["last"], "AAAA")
+
+    def test_the_commit_carries_the_target_and_the_company(self):
+        self._patch_run_claude(self._files_a_page())
+        desk = self.Desk()
+        loop.handle(self.cfg, desk, self._command(), {})
+        self.assertEqual(desk.commit_calls,
+                         [{"draft": "d" * 32, "target": "paper",
+                           "symbol": "SNDK"}])
+
+    def test_the_result_says_paper_and_the_edition(self):
+        self._patch_run_claude(self._files_a_page())
+        desk = self.Desk(state="paper")
+        cid = "2" * 32
+        loop.handle(self.cfg, desk, self._command(cid=cid), {})
+        self.assertEqual(desk.finished, [(cid, True, "paper " + "e" * 32)])
+
+    def test_a_paper_the_desk_had_already_says_unchanged(self):
+        self._patch_run_claude(self._files_a_page())
+        desk = self.Desk(state="unchanged")
+        cid = "3" * 32
+        loop.handle(self.cfg, desk, self._command(cid=cid), {})
+        self.assertEqual(desk.finished, [(cid, True, "unchanged " + "e" * 32)])
+
+    def test_a_command_with_no_company_fails_before_the_turn(self):
+        # The whole of a paper run is "write about this company", so a command
+        # that does not say which is forty minutes of research against nothing
+        # -- and, worse, a page about whichever company the model picked,
+        # filed under a name the desk would then refuse.
+        ran = []
+        self._patch_run_claude(lambda *a, **k: ran.append(1) or 0)
+        desk = self.Desk()
+        cid = "4" * 32
+        loop.handle(self.cfg, desk, {"id": cid, "kind": "paper", "text": "go"}, {})
+        self.assertEqual(ran, [])
+        self.assertEqual(desk.commits, [])
+        self.assertEqual(len(desk.finished), 1)
+        self.assertEqual(desk.finished[0][:2], (cid, False))
+        self.assertIn("company", desk.finished[0][2])
+
+    def test_a_symbol_that_is_not_one_is_refused_the_same_way(self):
+        # It reaches a prompt and a commit body, and on the desk's side a
+        # lookup: the shapes worth refusing are the ones that are not a ticker
+        # at all.
+        for bad in ("", "   ", "TOOLONGSYMBOL", "NVDA;rm -rf /", "../../etc",
+                    "NV DA", 7, None):
+            with self.subTest(symbol=bad):
+                ran = []
+                self._patch_run_claude(lambda *a, **k: ran.append(1) or 0)
+                desk = self.Desk()
+                loop.handle(self.cfg, desk,
+                            {"id": "5" * 32, "kind": "paper", "symbol": bad,
+                             "text": "go"}, {})
+                self.assertEqual(ran, [])
+                self.assertEqual(desk.finished[0][1], False)
+
+    def test_a_lowercase_symbol_is_uppercased_once_for_both_uses(self):
+        # The desk sends uppercase. This is for a command posted by hand, and
+        # it normalises in ONE place so the prompt and the commit body cannot
+        # disagree -- a page written about "sndk" and committed as "SNDK" would
+        # pass every check here and be refused at the desk.
+        self._patch_run_claude(self._files_a_page())
+        desk = self.Desk()
+        loop.handle(self.cfg, desk, self._command(symbol="sndk"), {})
+        self.assertEqual(desk.commit_calls[0]["symbol"], "SNDK")
+        self.assertIn("SNDK", self.seen["prompt"])
+
+    def test_a_desk_that_refuses_the_subject_fails_the_command(self):
+        # Spec section 6, first row. `handle` does not catch it: `main` does,
+        # and finishes the command with the reason, which is where an operator
+        # reads it and where rotation's next pass starts from.
+        self._patch_run_claude(self._files_a_page())
+        with self.assertRaises(RuntimeError) as caught:
+            loop.handle(self.cfg, self.RefusingDesk(), self._command(), {})
+        self.assertIn("commit_symbol_mismatch", str(caught.exception))
+
+    def test_a_turn_that_wrote_no_page_fails_as_an_ordered_page_does(self):
+        # Not a note on the command: a paper was ordered, so a run that filed
+        # nothing is a failure, exactly as a `file_edition` that produced no
+        # news.json is. `custom` is the kind that decides from the disk, and
+        # this is not that kind.
+        self._patch_run_claude(lambda *a, **k: 0)
+        desk = self.Desk()
+        with self.assertRaises(RuntimeError):
+            loop.handle(self.cfg, desk, self._command(), {})
+        self.assertEqual(desk.commits, [])
 
 
 class AuthRouteTest(unittest.TestCase):
