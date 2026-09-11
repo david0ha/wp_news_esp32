@@ -631,9 +631,19 @@ Four things a client has to get right:
   would serve** if that edition were current — the `policy` block is spliced in
   the same way. So the Today reader parses one shape whichever route fed it,
   and a second parser on the phone is never needed.
-- **An edition id is a content fingerprint**, so a payload cached under one can
-  never go stale and the cache needs no expiry. What does change is *which* id
-  a company's paper is, and that comes from `/api/papers`.
+- **An edition id is a content fingerprint**, so the *stored* payload under one
+  never changes: a cache keyed by edition id can hold the story, the figures and
+  the tile ids indefinitely and needs no expiry for them. The bytes on the wire
+  are not quite that, because of the bullet above — the `policy` block is
+  spliced in per request, and its two numbers are step functions of the clock,
+  so they move at a schedule transition and the ETag moves with them. Hence
+  **revalidate rather than trust the cache forever**: send the `If-None-Match`
+  the route gives you and take the 304, which is what an ordinary poll gets
+  within a window. Nothing the pager draws comes out of `policy` — it is the
+  board's cadence — so a phone that skipped the revalidation would render the
+  same page, but it would be relying on which half of the document it happened
+  to read. The other thing that changes is *which* id a company's paper is, and
+  that comes from `/api/papers`.
 - **`404 no_paper` on the publish is a state, not a failure** — that company has
   no edition yet — and a retry does not fix it. It joins the three 404s above
   that `desk.ts` answers `null` for rather than throwing. The same code answers

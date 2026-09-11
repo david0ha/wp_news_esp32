@@ -466,9 +466,14 @@ class LeaseTest(StoreTestCase):
     def test_a_run_that_never_reports_is_still_reaped(self):
         # The other half: a longer lease must not become no lease. A worker
         # that died costs one retry, ninety minutes later.
+        #
+        # `S.LEASE_SECONDS + 1` and not a literal `5401`: the number belongs in
+        # one place, and the test above is the one place that pins it. Two
+        # spellings of it here would be one to remember on the next change.
+        from claudepost import store as S
         cid = self.file_edition()["id"]
         self.store.claim_command("w1")
-        self.clock.advance(5401)
+        self.clock.advance(S.LEASE_SECONDS + 1)
         self.assertEqual(self.store.reap(), 1)
         self.assertEqual(self.store.get_command(cid)["status"], "pending")
 

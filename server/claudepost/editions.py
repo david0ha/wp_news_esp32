@@ -174,7 +174,20 @@ DEFAULT_LANG = "en"
 #: that is the device's buffer and the validator's cap; anything else is an
 #: edition the index simply cannot key, which is not an error -- gate 1 decides
 #: what an edition is, and this decides what a *paper* is.
-SUBJECT_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,8}\Z")
+#:
+#: **The same pattern as :data:`~claudepost.store.COMMAND_SYMBOL_RE`, lookahead
+#: and all**, and the agreement is the point rather than the clause. There is a
+#: real argument for leaving this one looser: it describes what an *edition's*
+#: subject may be, where the lookahead is a rule about what a *command* may
+#: carry, and the exposure from the gap was nil -- an edition keyed ``"..."``
+#: could never be ordered by the rotation, listed by ``/api/papers`` or
+#: published by symbol, because all three go through the command's regex. What
+#: decided it the other way is that two regexes answering "what is a symbol"
+#: differently by one subtle clause is exactly the discrepancy a later reader
+#: loses an afternoon to, and agreement costs a line. So ``"..."``, ``"-"`` and
+#: ``"."`` derive ``symbol: None`` here: the edition commits and is served like
+#: any other, and is a paper for nobody.
+SUBJECT_SYMBOL_RE = re.compile(r"^(?=.*[A-Z0-9])[A-Z0-9.\-]{1,8}\Z")
 
 #: A BCP-47 primary subtag, the wire's own shape from ``docs/news-contract.md``.
 #: Not :data:`~claudepost.settings.LANGS`: this field describes the text that
@@ -678,8 +691,8 @@ class EditionStore:
         return _sheet_names(os.path.join(self._edition_dir(edition_id), PROOF_DIR))
 
     def edition_meta(self, edition_id: str) -> dict:
-        """An edition's ``meta.json`` -- its birth certificate, rewritten once
-        at most.
+        """An edition's ``meta.json`` -- its birth certificate, rewritten only
+        on the paper re-filing path.
 
         Born with the edition and then left alone, with exactly one exception:
         an edition filed again as a company's *paper* has its ``created_at``
@@ -687,6 +700,13 @@ class EditionStore:
         by date. ``created_at`` is the only field that moves, and it moves only
         there -- on that path's ordinary route every other field, including
         ``published_at``, is carried over byte for byte.
+
+        **One path, not one occasion.** :meth:`_commit`'s ``unchanged``
+        short-circuit fires only when this edition is *already* that company's
+        newest paper, so a company whose coverage goes X, Y, X re-dates X on
+        the second filing of it, and can do so any number of times. There is no
+        once-only guard and there should not be: each re-filing is the newest
+        word the desk has about that company, and the index picks by date.
 
         One narrower case rewrites more than that field, and it is a repair
         rather than a move: when a re-filed edition's ``meta.json`` has become
@@ -969,9 +989,12 @@ class EditionStore:
                 return CommitResult(eid, "staged", reason)
 
         # The gate runs before the build so that meta.json is born with the
-        # right published_at. It is written once and rewritten only below, when
-        # a paper is filed again: the ordinary route there moves created_at and
-        # carries every other field over untouched, published_at included. The
+        # right published_at. It is rewritten on one path only -- the one
+        # below, when a paper is filed again -- and on that path as often as
+        # that happens, which the `unchanged` short-circuit above bounds only
+        # for a re-filing of the company's *current* newest paper. The ordinary
+        # route there moves created_at and carries every other field over
+        # untouched, published_at included. The
         # one exception is that route's repair path, where meta.json has become
         # unreadable and `_redate` writes this dict in its place -- see
         # `edition_meta` and `_redate`, which tell the same story, and which

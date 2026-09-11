@@ -526,13 +526,33 @@ class SubjectMetaTest(EditionTestCase):
         # Not an error and not a refusal: gate 1 is what decides whether a
         # payload is an edition, and an edition the index cannot key is simply
         # not a paper for anybody.
-        for bad in (None, "", "WAY-TOO-LONG-SYMBOL", "A B", 17):
+        #
+        # `"..."`, `"."` and `"-"` are the punctuation-only cases, and they are
+        # here because `SUBJECT_SYMBOL_RE` did NOT refuse them until
+        # 2026-09-11: they fit the character class and are not tickers. The
+        # exposure was nil -- an edition keyed `"..."` could never be ordered,
+        # listed or published, because all three of those go through
+        # `store.COMMAND_SYMBOL_RE`, which has always had the lookahead -- but
+        # two regexes answering "what is a symbol" differently by one clause is
+        # the discrepancy a later reader loses an afternoon to. They agree now.
+        for bad in (None, "", "WAY-TOO-LONG-SYMBOL", "A B", 17,
+                    "...", ".", "-", "--.-"):
             with self.subTest(symbol=bad):
                 d = self.es.open_draft()
                 self.es.put_payload(d, json.dumps(
                     {"serial": repr(bad), "subject": {"symbol": bad}}).encode())
                 r = self.es.commit(d, IMMEDIATE, self.clock.now())
+                # The edition itself is filed and readable, exactly like any
+                # other -- this is a key the index cannot hold, not a refusal.
+                self.assertIsNotNone(self.es.read_payload(r.edition_id))
                 self.assertIsNone(self.es.edition_meta(r.edition_id)["symbol"])
+                if isinstance(bad, str) and bad:
+                    # And it is a paper for nobody: asking the index for the
+                    # string the payload actually carried finds nothing, so
+                    # `/api/papers` would draw a row of nulls for it and the
+                    # rotation would treat it as a company never written about.
+                    self.assertEqual(self.es.papers([bad.upper()]),
+                                     {bad.upper(): None})
 
     def test_an_edition_filed_before_these_fields_is_filled_from_its_payload(self):
         # The migration that does not run. An edition's meta.json is its birth

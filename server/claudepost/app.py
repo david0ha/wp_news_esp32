@@ -967,23 +967,26 @@ class Desk:
     def _orderable_symbols(self) -> list[str]:
         """The printable companies the queue could actually carry a command for.
 
-        The two validators do not agree, and deliberately so:
-        :func:`~claudepost.watchlist._symbol` takes one to twelve characters,
-        while :data:`~claudepost.store.COMMAND_SYMBOL_RE` takes one to eight
-        and wants at least one letter or digit.
+        The watchlist's validator is the looser one, and deliberately so:
+        :func:`~claudepost.watchlist._symbol` takes one to twelve characters
+        of ``[A-Z0-9.-]``, where :data:`~claudepost.store.COMMAND_SYMBOL_RE`
+        takes one to eight and wants at least one letter or digit among them.
+        A watchlist is a document the owner keeps; a command is an instruction
+        the desk has to be able to see satisfied.
 
-        **Two reasons to skip, and they cover different symbols.** For a
-        nine-to-twelve-character ticker it is the cap: the payload validator
-        caps an edition's own ``subject.symbol`` at eight, so a command naming
-        a longer one could never be satisfied by any draft -- every run for it
-        would end in a ``409 commit_symbol_mismatch`` nobody could fix. That
-        argument does **not** reach the punctuation-only case.
-        :data:`~claudepost.editions.SUBJECT_SYMBOL_RE` carries no
-        letter-or-digit lookahead, so a draft whose subject is ``"..."`` would
-        validate and commit perfectly well; what stops ``"..."`` here is only
-        the second reason, which holds for both.
+        **Two reasons to skip such a symbol, and they are about different
+        things.** The first is that the command could never be satisfied:
+        :data:`~claudepost.editions.SUBJECT_SYMBOL_RE` is now the same pattern
+        as the command's, lookahead and all, so a symbol either one refuses is
+        a symbol no draft's ``subject.symbol`` can ever carry either -- every
+        run for it would end in a ``409 commit_symbol_mismatch`` nobody could
+        fix, and the command would fail, be retried and fail again. That
+        argument covers both shapes now that the two regexes agree; while they
+        differed it reached only the nine-to-twelve-character case, and
+        ``"..."`` rested on the second reason alone.
 
-        That second reason is that skipping is the strictly safer failure:
+        The second is about *this* function rather than about the command, and
+        it is why the answer here is a skip rather than a raise:
         `Desk.enqueue` raises `BadRequest` on such
         a symbol, and this runs at the end of the housekeeping block -- an
         exception here would take the reap, the draft sweep, the prune, the

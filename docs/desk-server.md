@@ -347,6 +347,16 @@ other half: `"..."` fits the character class and is not a ticker, and this
 symbol goes on to become a URL path segment at
 `POST /api/papers/<SYMBOL>/publish`.
 
+**The edition side is the same pattern**, and it was not always. `editions.py`'s
+`SUBJECT_SYMBOL_RE` had no lookahead until 2026-09-11, so a payload whose
+`subject.symbol` was `"..."` committed and was indexed under that key —
+harmlessly, because the rotation, `/api/papers` and the publish route all go
+through the command's regex and none of them could reach it. They agree now
+anyway: two regexes answering "what is a symbol" differently by one subtle
+clause is the discrepancy a later reader loses an afternoon to, and agreement
+costs a line. Such an edition is filed and served like any other and is simply
+a paper for nobody.
+
 **There is no server-side thread object.** `reply_to` is the thread. The phone
 keeps its own list of turns and the desk keeps the rows; nothing here joins
 them, because the only reader that needs the whole thread is the phone that
@@ -1440,7 +1450,11 @@ on it is set larger than a deck, a photograph that halftoned to mush.
 Two revisions, then it reports the failure with the validator's own words.
 
 **`kind` decides where the turn's `notes.md` goes, and two of the five kinds
-decide it from the disk rather than from themselves.** `"file_edition"` always
+this worker handles decide it from the disk rather than from themselves.**
+There are **six** kinds on the queue — the sixth, `"paper"`, is
+[the rotation's own](#the-papers) and is described below — and the five here
+are `"file_edition"`, `"research"`, `"custom"`, `"calendar"` and `"ask"`.
+`"file_edition"` always
 takes the draft path above, and if the run left a `notes.md` in its workdir it
 rides beside the draft (`PUT .../notes.md`) — the dossier behind the page,
 filed the same way whether or not one seemed worth writing. `"research"`
@@ -1479,6 +1493,15 @@ asked for the paper to change, and then the ordinary five gates apply
 unchanged. The result reads `answered`, `revised <edition id>` or `staged
 <edition id>`. A revision that fails a gate fails the command and the current
 edition stays current.
+
+**`"paper"` is the sixth, and this worker does not handle it yet.** The desk
+orders one, the queue carries it and the commit target that files it exists —
+all of that is above, under [The papers](#the-papers). What is not here is the
+worker's side: `agent/prompt.py` names no contract for the kind, so a `paper`
+command reaching this loop today would read `PROMPT.md` and the ordinary tail
+and file a *board* edition, which is not what was asked for. That work is its
+own plan, and this paragraph says so rather than leaving a reader to infer from
+the five above that the sixth behaves like them.
 
 ## Cloudflare
 
