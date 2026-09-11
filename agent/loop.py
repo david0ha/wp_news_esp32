@@ -59,7 +59,8 @@ from dataclasses import dataclass
 from typing import Mapping
 
 import prompt
-from deskclient import DeskClient, MAX_NOTES_BYTES, load_agent_env, read_token
+from deskclient import (DeskClient, MAX_NOTES_BYTES, PAPER_TARGET,
+                        load_agent_env, read_token)
 
 LOG = logging.getLogger("worker")
 
@@ -116,6 +117,22 @@ CALENDAR_KIND = "calendar"
 #: `answer.md`, which becomes an edition only if the model decided the message
 #: asked for one. Like `custom`, the disk decides -- see :func:`handle`.
 ASK_KIND = "ask"
+
+#: The command kind whose company the desk names instead of the rotation
+#: choosing it: a paper for one company on the watch list, refreshed on a
+#: cadence, filed as an edition that never touches the board's pointers. It is
+#: `file_edition`'s path with three differences -- see :func:`handle`.
+PAPER_KIND = "paper"
+
+#: What a ``paper`` command's ``symbol`` may be: the spec's rule for
+#: ``POST /api/commands`` (uppercase, one to eight of letter, digit, dot or
+#: hyphen) -- narrower than the desk's own three ``SYMBOL_RE``, which allow
+#: twelve; see ``agent/README.md`` for why. Restated here for
+#: :data:`TILE_ID_RE`'s reason. This value is written into a prompt and into
+#: a commit body, and the two ends of a bearer token are two programs: a
+#: worker that trusted whatever arrived under that key would put it in front
+#: of a model and then on the wire.
+PAPER_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,8}\Z")
 
 #: Where the edition the message is about is put. A directory rather than a
 #: bare file because the payload names its pictures by id, and a model asked
@@ -1304,11 +1321,47 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
       the model judged that the message asked for the paper to change. That
       judgement is the model's, per the design, and this loop does not
       second-guess it.
+    - ``"paper"`` is ``"file_edition"`` with the company already chosen, and
+      it is that path rather than a fourth branch: the same contract, the same
+      draft, the same proof, the same two revisions, the same look at the
+      sheets. Three things differ and nothing else does. The prompt names the
+      symbol and says the contract's rotation does not apply; the rotation file
+      is neither seeded nor persisted, because the cursor belongs to the
+      board's morning edition and there are more paper runs in a day than
+      editions; and the commit says which company it is filing under, which is
+      the wall -- the desk refuses a draft whose subject is somebody else.
     """
     cid = command["id"]
     kind = command.get("kind", "file_edition")
     calendar = kind == CALENDAR_KIND
     ask = kind == ASK_KIND
+    paper = kind == PAPER_KIND
+    symbol = command.get("symbol") if paper else None
+    # `isinstance` rather than `str()`: a JSON number under that key is a
+    # malformed command, and `str(7)` is "7", which matches the pattern below
+    # and would file a paper for a company called 7.
+    #
+    # The order below is load-bearing, not incidental: `.upper()` runs before
+    # the match, and Unicode case-folding can EXPAND a character rather than
+    # just recase it -- "ſ".upper() is "S", "ß".upper() is "SS", "ﬁ".upper()
+    # is "FI" -- so a non-ASCII symbol can turn into a well-formed one.
+    # Matching on the result rather than the input means whatever the
+    # expansion produces still has to satisfy the pattern.
+    symbol = symbol.strip().upper() if isinstance(symbol, str) else None
+    if paper and not (symbol and PAPER_SYMBOL_RE.match(symbol)):
+        # Before the workdir and before the turn, because the whole of a paper
+        # run is "write about this company". A command that does not say which
+        # would otherwise spend forty minutes researching a company the model
+        # picked for itself, and then be refused at the commit for filing it
+        # under a name that does not match -- a failure that costs the same as
+        # the work.
+        #
+        # Upper-cased once, here, so the prompt and the commit body cannot
+        # disagree: the desk sends uppercase and this is for a command posted
+        # by hand.
+        desk.finish(cid, False, "a paper command must name the company it is "
+                                "for; symbol was %r" % (command.get("symbol"),))
+        return
     workdir = os.path.join(cfg.scratch, cid)
     shutil.rmtree(workdir, ignore_errors=True)
     # No ``tiles/`` on the calendar path. Nothing would ever upload one, so an
@@ -1316,7 +1369,14 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     # research budget making them.
     os.makedirs(workdir if calendar else os.path.join(workdir, "tiles"),
                 exist_ok=True)
-    seed_watchlist(cfg, workdir)
+    if not paper:
+        # Not on the paper path: the company is already chosen, so the file has
+        # nothing to offer this turn and one thing to cost it. The cursor in it
+        # is the *board's* rotation, read by tomorrow's morning order, and a
+        # model handed a file the contract tells it to update will update it.
+        # At the default cadence there are more paper runs in a day than
+        # editions, so the board would skip a company every night.
+        seed_watchlist(cfg, workdir)
     if calendar:
         # In this order and before the turn, so that a desk that cannot say
         # what the owner holds fails the command here rather than after
@@ -1387,7 +1447,8 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         command.get("text", ""),
         kind=kind,
         lang=desk.settings().get("lang", "en"),
-        ask_lang=command.get("lang"))
+        ask_lang=command.get("lang"),
+        symbol=symbol)
     status = run_claude(cfg, text, workdir, agent_env, kind)
     if status != 0:
         desk.finish(cid, False, "claude exited %d" % status)
@@ -1482,9 +1543,13 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
                                     "typeset:\n%s" % report.get("render", ""))
             return
 
-    result = desk.commit(draft)
+    # Keyword arguments through a dict rather than a branch with two calls in
+    # it: every other kind must keep sending the body it has always sent, and
+    # two call sites is two places for that to stop being true.
+    result = desk.commit(draft, **({"target": PAPER_TARGET, "symbol": symbol}
+                                   if paper else {}))
     LOG.info("committed %s: %s", result.get("edition_id"), result.get("state"))
-    if not ask:
+    if not ask and not paper:
         # After the commit and not before: a rotation that advanced past a
         # company whose page never reached the desk skips it for a whole
         # cycle. Not on this path for an `ask`: the file in the workdir is
@@ -1492,6 +1557,10 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
         # from the phone is the rotation's business, and moving the cursor
         # here would advance tomorrow's edition past whatever company the
         # phone happened to be asking about.
+        #
+        # Nor on the paper path, for the other half of the same reason: that
+        # run was never given the file, so what would come back is whatever a
+        # model wrote into a name that happened to be free.
         persist_watchlist(cfg, workdir)
     write_brief(cfg, time.strftime("%Y-%m-%d"), command, result,
                 report.get("validate", ""))
