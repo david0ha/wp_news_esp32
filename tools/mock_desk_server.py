@@ -232,9 +232,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser()
-    # 8199, not 8080: this machine's live desk already holds 127.0.0.1:8080, and binding
-    # 0.0.0.0:8080 here would succeed silently while every request still reached that other
-    # server first — see task-14-report.md's tooling notes.
+    # 8199, not 8080: a desk brought up from server/compose.yaml publishes 8080 on the same
+    # host, and binding 0.0.0.0:8080 beside it succeeds silently while every request still
+    # reaches the desk — a mock that answers nothing and reports no error.
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="dev-operator-token")
