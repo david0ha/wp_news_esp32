@@ -36,6 +36,8 @@ import {
   deskLanguageView,
   EDITION_LANGUAGES,
   humanDeskError,
+  PAPER_REFRESH_PRESETS,
+  paperRefreshView,
   type DeskSettings,
 } from '../../lib/desk'
 import { clearDeskToken, getDeskToken, saveDeskToken } from '../../lib/deskToken'
@@ -856,6 +858,29 @@ function DeskSection({
     }
   }
 
+  // Write the cadence, then draw WHAT THE DESK PUT IN FORCE. The language write's rule, and the
+  // same `alive` guard: a desk behind a cold tunnel has fifteen seconds to answer and the tab can
+  // be left in one. `settings` is sent whole because `putSettings` builds the body field by field
+  // and omits the cadence when there is none — see its comment.
+  const chooseCadence = async (hours: number) => {
+    if (!address || !token || settings === null || hours === settings.paperRefreshHours) return
+    setBusy(true)
+    setLangMsg(null)
+    try {
+      const next = await createDeskClient({ baseUrl: address, token }).putSettings({
+        lang: settings.lang,
+        paperRefreshHours: hours,
+      })
+      if (!alive.current) return
+      setSettings(next)
+      setLangMsg({ tone: 'ok', message: s.settings.desk.paperRefreshSaved })
+    } catch (e) {
+      if (alive.current) setLangMsg({ tone: 'error', message: humanDeskError(e) })
+    } finally {
+      if (alive.current) setBusy(false)
+    }
+  }
+
   const view = deskLanguageView({ address, token, lang, busy, loaded })
   const note =
     view.note === 'needs_setup'
@@ -863,6 +888,15 @@ function DeskSection({
       : view.note === 'unsupported'
         ? fill(s.settings.desk.unsupported, { lang: lang ?? '' })
         : null
+  const cadence = paperRefreshView({ address, token, settings, busy, loaded })
+  const cadenceNote =
+    cadence.note === 'needs_setup'
+      ? s.settings.desk.needsSetup
+      : cadence.note === 'absent'
+        ? s.settings.desk.paperRefreshAbsent
+        : cadence.note === 'custom'
+          ? fill(s.settings.desk.paperRefreshCustom, { hours: String(cadence.hours ?? '') })
+          : null
 
   return (
     <Section title={s.settings.sections.desk}>
@@ -959,6 +993,23 @@ function DeskSection({
         onChange={(i) => void chooseLanguage(EDITION_LANGUAGES[i])}
       />
       {note ? <Text style={styles.help}>{note}</Text> : null}
+
+      <Text style={styles.deskLabel}>{s.settings.desk.paperRefresh}</Text>
+      <Text style={styles.help}>{s.settings.desk.paperRefreshHelp}</Text>
+      <View style={styles.chipRow}>
+        {PAPER_REFRESH_PRESETS.map((hours, i) => (
+          // Keyed on the interval and not on the label: the label is copy and changes with the
+          // language, which would remount every chip on a language switch. `SleepEditor`'s rule.
+          <Chip
+            key={hours}
+            label={formatInterval(hours * 3600)}
+            active={i === cadence.selectedIndex}
+            disabled={cadence.disabled}
+            onPress={() => void chooseCadence(hours)}
+          />
+        ))}
+      </View>
+      {cadenceNote !== null ? <Text style={styles.help}>{cadenceNote}</Text> : null}
       {langMsg ? <Text style={TONE[langMsg.tone]}>{langMsg.message}</Text> : null}
     </Section>
   )

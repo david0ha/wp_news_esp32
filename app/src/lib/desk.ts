@@ -253,6 +253,72 @@ export function deskLanguageView(input: {
 }
 
 /**
+ * The cadences the phone offers, in the order the chips are drawn.
+ *
+ * SIX POINTS IN A RANGE, NOT THE RANGE. The desk takes any integer from 1 to 72; these are the
+ * answers worth one tap. Twelve is the desk's own default and the spec's — a paper costs the
+ * worker thirty to forty minutes, so six hours does not fit in a day beside the board's own runs
+ * for a watchlist of any size. Three is there for a one-symbol watchlist, and seventy-two for
+ * somebody who wants the papers kept warm and little else.
+ */
+export const PAPER_REFRESH_PRESETS: readonly number[] = [3, 6, 12, 24, 48, 72]
+
+export type PaperRefreshNote = 'needs_setup' | 'absent' | 'custom' | null
+
+export interface PaperRefreshView {
+  /** Index into `PAPER_REFRESH_PRESETS`, or `-1` for "no chip is the answer". */
+  selectedIndex: number
+  disabled: boolean
+  note: PaperRefreshNote
+  /** What the desk says is in force, for the `custom` note to quote. */
+  hours: number | null
+}
+
+/**
+ * What the cadence row draws.
+ *
+ * `deskLanguageView`'s shape, with ONE STATE THAT ROW DOES NOT HAVE: a desk that answered
+ * perfectly well and carries no `paper_refresh_hours` at all — every desk one release behind this
+ * app. Drawn as `absent` and disabled, because there is nothing a write could reach; drawn as
+ * "nothing selected" it would look like a control that had broken.
+ *
+ * `settings === null` is "not read yet", which is why the whole document is the input rather than
+ * the number: `hours === null` inside a document that arrived means something entirely different
+ * from no document at all, and one nullable number cannot say both.
+ */
+export function paperRefreshView(input: {
+  address: string | null
+  token: string | null
+  settings: DeskSettings | null
+  busy: boolean
+  loaded: boolean
+}): PaperRefreshView {
+  const ready = Boolean(input.address) && Boolean(input.token)
+  const hours = input.settings?.paperRefreshHours ?? null
+  const selectedIndex = hours === null ? -1 : PAPER_REFRESH_PRESETS.indexOf(hours)
+  // Absent disables — there is nothing on the other end to write to. `custom` does NOT: tapping a
+  // chip is exactly how somebody leaves a hand-set value, so a control that refused to be touched
+  // would strand them on it.
+  const absent = input.settings !== null && hours === null
+  return {
+    selectedIndex,
+    disabled: !ready || input.busy || absent,
+    note: !input.loaded
+      ? null
+      : !ready
+        ? 'needs_setup'
+        : input.busy
+          ? null
+          : absent
+            ? 'absent'
+            : selectedIndex < 0 && hours !== null
+              ? 'custom'
+              : null,
+    hours,
+  }
+}
+
+/**
  * The queue's six statuses, exactly as `store.py` spells them.
  *
  * A closed union and not a string, unlike `PushDevice`'s `prefs`, and the asymmetry is

@@ -8,6 +8,10 @@ import {
   EDITION_LANGUAGES,
   humanDeskError,
   redactPushTokens,
+  PAPER_REFRESH_PRESETS,
+  PAPER_REFRESH_MIN,
+  PAPER_REFRESH_MAX,
+  paperRefreshView,
 } from './desk'
 import { setActiveLanguage } from '../i18n'
 
@@ -814,5 +818,74 @@ describe('deskClient.editionPayload', () => {
       code: 'http',
       status: 404,
     })
+  })
+})
+
+const paperRefreshSettings = (hours: number | null) => ({ lang: 'en', paperRefreshHours: hours })
+
+describe('paperRefreshView', () => {
+  const on = { address: 'https://d', token: 'tok', busy: false, loaded: true }
+
+  it('offers six choices across the desk’s whole range', () => {
+    expect([...PAPER_REFRESH_PRESETS]).toEqual([3, 6, 12, 24, 48, 72])
+  })
+
+  it('lights the chip the desk is set to', () => {
+    expect(paperRefreshView({ ...on, settings: paperRefreshSettings(12) })).toEqual({
+      selectedIndex: 2,
+      disabled: false,
+      note: null,
+      hours: 12,
+    })
+  })
+
+  it('says nothing while storage has not answered, rather than telling a set-up phone to set up', () => {
+    expect(
+      paperRefreshView({ address: null, token: null, settings: null, busy: false, loaded: false }),
+    ).toMatchObject({ note: null, disabled: true })
+  })
+
+  it('asks for an address and a token when there are none', () => {
+    expect(
+      paperRefreshView({ address: null, token: null, settings: null, busy: false, loaded: true }),
+    ).toMatchObject({ note: 'needs_setup', disabled: true, selectedIndex: -1 })
+  })
+
+  it('is dead and quiet while a read or a write is out', () => {
+    expect(paperRefreshView({ ...on, busy: true, settings: paperRefreshSettings(12) })).toMatchObject({
+      disabled: true,
+      note: null,
+    })
+  })
+
+  it('says the desk has no such setting when it answered without one', () => {
+    // NOT "nothing is selected", which reads as a broken control over a desk that answered
+    // perfectly well. This is the state of every desk one release behind.
+    expect(paperRefreshView({ ...on, settings: paperRefreshSettings(null) })).toMatchObject({
+      note: 'absent',
+      disabled: true,
+      selectedIndex: -1,
+    })
+  })
+
+  it('says so when the desk is on a value none of the chips names', () => {
+    // 1..72 is the desk's RANGE; the chips are six points in it. A cadence set by hand is legal
+    // and has to be drawn honestly rather than rounded to the nearest chip.
+    expect(
+      paperRefreshView({ ...on, settings: { lang: 'en', paperRefreshHours: 9 } }),
+    ).toMatchObject({
+      note: 'custom',
+      hours: 9,
+      selectedIndex: -1,
+      // Still usable: tapping a chip is how you leave a custom value.
+      disabled: false,
+    })
+  })
+
+  it('stays within the desk’s own range', () => {
+    for (const h of PAPER_REFRESH_PRESETS) {
+      expect(h).toBeGreaterThanOrEqual(PAPER_REFRESH_MIN)
+      expect(h).toBeLessThanOrEqual(PAPER_REFRESH_MAX)
+    }
   })
 })
