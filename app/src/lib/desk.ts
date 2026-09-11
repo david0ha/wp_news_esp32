@@ -293,6 +293,75 @@ export interface AskBody {
 /** What `POST /api/publish` did. A 404 is a state, not a failure — see `publishNow`. */
 export type PublishOutcome = 'published' | 'nothing_staged'
 
+/**
+ * One company's current newspaper, as `GET /api/papers` reports it.
+ *
+ * A PAPER IS NOT A THING THE DESK STORES. It is the newest edition whose subject is this symbol,
+ * derived on every read from the editions table (spec §2). So a row is a snapshot of an answer and
+ * not an object with an identity: two fetches a minute apart can name two different `editionId`s
+ * for the same symbol, and the pager is expected to follow.
+ *
+ * `editionId` is `null` for a symbol on the watchlist the desk has not written yet — a row of
+ * nulls rather than an absent row, so the pager can say "not written yet" rather than silently
+ * being one page shorter than the watchlist.
+ */
+export interface Paper {
+  /** Uppercase, 1–8 characters. The key everything else is looked up by. */
+  symbol: string
+  /** From the watchlist item, not from the edition. `''` when the desk sent none. */
+  name: string
+  editionId: string | null
+  /**
+   * MILLISECONDS. The wire carries unix SECONDS and `parsePaper` multiplies once — every other
+   * numeric stamp in this app is milliseconds, and mixing the two renders 1970.
+   */
+  createdAt: number | null
+  lang: string | null
+  /** The lead story's headline, for the row on the Board tab. */
+  headline: string | null
+  /** This is the edition currently on the glass. */
+  onBoard: boolean
+  /** Older than the desk's own `paper_refresh_hours`. The DESK decides this, not the phone. */
+  stale: boolean
+}
+
+/** Every printable watchlist symbol, in watchlist order, and what is on the board. */
+export interface PapersDoc {
+  papers: Paper[]
+  /** The current edition's id, or `null` for a desk that has published none. */
+  board: string | null
+}
+
+/** What `POST /api/papers/<S>/publish` did. `no_paper` is a state — see the implementation. */
+export type PublishPaperOutcome =
+  | { kind: 'published'; editionId: string; state: string }
+  | { kind: 'no_paper' }
+
+/**
+ * One row, or `null` for one this client cannot type.
+ *
+ * Only `symbol` is required, because it is what every lookup downstream is keyed on and there is
+ * no honest default for it. Everything else falls back, because a row missing its `headline` is
+ * still a paper worth paging to.
+ */
+function parsePaper(raw: unknown): Paper | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.symbol !== 'string' || o.symbol === '') return null
+  const created =
+    typeof o.created_at === 'number' && Number.isFinite(o.created_at) ? o.created_at * 1000 : null
+  return {
+    symbol: o.symbol,
+    name: typeof o.name === 'string' ? o.name : '',
+    editionId: typeof o.edition_id === 'string' && o.edition_id !== '' ? o.edition_id : null,
+    createdAt: created,
+    lang: typeof o.lang === 'string' && o.lang !== '' ? o.lang : null,
+    headline: typeof o.headline === 'string' && o.headline !== '' ? o.headline : null,
+    onBoard: o.on_board === true,
+    stale: o.stale === true,
+  }
+}
+
 function isCommandStatus(v: unknown): v is CommandStatus {
   return typeof v === 'string' && (COMMAND_STATUSES as readonly string[]).includes(v)
 }
@@ -364,6 +433,15 @@ export interface DeskClient {
   commandNotes(id: string): Promise<string | null>
   /** Force the staged edition out. `nothing_staged` is an outcome; see the implementation. */
   publishNow(): Promise<PublishOutcome>
+  /**
+   * Every printable watchlist symbol's current paper, in watchlist order.
+   *
+   * The ORDER IS THE DESK'S and is carried through untouched — `orderPapers` in
+   * `lib/papers/order.ts` is the only thing allowed to move a row, and it moves exactly one.
+   */
+  papers(): Promise<PapersDoc>
+  /** Put one symbol's newest edition on the glass. `no_paper` is an outcome, not a throw. */
+  publishPaper(symbol: string): Promise<PublishPaperOutcome>
 }
 
 export function createDeskClient(opts: DeskClientOptions): DeskClient {
@@ -529,6 +607,32 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
     return row
   }
 
+  // The paper list. A row this client cannot type is DROPPED, `pushOf`'s rule and for `pushOf`'s
+  // reason: the list is mostly about other companies, and refusing the document over one bad entry
+  // would take the whole pager down. A missing `papers` array is different and does refuse — that
+  // is a desk not speaking this contract, and an empty pager drawn from it would say "no
+  // companies" about a watchlist with five.
+  async function papersOf(res: Response): Promise<PapersDoc> {
+    if (!res.ok) throw await refusal(res, 'papers')
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', 'papers did not answer JSON', res.status)
+    }
+    const envelope = payload as { papers?: unknown; board?: unknown } | null
+    if (!Array.isArray(envelope?.papers)) {
+      throw new DeskError('bad_json', 'papers answered a list this app cannot read', res.status)
+    }
+    const rows: Paper[] = []
+    for (const raw of envelope.papers) {
+      const row = parsePaper(raw)
+      if (row !== null) rows.push(row)
+    }
+    const board = envelope.board
+    return { papers: rows, board: typeof board === 'string' && board !== '' ? board : null }
+  }
+
   return {
     async getSettings(): Promise<DeskSettings> {
       return settingsOf(await send('/api/settings', { method: 'GET' }))
@@ -657,6 +761,39 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       if (res.status === 404) return 'nothing_staged'
       if (!res.ok) throw await refusal(res, 'publish')
       return 'published'
+    },
+
+    async papers(): Promise<PapersDoc> {
+      return papersOf(await send('/api/papers', { method: 'GET' }))
+    },
+
+    async publishPaper(symbol: string): Promise<PublishPaperOutcome> {
+      const res = await send(`/api/papers/${encodeURIComponent(symbol)}/publish`, {
+        method: 'POST',
+      })
+      // THE 404 RULE AGAIN, over the narrowest fact this client has: the list said there was a
+      // paper and by the time the tap landed there was not — pruned, or the symbol dropped off the
+      // watchlist between the fetch and the finger. The row redraws as "no paper yet"; a thrown
+      // error would put a network banner over a desk that answered perfectly well.
+      if (res.status === 404) return { kind: 'no_paper' }
+      if (!res.ok) throw await refusal(res, 'papers')
+      let payload: unknown
+      try {
+        payload = JSON.parse(await res.text())
+      } catch {
+        throw new DeskError('bad_json', 'publish did not answer JSON', res.status)
+      }
+      const o = payload as { edition_id?: unknown; state?: unknown } | null
+      // Without an edition id there is nothing to say went on the glass, and the Board row would
+      // tick itself against an answer that named nothing.
+      if (typeof o?.edition_id !== 'string' || o.edition_id === '') {
+        throw new DeskError('bad_json', 'publish answered without an edition', res.status)
+      }
+      return {
+        kind: 'published',
+        editionId: o.edition_id,
+        state: typeof o.state === 'string' ? o.state : '',
+      }
     },
   }
 }

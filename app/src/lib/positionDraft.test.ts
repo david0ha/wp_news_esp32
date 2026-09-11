@@ -464,6 +464,9 @@ function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
     command: async () => null,
     commandNotes: async () => null,
     publishNow: async () => 'nothing_staged',
+    // Nothing in this file reads the paper list either; see the comment above.
+    papers: async () => ({ papers: [], board: null }),
+    publishPaper: async () => ({ kind: 'no_paper' }),
     ...over,
   }
 }

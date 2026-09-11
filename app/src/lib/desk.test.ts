@@ -537,3 +537,157 @@ describe('deskClient.publishNow', () => {
     await expect(c.publishNow()).rejects.toMatchObject({ code: 'unauthorized', status: 403 })
   })
 })
+
+const paperRow = (over: Record<string, unknown> = {}) => ({
+  symbol: 'SNDK',
+  name: 'SanDisk',
+  edition_id: 'a1b2c3d4e5f60718',
+  created_at: 1_757_000_000,
+  lang: 'en',
+  headline: 'The guide, not the buyback',
+  on_board: true,
+  stale: false,
+  ...over,
+})
+
+const papersBody = (papers: unknown[], board: unknown = 'a1b2c3d4e5f60718') =>
+  JSON.stringify({ ok: true, papers, board })
+
+describe('deskClient.papers', () => {
+  it('GETs /api/papers with the bearer and reads the rows in the order given', async () => {
+    const { client: c, calls } = client([
+      {
+        text: papersBody([
+          paperRow(),
+          paperRow({ symbol: 'TSLA', name: 'Tesla', on_board: false }),
+        ]),
+      },
+    ])
+    const doc = await c.papers()
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers')
+    expect(calls[0].init?.method).toBe('GET')
+    expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(doc.board).toBe('a1b2c3d4e5f60718')
+    expect(doc.papers.map((p) => p.symbol)).toEqual(['SNDK', 'TSLA'])
+    expect(doc.papers[0]).toEqual({
+      symbol: 'SNDK',
+      name: 'SanDisk',
+      editionId: 'a1b2c3d4e5f60718',
+      // SECONDS ON THE WIRE, MILLISECONDS IN THE MODEL. Everything else this app holds as a
+      // number is a millisecond stamp, and one that is not renders as 1970.
+      createdAt: 1_757_000_000_000,
+      lang: 'en',
+      headline: 'The guide, not the buyback',
+      onBoard: true,
+      stale: false,
+    })
+  })
+
+  it('reads a symbol with no paper as a row of nulls, not as an absent row', async () => {
+    // The pager draws a page for it saying the desk has not written one yet. Skipping it would
+    // make a company disappear from the phone because it is new to the watchlist.
+    const { client: c } = client([
+      {
+        text: papersBody([
+          paperRow({
+            symbol: 'MU',
+            name: 'Micron',
+            edition_id: null,
+            created_at: null,
+            lang: null,
+            headline: null,
+            on_board: false,
+            stale: true,
+          }),
+        ]),
+      },
+    ])
+    const doc = await c.papers()
+    expect(doc.papers[0]).toMatchObject({
+      symbol: 'MU',
+      editionId: null,
+      createdAt: null,
+      headline: null,
+      onBoard: false,
+      stale: true,
+    })
+  })
+
+  it('drops a row it cannot type instead of refusing the whole list', async () => {
+    // Four companies must not vanish because the fifth has a broken row. `pushOf`'s rule.
+    const { client: c } = client([
+      { text: papersBody([{ name: 'no symbol here' }, paperRow({ symbol: 'TSLA' })]) },
+    ])
+    expect((await c.papers()).papers.map((p) => p.symbol)).toEqual(['TSLA'])
+  })
+
+  it('reads a desk with no current edition as board: null', async () => {
+    const { client: c } = client([{ text: papersBody([paperRow({ on_board: false })], null) }])
+    expect((await c.papers()).board).toBeNull()
+  })
+
+  it('refuses a 200 that carries no papers array at all', async () => {
+    // A captive portal answering 200 for everything, or a desk not speaking this contract. An
+    // empty pager drawn from it would say "no companies" about a watchlist with five.
+    const { client: c } = client([{ text: '{"ok":true}' }])
+    await expect(c.papers()).rejects.toMatchObject({ code: 'bad_json' })
+  })
+
+  it('passes a refusal through with the desk’s own reason', async () => {
+    const { client: c } = client([{ status: 403, text: '{"ok":false,"error":"forbidden"}' }])
+    await expect(c.papers()).rejects.toMatchObject({ code: 'unauthorized' })
+  })
+})
+
+describe('deskClient.publishPaper', () => {
+  it('POSTs to the symbol’s publish route and reads what was promoted', async () => {
+    const { client: c, calls } = client([
+      { text: '{"ok":true,"edition_id":"a1b2c3d4e5f60718","state":"published"}' },
+    ])
+    expect(await c.publishPaper('SNDK')).toEqual({
+      kind: 'published',
+      editionId: 'a1b2c3d4e5f60718',
+      state: 'published',
+    })
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers/SNDK/publish')
+    expect(calls[0].init?.method).toBe('POST')
+  })
+
+  it('reads “that paper is already on the board” without inventing a failure', async () => {
+    const { client: c } = client([{ text: '{"ok":true,"edition_id":"e1","state":"unchanged"}' }])
+    expect(await c.publishPaper('SNDK')).toEqual({
+      kind: 'published',
+      editionId: 'e1',
+      state: 'unchanged',
+    })
+  })
+
+  it('reads a 404 as “there is no paper for this symbol”, a state and not a failure', async () => {
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"no_paper"}' }])
+    expect(await c.publishPaper('MU')).toEqual({ kind: 'no_paper' })
+  })
+
+  it('percent-encodes the symbol into the path', async () => {
+    // 'BRK.B' has no character `encodeURIComponent` touches, and the desk's own symbol charset
+    // (`[A-Z0-9.-]`) never produces one either — this only proves the dot survives untouched. The
+    // real proof of encoding is the next test, over a character the desk never validated (R-4).
+    const { client: c, calls } = client([
+      { text: '{"ok":true,"edition_id":"e","state":"published"}' },
+    ])
+    await c.publishPaper('BRK.B')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers/BRK.B/publish')
+  })
+
+  it('percent-encodes a symbol carrying a character the desk never validated', async () => {
+    const { client: c, calls } = client([
+      { text: '{"ok":true,"edition_id":"e","state":"published"}' },
+    ])
+    await c.publishPaper('AB/CD')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers/AB%2FCD/publish')
+  })
+
+  it('refuses a 200 with no edition id — there is nothing to say went on the glass', async () => {
+    const { client: c } = client([{ text: '{"ok":true,"state":"published"}' }])
+    await expect(c.publishPaper('SNDK')).rejects.toMatchObject({ code: 'bad_json' })
+  })
+})
