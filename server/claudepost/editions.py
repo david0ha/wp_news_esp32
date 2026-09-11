@@ -130,6 +130,20 @@ REASON_IMMEDIATE = "immediate"
 REASON_DUE = "due"
 REASON_PROMOTED = "promoted"
 REASON_UNCHANGED = "unchanged: identical to the edition already current"
+REASON_PAPER = "paper: filed for {s}; neither pointer moved"
+REASON_UNCHANGED_PAPER = "unchanged: identical to the newest paper for {s}"
+
+#: What a commit is for. ``board`` is the newspaper that goes on the glass and
+#: is every bit of today's behaviour; ``paper`` is the one the desk keeps for a
+#: company whether or not it is the one being printed.
+#:
+#: A named pair rather than a boolean because the difference is not "publish or
+#: not" -- a board commit that stages has not published either -- it is *which
+#: state the edition is being filed into*, and a `publish=False` would read as
+#: the first.
+TARGET_BOARD = "board"
+TARGET_PAPER = "paper"
+COMMIT_TARGETS: tuple[str, ...] = (TARGET_BOARD, TARGET_PAPER)
 
 # ``\Z`` and not ``$`` in all three of the regexes below, and this is the
 # reason: ``$`` also matches before a trailing newline, and every one of these
@@ -173,7 +187,10 @@ LANG_RE = re.compile(r"^[a-z]{2,3}\Z")
 class CommitResult:
     """What became of a commit: the edition, its state, and why.
 
-    ``state`` is one of ``"published"``, ``"staged"`` or ``"unchanged"``.
+    ``state`` is one of ``"published"``, ``"staged"``, ``"unchanged"`` or
+    ``"paper"``. ``"paper"`` is an edition that was filed for the index and
+    not for the glass: it passed every gate but the schedule one, which does
+    not apply to it, and neither pointer moved.
     ``reason`` is prose for a person -- the HTTP layer passes it through to
     whoever filed the draft, and an agent that was told "quiet" can decide to
     wait rather than to file again.
@@ -424,7 +441,9 @@ class EditionStore:
         return eid
 
     # -- the commit --------------------------------------------------------
-    def commit(self, draft_id: str, schedule: Schedule, now: float) -> CommitResult:
+    def commit(self, draft_id: str, schedule: Schedule, now: float,
+               target: str = TARGET_BOARD,
+               symbol: str | None = None) -> CommitResult:
         """Take a draft through every gate and, if it passes them, file it.
 
         The five gates in order: the draft exists and holds a payload, gate 1
@@ -439,20 +458,42 @@ class EditionStore:
         its own copy, and throwing the draft away would make it re-upload every
         tile to change a headline.
 
+        ``target`` picks which of the two things is being filed.
+        :data:`TARGET_BOARD` is the paragraph above, unchanged.
+        :data:`TARGET_PAPER` files the day's newspaper *about a company* --
+        four of the five gates, with the schedule one skipped because nothing
+        is about to appear on any wall, and with the fingerprint compared
+        against that company's own newest paper rather than against
+        ``current``. Neither pointer is written.
+
+        ``symbol`` is required by, and only meaningful to, a paper commit. It
+        is checked against the draft's own ``subject.symbol`` and a
+        disagreement is a ``Conflict``: the index is derived from the payload,
+        so a model that drifted to another company would otherwise file its
+        paper under the name the desk asked for and nothing downstream would
+        ever see the two disagree.
+
         Raises:
             NotFound: no such draft.
-            Conflict: that draft is already inside a commit.
-            BadRequest: no payload, or a gate refused it. The gate's own output
-                is in the message, because that output is the whole product of
-                a failed gate.
+            Conflict: that draft is already inside a commit, or
+                ``commit_symbol_mismatch`` -- the draft is about a different
+                company than the one this commit names.
+            BadRequest: no payload, a gate refused it, an unknown ``target``,
+                or ``commit_needs_symbol`` -- a paper commit that named no
+                company. The gate's own output is in the message, because that
+                output is the whole product of a failed gate.
         """
+        if target not in COMMIT_TARGETS:
+            raise BadRequest(message="target is one of: "
+                                     + ", ".join(COMMIT_TARGETS))
         draft_dir = self._require_draft(draft_id)
         with self._lock:
             if draft_id in self._busy:
                 raise Conflict(message=f"draft {draft_id} is already being committed")
             self._busy.add(draft_id)
         try:
-            return self._commit(draft_id, draft_dir, schedule, now)
+            return self._commit(draft_id, draft_dir, schedule, now,
+                                target, symbol)
         finally:
             with self._lock:
                 self._busy.discard(draft_id)
@@ -812,7 +853,8 @@ class EditionStore:
 
     # -- internals ---------------------------------------------------------
     def _commit(self, draft_id: str, draft_dir: str, schedule: Schedule,
-                now: float) -> CommitResult:
+                now: float, target: str = TARGET_BOARD,
+                symbol: str | None = None) -> CommitResult:
         """:meth:`commit`, with the draft already claimed in ``_busy``."""
         raw = self._draft_payload(draft_dir)
         if raw is None:
@@ -835,27 +877,58 @@ class EditionStore:
 
         eid, stored, dropped = _fingerprint_draft(draft_dir, raw)
         tile_ids = _tile_ids(os.path.join(draft_dir, TILES_DIR))
+        subject = _subject_symbol(stored)
+        is_paper = target == TARGET_PAPER
 
-        if eid == self.current_id():
-            # The bytes are already on the glass and already on disk as an
-            # immutable edition, so the draft has nowhere left to go. No pointer
-            # write and no publish row: an unchanged commit is not a publish and
-            # must not restart the minimum gap.
-            self._store.audit("commit", {"edition": eid, "state": "unchanged",
-                                         "draft": draft_id})
-            self._drop_draft(draft_id)
-            return CommitResult(eid, "unchanged", REASON_UNCHANGED)
+        if is_paper:
+            if not symbol:
+                raise BadRequest("commit_needs_symbol",
+                                 "a paper commit names the company it is for")
+            if subject != symbol:
+                # THE WALL. The index is keyed by the payload's own subject, so
+                # filing this would put a newspaper about one company under
+                # another company's name -- and nothing downstream could ever
+                # see the two disagree, because downstream only ever reads the
+                # index. Refusing here is what makes a drifted run a failed
+                # command with a reason in the queue instead.
+                raise Conflict("commit_symbol_mismatch",
+                               f"this draft is about {subject or 'no company'}, "
+                               f"not about {symbol}")
+            if eid == self._newest_paper_id(symbol):
+                self._store.audit("commit", {"edition": eid,
+                                             "state": "unchanged",
+                                             "draft": draft_id,
+                                             "symbol": symbol})
+                self._drop_draft(draft_id)
+                return CommitResult(eid, "unchanged",
+                                    REASON_UNCHANGED_PAPER.format(s=symbol))
+            # No schedule gate: a paper appears on nobody's wall, so a quiet
+            # window, a hold and the minimum gap all have nothing to say about
+            # it. `ok` is False so the meta below records no published_at, and
+            # the tail files rather than stages.
+            ok, reason = False, REASON_PAPER.format(s=symbol)
+        else:
+            if eid == self.current_id():
+                # The bytes are already on the glass and already on disk as an
+                # immutable edition, so the draft has nowhere left to go. No
+                # pointer write and no publish row: an unchanged commit is not
+                # a publish and must not restart the minimum gap.
+                self._store.audit("commit", {"edition": eid,
+                                             "state": "unchanged",
+                                             "draft": draft_id})
+                self._drop_draft(draft_id)
+                return CommitResult(eid, "unchanged", REASON_UNCHANGED)
 
-        ok, reason = self._schedule_gate(schedule, now, now)
+            ok, reason = self._schedule_gate(schedule, now, now)
 
-        if eid == self.staged_id():
-            # Already waiting, and waiting is idempotent. Rewriting the pointer
-            # would only move an mtime; publishing is publish_due's decision and
-            # it runs every few seconds.
-            self._store.audit("commit", {"edition": eid, "state": "staged",
-                                         "draft": draft_id})
-            self._drop_draft(draft_id)
-            return CommitResult(eid, "staged", reason)
+            if eid == self.staged_id():
+                # Already waiting, and waiting is idempotent. Rewriting the
+                # pointer would only move an mtime; publishing is publish_due's
+                # decision and it runs every few seconds.
+                self._store.audit("commit", {"edition": eid, "state": "staged",
+                                             "draft": draft_id})
+                self._drop_draft(draft_id)
+                return CommitResult(eid, "staged", reason)
 
         # The gate runs before the build so that meta.json is born with the
         # right published_at. It is written once and never rewritten.
@@ -901,6 +974,8 @@ class EditionStore:
             self._store.record_edition(eid, meta)
 
             with self._lock:
+                if is_paper:
+                    return self._file_paper(eid, symbol, reason, draft_id)
                 if ok:
                     return self._publish(eid, now, reason, draft_id=draft_id)
                 return self._stage(eid, now, reason, draft_id=draft_id)
@@ -939,6 +1014,24 @@ class EditionStore:
         if draft_id is not None:
             self._drop_draft(draft_id)
         return CommitResult(edition_id, "staged", reason)
+
+    def _file_paper(self, edition_id: str, symbol: str, reason: str,
+                    draft_id: str) -> CommitResult:
+        """Record a paper. Called with the lock held.
+
+        The shortest of the three tails, and deliberately: there is no pointer
+        to write, no publish row to add and no gap to restart. The edition is
+        already on disk and already in the store by the time this runs, so all
+        that is left is the audit line and the draft.
+        """
+        self._store.audit("paper", {"edition": edition_id, "symbol": symbol})
+        self._drop_draft(draft_id)
+        return CommitResult(edition_id, "paper", reason)
+
+    def _newest_paper_id(self, symbol: str) -> str | None:
+        """The edition this company's paper currently is, or ``None``."""
+        meta = self._newest_by_symbol().get(symbol)
+        return meta["id"] if meta else None
 
     def _schedule_gate(self, schedule: Schedule, now: float,
                        staged_at: float) -> tuple[bool, str]:

@@ -659,6 +659,162 @@ class PapersTest(SubjectMetaTest):
         self.assertEqual(self.es.prune(keep=2), 3)
 
 
+class PaperCommitTest(SubjectMetaTest):
+    """Filing a newspaper that is not for the glass.
+
+    Everything the board's own commit does, minus the schedule gate and both
+    pointer writes. The one new refusal is the wall: the index is keyed by the
+    payload's own subject, so a model that drifted to another company would
+    file its paper under the name the desk asked for and nobody would ever see
+    the two disagree.
+    """
+
+    def paper(self, symbol="SNDK", n=1, commit_as=None, **top):
+        """A draft naming ``symbol``, committed as a paper for ``commit_as``."""
+        d = self.es.open_draft()
+        doc = {"edition": "2026-08-19", "serial": n,
+               "subject": {"symbol": symbol, "name": "Sandisk Corp."},
+               "stories": [{"rank": 0, "headline": f"Story {n}"}]}
+        doc.update(top)
+        self.es.put_payload(d, json.dumps(doc).encode())
+        return self.es.commit(d, IMMEDIATE, self.clock.now(),
+                              target="paper",
+                              symbol=commit_as or symbol)
+
+    def test_a_paper_commit_files_an_edition_and_says_so(self):
+        r = self.paper()
+        self.assertEqual(r.state, "paper")
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], r.edition_id)
+        self.assertIsNotNone(self.es.read_payload(r.edition_id))
+
+    def test_it_writes_neither_pointer(self):
+        board = self.a_company("ACME", n=0).edition_id
+        r = self.paper("SNDK", n=1)
+        self.assertEqual(self.es.current_id(), board)
+        self.assertIsNone(self.es.staged_id())
+        self.assertNotEqual(r.edition_id, board)
+
+    def test_it_is_not_a_publish_and_does_not_restart_the_minimum_gap(self):
+        # A paper never reaches the glass, so counting it as a publish would
+        # make the board's own next edition wait behind a page nobody saw.
+        self.paper()
+        self.assertIsNone(self.es._store.last_publish_at())
+
+    def test_it_records_no_published_at(self):
+        r = self.paper()
+        self.assertIsNone(self.es.edition_meta(r.edition_id)["published_at"])
+
+    def test_the_schedule_gate_does_not_apply(self):
+        # The one gate a paper skips. A quiet window is about what may appear
+        # on the wall, and a paper appears on nobody's wall.
+        quiet = sched(quiet=[{"from": "00:00", "to": "23:59"}], wake=[],
+                      publish={"policy": "manual", "min_gap_minutes": 600})
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"serial": 7, "subject": {"symbol": "SNDK"}}).encode())
+        r = self.es.commit(d, quiet, self.clock.now(),
+                           target="paper", symbol="SNDK")
+        self.assertEqual(r.state, "paper")
+
+    def test_a_failing_gate_still_refuses_a_paper(self):
+        self.gates.validate_ok = False
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"subject": {"symbol": "SNDK"}}).encode())
+        with self.assertRaises(BadRequest) as caught:
+            self.es.commit(d, IMMEDIATE, self.clock.now(),
+                           target="paper", symbol="SNDK")
+        self.assertEqual(caught.exception.code, "gate_failed")
+
+    def test_an_unchanged_paper_is_unchanged(self):
+        first = self.paper("SNDK", n=1)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "unchanged")
+        self.assertEqual(again.edition_id, first.edition_id)
+
+    def test_the_fingerprint_gate_looks_at_the_symbol_and_not_at_the_board(self):
+        # The board is showing SNDK. A paper about SNDK with different copy is
+        # a change; the comparison that matters is against SNDK's own newest
+        # paper, not against whatever happens to be on the glass.
+        board = self.a_company("ACME", n=0).edition_id
+        first = self.paper("SNDK", n=1)
+        second = self.paper("SNDK", n=2)
+        self.assertEqual(second.state, "paper")
+        self.assertNotEqual(second.edition_id, first.edition_id)
+        self.assertEqual(self.es.current_id(), board)
+
+    def test_a_paper_identical_to_what_is_on_the_board_is_unchanged(self):
+        # Same bytes, same id, already on disk: there is nowhere for the draft
+        # to go, whichever pointer happens to name it.
+        d = self.es.open_draft()
+        raw = json.dumps({"serial": 4, "subject": {"symbol": "SNDK"}}).encode()
+        self.es.put_payload(d, raw)
+        board = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertEqual(board.state, "published")
+
+        d2 = self.es.open_draft()
+        self.es.put_payload(d2, raw)
+        again = self.es.commit(d2, IMMEDIATE, self.clock.now(),
+                               target="paper", symbol="SNDK")
+        self.assertEqual(again.state, "unchanged")
+        self.assertEqual(again.edition_id, board.edition_id)
+
+    def test_a_draft_about_another_company_is_refused(self):
+        with self.assertRaises(Conflict) as caught:
+            self.paper(symbol="ACME", commit_as="SNDK")
+        self.assertEqual(caught.exception.code, "commit_symbol_mismatch")
+        self.assertIn("ACME", caught.exception.message)
+        self.assertIn("SNDK", caught.exception.message)
+
+    def test_a_refused_paper_files_nothing(self):
+        board = self.a_company("SNDK", n=0).edition_id
+        with self.assertRaises(Conflict):
+            self.paper(symbol="ACME", commit_as="SNDK")
+        self.assertIsNone(self.es.papers(["ACME"])["ACME"])
+        self.assertEqual(self.es.current_id(), board)
+
+    def test_a_draft_with_no_usable_subject_is_refused_as_a_mismatch(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({"serial": 3}).encode())
+        with self.assertRaises(Conflict) as caught:
+            self.es.commit(d, IMMEDIATE, self.clock.now(),
+                           target="paper", symbol="SNDK")
+        self.assertEqual(caught.exception.code, "commit_symbol_mismatch")
+
+    def test_a_paper_commit_with_no_symbol_is_refused(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"subject": {"symbol": "SNDK"}}).encode())
+        with self.assertRaises(BadRequest) as caught:
+            self.es.commit(d, IMMEDIATE, self.clock.now(), target="paper")
+        self.assertEqual(caught.exception.code, "commit_needs_symbol")
+
+    def test_an_unknown_target_is_refused(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, payload(1))
+        with self.assertRaises(BadRequest):
+            self.es.commit(d, IMMEDIATE, self.clock.now(), target="glass")
+
+    def test_the_board_target_is_exactly_what_a_commit_did_before(self):
+        by_default = self.file(1)
+        self.assertEqual(by_default.state, "published")
+        d = self.es.open_draft()
+        self.es.put_payload(d, payload(2))
+        self.es.put_tile(d, "pic", b"\x01\x02\x03\x04")
+        named = self.es.commit(d, IMMEDIATE, self.clock.now(), target="board")
+        self.assertEqual(named.state, "published")
+        self.assertEqual(self.es.current_id(), named.edition_id)
+
+    def test_a_successful_paper_consumes_its_draft(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"serial": 5, "subject": {"symbol": "SNDK"}}).encode())
+        self.es.commit(d, IMMEDIATE, self.clock.now(),
+                       target="paper", symbol="SNDK")
+        with self.assertRaises(NotFound):
+            self.es.draft_info(d)
+
+
 # --------------------------------------------------------------------------
 # Gate 5 — the swap, and what a failure must not touch
 # --------------------------------------------------------------------------
