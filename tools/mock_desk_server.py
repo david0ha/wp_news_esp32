@@ -232,9 +232,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser()
-    # 8199, not 8080: a desk brought up from server/compose.yaml publishes 8080 on the same
-    # host, and binding 0.0.0.0:8080 beside it succeeds silently while every request still
-    # reaches the desk — a mock that answers nothing and reports no error.
+    # 8199, not 8080: 8080 is the desk's own listening port, and when a desk is already bound
+    # there a second bind on 0.0.0.0:8080 succeeds silently while every request still reaches
+    # the first listener — a mock that starts cleanly, answers nothing and reports no error.
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="dev-operator-token")
