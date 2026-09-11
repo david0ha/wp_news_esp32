@@ -148,6 +148,25 @@ _EID_RE = re.compile(r"^[0-9a-f]{16}\Z")
 #: came to advertise a ``.bmp`` the sheet route then refused.
 SHEET_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.(?:png|bmp)\Z")
 
+#: What an edition's ``lang`` is when the payload does not say, or says
+#: something that is not a language tag. The device's own rule, from
+#: ``docs/news-contract.md``: "absent or malformed means ``en``". The meta has
+#: to agree with what is actually printed rather than recording "unknown",
+#: because the phone draws this field as the paper's language.
+DEFAULT_LANG = "en"
+
+#: A ``subject.symbol`` as the index will key on it. Eight characters because
+#: that is the device's buffer and the validator's cap; anything else is an
+#: edition the index simply cannot key, which is not an error -- gate 1 decides
+#: what an edition is, and this decides what a *paper* is.
+SUBJECT_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,8}\Z")
+
+#: A BCP-47 primary subtag, the wire's own shape from ``docs/news-contract.md``.
+#: Not :data:`~claudepost.settings.LANGS`: this field describes the text that
+#: is actually in the payload, and the desk deliberately does not cross-check
+#: an edition's language against the setting.
+LANG_RE = re.compile(r"^[a-z]{2,3}\Z")
+
 
 @dataclass(frozen=True)
 class CommitResult:
@@ -635,7 +654,55 @@ class EditionStore:
             raise NotFound(message=f"edition {edition_id} has unreadable metadata") from None
         if not isinstance(doc, dict):
             raise NotFound(message=f"edition {edition_id} has unreadable metadata")
+        return self._filled(edition_id, doc)
+
+    def _subject_of(self, edition_id: str) -> tuple[str | None, str, str | None]:
+        """An edition's company, language and lead headline, off its stored payload."""
+        payload = self.read_payload(edition_id)
+        return (_subject_symbol(payload), _payload_lang(payload),
+                _lead_headline(payload))
+
+    def _filled(self, edition_id: str, doc: dict) -> dict:
+        """``doc`` with ``symbol`` and ``lang`` on it however old the edition is.
+
+        The migration that does not run. ``meta.json`` is an edition's birth
+        certificate and is never rewritten, so an edition filed before those
+        two fields existed gets them derived from its own stored payload on the
+        way out -- which is also what makes a pre-change edition a paper for
+        its company rather than an edition about nobody.
+
+        Membership and not truthiness: an edition filed *after* this change
+        about a payload with no usable subject records ``"symbol": null``, and
+        that is an answer rather than an omission. Re-deriving it every time
+        would read the payload to learn what the meta already says.
+        """
+        if "symbol" in doc and "lang" in doc:
+            return doc
+        symbol, lang, _headline = self._subject_of(edition_id)
+        doc.setdefault("symbol", symbol)
+        doc.setdefault("lang", lang)
         return doc
+
+    def headline(self, edition_id: str) -> str | None:
+        """The lead story's headline, for a reader choosing between papers.
+
+        ``None`` for an edition with no stories, and for one that is not there
+        at all -- the serving path's rule, because both mean the same thing to
+        a pager drawing a row.
+        """
+        return self._subject_of(edition_id)[2]
+
+    def list_editions(self, limit: int = 50) -> list[dict]:
+        """The history, each row carrying its company and its language.
+
+        Here rather than in :meth:`~claudepost.store.Store.list_editions`
+        because the fill reads a payload off the disk, which is this module's
+        territory and not the database's -- and because a row from the store
+        and a row from :meth:`edition_meta` answering "which company is this"
+        differently is exactly the bug the shared :meth:`_filled` prevents.
+        """
+        return [self._filled(row["id"], row)
+                for row in self._store.list_editions(limit)]
 
     # -- retention ---------------------------------------------------------
     def prune(self, keep: int | None = None) -> int:
@@ -722,10 +789,19 @@ class EditionStore:
 
         # The gate runs before the build so that meta.json is born with the
         # right published_at. It is written once and never rewritten.
+        #
+        # `symbol` and `lang` are the payload's own, copied here rather than
+        # left to be re-derived: they are what the paper index keys on, and an
+        # index that re-parsed 300 KB of JSON per row per request would be a
+        # phone refresh costing more than the edition it draws. Both are
+        # nullable-by-shape rather than by absence -- see `_filled`, which is
+        # the reader for every edition filed before they existed.
         meta = {"id": eid,
                 "created_at": now,
                 "published_at": now if ok else None,
                 "source": draft_id,
+                "symbol": _subject_symbol(stored),
+                "lang": _payload_lang(stored),
                 "validate": _clip(verdict.output),
                 "render": _clip(render.output),
                 "dropped_producer_policy": dropped,
@@ -1204,6 +1280,77 @@ def _stored_payload(raw: bytes) -> tuple[bytes, bool]:
     doc.pop("policy", None)
     return json.dumps(doc, separators=(",", ":"),
                       ensure_ascii=False).encode("utf-8"), True
+
+
+def _payload_doc(payload: bytes | None) -> dict:
+    """A stored payload as a dict, or an empty one however it failed.
+
+    Every way of failing is the same answer here -- no payload, a payload that
+    is not JSON, a payload that is JSON but not an object -- because every one
+    of them means the same thing to the index: there is nothing to key on.
+    ``read_payload``'s rule, one level up.
+    """
+    if not payload:
+        return {}
+    try:
+        doc = json.loads(payload)
+    except ValueError:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _subject_symbol(payload: bytes | None) -> str | None:
+    """The company an edition is about, as the index keys on it, or ``None``.
+
+    Upper-cased before it is matched, so ``"sndk"`` and ``"SNDK"`` are one
+    paper -- the same rule :func:`~claudepost.watchlist._symbol` and
+    :func:`~claudepost.store._checked_symbol` follow, and the reason a commit
+    can compare the two directly.
+    """
+    subject = _payload_doc(payload).get("subject")
+    symbol = subject.get("symbol") if isinstance(subject, dict) else None
+    if not isinstance(symbol, str):
+        return None
+    symbol = symbol.strip().upper()
+    return symbol if SUBJECT_SYMBOL_RE.match(symbol) else None
+
+
+def _payload_lang(payload: bytes | None) -> str:
+    """The language an edition is written in. Never ``None``; see :data:`DEFAULT_LANG`."""
+    lang = _payload_doc(payload).get("lang")
+    if isinstance(lang, str) and LANG_RE.match(lang):
+        return lang
+    return DEFAULT_LANG
+
+
+def _lead_headline(payload: bytes | None) -> str | None:
+    """The lead story's headline, for a reader choosing between papers.
+
+    The lead is the LOWEST-ranked story and not ``stories[0]``, because the
+    wire carries a rank and nothing about order -- ``docs/news-contract.md``'s
+    "``stories[]`` keeps the N lowest ranks" is the device's own rule and this
+    is the same one. A story with no usable rank sorts last rather than first,
+    so a producer that omitted the field cannot displace one that filed it.
+    Ties go to the earlier entry, which is the only tiebreak the payload
+    offers.
+    """
+    stories = _payload_doc(payload).get("stories")
+    if not isinstance(stories, list):
+        return None
+    best: tuple[tuple[float, int], str] | None = None
+    for i, story in enumerate(stories):
+        if not isinstance(story, dict):
+            continue
+        headline = story.get("headline")
+        if not isinstance(headline, str) or not headline.strip():
+            continue
+        rank = story.get("rank")
+        if isinstance(rank, bool) or not isinstance(rank, (int, float)):
+            rank = float("inf")
+        key = (float(rank), i)
+        if best is None or key < best[0]:
+            best = (key, headline)
+    return best[1] if best else None
 
 
 def _content_of(stored: bytes) -> bytes:

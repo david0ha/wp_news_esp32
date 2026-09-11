@@ -487,6 +487,102 @@ class FingerprintTest(EditionTestCase):
         self.assertEqual(self.es.fingerprint(plain), self.es.fingerprint(blocked))
 
 
+class SubjectMetaTest(EditionTestCase):
+    """What an edition records about the company it is about.
+
+    The paper index is derived from this and from nothing else, so the two
+    things it has to survive are a producer that filed a payload before this
+    field existed, and a payload whose subject is not usable as an index key.
+    """
+
+    def a_company(self, symbol="SNDK", n=1, **top):
+        """A draft whose payload names a company, committed."""
+        d = self.es.open_draft()
+        doc = {"edition": "2026-08-19", "serial": n,
+               "subject": {"symbol": symbol, "name": "Sandisk Corp."},
+               "stories": [{"rank": 0, "headline": f"Story {n}"}]}
+        doc.update(top)
+        self.es.put_payload(d, json.dumps(doc).encode())
+        return self.es.commit(d, IMMEDIATE, self.clock.now())
+
+    def test_a_commit_records_the_symbol_and_the_language(self):
+        eid = self.a_company("SNDK", lang="ko").edition_id
+        meta = self.es.edition_meta(eid)
+        self.assertEqual(meta["symbol"], "SNDK")
+        self.assertEqual(meta["lang"], "ko")
+
+    def test_a_payload_with_no_language_is_recorded_as_english(self):
+        # `docs/news-contract.md`: absent or malformed means `en`, and the
+        # device applies the same rule -- so the meta must agree with what is
+        # actually printed rather than saying "unknown".
+        meta = self.es.edition_meta(self.a_company("ACME").edition_id)
+        self.assertEqual(meta["lang"], "en")
+
+    def test_a_lower_case_ticker_is_recorded_upper_case(self):
+        meta = self.es.edition_meta(self.a_company("sndk").edition_id)
+        self.assertEqual(meta["symbol"], "SNDK")
+
+    def test_a_payload_with_no_usable_symbol_records_none(self):
+        # Not an error and not a refusal: gate 1 is what decides whether a
+        # payload is an edition, and an edition the index cannot key is simply
+        # not a paper for anybody.
+        for bad in (None, "", "WAY-TOO-LONG-SYMBOL", "A B", 17):
+            with self.subTest(symbol=bad):
+                d = self.es.open_draft()
+                self.es.put_payload(d, json.dumps(
+                    {"serial": repr(bad), "subject": {"symbol": bad}}).encode())
+                r = self.es.commit(d, IMMEDIATE, self.clock.now())
+                self.assertIsNone(self.es.edition_meta(r.edition_id)["symbol"])
+
+    def test_an_edition_filed_before_these_fields_is_filled_from_its_payload(self):
+        # The migration that does not run. An edition's meta.json is its birth
+        # certificate and is never rewritten, so the two fields are derived on
+        # the way out instead -- which is also why a pre-change edition is
+        # still a paper for its company.
+        eid = self.a_company("NVDA", lang="ko").edition_id
+        path = os.path.join(self.root, "editions", eid, "meta.json")
+        with open(path, "r+", encoding="utf-8") as f:
+            doc = json.load(f)
+            doc.pop("symbol")
+            doc.pop("lang")
+            f.seek(0)
+            json.dump(doc, f)
+            f.truncate()
+
+        meta = self.es.edition_meta(eid)
+        self.assertEqual(meta["symbol"], "NVDA")
+        self.assertEqual(meta["lang"], "ko")
+
+    def test_the_history_carries_the_two_fields_on_both_paths(self):
+        # `edition_meta` reads a file and `list_editions` reads a database.
+        # Two readers answering "which company is this" differently is the
+        # bug this test exists to prevent.
+        eid = self.a_company("SNDK", lang="ko").edition_id
+        [row] = [r for r in self.es.list_editions() if r["id"] == eid]
+        self.assertEqual((row["symbol"], row["lang"]),
+                         (self.es.edition_meta(eid)["symbol"],
+                          self.es.edition_meta(eid)["lang"]))
+
+    def test_the_lead_headline_is_the_lowest_ranked_story(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({
+            "subject": {"symbol": "SNDK"},
+            "stories": [{"rank": 30, "headline": "A brief"},
+                        {"rank": 10, "headline": "The lead"},
+                        {"rank": 20, "headline": "A second"}]}).encode())
+        r = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertEqual(self.es.headline(r.edition_id), "The lead")
+
+    def test_an_edition_with_no_stories_has_no_headline(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({"subject": {"symbol": "SNDK"}}).encode())
+        r = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertIsNone(self.es.headline(r.edition_id))
+
+    def test_an_edition_that_is_not_there_has_no_headline(self):
+        self.assertIsNone(self.es.headline("0" * 16))
+
+
 # --------------------------------------------------------------------------
 # Gate 5 — the swap, and what a failure must not touch
 # --------------------------------------------------------------------------
