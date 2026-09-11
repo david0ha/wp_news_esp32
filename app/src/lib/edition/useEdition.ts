@@ -66,11 +66,31 @@ export function useEdition(): {
   // the write to disk, which the reducer cannot.
   const seqRef = useRef(0)
 
+  // AND DISCARDS ONE THAT LANDS AFTER THIS HOOK IS GONE. `seqRef` is per-instance and nothing bumps
+  // it on unmount, so a fetch still in flight when the component goes away used to run its whole
+  // post-await body — including `writeCachedEdition`, which sets the module-wide current-edition
+  // slot synchronously. On a phone with a desk token that is not hypothetical: Today draws the
+  // single-page reader for the first frames, starts a device-plane `/news.json` fetch, and then
+  // unmounts it when the paper list lands and the pager takes over. The dead hook's response
+  // arrived seconds later and overwrote the slot the pager's own page had already published, so a
+  // tile tapped on page three opened page zero's story. Nothing re-asserted it afterwards.
+  //
+  // Set true on mount rather than only false on cleanup: an effect that is torn down and re-run —
+  // StrictMode's double-invoke, or any future remount of the same instance — would otherwise leave
+  // the hook permanently unable to write.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
   const runFetch = useCallback(async (url: string, etag: string | null) => {
     const seq = ++seqRef.current
     try {
       const result = await editionClient.fetch(url, etag)
-      if (seqRef.current !== seq) return
+      if (!mounted.current || seqRef.current !== seq) return
       const fetchedAt = Date.now()
       if (result.status === 'ok') {
         const before = machineRef.current.state
