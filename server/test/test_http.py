@@ -1040,6 +1040,121 @@ class ControlPlaneTest(DeskTestCase):
         self.assertIn("PUT", headers.get("Allow", ""))
 
 
+class PaperCommandTest(DeskTestCase):
+    """A `paper` command over the wire, and the symbol it must carry."""
+
+    def post(self, **doc):
+        doc.setdefault("kind", "paper")
+        doc.setdefault("text", "Refresh the paper for SNDK.")
+        return self.api("POST", "/api/commands", doc, "producer")
+
+    def test_a_paper_command_carries_its_company(self):
+        status, doc = self.post(symbol="SNDK")
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["command"]["kind"], "paper")
+        self.assertEqual(doc["command"]["symbol"], "SNDK")
+
+    def test_the_symbol_comes_back_on_the_read_and_on_the_list(self):
+        _s, doc = self.post(symbol="sndk")
+        cid = doc["command"]["id"]
+        status, one = self.api("GET", "/api/commands/%s" % cid, None, "producer")
+        self.assertEqual(status, 200, one)
+        self.assertEqual(one["command"]["symbol"], "SNDK")
+
+        status, listed = self.api("GET", "/api/commands", None, "producer")
+        self.assertEqual(status, 200, listed)
+        [row] = [r for r in listed["commands"] if r["id"] == cid]
+        self.assertEqual(row["symbol"], "SNDK")
+
+    def test_a_paper_without_a_symbol_is_a_bad_request(self):
+        status, doc = self.post()
+        self.assertEqual(status, 400, doc)
+
+    def test_another_kind_with_a_symbol_is_a_bad_request(self):
+        status, doc = self.post(kind="custom", symbol="SNDK")
+        self.assertEqual(status, 400, doc)
+
+    def test_the_older_kinds_still_post_and_report_a_null_symbol(self):
+        status, doc = self.post(kind="custom", text="look at the guide")
+        self.assertEqual(status, 200, doc)
+        self.assertIsNone(doc["command"]["symbol"])
+
+
+class CommitTargetTest(DeskTestCase):
+    """The commit body, and the fact that no body still means the board."""
+
+    #: A payload about a company, so a paper commit has a subject to match.
+    SNDK = json.dumps({
+        "edition": "SEMICONDUCTORS",
+        "subject": {"symbol": "SNDK", "name": "Sandisk Corp."},
+        "stories": [{"rank": 0, "headline": "A headline long enough to be one",
+                     "body": "MILPITAS — copy."}],
+    }).encode()
+
+    def draft(self, payload=None):
+        status, doc = self.api("POST", "/api/drafts", {}, "producer")
+        self.assertEqual(status, 200, doc)
+        draft = doc["draft_id"]
+        status, _, _ = self.call("PUT", "/api/drafts/%s/news.json" % draft,
+                                 payload or self.SNDK, self.tokens["producer"])
+        self.assertEqual(status, 200)
+        return draft
+
+    def commit(self, draft, body=None):
+        return self.api("POST", "/api/drafts/%s/commit" % draft, body, "producer")
+
+    def test_no_body_at_all_is_still_a_board_commit(self):
+        draft = self.draft()
+        status, raw, _ = self.call("POST", "/api/drafts/%s/commit" % draft,
+                                   None, self.tokens["producer"])
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(json.loads(raw)["state"], "published")
+
+    def test_an_empty_object_is_still_a_board_commit(self):
+        status, doc = self.commit(self.draft(), {})
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["state"], "published")
+
+    def test_a_paper_commit_files_without_moving_the_board(self):
+        board = self.file_edition()
+        status, doc = self.commit(self.draft(),
+                                  {"target": "paper", "symbol": "SNDK"})
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["state"], "paper")
+
+        status, editions = self.api("GET", "/api/editions", None, "producer")
+        self.assertEqual(editions["current"], board["edition_id"])
+        self.assertIsNone(editions["staged"])
+
+    def test_a_lower_case_symbol_in_the_body_is_accepted(self):
+        status, doc = self.commit(self.draft(),
+                                  {"target": "paper", "symbol": "sndk"})
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["state"], "paper")
+
+    def test_a_draft_about_another_company_is_a_conflict(self):
+        status, doc = self.commit(self.draft(),
+                                  {"target": "paper", "symbol": "ACME"})
+        self.assertEqual(status, 409, doc)
+        self.assertEqual(doc["error"], "commit_symbol_mismatch")
+
+    def test_a_paper_target_with_no_symbol_is_a_bad_request(self):
+        status, doc = self.commit(self.draft(), {"target": "paper"})
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(doc["error"], "commit_needs_symbol")
+
+    def test_a_target_the_desk_has_never_heard_of_is_a_bad_request(self):
+        status, doc = self.commit(self.draft(), {"target": "glass"})
+        self.assertEqual(status, 400, doc)
+
+    def test_the_history_reports_the_company_and_the_language(self):
+        self.commit(self.draft(), {"target": "paper", "symbol": "SNDK"})
+        status, doc = self.api("GET", "/api/editions", None, "producer")
+        self.assertEqual(status, 200, doc)
+        [row] = [r for r in doc["editions"] if r.get("symbol") == "SNDK"]
+        self.assertEqual(row["lang"], "en")
+
+
 class WatchlistTest(DeskTestCase):
     """`/api/watchlist`: an operator's own private view, a producer's read-only one."""
 

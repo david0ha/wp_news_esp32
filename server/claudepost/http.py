@@ -54,7 +54,7 @@ from . import (calendar as cal, notes, policy, positions as pos, push,
                tiles, watchlist as wl)
 from .app import COMMAND_ID_RE, Desk, as_int, utc_stamp
 from .auth import require, scope_from_header
-from .editions import CommitResult, SHEET_RE
+from .editions import COMMIT_TARGETS, TARGET_BOARD, CommitResult, SHEET_RE
 from .errors import BadRequest, Conflict, DeskError, Internal, NotFound, TooLarge, epoch_seconds
 
 LOG = logging.getLogger("claudepost.http")
@@ -571,13 +571,38 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(200, data, _SHEET_TYPES[os.path.splitext(name)[1]])
 
     def h_commit(self, match, _query) -> None:
+        """File a draft, for the board or as a company's paper.
+
+        The body is **optional**, and that is the compatibility promise: no
+        body, an empty object, or one with no ``target`` is exactly the board
+        commit this route has always been. A worker one release behind the desk
+        goes on filing editions.
+        """
         desk = self.desk
+        doc = self._json_body(required=False)
+        target = doc.get("target", TARGET_BOARD)
+        if target not in COMMIT_TARGETS:
+            raise BadRequest(message="target is one of: "
+                                     + ", ".join(COMMIT_TARGETS))
+        symbol = doc.get("symbol")
+        if symbol is not None:
+            # Shape here, meaning in `editions.commit`: a non-string cannot be
+            # upper-cased, and everything past that -- whether it matches the
+            # draft's own subject -- is the commit's decision and not a route's.
+            if not isinstance(symbol, str) or isinstance(symbol, bool):
+                raise BadRequest(message="symbol is a ticker")
+            symbol = symbol.upper()
         self._send_commit(desk.editions.commit(match.group("draft"), desk.schedule,
-                                               desk.clock.now()))
+                                               desk.clock.now(),
+                                               target=target, symbol=symbol))
 
     # -- handlers: editions -----------------------------------------------
     def h_list_editions(self, _match, _query) -> None:
-        self._send_json(200, {"ok": True, "editions": self.desk.store.list_editions(),
+        # `editions.list_editions` and not `store.list_editions`: the company
+        # and the language are filled off the payload for an edition that
+        # predates them, and that fill is the edition store's.
+        self._send_json(200, {"ok": True,
+                              "editions": self.desk.editions.list_editions(),
                               "current": self.desk.editions.current_id(),
                               "staged": self.desk.editions.staged_id()})
 
@@ -607,15 +632,18 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         text = doc.get("text")
         if not isinstance(text, str) or not text.strip():
             raise BadRequest(message="a command needs text")
-        # `reply_to` and `lang` are passed through as they arrived, `None` and
-        # all: `store.add_command` is where both are checked, so the shape a
-        # `curl` can file and the shape the phone can file are one rule.
+        # `reply_to`, `lang` and `symbol` are passed through as they arrived,
+        # `None` and all: `store.add_command` is where all three are checked,
+        # so the shape a `curl` can file and the shape the phone can file are
+        # one rule. `symbol` in particular is checked *against the kind* there,
+        # which a route cannot do without duplicating the kind table.
         command = self.desk.enqueue(
             doc.get("kind", "custom"), text,
             priority=_int_field(doc, "priority", 5, 0, 9),
             deadline_at=_epoch_field(doc, "deadline_at"),
             source=str(doc.get("source", "api"))[:64],
-            reply_to=doc.get("reply_to"), lang=doc.get("lang"))
+            reply_to=doc.get("reply_to"), lang=doc.get("lang"),
+            symbol=doc.get("symbol"))
         self._send_json(200, {"ok": True, "command": command})
 
     def h_claim(self, _match, query) -> None:

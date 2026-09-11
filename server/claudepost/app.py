@@ -1021,11 +1021,13 @@ class Desk:
     def enqueue(self, kind: str, text: str, priority: int = 5,
                 deadline_at: float | None = None, source: str = "api",
                 reply_to: str | None = None,
-                lang: str | None = None) -> dict:
+                lang: str | None = None,
+                symbol: str | None = None) -> dict:
         """Add a command and wake anything parked on a long poll."""
         command = self.store.add_command(kind, text, priority=priority,
                                          deadline_at=deadline_at, source=source,
-                                         reply_to=reply_to, lang=lang)
+                                         reply_to=reply_to, lang=lang,
+                                         symbol=symbol)
         with self.queue_event:
             self.queue_event.notify_all()
         return command
