@@ -441,6 +441,37 @@ class LeaseTest(StoreTestCase):
             self.assertEqual(c["status"], expected, f"after attempt {attempt}")
         self.assertIsNone(self.store.claim_command("w9"))
 
+    def test_the_lease_is_longer_than_any_run_the_worker_makes(self):
+        # Ninety minutes, and the number is asserted rather than derived,
+        # because the thing it has to be longer than is not in this file: a
+        # paper run is 25-40 minutes clean and longer with a revision turn, and
+        # on 2026-09-11 a thirty-minute lease put a claimed order back to
+        # `pending` at minute 39 while the worker was still writing it.
+        from claudepost import store as S
+        self.assertEqual(S.LEASE_SECONDS, 5400)
+
+    def test_an_hour_into_a_run_the_claim_still_holds(self):
+        # The exact failure that was seen. With one worker it was harmless --
+        # `finish_command` takes a report on a pending row -- but the rotation
+        # reads `pending` as "the worker is idle" and would have ordered a
+        # second paper on top of the one being written.
+        cid = self.file_edition()["id"]
+        self.store.claim_command("w1")
+        self.clock.advance(3600)
+        self.assertEqual(self.store.reap(), 0)
+        c = self.store.get_command(cid)
+        self.assertEqual(c["status"], "claimed")
+        self.assertEqual(c["claimed_by"], "w1")
+
+    def test_a_run_that_never_reports_is_still_reaped(self):
+        # The other half: a longer lease must not become no lease. A worker
+        # that died costs one retry, ninety minutes later.
+        cid = self.file_edition()["id"]
+        self.store.claim_command("w1")
+        self.clock.advance(5401)
+        self.assertEqual(self.store.reap(), 1)
+        self.assertEqual(self.store.get_command(cid)["status"], "pending")
+
 
 class DeadlineTest(StoreTestCase):
     def test_a_command_past_its_deadline_is_never_claimed(self):

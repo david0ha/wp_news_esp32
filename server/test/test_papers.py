@@ -373,6 +373,35 @@ class RotationTest(PaperTestCase):
         self.assertEqual([d for d in self.rotate() if d.startswith("paper:")],
                          [])
 
+    def test_the_worker_is_busy_whether_the_row_is_pending_or_claimed(self):
+        """Both halves of rule 1, and the lease is what keeps them apart.
+
+        A `claimed` row is a worker running; a `pending` row is one waiting to
+        be claimed. The rotation stands down for either -- and the lease is
+        what stops a run in progress becoming the second of those behind the
+        desk's back, which is the whole of §3.8.
+        """
+        self.assertIn("paper:SNDK", self.rotate())
+        self.assertEqual(self.ordered()[0]["status"], "pending")
+        self.assertEqual([d for d in self.rotate() if d.startswith("paper:")],
+                         [])
+
+        self.desk.store.claim_command("w")
+        self.assertEqual(self.ordered()[0]["status"], "claimed")
+        self.assertEqual([d for d in self.rotate() if d.startswith("paper:")],
+                         [])
+
+    def test_a_run_an_hour_old_is_not_mistaken_for_an_idle_worker(self):
+        self.rotate()
+        self.desk.store.claim_command("w")
+        self.clock.advance(3600)
+        # `tick`'s housekeeping reaps before it rotates; an hour is inside the
+        # lease, so the reap leaves the claim alone and the rotation sees it.
+        self.assertEqual([d for d in self.desk.tick() if d.startswith("paper:")],
+                         [])
+        self.assertEqual(self.ordered()[0]["status"], "claimed")
+        self.assertEqual(len(self.ordered()), 1)
+
     def test_a_command_of_any_other_kind_stops_it_too(self):
         # An `ask` the owner typed is claimed on the worker's next poll, and a
         # paper queued behind it would make that answer wait for a run that

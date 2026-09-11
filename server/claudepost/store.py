@@ -51,9 +51,24 @@ from .errors import BadRequest, Conflict, NotFound, epoch_seconds
 from .settings import LANGS
 
 #: How long a claim is good for. A worker that dies mid-edition costs one
-#: retry, not a lost day -- but thirty minutes is long enough that a slow
-#: research turn is not reaped out from under a worker still doing it.
-LEASE_SECONDS: int = 1800
+#: retry, not a lost day -- so this is a wall against a dead worker, and it has
+#: to be longer than any live one takes.
+#:
+#: NINETY MINUTES, up from thirty. A paper run is 25-40 minutes when its proof
+#: clears first time and longer when it needs a revision turn, and on
+#: 2026-09-11 the desk put a claimed order back to `pending` at minute 39 while
+#: the worker was still writing it. With one worker that was harmless --
+#: `finish_command` accepts a report on a pending row -- but two readers do not
+#: survive it: a second worker would claim the row and write the same edition
+#: twice, and the rotation reads `pending` as "the worker is idle" and would
+#: order a second paper on top of the one in flight.
+#:
+#: No heartbeat. A worker that reported in every minute would be a second
+#: protocol to keep alive, with its own failure mode -- a run that is working
+#: but not heartbeating -- and a lease longer than any run is the simpler wall.
+#: The cost of getting it wrong in this direction is bounded and dull: a dead
+#: worker's command waits ninety minutes instead of thirty before a retry.
+LEASE_SECONDS: int = 5400
 
 #: Three claims and the command is failed rather than returned. Something that
 #: kills three workers in a row will kill the fourth, and a queue that retries
