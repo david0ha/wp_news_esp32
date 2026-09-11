@@ -74,7 +74,16 @@ COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
 #: ``tools/mock_news_server.py``'s length table), so a nine-character symbol
 #: here would name a command no draft could ever satisfy and every paper run
 #: for it would end in a 409 nobody could fix.
-COMMAND_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,8}\Z")
+#:
+#: The lookahead requires at least one letter or digit. A ticker is always
+#: made of at least one of those -- ``"."``, ``".."`` and ``"........"`` are
+#: not tickers, they are punctuation that happens to fit the character class
+#: below them. Without the lookahead they would pass, and this symbol goes on
+#: to become a URL path segment at ``POST /api/papers/<SYMBOL>/publish``, where
+#: ``".."`` is not a value anything downstream should ever have to think about.
+#: So the desk refuses the shape here, at the one place that decides what a
+#: symbol is, rather than trusting every route that takes one to remember.
+COMMAND_SYMBOL_RE = re.compile(r"^(?=.*[A-Z0-9])[A-Z0-9.\-]{1,8}\Z")
 
 #: Advisory: it tells a worker whether the expected outcome is an edition. The
 #: desk never acts on a command itself, so this is never dispatch.
@@ -844,7 +853,8 @@ def _checked_symbol(kind: str, symbol: object) -> str | None:
     sym = symbol.upper()
     if not COMMAND_SYMBOL_RE.match(sym):
         raise BadRequest(message=f"{symbol!r:.32} is not a symbol "
-                                 f"(letters, digits, '.', '-', 1-8 characters)")
+                                 f"(letters, digits, '.', '-', 1-8 characters, "
+                                 f"at least one letter or digit)")
     return sym
 
 

@@ -160,6 +160,25 @@ class PaperTest(StoreTestCase):
                 with self.assertRaises(BadRequest):
                     self.store.add_command("paper", "Refresh it.", symbol=bad)
 
+    def test_a_symbol_of_nothing_but_punctuation_is_not_a_ticker(self):
+        # A ticker always carries at least one letter or digit. These are not
+        # tickers, and `..` in particular becomes a URL path segment at
+        # `/api/papers/<SYMBOL>/publish` -- so the desk refuses the shape here,
+        # at the one place that decides what a symbol is, rather than leaving
+        # every consumer to remember.
+        for bad in (".", "..", "-", "--", "........", ".-.-"):
+            with self.subTest(symbol=bad):
+                with self.assertRaises(BadRequest):
+                    self.store.add_command("paper", "Refresh it.", symbol=bad)
+
+    def test_a_symbol_that_mixes_punctuation_with_a_ticker_still_works(self):
+        # `BRK.B` and `RDS-A` are real shapes. The lookahead must not cost them.
+        for good in ("BRK.B", "RDS-A", "A", "A.B.C.D"):
+            with self.subTest(symbol=good):
+                self.assertEqual(
+                    self.store.add_command("paper", "Refresh it.",
+                                           symbol=good)["symbol"], good)
+
     def test_only_a_paper_may_carry_one(self):
         # The index is derived from the edition's own subject, so a symbol on
         # any other kind would be a field nothing reads and a promise nothing
