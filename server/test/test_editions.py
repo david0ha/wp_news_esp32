@@ -879,6 +879,40 @@ class PaperCommitTest(SubjectMetaTest):
         meta = self.es.edition_meta(first.edition_id)
         self.assertEqual(meta["symbol"], "SNDK")
 
+    def test_a_redate_repairs_a_meta_json_that_will_not_parse(self):
+        # `meta.json` unreadable at the moment of a re-file is not merely
+        # "no derived field to write" -- it is nothing on disk worth
+        # preserving at all. `_redate`'s fallback then writes this commit's
+        # own freshly built document (byte-identical in content to the
+        # edition it is redating, because an edition id is its content
+        # fingerprint) so disk and store move together instead of disk
+        # keeping the old date while the store takes the new one.
+        first = self.paper("SNDK", n=1)
+        path = os.path.join(self.root, "editions", first.edition_id, "meta.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("not json at all {{{")
+
+        self.clock.set(T0 + 60)
+        self.paper("SNDK", n=2)
+
+        self.clock.set(T0 + 120)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, first.edition_id)
+
+        # Disk and store agree -- that is the property under test, not either
+        # value in particular.
+        with open(path, encoding="utf-8") as f:
+            on_disk = json.load(f)
+        row = self.store.get_edition(first.edition_id)
+        self.assertEqual(on_disk["created_at"], row["created_at"])
+        self.assertEqual(on_disk["created_at"], T0 + 120)
+
+        # The repair also recovers the edition's symbol from bytes this
+        # commit already holds, rather than leaving it unreadable forever.
+        self.assertEqual(self.es.edition_meta(first.edition_id)["symbol"],
+                         "SNDK")
+
     def test_a_re_dated_paper_keeps_the_fact_that_it_reached_the_glass(self):
         # published_at is a fact about the past. Re-filing changes which paper
         # is newest, not whether this edition was ever on the wall.
