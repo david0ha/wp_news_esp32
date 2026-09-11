@@ -583,6 +583,82 @@ class SubjectMetaTest(EditionTestCase):
         self.assertIsNone(self.es.headline("0" * 16))
 
 
+class PapersTest(SubjectMetaTest):
+    """Which edition is the paper for a company, and what retention may not take.
+
+    Inherits `SubjectMetaTest`'s `a_company` helper rather than repeating it --
+    a second spelling of "a draft that names a company" would be a second thing
+    to keep in step with the payload shape.
+    """
+
+    def test_the_newest_edition_for_a_symbol_is_its_paper(self):
+        old = self.a_company("SNDK", n=1).edition_id
+        self.clock.set(T0 + 3600)
+        new = self.a_company("SNDK", n=2).edition_id
+
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], new)
+        self.assertNotEqual(old, new)
+
+    def test_each_symbol_gets_its_own_newest(self):
+        sndk = self.a_company("SNDK", n=1).edition_id
+        self.clock.set(T0 + 60)
+        acme = self.a_company("ACME", n=2).edition_id
+        self.clock.set(T0 + 120)
+        sndk2 = self.a_company("SNDK", n=3).edition_id
+
+        found = self.es.papers(["SNDK", "ACME"])
+        self.assertEqual(found["SNDK"]["id"], sndk2)
+        self.assertEqual(found["ACME"]["id"], acme)
+        self.assertNotEqual(sndk, sndk2)
+
+    def test_a_symbol_with_no_edition_answers_none_rather_than_being_dropped(self):
+        # The pager draws a "not written yet" row from this, so a key that is
+        # missing and a key that is None are different answers to it.
+        self.a_company("SNDK")
+        found = self.es.papers(["SNDK", "NVDA"])
+        self.assertIn("NVDA", found)
+        self.assertIsNone(found["NVDA"])
+
+    def test_asking_for_nothing_answers_nothing(self):
+        self.a_company("SNDK")
+        self.assertEqual(self.es.papers([]), {})
+
+    def test_an_edition_the_index_cannot_key_belongs_to_no_symbol(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({"serial": 9, "subject": {}}).encode())
+        self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertIsNone(self.es.papers([""])[""])
+
+    def test_retention_never_takes_a_watched_company_s_paper(self):
+        # The pager's whole promise. Without this the newest edition about a
+        # company on the watchlist ages out behind the board's own run of
+        # editions, and the row goes blank with nothing to explain it.
+        sndk = self.a_company("SNDK", n=0).edition_id
+        for n in range(1, 6):
+            self.clock.set(T0 + n * 60)
+            self.a_company("ACME", n=n)
+
+        self.assertEqual(self.es.prune(keep=1, symbols=["SNDK", "ACME"]), 4)
+        self.assertIsNotNone(self.es.read_payload(sndk))
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], sndk)
+
+    def test_a_company_that_left_the_watchlist_ages_out_normally(self):
+        sndk = self.a_company("SNDK", n=0).edition_id
+        for n in range(1, 6):
+            self.clock.set(T0 + n * 60)
+            self.a_company("ACME", n=n)
+
+        # ACME only. SNDK's paper has lost its protection and is old history.
+        self.assertEqual(self.es.prune(keep=1, symbols=["ACME"]), 5)
+        self.assertIsNone(self.es.read_payload(sndk))
+
+    def test_protecting_nothing_is_what_prune_did_before(self):
+        for n in range(5):
+            self.clock.set(T0 + n * 60)
+            self.a_company("ACME", n=n)
+        self.assertEqual(self.es.prune(keep=2), 3)
+
+
 # --------------------------------------------------------------------------
 # Gate 5 — the swap, and what a failure must not touch
 # --------------------------------------------------------------------------

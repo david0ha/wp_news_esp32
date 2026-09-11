@@ -41,6 +41,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from . import notes, tiles
@@ -692,6 +693,57 @@ class EditionStore:
         """
         return self._subject_of(edition_id)[2]
 
+    def papers(self, symbols: Sequence[str]) -> dict[str, dict | None]:
+        """The newest edition about each requested company, or ``None``.
+
+        A **read, not a cache**: the editions on disk are the truth, and a
+        second record of "which is the newest paper for S" would be a thing to
+        keep in step with retention, with a promotion, and with a commit that
+        crashed between the build and the record.
+
+        Every requested symbol gets a key, ``None`` and all. A key that was
+        simply missing would make "this company has no paper yet" and "you
+        misspelled the symbol" the same answer to a pager, and the first of
+        those is a row it has to draw.
+        """
+        newest = self._newest_by_symbol()
+        return {symbol: newest.get(symbol) for symbol in symbols}
+
+    def _newest_by_symbol(self) -> dict[str, dict]:
+        """``{symbol: meta}`` for every company with an edition on disk.
+
+        Off the DISK rather than off the editions table, and that is the
+        safety argument rather than a preference: a store row outlives the
+        directory ``prune`` deleted, so an index built from the table would
+        hand a reader an edition id whose payload 404s. Walking the disk also
+        bounds the cost at retention depth -- a few dozen small ``meta.json``
+        reads -- where the table grows forever.
+
+        Ties on ``created_at`` are broken by the id, so two editions filed in
+        the same second resolve the same way on every call. Without it the
+        answer would depend on ``os.listdir`` order, and a pager would appear
+        to flip between two papers at random.
+        """
+        newest: dict[str, tuple[float, str, dict]] = {}
+        for eid in self._edition_ids():
+            try:
+                meta = self.edition_meta(eid)
+            except NotFound:
+                # A directory that lost its meta.json, or one deleted between
+                # the listing and the read. Not an edition anybody can serve.
+                continue
+            symbol = meta.get("symbol")
+            if not symbol:
+                continue
+            try:
+                at = float(meta.get("created_at") or 0.0)
+            except (TypeError, ValueError):
+                at = 0.0
+            key = (at, eid)
+            if symbol not in newest or key > newest[symbol][:2]:
+                newest[symbol] = (at, eid, meta)
+        return {symbol: meta for symbol, (_at, _eid, meta) in newest.items()}
+
     def list_editions(self, limit: int = 50) -> list[dict]:
         """The history, each row carrying its company and its language.
 
@@ -705,13 +757,22 @@ class EditionStore:
                 for row in self._store.list_editions(limit)]
 
     # -- retention ---------------------------------------------------------
-    def prune(self, keep: int | None = None) -> int:
+    def prune(self, keep: int | None = None,
+              symbols: Sequence[str] = ()) -> int:
         """Delete old editions, keeping the newest ``keep`` of them, and count them.
 
         ``current`` and ``staged`` survive however old they are: retention must
         never be able to delete the page on the wall. Leftover ``.build-*``
         directories go too, but they are not editions and are not counted --
         this number is how much history was dropped, not how much rubbish.
+
+        ``symbols`` is the companies whose papers must survive -- the desk's
+        printable watchlist. The newest edition of each is protected however
+        old it is, for the same reason ``current`` is: a paper pruned out from
+        under the pager is a row that goes blank with nothing on the desk to
+        explain it. An edition for a company no longer on that list loses the
+        protection and ages out normally, which is what makes removing a
+        symbol from the watchlist the way to stop keeping its paper.
         """
         depth = self._keep if keep is None else max(0, int(keep))
         with self._lock:
@@ -729,6 +790,15 @@ class EditionStore:
             # an mtime would be whatever the last copy or restore made it.
             known.sort(key=self._created_at, reverse=True)
             protected.update(known[:depth])
+
+            # After the depth, not before: a paper inside the newest `depth`
+            # is already protected and this adds nothing, and a paper outside
+            # it is exactly the case this exists for.
+            if symbols:
+                newest = self._newest_by_symbol()
+                protected.update(meta["id"] for meta in
+                                 (newest.get(s) for s in symbols)
+                                 if meta is not None)
 
             gone = 0
             for eid in known[depth:]:
