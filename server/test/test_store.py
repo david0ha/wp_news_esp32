@@ -119,6 +119,63 @@ class AskTest(StoreTestCase):
                          "file_edition")
 
 
+class PaperTest(StoreTestCase):
+    """The kind the rotation files, and the column that says which company."""
+
+    def paper(self, text="Refresh the paper for SNDK.", **kw):
+        kw.setdefault("symbol", "SNDK")
+        return self.store.add_command("paper", text, **kw)
+
+    def test_paper_is_a_kind_the_queue_takes(self):
+        row = self.paper()
+        self.assertEqual(row["kind"], "paper")
+        self.assertEqual(row["status"], "pending")
+        self.assertEqual(row["symbol"], "SNDK")
+
+    def test_the_symbol_round_trips_through_the_database(self):
+        cid = self.paper()["id"]
+        self.assertEqual(self.store.get_command(cid)["symbol"], "SNDK")
+        [listed] = [r for r in self.store.list_commands() if r["id"] == cid]
+        self.assertEqual(listed["symbol"], "SNDK")
+
+    def test_a_claimed_paper_still_knows_its_company(self):
+        # The worker reads the symbol off the claim and off nothing else. A
+        # column the claim does not return is a run about no company at all.
+        self.paper()
+        self.assertEqual(self.store.claim_command("w")["symbol"], "SNDK")
+
+    def test_a_paper_without_a_symbol_is_refused(self):
+        # The company is the whole instruction. A `paper` with no symbol is a
+        # run that would fall back to picking one, which is the board's job.
+        with self.assertRaises(BadRequest) as caught:
+            self.store.add_command("paper", "Refresh the paper.")
+        self.assertIn("symbol", caught.exception.message)
+
+    def test_a_lower_case_ticker_is_stored_upper_case(self):
+        self.assertEqual(self.paper(symbol="sndk")["symbol"], "SNDK")
+
+    def test_a_symbol_that_is_not_a_ticker_is_refused(self):
+        for bad in ("", "TOOLONGSYM", "../etc", "A B", "A/B", 17, True):
+            with self.subTest(symbol=bad):
+                with self.assertRaises(BadRequest):
+                    self.store.add_command("paper", "Refresh it.", symbol=bad)
+
+    def test_only_a_paper_may_carry_one(self):
+        # The index is derived from the edition's own subject, so a symbol on
+        # any other kind would be a field nothing reads and a promise nothing
+        # keeps.
+        with self.assertRaises(BadRequest) as caught:
+            self.store.add_command("ask", "왜 그 회사예요?", symbol="SNDK")
+        self.assertIn("paper", caught.exception.message)
+
+    def test_the_five_older_kinds_still_work_and_carry_the_column(self):
+        for kind in ("file_edition", "research", "custom", "calendar"):
+            with self.subTest(kind=kind):
+                row = self.store.add_command(kind, "do the thing")
+                self.assertIsNone(row["symbol"])
+                self.assertIsNone(self.store.get_command(row["id"])["symbol"])
+
+
 class MigrationTest(unittest.TestCase):
     """A desk that has been running since August opens the new schema.
 
@@ -181,6 +238,30 @@ class MigrationTest(unittest.TestCase):
                  in second._db.execute("PRAGMA table_info(commands)")]
         self.assertEqual(names.count("reply_to"), 1)
         self.assertEqual(names.count("lang"), 1)
+
+    def test_the_symbol_column_is_added_to_an_older_database_too(self):
+        # A desk that has never restarted since August gets all three columns
+        # in one pass, and the rotation's first order is the first write that
+        # would have hit `no such column: symbol`.
+        old = sqlite3.connect(self.path)
+        old.executescript(self.OLD)
+        old.commit()
+        old.close()
+
+        store = Store(self.path, FixedClock(T0))
+        self.addCleanup(store.close)
+        row = store.add_command("paper", "Refresh the paper for ACME.",
+                                symbol="ACME")
+        self.assertEqual(store.get_command(row["id"])["symbol"], "ACME")
+
+    def test_opening_twice_adds_the_symbol_column_once(self):
+        first = Store(self.path, FixedClock(T0))
+        self.addCleanup(first.close)
+        second = Store(self.path, FixedClock(T0))
+        self.addCleanup(second.close)
+        names = [r["name"] for r
+                 in second._db.execute("PRAGMA table_info(commands)")]
+        self.assertEqual(names.count("symbol"), 1)
 
 
 class AddCommandTest(StoreTestCase):

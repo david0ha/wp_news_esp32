@@ -68,6 +68,14 @@ MAX_ATTEMPTS: int = 3
 #: only spelling.
 COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
 
+#: A ticker as a command may carry one. Eight characters rather than the
+#: watchlist's twelve, deliberately: this symbol is compared against an
+#: edition's own ``subject.symbol``, which the validator caps at eight (see
+#: ``tools/mock_news_server.py``'s length table), so a nine-character symbol
+#: here would name a command no draft could ever satisfy and every paper run
+#: for it would end in a 409 nobody could fix.
+COMMAND_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,8}\Z")
+
 #: Advisory: it tells a worker whether the expected outcome is an edition. The
 #: desk never acts on a command itself, so this is never dispatch.
 #:
@@ -82,8 +90,14 @@ COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
 #: kind rather than a `custom` with a convention because two things downstream
 #: read it: the worker's prompt, and the finish path that decides whether
 #: anybody's phone rings.
+#:
+#: ``paper`` is the rotation's own kind -- a complete newspaper about a company
+#: the desk names, filed for the index rather than for the glass. It is a kind
+#: rather than a `file_edition` with a symbol because two things downstream
+#: branch on it: the worker's prompt, which must suspend the contract's "which
+#: company" rule, and the commit, which writes neither pointer.
 COMMAND_KINDS: tuple[str, ...] = ("file_edition", "research", "custom",
-                                  "calendar", "ask")
+                                  "calendar", "ask", "paper")
 
 #: An instruction in the owner's own words, not a document.
 MAX_COMMAND_TEXT: int = 2000
@@ -116,7 +130,12 @@ CREATE TABLE IF NOT EXISTS commands (
     -- read. Both nullable, which is also what makes them addable by ALTER
     -- TABLE below without rewriting a row.
     reply_to    TEXT,
-    lang        TEXT
+    lang        TEXT,
+    -- Which company a `paper` is about. NULL on every other kind, which is
+    -- what makes it addable by ALTER TABLE below without rewriting a row.
+    -- The desk decides the company for a paper and the model does not, so
+    -- this is the instruction rather than a hint about it.
+    symbol      TEXT
 );
 -- The claim's subquery is exactly this order, and it runs on every long poll.
 CREATE INDEX IF NOT EXISTS commands_queue
@@ -184,7 +203,8 @@ CREATE TABLE IF NOT EXISTS audit (
 
 _COMMAND_COLUMNS = ("id", "kind", "text", "priority", "status", "source",
                     "created_at", "deadline_at", "claimed_by", "claimed_at",
-                    "finished_at", "attempts", "result", "reply_to", "lang")
+                    "finished_at", "attempts", "result", "reply_to", "lang",
+                    "symbol")
 
 #: Columns added to a table after this desk first shipped, as
 #: ``(table, column, declaration)``.
@@ -201,6 +221,7 @@ _COMMAND_COLUMNS = ("id", "kind", "text", "priority", "status", "source",
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("commands", "reply_to", "TEXT"),
     ("commands", "lang", "TEXT"),
+    ("commands", "symbol", "TEXT"),
 )
 
 #: The claim, and the reason it is one statement.
@@ -306,7 +327,8 @@ class Store:
     def add_command(self, kind: str, text: str, priority: int = 5,
                     deadline_at: float | None = None, source: str = "",
                     reply_to: str | None = None,
-                    lang: str | None = None) -> dict:
+                    lang: str | None = None,
+                    symbol: str | None = None) -> dict:
         """File an intent for a worker to act on. Returns the command.
 
         The desk does not execute it. It holds it until something claims it,
@@ -328,13 +350,14 @@ class Store:
             raise BadRequest(message="priority is 0..9, 0 first")
         reply_to = self._checked_reply_to(reply_to)
         lang = _checked_lang(lang)
+        symbol = _checked_symbol(kind, symbol)
         now = self._clock.now()
         row = {"id": _new_id(), "kind": kind, "text": text, "priority": priority,
                "status": "pending", "source": source or "", "created_at": now,
                "deadline_at": epoch_seconds(deadline_at, "deadline_at"),
                "claimed_by": None, "claimed_at": None, "finished_at": None,
                "attempts": 0, "result": "",
-               "reply_to": reply_to, "lang": lang}
+               "reply_to": reply_to, "lang": lang, "symbol": symbol}
         with self._write():
             self._db.execute(
                 "INSERT INTO commands ({}) VALUES ({})".format(
@@ -793,6 +816,36 @@ def _checked_lang(lang: object) -> str | None:
     if not isinstance(lang, str) or lang not in LANGS:
         raise BadRequest(message=f"lang: must be one of: {', '.join(LANGS)}")
     return lang
+
+
+def _checked_symbol(kind: str, symbol: object) -> str | None:
+    """The company a command is about, or ``None`` for the kinds that have none.
+
+    Required on a ``paper`` and refused on everything else, which is two rules
+    in one function because they are the same rule: the symbol *is* the paper's
+    instruction, and on any other kind it is a field nothing reads. A
+    ``file_edition`` carrying one would look to an operator like a board
+    edition pinned to a company, which is precisely what it would not be.
+
+    Upper-cased before it is matched, the way
+    :func:`~claudepost.watchlist._symbol` does it, so this is the one place
+    that decides what canonical means for a queue row.
+    """
+    if symbol is None:
+        if kind == "paper":
+            raise BadRequest(message="a paper command needs a symbol: "
+                                     "the desk names the company, not the model")
+        return None
+    if kind != "paper":
+        raise BadRequest(message=f"only a paper command carries a symbol, "
+                                 f"not a {kind!r}")
+    if not isinstance(symbol, str) or isinstance(symbol, bool):
+        raise BadRequest(message="symbol is a ticker")
+    sym = symbol.upper()
+    if not COMMAND_SYMBOL_RE.match(sym):
+        raise BadRequest(message=f"{symbol!r:.32} is not a symbol "
+                                 f"(letters, digits, '.', '-', 1-8 characters)")
+    return sym
 
 
 def _edition_dict(row: sqlite3.Row) -> dict:
