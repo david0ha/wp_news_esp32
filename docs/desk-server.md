@@ -349,13 +349,19 @@ symbol goes on to become a URL path segment at
 
 **The edition side is the same pattern**, and it was not always. `editions.py`'s
 `SUBJECT_SYMBOL_RE` had no lookahead until 2026-09-11, so a payload whose
-`subject.symbol` was `"..."` committed and was indexed under that key —
-harmlessly, because the rotation, `/api/papers` and the publish route all go
-through the command's regex and none of them could reach it. They agree now
-anyway: two regexes answering "what is a symbol" differently by one subtle
-clause is the discrepancy a later reader loses an afternoon to, and agreement
-costs a line. Such an edition is filed and served like any other and is simply
-a paper for nobody.
+`subject.symbol` was `"..."` committed and was indexed under that key. The
+rotation and the publish route both check the symbol they act on against the
+command's own regex before they do anything with it, so neither could ever
+have reached it. `/api/papers` could: it draws its rows from the watchlist
+document, whose own `SYMBOL_RE` carries no lookahead, so a watchlist row named
+`"..."` beside an edition keyed the same way would have produced a real,
+populated row on that listing rather than a null one. The gap's exposure was
+small, not nil, and the listing is exactly where it lived — which is the
+stronger reason to close it, not a weaker one. They agree now: two regexes
+answering "what is a symbol" differently by one subtle clause is the
+discrepancy a later reader loses an afternoon to, and this one was not even
+harmless. Such an edition is filed and served like any other and is simply a
+paper for nobody.
 
 **There is no server-side thread object.** `reply_to` is the thread. The phone
 keeps its own list of turns and the desk keeps the rows; nothing here joins

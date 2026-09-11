@@ -179,14 +179,21 @@ DEFAULT_LANG = "en"
 #: and all**, and the agreement is the point rather than the clause. There is a
 #: real argument for leaving this one looser: it describes what an *edition's*
 #: subject may be, where the lookahead is a rule about what a *command* may
-#: carry, and the exposure from the gap was nil -- an edition keyed ``"..."``
-#: could never be ordered by the rotation, listed by ``/api/papers`` or
-#: published by symbol, because all three go through the command's regex. What
-#: decided it the other way is that two regexes answering "what is a symbol"
-#: differently by one subtle clause is exactly the discrepancy a later reader
-#: loses an afternoon to, and agreement costs a line. So ``"..."``, ``"-"`` and
-#: ``"."`` derive ``symbol: None`` here: the edition commits and is served like
-#: any other, and is a paper for nobody.
+#: carry. The rotation and a publish by symbol both check the symbol they are
+#: about to act on against the command's own regex before they do anything
+#: with it, so neither could ever have reached a punctuation-only key like
+#: ``"..."``. ``/api/papers`` is different: it draws its rows from the
+#: watchlist document, and :data:`~claudepost.watchlist.SYMBOL_RE` carries no
+#: lookahead, so that listing was not gated the same way. A watchlist row
+#: named ``"..."`` beside an edition whose ``subject.symbol`` was ``"..."``
+#: would have produced a real, populated row there -- the exposure from the
+#: gap was small, not nil, and the listing is where it lived. That makes
+#: agreement the stronger case, not the weaker one: two regexes answering
+#: "what is a symbol" differently by one subtle clause is the discrepancy a
+#: later reader loses an afternoon to, and this time it would not even have
+#: been harmless. So ``"..."``, ``"-"`` and ``"."`` derive ``symbol: None``
+#: here: the edition commits and is served like any other, and is a paper for
+#: nobody.
 SUBJECT_SYMBOL_RE = re.compile(r"^(?=.*[A-Z0-9])[A-Z0-9.\-]{1,8}\Z")
 
 #: A BCP-47 primary subtag, the wire's own shape from ``docs/news-contract.md``.

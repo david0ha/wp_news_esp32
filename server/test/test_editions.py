@@ -530,11 +530,17 @@ class SubjectMetaTest(EditionTestCase):
         # `"..."`, `"."` and `"-"` are the punctuation-only cases, and they are
         # here because `SUBJECT_SYMBOL_RE` did NOT refuse them until
         # 2026-09-11: they fit the character class and are not tickers. The
-        # exposure was nil -- an edition keyed `"..."` could never be ordered,
-        # listed or published, because all three of those go through
-        # `store.COMMAND_SYMBOL_RE`, which has always had the lookahead -- but
-        # two regexes answering "what is a symbol" differently by one clause is
-        # the discrepancy a later reader loses an afternoon to. They agree now.
+        # rotation and the publish route both check the symbol they act on
+        # against `store.COMMAND_SYMBOL_RE`, which has always had the
+        # lookahead, so neither could ever have reached one -- but
+        # `/api/papers` draws its rows from the watchlist document, whose own
+        # regex carries no lookahead, so a watchlist row named `"..."` beside
+        # an edition keyed the same way would have produced a real, populated
+        # row on that listing. The exposure was small, not nil, and the
+        # listing is where it lived -- which argues for agreement, not against
+        # it: two regexes answering "what is a symbol" differently by one
+        # clause is the discrepancy a later reader loses an afternoon to. They
+        # agree now.
         for bad in (None, "", "WAY-TOO-LONG-SYMBOL", "A B", 17,
                     "...", ".", "-", "--.-"):
             with self.subTest(symbol=bad):
