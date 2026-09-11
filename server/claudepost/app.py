@@ -34,7 +34,7 @@ from .notes import NoteStore
 # built from it, so the route's pattern, the note store's and the queue's are one
 # regex. It moved to `store` because `add_command` now checks a `reply_to`
 # against it, and `store` cannot import `app` -- `app` imports `store`.
-from .store import COMMAND_ID_RE, Store
+from .store import COMMAND_ID_RE, COMMAND_SYMBOL_RE, Store
 
 LOG = logging.getLogger("claudepost.app")
 
@@ -255,6 +255,13 @@ class Desk:
 
         self._last_housekeeping = 0.0
 
+        #: Watchlist symbols the rotation has already refused to order, so the
+        #: reason is logged once rather than once every ten minutes forever.
+        #: In memory, on `push_failures`' reasoning: it is a fact about this
+        #: process's log rather than about the household, and a restart is
+        #: exactly when the line should be said again.
+        self._unorderable: set[str] = set()
+
         self._load_schedule()
         self._load_watchlist()
         self._load_settings()
@@ -308,7 +315,10 @@ class Desk:
             if expired:
                 did.append("reaped:%d" % expired)
             swept = self.editions.sweep_drafts()
-            pruned = self.editions.prune()
+            # The printable watchlist, so retention never takes the paper the
+            # pager is about to draw. `papers()` and this read the same list
+            # for the same reason.
+            pruned = self.editions.prune(symbols=self.printable_symbols())
             # The delivery ledger ages out here rather than in a sweep of its
             # own: sixty days is the slowest thing this desk measures, and a
             # second periodic pass to watch it would be a second thing to keep
@@ -325,6 +335,15 @@ class Desk:
             owed = self._fire_owed_answers(t)
             if owed:
                 did.append("answers:%d" % owed)
+
+            # Last in the pass, deliberately: it is the only step that adds
+            # work rather than clearing it, and the queue it reads must be the
+            # one the reap above has already settled -- a lapsed lease still
+            # counted as `claimed` would stand the rotation down for the next
+            # ten minutes for nothing.
+            ordered = self._order_stale_paper(t)
+            if ordered:
+                did.append("paper:" + ordered)
 
         return did
 
@@ -945,6 +964,97 @@ class Desk:
         LOG.info("wake at %d: enqueued a filing", int(last))
         return True
 
+    def _orderable_symbols(self) -> list[str]:
+        """The printable companies the queue could actually carry a command for.
+
+        The two validators do not agree, and deliberately so:
+        :func:`~claudepost.watchlist._symbol` takes one to twelve characters,
+        while :data:`~claudepost.store.COMMAND_SYMBOL_RE` takes one to eight
+        and wants at least one letter or digit. The payload validator caps an
+        edition's own ``subject.symbol`` at eight, so a command naming a
+        longer one could never be satisfied by any draft -- every run for it
+        would end in a ``409 commit_symbol_mismatch`` nobody could fix.
+
+        So a symbol that fails it is skipped rather than ordered. Skipping is
+        the strictly safer failure: `Desk.enqueue` raises `BadRequest` on such
+        a symbol, and this runs at the end of the housekeeping block -- an
+        exception here would take the reap, the draft sweep, the prune, the
+        delivery ageing and the owed answers down with it, every ten minutes
+        forever, over one row in a document the vault pushes every morning. A
+        company that silently never gets a paper is a row the pager still
+        draws, with ``stale`` true forever, which is honest: the desk really is
+        not going to refresh it. `papers()` is not filtered for exactly that
+        reason.
+
+        Logged once per symbol rather than once per pass, because a line every
+        ten minutes forever would bury everything else in the log.
+        """
+        good = []
+        for symbol in self.printable_symbols():
+            if COMMAND_SYMBOL_RE.match(symbol):
+                good.append(symbol)
+            elif symbol not in self._unorderable:
+                self._unorderable.add(symbol)
+                LOG.warning("rotation: %.32r is on the watchlist but is not a "
+                            "symbol a command can carry (1-8 characters, at "
+                            "least one letter or digit); it will never get a "
+                            "paper", symbol)
+        return good
+
+    def _order_stale_paper(self, t: float) -> str | None:
+        """Order a refresh of the stalest paper, when there is nothing else to do.
+
+        Four rules, in this order, and the first is the one that makes the
+        other three safe:
+
+        1. **Nothing while the queue holds anything**, of any kind. That is
+           what makes this idempotent without a meta key, a timestamp or
+           anything held in memory -- the order it just filed is what stops the
+           next pass filing a second. It is also what keeps a typed `ask` from
+           waiting behind a run that takes thirty to forty minutes: an `ask`
+           posted while the worker is idle is claimed on its next poll, and
+           this pass stands down until it finishes.
+        2. **The stalest company first.** A company with no paper at all is
+           older than any paper, because there is nothing for the pager to
+           draw; ties go to the watchlist's own order, which ``min`` over a
+           list gives for free by returning the first minimum.
+        3. **Nothing before the cadence.** A paper younger than
+           ``paper_refresh_hours`` is current.
+        4. **Priority 9**, the lowest the queue has, so the morning order and
+           anything typed on a phone -- both 5 -- are claimed ahead of a paper
+           that is merely pending. Only a paper already *claimed* makes
+           anything wait, and that is the cost accepted in the design.
+
+        Quiet hours deliberately do not apply: a paper never touches the board,
+        and the night is the cheapest time to write one.
+
+        Returns the symbol ordered, or ``None``.
+        """
+        symbols = self._orderable_symbols()
+        if not symbols:
+            return None
+
+        # Two reads rather than one query with an IN clause: this runs every
+        # ten minutes, both are index scans that stop at the first row, and a
+        # query built here would be a second place that knows the status
+        # vocabulary.
+        for status in ("pending", "claimed"):
+            if self.store.list_commands(status=status, limit=1):
+                return None
+
+        found = self.editions.papers(symbols)
+        symbol = min(symbols, key=lambda s: _paper_age_key(found.get(s)))
+        meta = found.get(symbol)
+        cadence = self.paper_cadence_seconds()
+        if meta is not None and t - _paper_age_key(meta) < cadence:
+            return None
+
+        self.enqueue("paper", PAPER_ORDER.format(s=symbol),
+                     priority=9, source="rotation",
+                     deadline_at=t + cadence, symbol=symbol)
+        LOG.info("rotation: ordered a paper for %s", symbol)
+        return symbol
+
     def _fire_due_alerts(self, t: float) -> str | None:
         """Tell the phones what is about to happen. Returns a ``did`` entry.
 
@@ -1107,6 +1217,21 @@ class Desk:
         with self.queue_event:
             self.queue_event.notify_all()
         return command
+
+
+def _paper_age_key(meta: dict | None) -> float:
+    """When a paper was written, for ordering. No paper sorts oldest of all.
+
+    ``-inf`` rather than ``0`` so that a symbol with no paper cannot be tied
+    with one written at the epoch by a desk whose clock was wrong -- and so
+    that the answer does not depend on the epoch being a time nobody files at.
+    """
+    if meta is None:
+        return float("-inf")
+    try:
+        return float(meta.get("created_at") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _last_wake_at(s: sched.Schedule, t: float) -> float | None:
