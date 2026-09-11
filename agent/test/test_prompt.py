@@ -307,6 +307,22 @@ class PaperTailTest(unittest.TestCase):
                                       symbol="SNDK")
             self.assertNotIn("SNDK", out, kind)
 
+    def test_the_shipped_contract_knows_the_rotation_can_be_stood_down(self):
+        # The tail contradicts a section of PROMPT.md, and PROMPT.md is read by
+        # the standalone producer and by any worker anybody else writes -- so
+        # the contradiction has to be in the contract too, not only in the
+        # prompt this worker happens to assemble. Asserted against the section
+        # rather than the file, because "paper" appears all over a document
+        # about newspapers.
+        here = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(here, "..", "..", "tools", "edition", "PROMPT.md")
+        with open(path, encoding="utf-8") as f:
+            contract = f.read()
+        section = contract.split("## Which company")[1].split("\n## ")[0]
+        self.assertIn("`paper`", section)
+        self.assertIn("does not apply", section)
+        self.assertIn("subject.symbol", section)
+
 
 class ContractNameTest(unittest.TestCase):
     """Which of the two shipped contracts a kind of command is written against.

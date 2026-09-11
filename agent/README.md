@@ -201,6 +201,21 @@ revision that fails a gate fails the command and leaves the current edition
 standing, which is the firmware's own failure semantics: a stale paper beats an
 empty one.
 
+A sixth kind, `paper`, is the same filing run with the company already chosen.
+The desk keeps a current newspaper for every company on the watch list and
+orders the stalest one whenever the queue is empty, so the command carries a
+`symbol` beside its text and the run writes that company's edition: same
+contract, same draft, same proof, same two revisions, same look at the sheets.
+Three things differ. The prompt names the symbol and says the contract's "Which
+company" section does not apply; the watch list is not seeded into the edition
+directory and not copied back out, because that cursor belongs to the board's
+morning edition; and the commit says which company it is filing under
+(`{"target": "paper", "symbol": "SNDK"}`), which the desk checks against the
+payload's own `subject.symbol` and refuses on a mismatch. The result is `paper
+<edition id>` or `unchanged <edition id>`. A paper is recorded and readable and
+**does not reach the glass**: putting one on the board is an operator's tap in
+the app, not something this worker can do.
+
 ## The second job: the event book
 
 A `calendar` command is not a page. It files **ten dated things about to
@@ -328,6 +343,18 @@ to fail a filing that already reached the glass.
 
 Both ends write that file and neither owns it: you add what you are watching,
 the worker adds what it found.
+
+A `paper` run is the one kind that gets none of this. Its company came with the
+order, so the file has nothing to offer it and one thing to cost it: a model
+handed a cursor the contract tells it to update will update it, and at the
+default cadence there are more paper runs in a day than editions — the board's
+rotation would skip a company every night for a reason nobody could see.
+
+A symbol the watch list will happily take can still be one the desk can never
+order a paper for: `agent/loop.py`'s `PAPER_SYMBOL_RE` caps a paper order at
+eight characters, the limit `POST /api/commands` enforces, where the watch
+list's own check allows twelve — so a nine-to-twelve-character symbol sits on
+the rotation forever and never receives a paper.
 
 In a container it lives at `/state/watchlist.json`, which is
 `~/.claudepost/state/` on the host — a mount of its own, and **writable**,
