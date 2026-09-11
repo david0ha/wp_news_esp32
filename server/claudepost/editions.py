@@ -130,8 +130,8 @@ REASON_IMMEDIATE = "immediate"
 REASON_DUE = "due"
 REASON_PROMOTED = "promoted"
 REASON_UNCHANGED = "unchanged: identical to the edition already current"
-REASON_PAPER = "paper: filed for {s}; neither pointer moved"
-REASON_UNCHANGED_PAPER = "unchanged: identical to the newest paper for {s}"
+REASON_PAPER = "filed: a paper for {s}; neither pointer moved"
+REASON_UNCHANGED_PAPER = "duplicate: identical to the newest paper for {s}"
 
 #: What a commit is for. ``board`` is the newspaper that goes on the glass and
 #: is every bit of today's behaviour; ``paper`` is the one the desk keeps for a
@@ -678,7 +678,14 @@ class EditionStore:
         return _sheet_names(os.path.join(self._edition_dir(edition_id), PROOF_DIR))
 
     def edition_meta(self, edition_id: str) -> dict:
-        """An edition's ``meta.json`` -- its birth certificate, never rewritten.
+        """An edition's ``meta.json`` -- its birth certificate, rewritten once
+        at most.
+
+        Born with the edition and then left alone, with exactly one exception:
+        an edition filed again as a company's *paper* has its ``created_at``
+        moved to that filing, because the paper index has no pointer and picks
+        by date. Nothing else in the document ever moves, ``published_at``
+        included. See :meth:`_redate`, and the argument at its call site.
 
         Raises:
             NotFound: unknown id, missing directory, or metadata that will not
@@ -708,10 +715,14 @@ class EditionStore:
         """``doc`` with ``symbol`` and ``lang`` on it however old the edition is.
 
         The migration that does not run. ``meta.json`` is an edition's birth
-        certificate and is never rewritten, so an edition filed before those
-        two fields existed gets them derived from its own stored payload on the
-        way out -- which is also what makes a pre-change edition a paper for
-        its company rather than an edition about nobody.
+        certificate, and the one rewrite there is moves a re-filed paper's
+        ``created_at`` and adds no field to anything -- so an edition filed
+        before these two existed gets them derived from its own stored payload
+        on the way out, which is what makes a pre-change edition a paper for
+        its company rather than an edition about nobody. (That one rewrite does
+        persist whatever this derived, because what :meth:`_redate` writes back
+        is what this handed it. A side effect of re-dating a single edition,
+        not a sweep: nothing backfills the ones never filed again.)
 
         Membership and not truthiness: an edition filed *after* this change
         about a payload with no usable subject records ``"symbol": null``, and
@@ -931,7 +942,9 @@ class EditionStore:
                 return CommitResult(eid, "staged", reason)
 
         # The gate runs before the build so that meta.json is born with the
-        # right published_at. It is written once and never rewritten.
+        # right published_at. It is written once and never rewritten, bar the
+        # single case below -- a paper filed again moves its created_at, and
+        # nothing moves published_at ever.
         #
         # `symbol` and `lang` are the payload's own, copied here rather than
         # left to be re-derived: they are what the paper index keys on, and an
@@ -959,19 +972,42 @@ class EditionStore:
         with self._lock:
             self._building.add(dest)
         try:
-            if not self._build_edition(dest, draft_dir, stored, meta):
-                # It was filed before. meta.json is that edition's birth
-                # certificate and is never rewritten, so the store gets the
-                # copy on disk rather than this commit's -- two records of one
-                # immutable edition disagreeing about when it was born would
-                # put the history (ordered from the store) and retention
-                # (ordered from disk) in different orders. Re-recording rather
-                # than skipping also repairs a crash between build and record.
+            built = self._build_edition(dest, draft_dir, stored, meta)
+            if not built:
+                # It was filed before, so the store gets the copy on disk
+                # rather than this commit's -- two records of one immutable
+                # edition disagreeing about when it was born would put the
+                # history (ordered from the store) and retention (ordered from
+                # disk) in different orders. Re-recording rather than skipping
+                # also repairs a crash between build and record.
                 try:
                     meta = self.edition_meta(eid)
                 except NotFound:
                     pass          # unreadable: this commit's copy beats none
-            self._store.record_edition(eid, meta)
+
+            if is_paper and not built:
+                # A paper filed again becomes that company's paper again, and
+                # the asymmetry with the board is the whole argument for
+                # rewriting a date that is otherwise never rewritten. The board
+                # says which edition is the board's with two pointers, so
+                # `created_at` decides nothing there and an edition filed again
+                # keeps the day it was born. The paper index has no pointer:
+                # `_newest_by_symbol` picks by `created_at`, so recency *is* the
+                # index. Leave the date alone here and the desk answers "paper
+                # A" to the worker that just filed A while `/api/papers` goes on
+                # showing B -- the desk contradicting itself about what it did a
+                # millisecond ago. A re-filing is the newest word the desk has
+                # about that company.
+                #
+                # Disk and store move together and under one lock, because the
+                # paragraph above is still binding: what `meta.json` says is
+                # exactly what reaches `record_edition`, so history and
+                # retention keep the same order however many re-filings race.
+                with self._lock:
+                    meta = self._redate(eid, meta, now)
+                    self._store.record_edition(eid, meta)
+            else:
+                self._store.record_edition(eid, meta)
 
             with self._lock:
                 if is_paper:
@@ -1154,6 +1190,32 @@ class EditionStore:
 
         fsync_dir(self._editions_root)
         return True
+
+    def _redate(self, edition_id: str, meta: dict, now: float) -> dict:
+        """Move an already-filed edition's ``created_at`` to ``now``. Lock held.
+
+        The only rewrite of a birth certificate this module performs, and only
+        for a paper -- the argument for it is at the call site, in
+        :meth:`_commit`. Everything else in the document is carried over
+        untouched, ``published_at`` above all: an edition that has been on the
+        glass has been on the glass, and that is a fact about the past rather
+        than about this filing.
+
+        Written the way every pointer here is written -- a temporary file in
+        the same directory and one ``os.replace`` -- so a reader inside
+        :meth:`edition_meta` at this instant gets the whole old document or the
+        whole new one. A truncated ``meta.json`` would not be a wrong date, it
+        would be a :class:`NotFound` that takes ``/api/papers`` and retention
+        down with it.
+
+        The document returned is the one on disk, byte for byte, and the caller
+        records *that* -- the two must not be assembled separately.
+        """
+        doc = dict(meta)
+        doc["created_at"] = now
+        atomic_write(os.path.join(self._edition_dir(edition_id), META_NAME),
+                     _canonical(doc).encode("utf-8"))
+        return doc
 
     def _open_build_dir(self) -> str:
         """A registered ``.build-*`` directory to assemble an edition in.

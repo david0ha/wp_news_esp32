@@ -536,9 +536,10 @@ class SubjectMetaTest(EditionTestCase):
 
     def test_an_edition_filed_before_these_fields_is_filled_from_its_payload(self):
         # The migration that does not run. An edition's meta.json is its birth
-        # certificate and is never rewritten, so the two fields are derived on
-        # the way out instead -- which is also why a pre-change edition is
-        # still a paper for its company.
+        # certificate, and the one rewrite there is moves a re-filed paper's
+        # created_at and adds no field to anything, so the two fields are
+        # derived on the way out instead -- which is also why a pre-change
+        # edition is still a paper for its company.
         eid = self.a_company("NVDA", lang="ko").edition_id
         path = os.path.join(self.root, "editions", eid, "meta.json")
         with open(path, "r+", encoding="utf-8") as f:
@@ -814,6 +815,115 @@ class PaperCommitTest(SubjectMetaTest):
         with self.assertRaises(NotFound):
             self.es.draft_info(d)
 
+    def test_re_filing_an_older_paper_makes_it_the_paper_again(self):
+        # The index has no pointer -- it picks by created_at -- so a re-filing
+        # that kept its original date would leave the desk answering "paper A"
+        # to the worker that just filed A while the index went on showing B.
+        a = self.paper("SNDK", n=1)
+        self.clock.set(T0 + 60)
+        b = self.paper("SNDK", n=2)
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], b.edition_id)
+
+        self.clock.set(T0 + 120)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, a.edition_id)
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], a.edition_id)
+
+        # Disk and store agree about the new date, which is what keeps the
+        # history and retention in the same order.
+        self.assertEqual(
+            self.es.edition_meta(a.edition_id)["created_at"], T0 + 120)
+        self.assertEqual(
+            self.store.get_edition(a.edition_id)["created_at"], T0 + 120)
+
+    def test_a_re_dated_paper_keeps_the_fact_that_it_reached_the_glass(self):
+        # published_at is a fact about the past. Re-filing changes which paper
+        # is newest, not whether this edition was ever on the wall.
+        d = self.es.open_draft()
+        raw = json.dumps({"serial": 8, "subject": {"symbol": "SNDK"}}).encode()
+        self.es.put_payload(d, raw)
+        board = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertEqual(
+            self.es.edition_meta(board.edition_id)["published_at"], T0)
+
+        # Another paper for SNDK, so re-filing the first is a change rather
+        # than the `duplicate` path.
+        self.clock.set(T0 + 60)
+        self.paper("SNDK", n=9)
+
+        self.clock.set(T0 + 120)
+        d2 = self.es.open_draft()
+        self.es.put_payload(d2, raw)
+        again = self.es.commit(d2, IMMEDIATE, self.clock.now(),
+                               target="paper", symbol="SNDK")
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, board.edition_id)
+
+        meta = self.es.edition_meta(board.edition_id)
+        self.assertEqual(meta["created_at"], T0 + 120)
+        self.assertEqual(meta["published_at"], T0)
+        self.assertEqual(
+            self.store.get_edition(board.edition_id)["published_at"], T0)
+
+    def test_the_board_path_does_not_re_date_an_edition_filed_again(self):
+        # The other half of the asymmetry. `current` and `staged` say which
+        # edition is the board's, so a date decides nothing there and an
+        # edition filed again keeps the day it was born.
+        first = self.file(1)
+        self.file(2, now=self.jump(T0 + 60))
+        again = self.es.commit(self.draft(1), IMMEDIATE, self.jump(T0 + 120))
+        self.assertEqual(again.edition_id, first.edition_id)
+        self.assertEqual(again.state, "published")
+        self.assertEqual(
+            self.es.edition_meta(first.edition_id)["created_at"], T0)
+        self.assertEqual(
+            self.store.get_edition(first.edition_id)["created_at"], T0)
+
+
+class ReasonKeywordTest(unittest.TestCase):
+    """The invariant the REASON block states about itself, asserted.
+
+    "Each carries its own keyword and none contains another's" is what makes
+    `assertIn("quiet", r.reason)` further down a real assertion rather than a
+    coincidence, and it is the kind of claim a comment loses quietly: the next
+    reason somebody writes opens with a word already in one of these and every
+    test still passes. Swept off the module rather than written as a list, so
+    a reason added without reading this is checked anyway.
+    """
+
+    def reasons(self) -> dict:
+        return {name: getattr(E, name) for name in dir(E)
+                if name.startswith("REASON_")}
+
+    def keyword(self, text: str) -> str:
+        """A reason's keyword: what it says before the colon, or all of it."""
+        return text.split(":")[0].strip()
+
+    def test_the_sweep_finds_the_block(self):
+        # A floor rather than a count, so adding a reason does not edit this
+        # test -- but a sweep that silently matched nothing would make every
+        # assertion below vacuously true.
+        found = self.reasons()
+        self.assertGreater(len(found), 8)
+        self.assertIn("REASON_PAPER", found)
+        self.assertIn("REASON_UNCHANGED_PAPER", found)
+
+    def test_every_reason_has_a_keyword(self):
+        for name, text in self.reasons().items():
+            self.assertTrue(self.keyword(text), f"{name} has no keyword")
+
+    def test_no_keyword_appears_inside_another_reason(self):
+        found = self.reasons()
+        for name, text in found.items():
+            word = self.keyword(text)
+            for other, other_text in found.items():
+                if other == name:
+                    continue
+                self.assertNotIn(
+                    word, other_text,
+                    f"{name}'s keyword {word!r} is inside {other}")
+
 
 # --------------------------------------------------------------------------
 # Gate 5 — the swap, and what a failure must not touch
@@ -964,10 +1074,11 @@ class CommitTest(EditionTestCase):
         self.assertEqual(self.es.read_payload(first.edition_id), payload(1))
 
         # And the store's copy is the same birth certificate as the disk's.
-        # meta.json is written once and never rewritten, so a store row that
-        # took the *second* filing's created_at would make the history
-        # (ordered from the store) and retention (ordered from disk) disagree
-        # about which edition is the oldest.
+        # On this path meta.json is written once and never rewritten -- only a
+        # paper filed again moves a created_at, and this is the board -- so a
+        # store row that took the *second* filing's created_at would make the
+        # history (ordered from the store) and retention (ordered from disk)
+        # disagree about which edition is the oldest.
         on_disk = self.es.edition_meta(first.edition_id)
         self.assertEqual(on_disk["created_at"], T0)
         self.assertEqual(self.store.get_edition(first.edition_id)["created_at"], T0)
