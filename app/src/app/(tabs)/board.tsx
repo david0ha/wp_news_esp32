@@ -9,6 +9,7 @@ import { InfoRow } from '../../components/InfoRow'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { NoBoardYet } from '../../components/NoBoardYet'
+import { PaperSection } from '../../components/board/PaperSection'
 import { useDevice } from '../../lib/device'
 import {
   Esp32Error,
@@ -211,6 +212,10 @@ export default function Board() {
     return (
       <Screen edges={['top']}>
         <Header baseUrl={null} />
+        {/* This section is about the DESK, not the board. A phone with no board still has papers
+            worth putting on one later, and the publish itself works with nothing attached —
+            `pollBoard` is null and `runPaperPublish` skips it. */}
+        <PaperSection pollBoard={null} />
         <NoBoardYet />
       </Screen>
     )
@@ -235,6 +240,7 @@ export default function Board() {
     return (
       <Screen edges={['top']}>
         <Header baseUrl={baseUrl} />
+        <PaperSection pollBoard={() => client.refresh()} />
         <ScreenMessage loading={!error} error={error} message={t.board.loading} onRetry={retry} />
       </Screen>
     )
@@ -254,6 +260,9 @@ export default function Board() {
           <RefreshControl refreshing={refreshing} onRefresh={onPullRefresh} tintColor={colors.accent} />
         }
       >
+        {/* Above the device rows: what is on the glass is the first thing this tab is about. */}
+        <PaperSection pollBoard={() => client.refresh()} />
+
         {/* Status chips: how the last poll went, whether what's on the glass is the demo edition or
             stale, whether the board sleeps, and the battery when there is one. */}
         <View style={styles.chipRow}>
