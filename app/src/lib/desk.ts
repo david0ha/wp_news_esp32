@@ -238,6 +238,91 @@ export function deskLanguageView(input: {
   }
 }
 
+/**
+ * The queue's six statuses, exactly as `store.py` spells them.
+ *
+ * A closed union and not a string, unlike `PushDevice`'s `prefs`, and the asymmetry is
+ * deliberate. A foreign push preference belongs to another phone and can be left alone; this row
+ * is the one being waited on, and the poll stops on `done` or `failed` and on nothing else — so a
+ * status this app cannot classify is one it would sit on forever, with a spinner and no reason.
+ */
+export const COMMAND_STATUSES = [
+  'pending',
+  'claimed',
+  'done',
+  'failed',
+  'expired',
+  'cancelled',
+] as const
+export type CommandStatus = (typeof COMMAND_STATUSES)[number]
+
+/** `MAX_COMMAND_TEXT` on the desk. The composer refuses at this length rather than posting a 400. */
+export const MAX_COMMAND_TEXT = 2000
+
+/**
+ * One row of the desk's command queue, in the app's own spelling.
+ *
+ * The wire is snake_case and the model is camelCase, which is `edition/parse.ts`'s rule and is
+ * worth keeping for the reason that file's header gives: a record stored under wire names and read
+ * back through a camelCase reader loses every field whose two spellings differ, silently.
+ */
+export interface Command {
+  id: string
+  kind: string
+  text: string
+  status: CommandStatus
+  /** `answered`, `revised <eid>`, `staged <eid>`, or the worker's message on a failure. */
+  result: string | null
+  /** The previous turn of the same thread, or `null` for the first. */
+  replyTo: string | null
+  lang: string | null
+  source: string
+  createdAt: string
+  /** Whether `notes.md` is there to be fetched. */
+  hasNotes: boolean
+}
+
+/** A message from the phone. `kind` and `source` are this client's, not the caller's. */
+export interface AskBody {
+  text: string
+  /** Absent, never null: a null `reply_to` is a claim about a previous command that is not there. */
+  replyTo?: string
+  lang: string
+}
+
+/** What `POST /api/publish` did. A 404 is a state, not a failure — see `publishNow`. */
+export type PublishOutcome = 'published' | 'nothing_staged'
+
+function isCommandStatus(v: unknown): v is CommandStatus {
+  return typeof v === 'string' && (COMMAND_STATUSES as readonly string[]).includes(v)
+}
+
+/**
+ * One row, or `null` for a body this client cannot read.
+ *
+ * The id and the status are required because everything downstream is keyed on one and branches
+ * on the other; the rest defaults, because a row missing its `created_at` is still a row worth
+ * showing the answer of.
+ */
+function parseCommand(raw: unknown): Command | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.id !== 'string' || o.id === '') return null
+  if (!isCommandStatus(o.status)) return null
+  return {
+    id: o.id,
+    kind: typeof o.kind === 'string' ? o.kind : '',
+    text: typeof o.text === 'string' ? o.text : '',
+    status: o.status,
+    result: typeof o.result === 'string' ? o.result : null,
+    replyTo: typeof o.reply_to === 'string' ? o.reply_to : null,
+    lang: typeof o.lang === 'string' ? o.lang : null,
+    source: typeof o.source === 'string' ? o.source : '',
+    createdAt: typeof o.created_at === 'string' ? o.created_at : '',
+    hasNotes: o.has_notes === true,
+  }
+}
+
 export interface DeskClientOptions {
   /** The desk's base address, e.g. `https://desk.example.dev`. A trailing slash is fine. */
   baseUrl: string
@@ -271,6 +356,14 @@ export interface DeskClient {
   registerPushDevice(body: PushDeviceBody): Promise<PushDoc>
   /** Forget one phone. Answers nothing: what matters is that the desk no longer holds the token. */
   forgetPushDevice(token: string): Promise<void>
+  /** Put a message on the desk's queue. Answers the row the desk created. */
+  postCommand(body: AskBody): Promise<Command>
+  /** One row, or `null` for an id the desk has never held under any status. */
+  command(id: string): Promise<Command | null>
+  /** The worker's answer, as markdown — or `null` for a command that finished without writing one. */
+  commandNotes(id: string): Promise<string | null>
+  /** Force the staged edition out. `nothing_staged` is an outcome; see the implementation. */
+  publishNow(): Promise<PublishOutcome>
 }
 
 export function createDeskClient(opts: DeskClientOptions): DeskClient {
@@ -419,6 +512,23 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
     return { devices: raw.filter(isPushDevice) }
   }
 
+  // The command envelope, read once for both routes that answer one — the same reason `settingsOf`
+  // serves a GET and a PUT: two readers are two chances to disagree about what the desk said.
+  async function commandOf(res: Response, route: string): Promise<Command> {
+    if (!res.ok) throw await refusal(res, route)
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', `${route} did not answer JSON`, res.status)
+    }
+    const row = parseCommand((payload as { command?: unknown } | null)?.command)
+    if (row === null) {
+      throw new DeskError('bad_json', `${route} answered a row this app cannot read`, res.status)
+    }
+    return row
+  }
+
   return {
     async getSettings(): Promise<DeskSettings> {
       return settingsOf(await send('/api/settings', { method: 'GET' }))
@@ -492,6 +602,61 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // turning the switch off. Treating it as a failure would leave the switch reporting on —
       // and reporting on is a promise that the desk is still sending, which it is not.
       if (!res.ok && res.status !== 404) throw await refusal(res, 'push')
+    },
+
+    async postCommand(body: AskBody): Promise<Command> {
+      // Field by field, and NOT for the reason the push device body is: `h_enqueue` reads what it
+      // wants with `doc.get` and ignores everything else, so an unknown key here is dropped in
+      // silence rather than refused. That is the weaker contract of the two and the reason to be
+      // deliberate about the field set anyway — the keys this route DOES read include `priority`,
+      // `deadline_at` and `source`, so a body assembled by spreading some caller's object could
+      // hand the desk instructions nobody wrote, with no 400 to say so. Naming the four fields is
+      // what makes that impossible. `reply_to` is spread in only when there is one — see `AskBody`.
+      const wire = {
+        kind: 'ask',
+        text: body.text,
+        lang: body.lang,
+        ...(body.replyTo === undefined ? {} : { reply_to: body.replyTo }),
+        source: 'app',
+      }
+      const res = await send('/api/commands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(wire),
+      })
+      return commandOf(res, 'commands')
+    },
+
+    async command(id: string): Promise<Command | null> {
+      const res = await send(`/api/commands/${encodeURIComponent(id)}`, { method: 'GET' })
+      // A 404 IS AN ANSWER, and not the one an earlier version of this comment claimed. Rows are
+      // never deleted — `reap()` only ever UPDATEs a command's status, and an expired one still
+      // answers 200 with `status: "expired"`. So a 404 here means exactly one thing: an id the
+      // desk never held at all, not one that lapsed away. A state the turn renders either way, not
+      // a transport failure that a retry would fix. `forgetPushDevice` takes a 404 the same way
+      // and for the same reason: the status describes the world, not the request.
+      if (res.status === 404) return null
+      return commandOf(res, 'commands')
+    },
+
+    async commandNotes(id: string): Promise<string | null> {
+      const res = await send(`/api/commands/${encodeURIComponent(id)}/notes.md`, { method: 'GET' })
+      // The same 404 rule, over a narrower fact: a command that finished and wrote no answer.
+      // The worker treats that as a failure on its own side; the phone still has to draw the turn.
+      if (res.status === 404) return null
+      if (!res.ok) throw await refusal(res, 'notes')
+      // `text/markdown`, not JSON — the only route in this client that is not an envelope.
+      return res.text()
+    },
+
+    async publishNow(): Promise<PublishOutcome> {
+      const res = await send('/api/publish', { method: 'POST' })
+      // "Nothing is staged" is not this phone failing to publish; it is the staged edition
+      // already being out — published by the owner's own tooling, or by a second phone answering
+      // the same push. The caller's next act is identical either way: go and refetch the paper.
+      if (res.status === 404) return 'nothing_staged'
+      if (!res.ok) throw await refusal(res, 'publish')
+      return 'published'
     },
   }
 }

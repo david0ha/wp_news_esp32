@@ -17,36 +17,53 @@
 # Build context is the REPOSITORY ROOT:
 #     docker build -f agent/Dockerfile -t claudepost-agent .
 
+# Two identities inside this container, and the split is the point.
+#
+# The loop runs as root and every `claude` turn runs as `model` (uid 10001)
+# through gosu. Root is not a preference here, it is the only thing that works:
+# gosu is not setuid, agent/compose.yaml sets `no-new-privileges:true`, and a
+# process that is not root therefore cannot change uid at all -- measured, not
+# assumed. What the split buys is the one thing that IS enforced by the kernel:
+# `model` cannot read /proc/<loop>/environ, and the desk's producer token exists
+# nowhere else in this container. The old `worker` user is gone rather than
+# renamed; there is nothing left for a third identity to be.
 FROM node:22-slim
 
 # python3 runs the loop and the two repo tools the prompt names; curl is for a
-# human debugging inside the container. git is absent deliberately -- the worker
-# has no business pushing anything.
+# human debugging inside the container. gosu is how a turn is handed to `model`.
+# python3-pil is Pillow, which tools/make_tile.py imports -- as the Debian
+# package rather than through pip, because a Debian python3 refuses to install
+# into itself (PEP 668) and this is the trap that bit the host install. git is
+# absent deliberately -- the worker has no business pushing anything.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 curl ca-certificates tzdata \
+        python3 python3-pil gosu curl ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force
 
-# The same uid as the desk, so a directory bind-mounted into both has one owner
-# rather than two that disagree.
-RUN useradd --create-home --uid 10001 --shell /bin/bash worker
+# The user every `claude` turn runs as. It has a home because the CLI writes
+# its own configuration there, and a home owned by somebody else is a turn that
+# fails on its first write.
+RUN useradd --create-home --uid 10001 --shell /bin/bash model
 
 WORKDIR /repo
-COPY --chown=worker:worker tools/ tools/
+COPY tools/ tools/
 # The three modules the loop is, and nothing else. Not agent/ wholesale:
 # standalone/ is a different program that runs on a Mac with launchd, and test/
 # is the harness -- neither belongs in an image whose job is to run one script.
-COPY --chown=worker:worker agent/*.py /app/agent/
+COPY agent/*.py /app/agent/
 
 ENV PYTHONUNBUFFERED=1 \
     CLAUDEPOST_DESK=http://desk:8080 \
-    CLAUDEPOST_SECRETS=/run/secrets \
     CLAUDEPOST_REPO=/repo \
     CLAUDEPOST_SCRATCH=/scratch \
-    HOME=/home/worker
+    AGENT_RUN_AS=model \
+    HOME=/root
 
-RUN mkdir -p /scratch && chown worker:worker /scratch
+# /scratch is the loop's, and each command's directory inside it is handed to
+# `model` for the length of one turn -- see loop.own_workdir. /state is the
+# rotation cursor's, which is a bind mount in compose and an empty directory
+# here so that a bare `docker run` still starts.
+RUN mkdir -p /scratch /state
 
-USER worker
 CMD ["python3", "/app/agent/loop.py"]

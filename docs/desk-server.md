@@ -268,7 +268,7 @@ whole deliverable there.
 | Root | Where | Holds |
 |---|---|---|
 | **Serving** | Docker volume → `/data` | `current`, `staged`, `drafts/<id>/…`, `editions/<id>/…` (each with its own `notes.md` once one is filed), `notes/commands/<id>/…`, `desk.sqlite`, `schedule.json`, `watchlist.json`, `settings.json`, and `0600`: `positions.json`, `calendar.json`, `push.json` |
-| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` |
+| **Secrets** | `~/.claudepost/` → `/run/secrets`, ro | `tokens.json`, `agent.env`, `alpaca.json` — `agent.env` is no longer in the *agent* container's view of this mount; it reaches that loop through `env_file` instead |
 
 **Secrets are not in the repository, the image, or any synced directory.**
 `~/.claudepost/` sits outside all three — the repository is public and git history
@@ -292,6 +292,44 @@ attempts, and a deadline past which a pending command expires rather than
 surfacing three days late. The claim is a single `UPDATE … RETURNING`, because
 two statements is a race that surfaces as one instruction filing two editions
 and a wall that flashes twice.
+
+**A fifth kind, `ask`, is a message somebody typed on a phone.** It carries two
+nullable columns the other four never use — `reply_to`, the command id of the
+previous turn of the same thread, and `lang`, the language the phone was in when
+the message was typed. `MAX_COMMAND_TEXT` is unchanged at 2000: a message is
+short.
+
+```json
+{ "kind": "ask", "text": "매수 얘기 말고 소송으로 톱 바꿔줘",
+  "reply_to": "9c1f…", "lang": "ko", "source": "app" }
+```
+
+`reply_to` is checked for **existence**, not merely for shape, and that is the
+whole reason the check is in `store.add_command` rather than at the route: the
+worker will fetch that row and put the earlier question and its answer in front
+of the model, so an id naming nothing is a thread that quietly loses a turn and
+a phone that never learns why. `lang` is checked against `settings.LANGS` —
+`en` or `ko`, the languages there is type on the board for — and `null` is a
+state rather than an omission: a typed message carries its own language, and
+this field exists only to break a tie the model cannot, a ticker on its own,
+say.
+
+**There is no server-side thread object.** `reply_to` is the thread. The phone
+keeps its own list of turns and the desk keeps the rows; nothing here joins
+them, because the only reader that needs the whole thread is the phone that
+wrote it.
+
+**`GET /api/commands/<id>`** — `producer` scope, `404` for an unknown id —
+answers one row with `has_notes` beside it, the same flag the list carries. It
+exists so a phone polling an open thread does not have to fetch the queue: a
+reader asking after its own message would otherwise be handed every other
+instruction the desk is holding.
+
+**`result` on a finished `ask` is a vocabulary**, and the desk does not parse
+it: `answered`, `revised <edition_id>`, `staged <edition_id>`, or on failure the
+worker's own sentence. The phone branches on the first word. What the desk does
+read is the first word, once, to put in a push payload — which is the knock at
+the door, not the answer. The answer is the command's `notes.md`.
 
 ## The audit log
 
@@ -826,7 +864,7 @@ a fact about them.
                  "tz": "Asia/Seoul",
                  "prefs": { "earnings": true, "expiry": true,
                             "dividend": true, "econ": true,
-                            "researched": true },
+                            "researched": true, "answer": true },
                  "lead": { "earnings": ["P1D"], "expiry": ["P7D", "P1D"],
                            "dividend": ["P1D"], "econ": ["PT3H"],
                            "researched": ["P1D"] },
@@ -834,18 +872,25 @@ a fact about them.
                  "last_seen": "2026-09-08T05:00:00Z" } ] }
 ```
 
-**Five switches, not eight, and not four.** The four computed kinds each get
-their own; the book's other four — `corporate`, `legal`, `index`, `other` —
-share `researched`. The rule is that a kind with no switch is a kind the owner
-cannot turn off *and also one that can never fire*, and an earlier draft
-applied only its first half: it gave switches to the computed kinds alone,
-which left the researched half of the book unable to notify at all. A book that
-ranks by effect on the positions puts a court date or an analyst day at rank 1
-often enough that ranking it first and never mentioning it is a design arguing
-with itself. They share one switch rather than getting four because the owner's
-question is "tell me about things somebody had to go and find", not "tell me
-about index rebalancing but not litigation". `push.pref_for()` is the only
-place that mapping lives.
+**Six switches, and one of them is not about the book.** The four computed
+kinds each get their own; the book's other four — `corporate`, `legal`,
+`index`, `other` — share `researched`. The rule is that a kind with no switch
+is a kind the owner cannot turn off *and also one that can never fire*, and an
+earlier draft applied only its first half: it gave switches to the computed
+kinds alone, which left the researched half of the book unable to notify at
+all. A book that ranks by effect on the positions puts a court date or an
+analyst day at rank 1 often enough that ranking it first and never mentioning
+it is a design arguing with itself. They share one switch rather than getting
+four because the owner's question is "tell me about things somebody had to go
+and find", not "tell me about index rebalancing but not litigation".
+`push.pref_for()` is the only place that mapping lives.
+
+The sixth is `answer`, and it is the first notification on this desk that is not
+about a date. It gets a switch under the rule the other five are argued from — a
+kind with no switch is a kind the owner cannot turn off — and it is deliberately
+absent from the `lead` map beside it, because a lead says *how long before the
+date* to speak and an answer has no date. It happens when the worker finishes.
+`push.LEAD_KINDS` is the five that take a lead; `push.KINDS` is all six.
 
 `POST` takes **one device**, not the whole document, because that is what a
 phone knows — its own token, its zone, its switches — but what is *validated*
@@ -941,6 +986,43 @@ by a library out of something it was handed is exactly where one appears.
 `GET /api/state` reports the device count and the longest failure streak — one
 number, because a per-phone breakdown would answer "is push working" by naming
 the phones.
+
+### The answer, and the one push that is not an alert
+
+When a command whose `source` is `app` reaches `done` or `failed`, `Desk.finish`
+tells every registered phone once:
+
+```json
+{ "title": "Claude Post", "body": "답변이 도착했습니다",
+  "data": { "command_id": "9c1f…", "result": "revised" } }
+```
+
+The body is English or Korean by the command's own `lang`, falling back to the
+desk's `settings.lang` when the phone did not say — `null` there means "the
+language of the message itself", which only the model that read it can know, and
+the language the paper is written in is the nearest thing the desk has. A failed
+command gets its own sentence rather than the same one: a notification promising
+an answer that opens onto an error is a worse failure than the one it reports.
+
+**The idempotency is the same delivery ledger the alerts use**, keyed
+`(token, "cmd:" + <command id>, "0")`. The prefix is why a command id cannot
+collide with an event id from the book, and the `"0"` is deliberately not an
+ISO-8601 duration, because there is no lead to spell.
+
+**The push is wrapped and the finish is not.** The caller is the worker's own
+`POST /api/commands/<id>/done`, and the 200 it gets back is what stops the
+worker retrying: a phone that does not ring costs an answer somebody opens the
+app for, where a `done` that 500s costs the whole command a second time — and on
+an `ask` that revised the paper, that is the paper revised twice.
+
+**A quiet window defers it rather than dropping it**, the rule alerts already
+follow. A device inside its window is skipped and *nothing is recorded for it*,
+which is exactly what leaves it owed; the housekeeping pass — ten minutes apart,
+because what it waits for is hour-scale — sends it once the window ends. Past
+`ANSWER_WINDOW_SECONDS` (36 hours, a day of quiet window plus slack for a desk
+that was down across one) the *notification* expires. The answer never does: the
+phone polls the command while its thread is open and reads it from the row on the
+next launch besides.
 
 ## What must never happen
 
@@ -1144,6 +1226,18 @@ handling at all — `agent/run-host.sh` runs the same `loop.py` against the same
 desk and spends the subscription. The trade is availability: a container
 restarts itself, a laptop sleeps.
 
+**In the container there are two users and the split is the credential.** The
+loop runs as root and every `claude` turn runs as `model` through `gosu`, in a
+workdir handed to that user for the length of the turn. Root is the only thing
+that works — `gosu` is not setuid and `no-new-privileges` is set, so a non-root
+process cannot change uid — and what it buys is that the desk's producer token
+lives only in the loop's environment, which another uid cannot read. The token
+is not a file in the container: compose reads `~/.claudepost/agent.env` on the
+host and hands it over as environment, because a bind mount's mode is not
+enforced on Docker Desktop for Mac. The tool allowlist is unchanged, and the
+container has ordinary outbound internet: this is a wall around the
+credentials, not an egress allowlist.
+
 A separate container from the desk, and separate for the reason
 [`agent/README.md`](../agent/README.md) gives for splitting filing from
 serving: **filing is an event that can fail, serving is a condition that must
@@ -1169,8 +1263,8 @@ on it is set larger than a deck, a photograph that halftoned to mush.
 
 Two revisions, then it reports the failure with the validator's own words.
 
-**`kind` decides where the turn's `notes.md` goes, and one of the four kinds
-decides it from the disk rather than from itself.** `"file_edition"` always
+**`kind` decides where the turn's `notes.md` goes, and two of the five kinds
+decide it from the disk rather than from themselves.** `"file_edition"` always
 takes the draft path above, and if the run left a `notes.md` in its workdir it
 rides beside the draft (`PUT .../notes.md`) — the dossier behind the page,
 filed the same way whether or not one seemed worth writing. `"research"`
@@ -1199,6 +1293,16 @@ where it lies as evidence, and nothing is uploaded. The seeding is the same
 rule from the other side, and it runs **before** the turn, so a desk that
 cannot say what the owner holds fails the command at the start rather than
 after forty-five minutes of research against nothing.
+
+**`"ask"` is the fifth, and it decides from the disk the way `custom` does.**
+A message from the phone, seeded with the edition the desk is serving (off the
+public plane, the same bytes the board reads) and one turn of the conversation
+behind it. It must write `answer.md`, which is filed on the command and is what
+the phone reads back; it writes `news.json` only if it judged that the message
+asked for the paper to change, and then the ordinary five gates apply
+unchanged. The result reads `answered`, `revised <edition id>` or `staged
+<edition id>`. A revision that fails a gate fails the command and the current
+edition stays current.
 
 ## Cloudflare
 

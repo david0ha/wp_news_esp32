@@ -607,11 +607,15 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         text = doc.get("text")
         if not isinstance(text, str) or not text.strip():
             raise BadRequest(message="a command needs text")
+        # `reply_to` and `lang` are passed through as they arrived, `None` and
+        # all: `store.add_command` is where both are checked, so the shape a
+        # `curl` can file and the shape the phone can file are one rule.
         command = self.desk.enqueue(
             doc.get("kind", "custom"), text,
             priority=_int_field(doc, "priority", 5, 0, 9),
             deadline_at=_epoch_field(doc, "deadline_at"),
-            source=str(doc.get("source", "api"))[:64])
+            source=str(doc.get("source", "api"))[:64],
+            reply_to=doc.get("reply_to"), lang=doc.get("lang"))
         self._send_json(200, {"ok": True, "command": command})
 
     def h_claim(self, _match, query) -> None:
@@ -642,7 +646,10 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def h_finish(self, match, _query) -> None:
         doc = self._json_body(required=False)
         status = "done" if match.group("verb") == "done" else "failed"
-        command = self.desk.store.finish_command(
+        # `Desk.finish` rather than the store directly: a command the phone
+        # filed rings the phone, and that decision belongs beside the desk's
+        # other push rather than in a route handler.
+        command = self.desk.finish(
             match.group("cid"), status, str(doc.get("result", ""))[:4000])
         self._send_json(200, {"ok": True, "command": command})
 
@@ -673,6 +680,18 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def h_get_command_notes(self, match, _query) -> None:
         """The note filed on a command, as the markdown a worker filed it as."""
         self._send_notes(self.desk.notes.get(match.group("cid")))
+
+    def h_get_command(self, match, _query) -> None:
+        """One command by id -- the phone's poll of an open thread.
+
+        The queue's list would answer this too, and does not: a phone asking
+        after its own message would be handed every other instruction the desk
+        is holding, which is a list of what the operator has asked for lately.
+        """
+        command = self.desk.command(match.group("cid"))
+        if command is None:
+            raise NotFound(message="no command %s" % match.group("cid"))
+        self._send_json(200, {"ok": True, "command": command})
 
     def h_cancel(self, match, _query) -> None:
         if not self.desk.store.cancel_command(match.group("cid")):
@@ -1249,6 +1268,7 @@ _ROUTES = [
     (re.compile(r"^/api/commands/next\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_claim)}),
     (re.compile(r"^/api/commands/(?P<cid>%s)\Z" % _CID), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_get_command),
         "DELETE": ("operator", DeskHTTPRequestHandler.h_cancel)}),
     (re.compile(r"^/api/commands/(?P<cid>%s)/(?P<verb>done|fail)\Z" % _CID), {
         "POST": ("producer", DeskHTTPRequestHandler.h_finish)}),

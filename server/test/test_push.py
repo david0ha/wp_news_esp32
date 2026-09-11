@@ -60,7 +60,7 @@ SPEC_DEVICE = {
     "platform": "ios",
     "tz": "Asia/Seoul",
     "prefs": {"earnings": True, "expiry": True, "dividend": True,
-              "econ": True, "researched": True},
+              "econ": True, "researched": True, "answer": True},
     "lead": {"earnings": ["P1D"], "expiry": ["P7D", "P1D"],
              "dividend": ["P1D"], "econ": ["PT3H"],
              "researched": ["P1D"]},
@@ -136,20 +136,26 @@ class DocumentTest(unittest.TestCase):
         fire. An earlier draft made the switch set the four computed kinds
         alone, which left the book's other four with neither.
 
-        Five switches rather than eight, because the owner's question is "tell
-        me about things somebody had to go and find", not "tell me about index
-        rebalancing but not litigation".
+        Six switches now, not five: `answer` is the first push that is not
+        about a dated event, and it gets a switch for the same reason. It is
+        deliberately *not* in `LEAD_KINDS`, because a lead is "how long before
+        the date" and an answer has no date -- it happens when it happens.
         """
-        self.assertEqual(set(P.KINDS), set(COMPUTED_KINDS) | {P.RESEARCHED})
-        self.assertEqual(set(P.DEFAULT_LEAD), set(P.KINDS))
+        self.assertEqual(set(P.KINDS),
+                         set(COMPUTED_KINDS) | {P.RESEARCHED, P.ANSWER})
+        self.assertEqual(set(P.LEAD_KINDS), set(COMPUTED_KINDS) | {P.RESEARCHED})
+        self.assertEqual(set(P.DEFAULT_LEAD), set(P.LEAD_KINDS))
         out = P.parse_devices(doc(device()))
         self.assertEqual(set(out["devices"][0]["prefs"]), set(P.KINDS))
-        self.assertEqual(set(out["devices"][0]["lead"]), set(P.KINDS))
+        self.assertEqual(set(out["devices"][0]["lead"]), set(P.LEAD_KINDS))
 
         # And every kind the book may carry lands on one of them.
         for kind in CALENDAR_KINDS:
             with self.subTest(kind=kind):
                 self.assertIn(P.pref_for(kind), P.KINDS)
+
+    def test_the_answer_keeps_its_own_switch(self):
+        self.assertEqual(P.pref_for(P.ANSWER), P.ANSWER)
 
     def test_a_computed_kind_keeps_its_own_switch(self):
         for kind in COMPUTED_KINDS:
@@ -164,7 +170,14 @@ class DocumentTest(unittest.TestCase):
         out = P.parse_devices(doc(device(prefs={"econ": False})))
         self.assertEqual(out["devices"][0]["prefs"],
                          {"earnings": True, "expiry": True, "dividend": True,
-                          "econ": False, P.RESEARCHED: True})
+                          "econ": False, P.RESEARCHED: True, P.ANSWER: True})
+
+    def test_a_lead_for_the_answer_is_not_a_field(self):
+        """A lead names how long before a date to say something, and an answer
+        has no date. Accepting one would store a number nothing can read."""
+        with self.assertRaises(BadRequest) as caught:
+            P.parse_devices(doc(device(lead={P.ANSWER: ["P1D"]})))
+        self.assertIn("lead", caught.exception.message)
 
     def test_a_string_is_not_a_switch(self):
         with self.assertRaises(BadRequest) as caught:

@@ -1,12 +1,16 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals'
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   DEFAULT_LEAD,
   DEFAULT_PREFS,
   DEFAULT_QUIET,
+  LEAD_KINDS,
   LEADS,
   PUSH_KINDS,
+  addNotificationTapListener,
   applyNotifyPrefs,
+  askRouteForPush,
+  commandIdOfPush,
   decideNotify,
   deviceBody,
   deviceZone,
@@ -29,6 +33,7 @@ import {
 } from './notify'
 import { DeskError } from './desk'
 import { setActiveLanguage, strings } from '../i18n'
+import * as Notifications from 'expo-notifications'
 
 // The house placeholder. It is the only push token anywhere in this repository, and it is not a
 // real one: a token is a capability to write on somebody's lock screen, so a plausible-looking
@@ -129,10 +134,18 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('the switches', () => {
-  it('is the desk’s five, not the book’s eight', () => {
-    // `push.KINDS` — the four computed kinds, and `researched` shared by the four the agent had
-    // to go and find. A sixth switch here would be one the desk has nowhere to put.
-    expect([...PUSH_KINDS].sort()).toEqual(['dividend', 'earnings', 'econ', 'expiry', 'researched'])
+  it('is the desk’s six, not the book’s eight', () => {
+    // `push.KINDS` — the four computed kinds, `researched` shared by the four the agent had to go
+    // and find, and `answer`, the one that is not a calendar alert at all. A seventh switch here
+    // would be one the desk has nowhere to put.
+    expect([...PUSH_KINDS].sort()).toEqual([
+      'answer',
+      'dividend',
+      'earnings',
+      'econ',
+      'expiry',
+      'researched',
+    ])
   })
 
   it('offers exactly the six lead times the desk can schedule', () => {
@@ -181,13 +194,15 @@ describe('parseNotifyPrefs', () => {
 describe('deviceBody', () => {
   const body = (prefs: NotifyPrefs) => deviceBody(TOKEN, 'ios', 'Asia/Seoul', prefs)
 
-  it('carries the token, the platform, the zone, every switch and every lead', () => {
+  it('carries the token, the platform, the zone, every switch, and a lead only for the kinds that take one', () => {
+    // `prefs` and `lead` answer to two different desk allowlists — `_KIND_KEYS` (all six) and
+    // `_LEAD_KEYS` (the five in LEAD_KINDS, `answer` excluded) — so their key sets must differ.
     const b = body(DEFAULT_PREFS) as unknown as Record<string, unknown>
     expect(b.token).toBe(TOKEN)
     expect(b.platform).toBe('ios')
     expect(b.tz).toBe('Asia/Seoul')
     expect(Object.keys(b.prefs as object).sort()).toEqual([...PUSH_KINDS].sort())
-    expect(Object.keys(b.lead as object).sort()).toEqual([...PUSH_KINDS].sort())
+    expect(Object.keys(b.lead as object).sort()).toEqual([...LEAD_KINDS].sort())
   })
 
   it('sends no key the desk does not know', () => {
@@ -955,5 +970,149 @@ describe('the push token goes to the desk and nowhere else', () => {
     expect(logged.join('\n')).not.toContain('ExponentPushToken')
     expect(written).toHaveLength(0)
     expect(logged).toHaveLength(0)
+  })
+})
+
+describe('the answer kind', () => {
+  it('is a sixth switch beside the five calendar ones', () => {
+    expect([...PUSH_KINDS]).toEqual([
+      'earnings',
+      'expiry',
+      'dividend',
+      'econ',
+      'researched',
+      'answer',
+    ])
+  })
+
+  it('takes no lead time, because it is about something that already happened', () => {
+    // A lead is "how far ahead of a date". An answer has no date ahead of it, and a lead selector
+    // under this switch would be asking a question with no answer.
+    expect([...LEAD_KINDS]).toEqual(['earnings', 'expiry', 'dividend', 'econ', 'researched'])
+    expect(DEFAULT_LEAD.answer).toEqual([])
+  })
+
+  it('registers `prefs` over all six kinds but `lead` over only the five the desk allows', () => {
+    // The desk validates the two documents against two different allowlists — `prefs` against
+    // `_KIND_KEYS` (all six), `lead` against `_LEAD_KEYS` (the five in LEAD_KINDS). A `lead`
+    // built over PUSH_KINDS would put an `answer` key in every registration and 400 the whole
+    // document, so this checks the KEY SET the desk actually enforces, not one value inside it —
+    // a value-only assertion here would have passed while that contract was broken.
+    const body = deviceBody(TOKEN, 'ios', 'Asia/Seoul', DEFAULT_PREFS)
+    expect(Object.keys(body.prefs).sort()).toEqual([...PUSH_KINDS].sort())
+    expect(body.prefs.answer).toBe(true)
+    expect(Object.keys(body.lead).sort()).toEqual([...LEAD_KINDS].sort())
+    expect(body.lead.answer).toBeUndefined()
+  })
+})
+
+describe('routing a notification tap', () => {
+  it('finds the command id in the push’s data', () => {
+    expect(commandIdOfPush({ command_id: 'c0ffee00', result: 'answered' })).toBe('c0ffee00')
+  })
+
+  it('ignores a push carrying no command id — every calendar alert is one', () => {
+    expect(commandIdOfPush({ event_id: 'evt1' })).toBeNull()
+    expect(commandIdOfPush(null)).toBeNull()
+    expect(commandIdOfPush({ command_id: 42 })).toBeNull()
+    expect(commandIdOfPush({ command_id: '' })).toBeNull()
+    expect(commandIdOfPush({ command_id: '   ' })).toBeNull()
+  })
+
+  it('routes to the ask screen with the command as the parameter', () => {
+    // The push carries a COMMAND id and the screen opens a THREAD; the lookup is the ask hook's,
+    // over what it reads off disk. Routing by command id is what makes the link work on a phone
+    // whose thread list was written by a different launch.
+    expect(askRouteForPush({ command_id: 'c0ffee00' })).toBe('/ask?command=c0ffee00')
+  })
+
+  it('percent-encodes an id that would otherwise break the query', () => {
+    expect(askRouteForPush({ command_id: 'a&b' })).toBe('/ask?command=a%26b')
+  })
+
+  it('routes nothing for a push that is not about a command', () => {
+    expect(askRouteForPush({ event_id: 'evt1' })).toBeNull()
+  })
+})
+
+describe('addNotificationTapListener', () => {
+  function fakeResponse(identifier: string, data: Record<string, unknown>) {
+    return { notification: { request: { identifier, content: { data } } } } as Notifications.NotificationResponse
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('routes the response that launched a cold process, read once on mount', () => {
+    jest
+      .spyOn(Notifications, 'getLastNotificationResponse')
+      .mockReturnValue(fakeResponse('n1', { command_id: 'c0ffee00' }))
+    let listener: ((r: Notifications.NotificationResponse) => void) | undefined
+    jest.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation((l) => {
+      listener = l
+      return { remove: () => undefined }
+    })
+    const go = jest.fn()
+
+    const unsubscribe = addNotificationTapListener(go)
+
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith('/ask?command=c0ffee00')
+    expect(listener).toBeDefined()
+    unsubscribe()
+  })
+
+  it('does not route the cold-launch response twice, when the OS also replays it to the live listener', () => {
+    // Some platforms redeliver the response that launched the process to the listener once it is
+    // registered. Without a guard keyed on the response's own identifier, one tap would open the
+    // ask screen twice.
+    jest
+      .spyOn(Notifications, 'getLastNotificationResponse')
+      .mockReturnValue(fakeResponse('n1', { command_id: 'c0ffee00' }))
+    let listener: ((r: Notifications.NotificationResponse) => void) | undefined
+    jest.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation((l) => {
+      listener = l
+      return { remove: () => undefined }
+    })
+    const go = jest.fn()
+
+    const unsubscribe = addNotificationTapListener(go)
+    listener?.(fakeResponse('n1', { command_id: 'c0ffee00' }))
+
+    expect(go).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
+  it('routes a live tap normally when there is no cold-launch response to replay', () => {
+    jest.spyOn(Notifications, 'getLastNotificationResponse').mockReturnValue(null)
+    let listener: ((r: Notifications.NotificationResponse) => void) | undefined
+    jest.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation((l) => {
+      listener = l
+      return { remove: () => undefined }
+    })
+    const go = jest.fn()
+
+    const unsubscribe = addNotificationTapListener(go)
+    listener?.(fakeResponse('n2', { command_id: 'c0ffee00' }))
+
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith('/ask?command=c0ffee00')
+    unsubscribe()
+  })
+
+  it('ignores a cold-launch response that is not about a command, such as a calendar alert', () => {
+    jest
+      .spyOn(Notifications, 'getLastNotificationResponse')
+      .mockReturnValue(fakeResponse('n3', { event_id: 'evt1' }))
+    jest
+      .spyOn(Notifications, 'addNotificationResponseReceivedListener')
+      .mockReturnValue({ remove: () => undefined })
+    const go = jest.fn()
+
+    const unsubscribe = addNotificationTapListener(go)
+
+    expect(go).not.toHaveBeenCalled()
+    unsubscribe()
   })
 })

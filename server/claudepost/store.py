@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -47,6 +48,7 @@ from typing import Iterator
 
 from .clock import Clock
 from .errors import BadRequest, Conflict, NotFound, epoch_seconds
+from .settings import LANGS
 
 #: How long a claim is good for. A worker that dies mid-edition costs one
 #: retry, not a lost day -- but thirty minutes is long enough that a slow
@@ -58,6 +60,14 @@ LEASE_SECONDS: int = 1800
 #: forever is a queue that hides the reason.
 MAX_ATTEMPTS: int = 3
 
+#: The shape of a command id: the ids this table hands out, the `NoteStore` the
+#: desk gives their notes to, and every `/api/commands/<cid>/...` route in
+#: `http.py`. It lives here rather than in `app.py` because `add_command` has to
+#: check a `reply_to` against it and `store` cannot import `app` -- `app`
+#: imports `store`. `app.py` re-exports it, so the one spelling is still the
+#: only spelling.
+COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
+
 #: Advisory: it tells a worker whether the expected outcome is an edition. The
 #: desk never acts on a command itself, so this is never dispatch.
 #:
@@ -66,8 +76,14 @@ MAX_ATTEMPTS: int = 3
 #: worker knows what to do with one, but nothing can queue it. That is exactly
 #: how it was found, by the worker's own author noticing there was no way to
 #: ask for the work that had just been built.
+#:
+#: ``ask`` is the phone's own kind -- a message typed by the owner, answered by
+#: the worker, and sometimes an instruction to rewrite the edition. It is a
+#: kind rather than a `custom` with a convention because two things downstream
+#: read it: the worker's prompt, and the finish path that decides whether
+#: anybody's phone rings.
 COMMAND_KINDS: tuple[str, ...] = ("file_edition", "research", "custom",
-                                  "calendar")
+                                  "calendar", "ask")
 
 #: An instruction in the owner's own words, not a document.
 MAX_COMMAND_TEXT: int = 2000
@@ -93,7 +109,14 @@ CREATE TABLE IF NOT EXISTS commands (
     claimed_at  REAL,
     finished_at REAL,
     attempts    INTEGER NOT NULL DEFAULT 0,
-    result      TEXT    NOT NULL DEFAULT ''
+    result      TEXT    NOT NULL DEFAULT '',
+    -- The thread. `reply_to` is the previous turn's command id and `lang` is
+    -- the language the phone was in when the message was typed; NULL there
+    -- means "the language of the message itself", which only the model can
+    -- read. Both nullable, which is also what makes them addable by ALTER
+    -- TABLE below without rewriting a row.
+    reply_to    TEXT,
+    lang        TEXT
 );
 -- The claim's subquery is exactly this order, and it runs on every long poll.
 CREATE INDEX IF NOT EXISTS commands_queue
@@ -161,7 +184,24 @@ CREATE TABLE IF NOT EXISTS audit (
 
 _COMMAND_COLUMNS = ("id", "kind", "text", "priority", "status", "source",
                     "created_at", "deadline_at", "claimed_by", "claimed_at",
-                    "finished_at", "attempts", "result")
+                    "finished_at", "attempts", "result", "reply_to", "lang")
+
+#: Columns added to a table after this desk first shipped, as
+#: ``(table, column, declaration)``.
+#:
+#: ``CREATE TABLE IF NOT EXISTS`` does exactly nothing to a table that already
+#: exists, so a column added to :data:`_SCHEMA` alone reaches a fresh database
+#: and no other. The failure that causes is not a startup error, which somebody
+#: would notice -- it is ``no such column: reply_to`` raised on the first
+#: message sent from the phone, on a desk that has been serving since August.
+#:
+#: Every entry must be nullable and carry no default. That is what makes
+#: ``ALTER TABLE ... ADD COLUMN`` a metadata-only write on SQLite rather than a
+#: rewrite of every row in the table.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("commands", "reply_to", "TEXT"),
+    ("commands", "lang", "TEXT"),
+)
 
 #: The claim, and the reason it is one statement.
 #:
@@ -217,16 +257,56 @@ class Store:
         # is IF NOT EXISTS, so twenty processes opening the file at once is a
         # race with no losing side.
         self._db.executescript(_SCHEMA)
+        self._migrate()
 
     def close(self) -> None:
         """Close the connection. Idempotent."""
         with self._lock:
             self._db.close()
 
+    def _migrate(self) -> None:
+        """Add the columns :data:`_SCHEMA` has gained since a database was made.
+
+        Outside :meth:`_write` for ``executescript``'s reason: this runs in the
+        constructor, before anything can be contending for the file, and each
+        statement is guarded by its own read. Idempotent, so twenty processes
+        opening the file at once is a race with no losing side -- a second
+        ``ADD COLUMN`` for a column that now exists is simply not issued.
+        """
+        for table, column, decl in _ADDED_COLUMNS:
+            have = {row["name"] for row in
+                    self._db.execute("PRAGMA table_info(%s)" % table)}
+            if column not in have:
+                self._db.execute("ALTER TABLE %s ADD COLUMN %s %s"
+                                 % (table, column, decl))
+        self._db.commit()
+
+    def _checked_reply_to(self, reply_to: object) -> str | None:
+        """The command this one answers, or ``None``.
+
+        Checked for *existence* and not merely for shape, because the field's
+        whole purpose is that a worker will fetch that row and put the earlier
+        question and answer in front of the model. An id that names nothing is
+        a thread the prompt would quietly lose a turn from, and the phone that
+        sent it would never learn why.
+        """
+        if reply_to is None:
+            return None
+        if not isinstance(reply_to, str) or not COMMAND_ID_RE.match(reply_to):
+            raise BadRequest(message="reply_to is a command id")
+        with self._lock:
+            row = self._db.execute("SELECT 1 FROM commands WHERE id = ?",
+                                   (reply_to,)).fetchone()
+        if row is None:
+            raise BadRequest(message=f"no command {reply_to} to reply to")
+        return reply_to
+
     # -- commands ----------------------------------------------------------
 
     def add_command(self, kind: str, text: str, priority: int = 5,
-                    deadline_at: float | None = None, source: str = "") -> dict:
+                    deadline_at: float | None = None, source: str = "",
+                    reply_to: str | None = None,
+                    lang: str | None = None) -> dict:
         """File an intent for a worker to act on. Returns the command.
 
         The desk does not execute it. It holds it until something claims it,
@@ -246,12 +326,15 @@ class Store:
         if not isinstance(priority, int) or isinstance(priority, bool) \
                 or not 0 <= priority <= 9:
             raise BadRequest(message="priority is 0..9, 0 first")
+        reply_to = self._checked_reply_to(reply_to)
+        lang = _checked_lang(lang)
         now = self._clock.now()
         row = {"id": _new_id(), "kind": kind, "text": text, "priority": priority,
                "status": "pending", "source": source or "", "created_at": now,
                "deadline_at": epoch_seconds(deadline_at, "deadline_at"),
                "claimed_by": None, "claimed_at": None, "finished_at": None,
-               "attempts": 0, "result": ""}
+               "attempts": 0, "result": "",
+               "reply_to": reply_to, "lang": lang}
         with self._write():
             self._db.execute(
                 "INSERT INTO commands ({}) VALUES ({})".format(
@@ -382,6 +465,29 @@ class Store:
             return int(self._db.execute(
                 "SELECT COUNT(*) FROM commands WHERE status = 'pending'"
             ).fetchone()[0])
+
+    def finished_since(self, t: float, source: str) -> list[dict]:
+        """``done`` and ``failed`` commands from ``source`` that ended after ``t``.
+
+        Oldest first, and bounded on purpose for
+        :meth:`deliveries_since`' reason: the caller decides how far back an
+        answer can still be owed, and an unbounded read would grow with the
+        queue forever over rows nothing can act on. It runs on the scheduler's
+        housekeeping pass, on the connection the publish path writes.
+
+        ``expired`` and ``cancelled`` are excluded because neither is a worker's
+        report: nobody wrote an answer, so there is nothing to announce.
+        """
+        since = epoch_seconds(t, "t")
+        if since is None:
+            raise BadRequest(message="a window starts at an instant")
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM commands "
+                " WHERE source = ? AND finished_at IS NOT NULL "
+                "   AND finished_at >= ? AND status IN ('done', 'failed') "
+                " ORDER BY finished_at ASC", (source, since)).fetchall()
+        return [dict(r) for r in rows]
 
     # -- directives --------------------------------------------------------
 
@@ -672,6 +778,21 @@ class Store:
 def _new_id() -> str:
     """A random id. uuid4 because ids are handed to clients and must not count."""
     return uuid.uuid4().hex
+
+
+def _checked_lang(lang: object) -> str | None:
+    """A language the board can print, or ``None`` for "the message's own".
+
+    ``None`` is a state rather than an omission: a typed message carries its
+    own language, and this field only breaks a tie the model cannot -- a ticker
+    on its own, say. So there is no default to fall back to here, which is the
+    one way this differs from `settings`' own check.
+    """
+    if lang is None:
+        return None
+    if not isinstance(lang, str) or lang not in LANGS:
+        raise BadRequest(message=f"lang: must be one of: {', '.join(LANGS)}")
+    return lang
 
 
 def _edition_dict(row: sqlite3.Row) -> dict:

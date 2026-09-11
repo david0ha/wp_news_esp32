@@ -45,7 +45,10 @@ cp agent/.env.example agent/.env      # CLAUDEPOST_DESK=http://127.0.0.1:8790, A
 
 Same `loop.py`, same desk, same gates; only the process boundary moves. The
 script sets the four paths the image's defaults get wrong (`/repo`, `/scratch`,
-`/run/secrets`, `http://desk:8080`), refuses to start if this machine is not
+`/run/secrets`, `http://desk:8080`) and a fifth thing besides — it pins
+`AGENT_RUN_AS` empty, because there is nobody on a host run to hand a turn to
+and a bare default would still let a value left in `agent/.env` for the
+container through. It refuses to start if this machine is not
 signed in, and **unsets `ANTHROPIC_API_KEY`** unless `CLAUDEPOST_USE_API_KEY=1`
 — a key beside a login is the one failure nothing downstream can see, because
 `claude` starts either way and the difference is a statement four weeks later.
@@ -98,17 +101,48 @@ ANTHROPIC_API_KEY=sk-ant-...          # or CLAUDE_CODE_OAUTH_TOKEN from `claude 
 CLAUDEPOST_TOKEN=<a producer token>   # server/tools/mint-token.sh producer agent
 ```
 
-Headless Claude Code in a container will not find a desktop login session, so
-the worker warns at startup if neither of the first two is set rather than
-letting you discover it at 06:00.
+That file is **not mounted into the container**. `agent/compose.yaml` reads it
+on the host, through `env_file`, and the loop gets it as its environment. The
+reason is measured rather than assumed: on Docker Desktop for Mac a
+bind-mounted file reported as `-rw------- 0 0` is readable by an unprivileged
+container user anyway, so a mounted `agent.env` would be readable by the very
+user the model runs as. `/proc/<loop pid>/environ` is not — different uid, and
+the kernel enforces that one. Only that second property is one
+`agent/test/image.sh` can check: the bind-mount claim above was measured by
+hand, once, against Docker Desktop for Mac, and there is no longer a mounted
+`agent.env` in this arrangement for a test to check the mode of. What the
+script actually asserts is that no file named `agent.env` exists anywhere in
+the built image, and that `gosu model` cannot read `/proc/<loop pid>/environ`.
 
 **3. Up.**
 
 ```sh
-cp agent/.env.example agent/.env      # then fill it in
-docker compose -f agent/compose.yaml up -d
+./agent/install-docker.sh       # build, check the wall, stand launchd down, up -d
 docker compose -f agent/compose.yaml logs -f
 ```
+
+### Two users in one container
+
+The loop runs as **root**; every `claude` turn runs as **`model`** (uid 10001)
+through `gosu`, and the workdir is handed to that user for the length of the
+turn. Root is not a preference: `gosu` is not setuid, compose sets
+`no-new-privileges:true`, and a process that is not root cannot change uid at
+all — so a non-root loop could not hand a turn to anybody.
+
+What the split buys is one sentence: **the model cannot read the desk token**,
+because the token exists only in the loop's environment and the kernel keeps
+another uid out of `/proc/<pid>/environ`. That is stronger than the old
+arrangement, where the token was stripped from the child's environment but a
+`Bash` tool could in principle have read the parent's.
+
+What it does not buy: the container has ordinary outbound internet, because
+`WebSearch` and `WebFetch` are the point. It is not an egress allowlist. The
+desk's `/api/*` is reachable from inside and still needs a bearer token; the
+public plane (`/news.json`, `/tiles/<id>.bin`) is public by design and is
+exactly what an `ask` is seeded from.
+
+`agent/run-host.sh` switches nobody: out there the turn runs as the operator,
+which is the same trade that script has always been.
 
 Order does not matter. There is no `depends_on` across compose files, and none
 is needed: the claim loop backs off from one second to five minutes and stays
@@ -150,6 +184,22 @@ is the operator's own text and can be either — a `news.json` in the workdir
 means it was an order and the note follows the draft, no `news.json` means it
 was a look and the note follows the command. Leaving no `notes.md` files
 nothing; that is the ordinary case, not a gap.
+
+A fifth kind, `ask`, is a message from the phone. It is seeded with the
+edition the desk is serving now (`current/news.json` and `current/tiles/`,
+fetched off the public plane) and, when the message is a follow-up, with the
+turn before it (`previous.md`). The turn writes `answer.md` — always; a turn
+that answered nobody has failed — and writes `news.json` only if it judged that
+the message asked for the paper to change. That judgement is the model's and
+this loop does not second-guess it: a `news.json` in the workdir means "revise",
+exactly as it does for `custom`.
+
+The answer goes on the command, at `PUT /api/commands/<id>/notes.md`, which is
+where the phone reads it. The command's result is `answered`, `revised <edition
+id>` or `staged <edition id>` — the first word is what the phone branches on. A
+revision that fails a gate fails the command and leaves the current edition
+standing, which is the firmware's own failure semantics: a stale paper beats an
+empty one.
 
 ## The second job: the event book
 
@@ -242,15 +292,16 @@ same setting from the desk instead.
 | Variable | Default | What it is |
 |---|---|---|
 | `CLAUDEPOST_DESK` | `http://desk:8080` | the desk. `http://host.docker.internal:8790` on Docker Desktop against a local desk; `https://your-hostname/` through the tunnel from another machine |
-| `CLAUDEPOST_SECRETS` | `/run/secrets` | where `~/.claudepost` is mounted: `agent.env`, or `tokens.json` as a fallback |
+| `CLAUDEPOST_SECRETS` | `/run/secrets` | `~/.claudepost`, read directly by `agent/run-host.sh` on the host. `agent/compose.yaml` mounts nothing here any more — `agent.env` reaches the loop through `env_file` instead — so in a container this path is empty unless you add your own mount, in which case a `tokens.json` there is still read as a fallback |
 | `CLAUDEPOST_REPO` | `/repo` | the repository in the image — `PROMPT.md` and `tools/` |
 | `CLAUDEPOST_SCRATCH` | `/scratch` | one workdir per command: the payload, the tiles, the sheets fetched back |
-| `CLAUDEPOST_WATCHLIST` | `<secrets>/watchlist.json` | the candidates and the rotation cursor. Seeded into each edition directory and taken back after a commit — see below |
+| `CLAUDEPOST_WATCHLIST` | `/state/watchlist.json` | the candidates and the rotation cursor. Seeded into each edition directory and taken back after a commit — see below. `/state` is the writable mount of `~/.claudepost/state`; `agent/run-host.sh` sets this to a host path beside the token instead |
 | `CLAUDEPOST_ONCE` | `0` | handle one instruction (or one empty queue) and exit, instead of staying resident |
 | `AGENT_CONTEXT_DIR` | unset | your context directory. Unset, missing or empty are all "no context". That is a **host** path in `agent/.env` or a bare run; under `docker compose` the container always sees `/context`, so there the commented volume line is the switch and this variable is what it mounts |
 | `AGENT_WRITE_BRIEFS` | `0` | whether the worker may append to `<context>/briefs/`. Needs a context directory too |
 | `AGENT_TOOLS` | see above | the `claude --print` allowlist. Empty means the default |
 | `AGENT_STRICT_MCP` | `1` | keep this machine's own MCP servers out of the child. Set `0` to let them in for market data, and then name each tool in `AGENT_TOOLS` |
+| `AGENT_RUN_AS` | `model` under `docker compose` (`${AGENT_RUN_AS:-model}`, blank or missing both landing there); empty under `agent/run-host.sh`, which pins it | the user every `claude` turn is handed to, through `gosu`. The loop must be root to hand a turn to anybody, and refuses to start rather than run a turn as root if the two disagree either way — see "Two users in one container" above |
 | `CLAUDEPOST_KEEP_PLUGINS` | `0` | leave the operator's plugins/orchestration layer in force inside the child instead of setting `DISABLE_OMC` |
 | `CLAUDEPOST_USE_API_KEY` | `0` | spend the metered key even when a CLI login is present; otherwise the key is kept out of the child so the subscription pays |
 | `CLAUDEPOST_LOG_LEVEL` | `INFO` | `DEBUG` adds the whole transcript |
@@ -278,6 +329,13 @@ to fail a filing that already reached the glass.
 Both ends write that file and neither owns it: you add what you are watching,
 the worker adds what it found.
 
+In a container it lives at `/state/watchlist.json`, which is
+`~/.claudepost/state/` on the host — a mount of its own, and **writable**,
+where the old read-only secrets mount meant a container could seed the rotation
+and never advance it. `agent/install-docker.sh` moves an existing
+`~/.claudepost/watchlist.json` there for you. Under `agent/run-host.sh` it
+stays beside the token, where it always was.
+
 ## Verifying
 
 Standard library, no Docker, no network, no API key:
@@ -292,6 +350,12 @@ is total — and the HTTP client, including the one property that is not about
 correctness at all, that **a bearer token never reaches an exception message**.
 Those strings are handed to `POST /api/commands/<id>/fail`, where the desk
 stores them and an operator reads them later.
+
+```sh
+sh agent/test/run.sh        # layer 0: no Docker, no network, no API key
+sh agent/test/image.sh      # layer 2: builds the image and checks the wall.
+                            # Skips with exit 0 when Docker is not on PATH.
+```
 
 ## The other paths
 

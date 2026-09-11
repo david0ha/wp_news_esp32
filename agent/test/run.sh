@@ -6,9 +6,10 @@
 # save. What it covers is the two halves of the worker that are worth being sure
 # about without a desk in front of them -- the prompt that is assembled from the
 # shipped contract plus whatever the operator brought, and the HTTP client that
-# talks to the desk. The loop itself is not tested here: it is a claim, a
-# subprocess and a commit, and every part of it that could be wrong on its own
-# has been moved out into the two modules below.
+# talks to the desk -- plus the loop itself: what it decides on its own about
+# configuration and about seeding and filing each kind of command, everything
+# else about it being a claim, a subprocess and a commit that a fake desk and
+# a fake subprocess can stand in for here.
 #
 #   sh agent/test/run.sh
 #   sh agent/test/run.sh -k prompt      # one module
