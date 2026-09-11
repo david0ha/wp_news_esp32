@@ -1450,7 +1450,7 @@ on it is set larger than a deck, a photograph that halftoned to mush.
 Two revisions, then it reports the failure with the validator's own words.
 
 **`kind` decides where the turn's `notes.md` goes, and two of the five kinds
-this worker handles decide it from the disk rather than from themselves.**
+below decide it from the disk rather than from themselves.**
 There are **six** kinds on the queue — the sixth, `"paper"`, is
 [the rotation's own](#the-papers) and is described below — and the five here
 are `"file_edition"`, `"research"`, `"custom"`, `"calendar"` and `"ask"`.
@@ -1494,14 +1494,9 @@ unchanged. The result reads `answered`, `revised <edition id>` or `staged
 <edition id>`. A revision that fails a gate fails the command and the current
 edition stays current.
 
-**`"paper"` is the sixth, and this worker does not handle it yet.** The desk
-orders one, the queue carries it and the commit target that files it exists —
-all of that is above, under [The papers](#the-papers). What is not here is the
-worker's side: `agent/prompt.py` names no contract for the kind, so a `paper`
-command reaching this loop today would read `PROMPT.md` and the ordinary tail
-and file a *board* edition, which is not what was asked for. That work is its
-own plan, and this paragraph says so rather than leaving a reader to infer from
-the five above that the sixth behaves like them.
+**`"paper"` is the sixth**, and the worker handles it on the `file_edition`
+path, with the company given rather than chosen and the commit targeted at the
+paper — the desk's side of which is above, under [The papers](#the-papers).
 
 ## Cloudflare
 
