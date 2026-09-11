@@ -1,4 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import {
   createDeskClient,
   deskLanguageView,
@@ -12,10 +14,20 @@ import { setActiveLanguage } from '../i18n'
 const BASE = 'https://desk.example.dev'
 const TOKEN = 'operator-token-for-tests'
 
+const EDITION_FIXTURE = join(
+  __dirname,
+  '../../../components/news_core/test/host/fixtures/news.json',
+)
+
 // A fake `fetch` that replays a queue of responses, or throws a queued Error for a refused
 // connection. Every call is recorded, because the things this client has to get right are all
 // properties of the REQUEST: the method, the path, the bearer header and the exact body.
-type Reply = { status?: number; text?: string } | Error
+//
+// `headers` and `arrayBuffer` are here for `editionClient`'s sake — `editionPayload` reads one
+// through `edition/client.ts`, which needs `res.headers.get()` (case-insensitively, for the ETag)
+// and `res.arrayBuffer()` rather than `res.text()`. Widened in place rather than duplicated: two
+// fakes in this file would be two answers to "what does a response look like here".
+type Reply = { status?: number; text?: string; headers?: Record<string, string> } | Error
 
 function fakeFetch(replies: Reply[]) {
   const calls: Array<{ url: string; init?: RequestInit }> = []
@@ -26,10 +38,19 @@ function fakeFetch(replies: Reply[]) {
     i++
     if (r instanceof Error) throw r
     const status = r.status ?? 200
+    const headers = r.headers ?? {}
+    const text = r.text ?? ''
     return {
       ok: status >= 200 && status < 300,
       status,
-      text: async () => r.text ?? '',
+      headers: {
+        get: (k: string) => {
+          const hit = Object.keys(headers).find((h) => h.toLowerCase() === k.toLowerCase())
+          return hit === undefined ? null : headers[hit]
+        },
+      },
+      text: async () => text,
+      arrayBuffer: async () => new TextEncoder().encode(text).buffer,
     } as unknown as Response
   }) as unknown as typeof fetch
   return { fetchImpl, calls }
@@ -689,5 +710,56 @@ describe('deskClient.publishPaper', () => {
   it('refuses a 200 with no edition id — there is nothing to say went on the glass', async () => {
     const { client: c } = client([{ text: '{"ok":true,"state":"published"}' }])
     await expect(c.publishPaper('SNDK')).rejects.toMatchObject({ code: 'bad_json' })
+  })
+})
+
+describe('deskClient.editionSource', () => {
+  it('addresses one edition, payload and pictures, with the bearer on both', () => {
+    const { client: c } = client([])
+    const s = c.editionSource('a1b2c3d4e5f60718')
+    expect(s.payloadUrl).toBe(
+      'https://desk.example.dev/api/editions/a1b2c3d4e5f60718/news.json',
+    )
+    expect(s.tileUrl('sndk_fab')).toBe(
+      'https://desk.example.dev/api/editions/a1b2c3d4e5f60718/tiles/sndk_fab.bin',
+    )
+    expect(s.headers).toEqual({ Authorization: `Bearer ${TOKEN}` })
+  })
+})
+
+describe('deskClient.editionPayload', () => {
+  it('GETs the edition through the edition client, bearer and Accept together', async () => {
+    const { client: c, calls } = client([
+      { text: readFileSync(EDITION_FIXTURE, 'utf8'), headers: { ETag: '"e1"' } },
+    ])
+    const got = await c.editionPayload('a1b2c3d4e5f60718')
+    expect(calls[0].url).toBe(
+      'https://desk.example.dev/api/editions/a1b2c3d4e5f60718/news.json',
+    )
+    expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(header(calls[0].init, 'Accept')).toBe('application/json')
+    expect(got.status).toBe('ok')
+    if (got.status !== 'ok') throw new Error('unreachable')
+    expect(got.etag).toBe('"e1"')
+    // THE SAME PARSE THE DEVICE PLANE GETS, and the same wire body carried beside it — the cache
+    // stores wire bodies, not parsed editions (`edition/store.ts`'s header). A paper read by a
+    // second parser would be a second newspaper maintained as one.
+    expect(got.edition.subject.symbol).not.toBe('')
+    expect(got.wire).toEqual(JSON.parse(readFileSync(EDITION_FIXTURE, 'utf8')))
+  })
+
+  it('asks the conditional question when it holds a tag, and reads the 304', async () => {
+    const { client: c, calls } = client([{ status: 304 }])
+    expect(await c.editionPayload('e1', '"e1"')).toEqual({ status: 'not_modified' })
+    expect(header(calls[0].init, 'If-None-Match')).toBe('"e1"')
+  })
+
+  it('fails as an EditionError, not a DeskError — Today already draws those sentences', async () => {
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"not_found"}' }])
+    await expect(c.editionPayload('gone')).rejects.toMatchObject({
+      name: 'EditionError',
+      code: 'http',
+      status: 404,
+    })
   })
 })

@@ -20,6 +20,7 @@ import {
   type Shape,
 } from './positionDraft'
 import { createDeskClient, DeskError, type DeskClient } from './desk'
+import { NO_SOURCE } from './edition/source'
 import { positionsBody, strategyLabel, type Position, type PositionsDoc } from './positions'
 import { en } from '../i18n/en'
 import { ko } from '../i18n/ko'
@@ -467,6 +468,10 @@ function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
     // Nothing in this file reads the paper list either; see the comment above.
     papers: async () => ({ papers: [], board: null }),
     publishPaper: async () => ({ kind: 'no_paper' }),
+    editionSource: () => NO_SOURCE,
+    editionPayload: async () => {
+      throw new Error('not used in this file')
+    },
     ...over,
   }
 }

@@ -46,6 +46,8 @@
 import { fill, strings } from '../i18n'
 import { parsePositionsDoc, positionsBody, type PositionsDoc } from './positions'
 import { parseCalendarDoc, type CalendarDoc } from './schedule'
+import { createEditionClient, editionClient, type EditionFetch } from './edition/client'
+import { paperSource, type EditionSource } from './edition/source'
 
 /** Long enough for a cold tunnel, short enough that a tap on a selector still feels like one. */
 export const DESK_TIMEOUT_MS = 15_000
@@ -442,12 +444,35 @@ export interface DeskClient {
   papers(): Promise<PapersDoc>
   /** Put one symbol's newest edition on the glass. `no_paper` is an outcome, not a throw. */
   publishPaper(symbol: string): Promise<PublishPaperOutcome>
+  /**
+   * How to reach one stored edition — its payload, its pictures, and the header both need.
+   *
+   * Handed to the reader as a value so nothing below the screen has to know which plane it is
+   * rendering: `lib/edition/source.ts` explains why that is a value and not a string.
+   *
+   * NOT A ROUTE. This is a client-side helper that builds a `paperSource` from this client's own
+   * base URL and token — there is no `/api/editions/<eid>/source` on the desk to ask instead.
+   */
+  editionSource(editionId: string): EditionSource
+  /**
+   * One stored edition, read exactly as the device plane's is.
+   *
+   * Answers `EditionFetch` and throws `EditionError`, not `DeskError`, and that is deliberate:
+   * this route serves the same document as `/news.json` under the same 320 KB cap, and the Today
+   * screen already has a sentence for every way that can fail (`humanEditionError`).
+   */
+  editionPayload(editionId: string, etag?: string | null): Promise<EditionFetch>
 }
 
 export function createDeskClient(opts: DeskClientOptions): DeskClient {
   const baseUrl = opts.baseUrl.replace(/\/+$/, '')
   const fetchFn = opts.fetchFn ?? fetch
   const timeoutMs = opts.timeoutMs ?? DESK_TIMEOUT_MS
+  // `editionClient` is a module singleton built around the global `fetch`, so a test's injected
+  // `fetchFn` would never reach it. Build this client's own when one was given; only the app-wide
+  // singleton reads the real network.
+  const editions =
+    opts.fetchFn === undefined ? editionClient : createEditionClient({ fetchFn: opts.fetchFn, timeoutMs })
 
   // Our own deadline firing and the network refusing are one code here, unlike `esp32.ts` where a
   // timeout is a statement about a sleeping board. A desk is a server that is meant to be awake,
@@ -776,7 +801,9 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // watchlist between the fetch and the finger. The row redraws as "no paper yet"; a thrown
       // error would put a network banner over a desk that answered perfectly well.
       if (res.status === 404) return { kind: 'no_paper' }
-      if (!res.ok) throw await refusal(res, 'papers')
+      // Its own label: this is `/api/papers/<SYMBOL>/publish`, not `/api/papers`, and a refusal
+      // that says "papers responded 403" reads like the list failed rather than the publish.
+      if (!res.ok) throw await refusal(res, 'paper publish')
       let payload: unknown
       try {
         payload = JSON.parse(await res.text())
@@ -794,6 +821,20 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
         editionId: o.edition_id,
         state: typeof o.state === 'string' ? o.state : '',
       }
+    },
+
+    editionSource(editionId: string): EditionSource {
+      return paperSource({ deskBaseUrl: baseUrl, editionId, token: opts.token })
+    },
+
+    async editionPayload(editionId: string, etag: string | null = null): Promise<EditionFetch> {
+      // NOT `send()`. `send` is the control plane's envelope reader and this route does not answer
+      // an envelope — it answers an edition, and the one thing in this app that knows what a valid
+      // edition is lives in `edition/client.ts`. What this method contributes is the address and
+      // the credential; the cap, the deadline, the conditional GET and the parse are that client's,
+      // unchanged, so a paper and the board's own edition are read by the same code.
+      const src = paperSource({ deskBaseUrl: baseUrl, editionId, token: opts.token })
+      return editions.fetch(src.payloadUrl, etag, src.headers)
     },
   }
 }
