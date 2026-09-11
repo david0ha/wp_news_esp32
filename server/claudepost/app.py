@@ -307,7 +307,7 @@ class Desk:
         if t - self._last_housekeeping >= HOUSEKEEPING_SECONDS:
             self._last_housekeeping = t
             # The reap goes here rather than on every tick because what it
-            # measures is slow: a lease is half an hour and a deadline is
+            # measures is slow: a lease is ninety minutes and a deadline is
             # hour-scale, so a write transaction every five seconds to ask
             # whether either has passed is a transaction that finds nothing
             # all day -- on the same connection the publish path writes.

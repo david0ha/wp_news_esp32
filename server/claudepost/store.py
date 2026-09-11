@@ -32,7 +32,7 @@ handler does *not* retry. Taking the write lock up front is what makes
 
 Times are epoch seconds as REAL, taken from the injected
 :class:`~claudepost.clock.Clock` rather than from SQLite's own ``strftime``,
-so a test can move a lease boundary without waiting half an hour to cross it.
+so a test can move a lease boundary without waiting ninety minutes to cross it.
 """
 
 from __future__ import annotations
@@ -402,7 +402,7 @@ class Store:
         claim two statements again to save a pass that runs anyway. That the
         pass is ten minutes apart rather than five seconds costs this nothing:
         the claim's own subquery already skips a command past its deadline, so
-        what waits for the reap is a lapsed lease -- which is half an hour old
+        what waits for the reap is a lapsed lease -- which is ninety minutes old
         by then and belongs to a worker that is not coming back.
         """
         now = self._clock.now()

@@ -2293,7 +2293,7 @@ class TickTest(DeskTestCase):
         return next(c["id"] for c in doc["commands"] if c["kind"] == kind)
 
     def test_the_queue_is_reaped_on_the_housekeeping_pass_not_every_tick(self):
-        # A lease runs half an hour and a deadline is hours away; a write
+        # A lease runs ninety minutes and a deadline is hours away; a write
         # transaction every five seconds to ask whether either has passed is a
         # transaction that finds nothing all day. It goes with the sweep and
         # the prune, ten minutes apart, where the rest of the tidying lives.
