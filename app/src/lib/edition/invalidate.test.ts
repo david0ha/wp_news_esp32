@@ -3,6 +3,7 @@ import {
   __resetEditionStaleForTests,
   markEditionStale,
   takeEditionStale,
+  takePapersStale,
 } from './invalidate'
 
 beforeEach(() => {
@@ -27,5 +28,24 @@ describe('the edition invalidation flag', () => {
     markEditionStale()
     expect(takeEditionStale()).toBe(true)
     expect(takeEditionStale()).toBe(false)
+  })
+})
+
+describe('one mark, two readers', () => {
+  it('marks the paper list as well as the edition on screen', () => {
+    // A `revised` rewrote an edition. That is also a new `created_at` for that company's paper and
+    // possibly a new `edition_id` on the board, so both readers have stale answers.
+    markEditionStale()
+    expect(takeEditionStale()).toBe(true)
+    expect(takePapersStale()).toBe(true)
+  })
+
+  it('gives each reader its own bit, so one taking it does not rob the other', () => {
+    markEditionStale()
+    expect(takeEditionStale()).toBe(true)
+    expect(takeEditionStale()).toBe(false)
+    // Today's pager may not even be mounted when the edition reader takes its bit.
+    expect(takePapersStale()).toBe(true)
+    expect(takePapersStale()).toBe(false)
   })
 })
