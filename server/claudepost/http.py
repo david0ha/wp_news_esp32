@@ -864,11 +864,14 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
         :meth:`h_put_schedule`'s shape exactly, including the refusal: a
         document carrying a key this desk does not know is refused whole with
-        ``bad_settings`` and leaves the language in force untouched. That
-        matters more here than the single field suggests -- this is the
+        ``bad_settings`` and leaves the settings in force untouched. That
+        matters more here than its two fields suggest -- this is the
         document a later release adds a setting to, so a phone app one
         version ahead of the desk has to be told no rather than left
-        believing it changed something.
+        believing it changed something. The audit records the whole
+        normalised document for the same reason: naming a field by hand was
+        already one behind the moment ``paper_refresh_hours`` arrived, and
+        ``parse_settings`` guarantees ``doc`` holds nothing but ``_KEYS``.
 
         Read at ``producer`` scope and written at ``operator``: the agent and
         the phone both need to know what the paper is written in, but which
@@ -877,7 +880,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         """
         doc = st.parse_settings(self._json_body())
         self.desk.set_settings(doc)
-        self.desk.store.audit("settings", {"lang": doc["lang"]})
+        self.desk.store.audit("settings", dict(doc))
         self._send_json(200, {"ok": True, "source": self.desk.settings_source,
                               "settings": self.desk.settings})
 

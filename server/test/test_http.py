@@ -1344,7 +1344,14 @@ class SettingsTest(DeskTestCase):
         self.assertEqual(status, 200, doc)
         event = doc["events"][0]
         self.assertEqual(event["event"], "settings")
-        self.assertEqual(event["detail"], {"lang": "ko"})
+        # The whole normalised document, not a hand-listed field: the audit
+        # names `lang` and the default `paper_refresh_hours` the PUT left
+        # alone, because what was put in force is the document and not the
+        # one key the caller happened to send. An exact match rather than a
+        # subset -- a setting added without a line here is a setting nothing
+        # writes down.
+        self.assertEqual(event["detail"],
+                         {"lang": "ko", "paper_refresh_hours": 12})
 
 
 class PositionsTest(DeskTestCase):

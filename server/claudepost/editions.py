@@ -684,8 +684,18 @@ class EditionStore:
         Born with the edition and then left alone, with exactly one exception:
         an edition filed again as a company's *paper* has its ``created_at``
         moved to that filing, because the paper index has no pointer and picks
-        by date. Nothing else in the document ever moves, ``published_at``
-        included. See :meth:`_redate`, and the argument at its call site.
+        by date. ``created_at`` is the only field that moves, and it moves only
+        there -- on that path's ordinary route every other field, including
+        ``published_at``, is carried over byte for byte.
+
+        One narrower case rewrites more than that field, and it is a repair
+        rather than a move: when a re-filed edition's ``meta.json`` has become
+        unreadable, :meth:`_redate` writes this commit's own freshly built
+        document in its place, which can cost a ``published_at`` the corrupt
+        file once held. The store row keeps that value regardless -- it is
+        COALESCEd -- and there was nothing readable on disk to preserve. See
+        :meth:`_redate`, which argues both routes, and the call site in
+        :meth:`_commit`.
 
         Raises:
             NotFound: unknown id, missing directory, or metadata that will not
@@ -959,9 +969,13 @@ class EditionStore:
                 return CommitResult(eid, "staged", reason)
 
         # The gate runs before the build so that meta.json is born with the
-        # right published_at. It is written once and never rewritten, bar the
-        # single case below -- a paper filed again moves its created_at, and
-        # nothing moves published_at ever.
+        # right published_at. It is written once and rewritten only below, when
+        # a paper is filed again: the ordinary route there moves created_at and
+        # carries every other field over untouched, published_at included. The
+        # one exception is that route's repair path, where meta.json has become
+        # unreadable and `_redate` writes this dict in its place -- see
+        # `edition_meta` and `_redate`, which tell the same story, and which
+        # note that the store row's published_at is COALESCEd and survives it.
         #
         # `symbol` and `lang` are the payload's own, copied here rather than
         # left to be re-derived: they are what the paper index keys on, and an

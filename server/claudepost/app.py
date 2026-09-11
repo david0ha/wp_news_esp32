@@ -970,13 +970,21 @@ class Desk:
         The two validators do not agree, and deliberately so:
         :func:`~claudepost.watchlist._symbol` takes one to twelve characters,
         while :data:`~claudepost.store.COMMAND_SYMBOL_RE` takes one to eight
-        and wants at least one letter or digit. The payload validator caps an
-        edition's own ``subject.symbol`` at eight, so a command naming a
-        longer one could never be satisfied by any draft -- every run for it
-        would end in a ``409 commit_symbol_mismatch`` nobody could fix.
+        and wants at least one letter or digit.
 
-        So a symbol that fails it is skipped rather than ordered. Skipping is
-        the strictly safer failure: `Desk.enqueue` raises `BadRequest` on such
+        **Two reasons to skip, and they cover different symbols.** For a
+        nine-to-twelve-character ticker it is the cap: the payload validator
+        caps an edition's own ``subject.symbol`` at eight, so a command naming
+        a longer one could never be satisfied by any draft -- every run for it
+        would end in a ``409 commit_symbol_mismatch`` nobody could fix. That
+        argument does **not** reach the punctuation-only case.
+        :data:`~claudepost.editions.SUBJECT_SYMBOL_RE` carries no
+        letter-or-digit lookahead, so a draft whose subject is ``"..."`` would
+        validate and commit perfectly well; what stops ``"..."`` here is only
+        the second reason, which holds for both.
+
+        That second reason is that skipping is the strictly safer failure:
+        `Desk.enqueue` raises `BadRequest` on such
         a symbol, and this runs at the end of the housekeeping block -- an
         exception here would take the reap, the draft sweep, the prune, the
         delivery ageing and the owed answers down with it, every ten minutes
@@ -1225,6 +1233,15 @@ def _paper_age_key(meta: dict | None) -> float:
     ``-inf`` rather than ``0`` so that a symbol with no paper cannot be tied
     with one written at the epoch by a desk whose clock was wrong -- and so
     that the answer does not depend on the epoch being a time nobody files at.
+
+    That separates *no paper* from every paper, and no further. A paper whose
+    ``created_at`` is missing or will not parse still falls back to ``0.0``,
+    so two of those tie with each other and with one genuinely written at the
+    epoch. Deliberate, and not worth a second sentinel: the tiebreak below is
+    the watchlist's own order, which is a defined answer rather than an
+    arbitrary one, and ``0.0`` is the same fallback
+    :func:`~claudepost.editions._newest_by_symbol` sorts by, so the two agree
+    about which edition is newest.
     """
     if meta is None:
         return float("-inf")
