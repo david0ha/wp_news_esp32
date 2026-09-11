@@ -533,6 +533,57 @@ phone-specific subset.
 | GET | `/api/commands/<id>/notes.md` | — | the worker's answer, as `text/markdown` |
 | POST | `/api/publish` | — | put a staged revision up now |
 
+**The phone reads more than one edition now.** The desk keeps a current
+newspaper for every company on the watchlist — a **paper** — and Today pages
+through them. Four routes, the first three at the producer scope and the last
+at the operator scope, all through `app/src/lib/desk.ts` as usual.
+
+| Method | Path | What the phone does with it |
+|---|---|---|
+| GET | `/api/papers` | the list, in watchlist order, refetched on focus past a five-minute throttle |
+| GET | `/api/editions/<eid>/news.json` | one page's payload, conditional, cached in memory by edition id |
+| GET | `/api/editions/<eid>/tiles/<id>.bin` | that page's photographs |
+| POST | `/api/papers/<SYMBOL>/publish` | put that company's paper on the glass |
+
+Five things a client has to get right:
+
+- **`created_at` is unix seconds.** Every other numeric stamp in the app is
+  milliseconds. `parsePaper` multiplies once and nothing downstream converts
+  anything.
+- **A row of nulls is a symbol with no paper, and it is still a page.** The
+  pager draws "not written yet" for it rather than being one page shorter than
+  the watchlist, because a company vanishing from the phone the day it is added
+  is indistinguishable from a bug.
+- **The pager appears only when the desk answers with at least one paper.** No
+  token, no address, a desk one release behind with no `/api/papers`, an empty
+  watchlist — every one of those leaves Today exactly what it was: one page,
+  the device plane's `news.json`, no credential. The single-page reader is the
+  floor and the pager is laid over it.
+- **An edition id is a content fingerprint**, so a payload cached under one
+  cannot go stale. It can only stop being the newest, and the list is what says
+  so. That is why there is no revalidation inside a session and why the cache
+  is keyed on the id rather than on the symbol.
+- **A paper's pictures are behind the same bearer as its payload.** The reader
+  carries an `EditionSource` — payload address, tile address, headers — so the
+  same components render an unauthenticated `/news.json` and an authenticated
+  per-edition route with no branch between them. `DeskClient.editionSource(eid)`
+  builds this value from the client's own base URL and token; it is a
+  client-side helper, not a fifth route, and a tile still fetches through the
+  one path that carries the `w*h/2` length check — `editionSource(eid).tileUrl(id)`
+  plus that source's headers, into the same `fetchTile` the device plane's
+  photographs already use. The token itself is in that object, in memory;
+  `edition/store.ts` writes four keys to disk and that is not one of them.
+
+**`GET/PUT /api/settings` carries `paper_refresh_hours` (1..72) beside `lang`.**
+`putSettings` sends the key whenever the settings object it was handed carries
+a number, and leaves it out when that value is `null` — it never sends a
+literal `null` for it. The desk validates the field as an integer 1..72 and
+refuses the *whole document* on a bad one, so a `null` in the body would
+reject the language change travelling in the same write.
+
+The design is
+[docs/superpowers/specs/2026-09-11-papers-per-ticker-design.md](superpowers/specs/2026-09-11-papers-per-ticker-design.md).
+
 Five things about it a client has to get right, because `app/src/lib/ask/`
 got each one wrong once before it got it right:
 

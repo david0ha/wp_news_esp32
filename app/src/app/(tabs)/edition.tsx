@@ -1,15 +1,26 @@
 import { useCallback, useMemo, useState } from 'react'
-import { RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import {
+  FlatList,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Screen } from '../../components/Screen'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masthead } from '../../components/edition/Masthead'
 import { ChipRow } from '../../components/edition/ChipRow'
 import { Masonry } from '../../components/edition/Masonry'
-import { EditionUrlProvider } from '../../components/edition/editionUrl'
+import { EditionSourceProvider } from '../../components/edition/editionSource'
 import { EditionTypeProvider } from '../../components/edition/typeRamp'
 import { PhotoTile } from '../../components/edition/tiles/PhotoTile'
+import { PaperPage } from '../../components/edition/PaperPage'
 import { getDeskToken } from '../../lib/deskToken'
+import { clampPaperIndex, paperKey, papersPagerView } from '../../lib/papers/order'
+import { lastPaperIndex, rememberPaperIndex, usePapers } from '../../lib/papers/list'
+import { type Paper } from '../../lib/desk'
 import { isDemo } from '../../lib/edition/editionState'
 import { useEdition } from '../../lib/edition/useEdition'
 import { freshnessLabel } from '../../lib/edition/freshness'
@@ -31,7 +42,141 @@ import {
 import { colors, layout, radius, space } from '../../theme'
 
 /**
- * Today — the edition itself, read on the phone.
+ * Today — one page, or one page per company the desk watches.
+ *
+ * THE SINGLE-PAGE READER IS THE FLOOR, NOT A FALLBACK. Every state that is not "the desk answered
+ * with at least one paper" draws exactly what this tab drew before the papers feature: a phone with
+ * no desk, a desk that refused, a desk one release behind with no `/api/papers` at all, an empty
+ * watchlist, and the first frame of every cold launch. The pager is laid OVER it, which is also why
+ * the `/news.json` fetch that happens first is not wasted — `editionUrl` falls back to the desk's
+ * own device plane, which serves the board's current edition, which is page 0 of the pager. The
+ * reader sees the same paper before and after the swap.
+ */
+export default function EditionScreen() {
+  const router = useRouter()
+  const { width } = useWindowDimensions()
+  const { ready, doc, load } = usePapers()
+
+  // Whether the desk can be talked to at all — the same read the Ask pill has always done, now
+  // serving two purposes. `useFocusEffect` and not a mount effect, for the reason spelled out
+  // where this used to live: this screen is registered first and mounts at app boot, before
+  // Settings has necessarily been touched, and the tab navigator keeps it mounted across the trip
+  // to Settings and back. A plain `useEffect` would run once at boot and never again, so a phone
+  // set up in this session would not get a pager until it was killed and relaunched.
+  const [canAsk, setCanAsk] = useState(false)
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true
+      void (async () => {
+        const [address, token] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+        if (alive) setCanAsk(Boolean(address) && Boolean(token))
+      })()
+      // The list rides the same focus. `loadPapers` reads its own throttle and its own mark, so a
+      // focus inside the window costs one storage read and no request — and on a phone with no
+      // desk it returns before building a request at all.
+      void load()
+      return () => {
+        alive = false
+      }
+    }, [load]),
+  )
+
+  const view = papersPagerView({ ready, doc })
+
+  if (!view.pager) return <TodayEdition canAsk={canAsk} />
+
+  return (
+    <PaperPager
+      papers={view.papers}
+      width={width}
+      canAsk={canAsk}
+      onOpenAsk={() => router.push('/ask')}
+      onOpenSymbol={(symbol) => router.push(`/market/${encodeURIComponent(symbol)}`)}
+      onOpenTile={(tile) => router.push(`/tile/${encodeURIComponent(tile.id)}`)}
+    />
+  )
+}
+
+/**
+ * The papers, side by side.
+ *
+ * A horizontal `FlatList` with `pagingEnabled` and not a pager library: `react-native-pager-view`
+ * is not a dependency of this app, and a list that already knows how to virtualise, key and recycle
+ * is what this needs — five pages, each a whole newspaper with decoded photographs in it.
+ *
+ * `getItemLayout` is what makes `initialScrollIndex` work: without it the list cannot know where
+ * page three starts without measuring pages one and two, and a remembered index would scroll to the
+ * wrong place or to nowhere.
+ *
+ * WHICH PAGE IS "NEARBY" DECIDES WHAT FETCHES; WHICH PAGE IS "ACTIVE" DECIDES WHAT THE TILE ROUTE
+ * READS. The page on screen and its two neighbours fetch; the rest are mounted and idle. Exactly
+ * one page is active, and it is the one that reports its settled edition upward — see `PaperPage`.
+ */
+function PaperPager({
+  papers,
+  width,
+  canAsk,
+  onOpenAsk,
+  onOpenSymbol,
+  onOpenTile,
+}: {
+  papers: Paper[]
+  width: number
+  canAsk: boolean
+  onOpenAsk: () => void
+  onOpenSymbol: (symbol: string) => void
+  onOpenTile: (tile: Tile) => void
+}) {
+  // Seeded from the session's remembered page and clamped against THIS list, which may be shorter
+  // than the one the index was remembered against — the watchlist is the desk's and moves.
+  const [index, setIndex] = useState(() => clampPaperIndex(lastPaperIndex(), papers.length))
+
+  // Clamped again at every use rather than only where it is set: the list can shrink under a held
+  // index between renders, and an index past the end would leave no page marked active at all —
+  // which would point the tile route at nothing.
+  const at = clampPaperIndex(index, papers.length)
+
+  const settle = useCallback(
+    (next: number) => {
+      const to = clampPaperIndex(next, papers.length)
+      setIndex(to)
+      rememberPaperIndex(to)
+    },
+    [papers.length],
+  )
+
+  return (
+    <Screen edges={['top']}>
+      <FlatList
+        data={papers}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        initialScrollIndex={at}
+        getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
+        keyExtractor={paperKey}
+        onMomentumScrollEnd={(e) =>
+          settle(Math.round(e.nativeEvent.contentOffset.x / Math.max(width, 1)))
+        }
+        renderItem={({ item, index: i }) => (
+          <PaperPage
+            paper={item}
+            active={i === at}
+            // The page on screen and its immediate neighbours. See the doc above.
+            nearby={Math.abs(i - at) <= 1}
+            width={width}
+            onAsk={canAsk ? onOpenAsk : undefined}
+            onPressSymbol={onOpenSymbol}
+            onOpenTile={onOpenTile}
+          />
+        )}
+      />
+    </Screen>
+  )
+}
+
+/**
+ * Today's single page — the edition itself, read on the phone.
  *
  * The material is not on the board. It is at the edition URL, which this phone already stores as
  * its own setting, and which the desk serves unauthenticated on its device plane. So this screen
@@ -41,7 +186,7 @@ import { colors, layout, radius, space } from '../../theme'
  * Everything about WHAT to show is decided in `useEdition`'s reducer, which is pure and tested.
  * What is left here is layout: measure the column, cut the tiles, hand them to the masonry.
  */
-export default function EditionScreen() {
+function TodayEdition({ canAsk }: { canAsk: boolean }) {
   const router = useRouter()
   const { width } = useWindowDimensions()
   const { state, refresh } = useEdition()
@@ -51,29 +196,6 @@ export default function EditionScreen() {
   // the selection being thrown away — if tomorrow's edition has photographs again, Photos comes
   // back selected rather than needing a second tap.
   const [chip, setChip] = useState<Chip>('all')
-
-  // Whether asking is possible at all. Both are needed: the control plane sends a credential on
-  // every call, so an address with no token can ask nothing. `useFocusEffect`, not a mount effect
-  // — this screen is registered first and mounts at app boot, before Settings has necessarily
-  // been touched, and the ordinary first run is Today (mounted) -> Settings (save address and
-  // token) -> back to Today. `expo-router`'s tab navigator keeps Today mounted across that trip,
-  // so a plain `useEffect` runs once at boot and never again; the button would stay hidden until
-  // the app is killed and relaunched. `useEdition.ts` and `board.tsx` hit the identical class of
-  // bug and both settled on `useFocusEffect`, which fires on mount as well as on every later
-  // return to the tab.
-  const [canAsk, setCanAsk] = useState(false)
-  useFocusEffect(
-    useCallback(() => {
-      let alive = true
-      void (async () => {
-        const [address, token] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
-        if (alive) setCanAsk(Boolean(address) && Boolean(token))
-      })()
-      return () => {
-        alive = false
-      }
-    }, []),
-  )
 
   // Keyed on the EDITION and not on the cache entry that carries it. A 304 rebuilds the entry to
   // move `fetchedAt` but keeps the same edition object, so this way the page is cut once and a
@@ -142,7 +264,7 @@ export default function EditionScreen() {
           what language it is in, named once for the face everything below is set in. The second
           is the EDITION's language and not the reader's: a Korean edition on an English phone is
           still Korean, and Inter cannot set it. See `typeRamp.tsx`. */}
-      <EditionUrlProvider url={state.cached.url}>
+      <EditionSourceProvider source={state.cached.source}>
         <EditionTypeProvider lang={state.cached.edition.lang}>
           <ScrollView
             contentContainerStyle={styles.scroll}
@@ -197,7 +319,7 @@ export default function EditionScreen() {
             </View>
           </ScrollView>
         </EditionTypeProvider>
-      </EditionUrlProvider>
+      </EditionSourceProvider>
     </Screen>
   )
 }

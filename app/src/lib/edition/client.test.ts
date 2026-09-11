@@ -6,7 +6,6 @@ import {
   EditionError,
   EDITION_MAX_BYTES,
   humanEditionError,
-  tileUrl,
 } from './client'
 import { parseEdition } from './parse'
 import { setActiveLanguage } from '../../i18n'
@@ -247,45 +246,6 @@ describe('humanEditionError', () => {
   })
 })
 
-describe('tileUrl', () => {
-  it('resolves beside the payload', () => {
-    expect(tileUrl('http://desk.local:8123/news.json', 'sndk_fab')).toBe(
-      'http://desk.local:8123/tiles/sndk_fab.bin',
-    )
-    expect(tileUrl('https://claudepost.example.dev/edition/news.json', 'x')).toBe(
-      'https://claudepost.example.dev/edition/tiles/x.bin',
-    )
-  })
-
-  it('drops the query and the fragment', () => {
-    expect(tileUrl('http://d/news.json?v=2#top', 'a')).toBe('http://d/tiles/a.bin')
-    expect(tileUrl('http://d/sub/news.json#frag', 'a')).toBe('http://d/sub/tiles/a.bin')
-  })
-
-  it('percent-encodes an id that would otherwise change the path', () => {
-    expect(tileUrl('http://d/news.json', '../secret')).toBe('http://d/tiles/..%2Fsecret.bin')
-  })
-
-  it('answers the empty string for a URL it cannot resolve beside', () => {
-    expect(tileUrl('', 'a')).toBe('')
-    expect(tileUrl('news.json', 'a')).toBe('')
-  })
-
-  // A bare authority — no path at all — has slashes of its own: the scheme's `//`. Naively
-  // cutting at the LAST slash finds one of those and drops the host, producing
-  // `http://tiles/x.bin`. The directory of a URL with no path is the authority itself.
-  it('resolves against a bare authority with no path (the scheme-slash trap)', () => {
-    expect(tileUrl('http://host.local:8123', 'x')).toBe('http://host.local:8123/tiles/x.bin')
-    expect(tileUrl('https://claudepost.example', 'x')).toBe(
-      'https://claudepost.example/tiles/x.bin',
-    )
-  })
-
-  it('drops the query and the fragment on a bare authority too', () => {
-    expect(tileUrl('http://host?a=1#f', 'x')).toBe('http://host/tiles/x.bin')
-  })
-})
-
 describe('editionClient.fetchTile', () => {
   it('returns the body when it weighs exactly w*h/2', async () => {
     const bytes = new Uint8Array((2 * 2) / 2).fill(0x11)
@@ -331,5 +291,35 @@ describe('editionClient.fetchTile', () => {
     const { client: c, calls } = client([{ bytes: new Uint8Array(2) }])
     await expect(c.fetchTile('', 2, 2)).rejects.toMatchObject({ code: 'no_url' })
     expect(calls).toHaveLength(0)
+  })
+})
+
+const PAPER = 'https://d/api/editions/e1/news.json'
+
+describe('the headers a fetch carries', () => {
+  it('sends the caller’s headers beside Accept, so a paper can be authenticated', async () => {
+    const { client: c, calls } = client([{ text: fixtureText(), headers: { ETag: '"abc"' } }])
+    await c.fetch(PAPER, null, { Authorization: 'Bearer t' })
+    expect(header(calls[0].init, 'Accept')).toBe('application/json')
+    expect(header(calls[0].init, 'Authorization')).toBe('Bearer t')
+  })
+
+  it('still sends If-None-Match alongside them', async () => {
+    const { client: c, calls } = client([{ status: 304 }])
+    await c.fetch(PAPER, '"abc"', { Authorization: 'Bearer t' })
+    expect(header(calls[0].init, 'If-None-Match')).toBe('"abc"')
+    expect(header(calls[0].init, 'Authorization')).toBe('Bearer t')
+  })
+
+  it('sends a tile’s headers too — a paper’s photograph is behind the same token', async () => {
+    const { client: c, calls } = client([{ bytes: new Uint8Array(8) }])
+    await c.fetchTile('https://d/api/editions/e1/tiles/a.bin', 4, 4, { Authorization: 'Bearer t' })
+    expect(header(calls[0].init, 'Authorization')).toBe('Bearer t')
+  })
+
+  it('sends no Authorization when the source has none', async () => {
+    const { client: c, calls } = client([{ bytes: new Uint8Array(8) }])
+    await c.fetchTile('http://d/tiles/a.bin', 4, 4)
+    expect(header(calls[0].init, 'Authorization')).toBeUndefined()
   })
 })

@@ -32,6 +32,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { isEmptyEdition, parseEdition } from './parse'
+import { deviceSource, type EditionSource } from './source'
 import { type Edition } from './types'
 
 /** Namespaced like every other key this app owns. The literal is load-bearing. */
@@ -49,6 +50,15 @@ export interface CachedEdition {
   wire: unknown
   /** `parseEdition(wire)`. Kept beside it so no caller has to re-derive what the reader already did. */
   edition: Edition
+  /**
+   * How to fetch this edition's pictures — and, for a paper, with what credential.
+   *
+   * DERIVED AND NEVER PERSISTED. A device-plane entry's source is `deviceSource(url)` and is
+   * rebuilt on every read; a paper's carries a bearer token and is only ever in memory. The write
+   * below stores four keys and this is not one of them, which is the whole reason it is safe for
+   * this field to hold a credential at all.
+   */
+  source: EditionSource
 }
 
 /**
@@ -87,6 +97,9 @@ function sanitize(raw: unknown): CachedEdition | null {
     fetchedAt: o.fetchedAt,
     wire: o.wire,
     edition,
+    // Rebuilt, not read: nothing about a source is written down. An entry on disk is by
+    // construction a device-plane one — a paper is cached in memory only (`lib/papers/cache.ts`).
+    source: deviceSource(o.url),
   }
 }
 
@@ -127,7 +140,8 @@ export async function writeCachedEdition(c: CachedEdition): Promise<void> {
   try {
     // The wire body, NOT the entry: `edition` is derived from `wire` on every read, and writing
     // both would store the same content twice in two spellings — the second of which is the one
-    // the reader cannot use. See the header.
+    // the reader cannot use. See the header. `source` is left out for a harder reason: a paper's
+    // carries the operator's bearer token, and this is the only path from one to a disk.
     const stored = { url: c.url, etag: c.etag, fetchedAt: c.fetchedAt, wire: c.wire }
     await AsyncStorage.setItem(EDITION_CACHE_KEY, JSON.stringify(stored))
   } catch {

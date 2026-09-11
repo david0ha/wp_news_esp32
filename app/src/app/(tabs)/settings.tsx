@@ -36,6 +36,9 @@ import {
   deskLanguageView,
   EDITION_LANGUAGES,
   humanDeskError,
+  PAPER_REFRESH_PRESETS,
+  paperRefreshView,
+  type DeskSettings,
 } from '../../lib/desk'
 import { clearDeskToken, getDeskToken, saveDeskToken } from '../../lib/deskToken'
 import {
@@ -584,6 +587,19 @@ function LanguagePicker() {
 type Toned = { tone: 'ok' | 'info' | 'error'; message: string }
 
 /**
+ * `langMsg`'s own shape, and not `Toned`: the two SUCCESS notes it carries — a language write and
+ * a cadence write — are fixed sentences with no data of their own, so the `ok` arm names which one
+ * happened (`kind`) rather than the sentence itself. A resolved string in `useState` does not
+ * follow a language switch — `s` at the moment of the write is not `s` a screen re-render later —
+ * which is exactly the bug this shape rules out: read at every render through the CURRENT `s`,
+ * the same way `note` and `cadenceNote` below already resolve their own discriminants at draw
+ * time rather than at the moment the desk answered. The `error` arm keeps a plain message because
+ * `humanDeskError` already resolves through the desk's own error catalogue at throw time — a
+ * different, unreported concern than the one these two notes had.
+ */
+type LangMsg = { tone: 'ok'; kind: 'language' | 'cadence' } | { tone: 'error'; message: string }
+
+/**
  * The desk: its address, an operator token, and the language the NEWSPAPER is written in.
  *
  * This is the app's first authenticated call to anything (`lib/desk.ts`). Everything else the app
@@ -628,10 +644,13 @@ function DeskSection({
   const [tokenDraft, setTokenDraft] = useState('')
   const [tokenMsg, setTokenMsg] = useState<Toned | null>(null)
   // What the desk says it is set to — `null` until it has answered, and again if it stops
-  // answering. Never a guessed default: see `desk.ts`'s `settingsOf`.
-  const [lang, setLang] = useState<string | null>(null)
+  // answering. Never a guessed default: see `desk.ts`'s `settingsOf`. Held whole (not just
+  // `lang`) so a write can carry the cadence back unchanged; Task 12 builds the cadence row on
+  // this same state.
+  const [settings, setSettings] = useState<DeskSettings | null>(null)
+  const lang = settings?.lang ?? null
   const [busy, setBusy] = useState(false)
-  const [langMsg, setLangMsg] = useState<Toned | null>(null)
+  const [langMsg, setLangMsg] = useState<LangMsg | null>(null)
   /**
    * WHICH control has already reported that this phone could not be taken off the desk's list.
    *
@@ -678,7 +697,7 @@ function DeskSection({
   // would go on showing a live answer next to a control that can no longer change it.
   useEffect(() => {
     if (!address || !token) {
-      setLang(null)
+      setSettings(null)
       // And nothing is in flight any more. This arm is where "Forget token" lands: its own read
       // was abandoned by the cleanup below, whose `active` flag is false by then, so the `finally`
       // that would have cleared this is skipped and only here can do it.
@@ -690,11 +709,11 @@ function DeskSection({
     setLangMsg(null)
     void (async () => {
       try {
-        const settings = await createDeskClient({ baseUrl: address, token }).getSettings()
-        if (active) setLang(settings.lang)
+        const fetched = await createDeskClient({ baseUrl: address, token }).getSettings()
+        if (active) setSettings(fetched)
       } catch (e) {
         if (!active) return
-        setLang(null)
+        setSettings(null)
         setLangMsg({ tone: 'error', message: humanDeskError(e) })
       } finally {
         if (active) setBusy(false)
@@ -836,12 +855,38 @@ function DeskSection({
     setBusy(true)
     setLangMsg(null)
     try {
-      const settings = await createDeskClient({ baseUrl: address, token }).putSettings({
+      // The cadence rides along unchanged — this call is about the language only, and
+      // `putSettings` sends the key only when there is a number to send in the first place.
+      const written = await createDeskClient({ baseUrl: address, token }).putSettings({
         lang: next,
+        paperRefreshHours: settings?.paperRefreshHours ?? null,
       })
       if (!alive.current) return
-      setLang(settings.lang)
-      setLangMsg({ tone: 'ok', message: s.settings.desk.languageSaved })
+      setSettings(written)
+      setLangMsg({ tone: 'ok', kind: 'language' })
+    } catch (e) {
+      if (alive.current) setLangMsg({ tone: 'error', message: humanDeskError(e) })
+    } finally {
+      if (alive.current) setBusy(false)
+    }
+  }
+
+  // Write the cadence, then draw WHAT THE DESK PUT IN FORCE. The language write's rule, and the
+  // same `alive` guard: a desk behind a cold tunnel has fifteen seconds to answer and the tab can
+  // be left in one. `settings` is sent whole because `putSettings` builds the body field by field
+  // and omits the cadence when there is none — see its comment.
+  const chooseCadence = async (hours: number) => {
+    if (!address || !token || settings === null || hours === settings.paperRefreshHours) return
+    setBusy(true)
+    setLangMsg(null)
+    try {
+      const next = await createDeskClient({ baseUrl: address, token }).putSettings({
+        lang: settings.lang,
+        paperRefreshHours: hours,
+      })
+      if (!alive.current) return
+      setSettings(next)
+      setLangMsg({ tone: 'ok', kind: 'cadence' })
     } catch (e) {
       if (alive.current) setLangMsg({ tone: 'error', message: humanDeskError(e) })
     } finally {
@@ -856,6 +901,15 @@ function DeskSection({
       : view.note === 'unsupported'
         ? fill(s.settings.desk.unsupported, { lang: lang ?? '' })
         : null
+  const cadence = paperRefreshView({ address, token, settings, busy, loaded })
+  const cadenceNote =
+    cadence.note === 'needs_setup'
+      ? s.settings.desk.needsSetup
+      : cadence.note === 'absent'
+        ? s.settings.desk.paperRefreshAbsent
+        : cadence.note === 'custom'
+          ? fill(s.settings.desk.paperRefreshCustom, { hours: String(cadence.hours ?? '') })
+          : null
 
   return (
     <Section title={s.settings.sections.desk}>
@@ -952,7 +1006,32 @@ function DeskSection({
         onChange={(i) => void chooseLanguage(EDITION_LANGUAGES[i])}
       />
       {note ? <Text style={styles.help}>{note}</Text> : null}
-      {langMsg ? <Text style={TONE[langMsg.tone]}>{langMsg.message}</Text> : null}
+
+      <Text style={styles.deskLabel}>{s.settings.desk.paperRefresh}</Text>
+      <Text style={styles.help}>{s.settings.desk.paperRefreshHelp}</Text>
+      <View style={styles.chipRow}>
+        {PAPER_REFRESH_PRESETS.map((hours, i) => (
+          // Keyed on the interval and not on the label: the label is copy and changes with the
+          // language, which would remount every chip on a language switch. `SleepEditor`'s rule.
+          <Chip
+            key={hours}
+            label={formatInterval(hours * 3600)}
+            active={i === cadence.selectedIndex}
+            disabled={cadence.disabled}
+            onPress={() => void chooseCadence(hours)}
+          />
+        ))}
+      </View>
+      {cadenceNote !== null ? <Text style={styles.help}>{cadenceNote}</Text> : null}
+      {langMsg ? (
+        <Text style={TONE[langMsg.tone]}>
+          {langMsg.tone === 'ok'
+            ? langMsg.kind === 'language'
+              ? s.settings.desk.languageSaved
+              : s.settings.desk.paperRefreshSaved
+            : langMsg.message}
+        </Text>
+      ) : null}
     </Section>
   )
 }

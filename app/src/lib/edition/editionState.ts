@@ -18,6 +18,7 @@
 
 import { type EditionFetch } from './client'
 import { demoEdition, demoWire } from './demo'
+import { deviceSource } from './source'
 import { type CachedEdition } from './store'
 
 /** How stale the thing on screen has to be before a return to the tab quietly re-checks it. */
@@ -66,7 +67,16 @@ export function demoCache(): CachedEdition {
   // `wire` beside `edition`, and the two are the same content: every other entry's edition is
   // `parseEdition(wire)`, and an entry where that did not hold would be a second shape for the
   // readers to know about.
-  return { url: '', etag: null, fetchedAt: 0, wire: demoWire(), edition: demoEdition() }
+  return {
+    url: '',
+    etag: null,
+    fetchedAt: 0,
+    wire: demoWire(),
+    edition: demoEdition(),
+    // `''` all the way down: the bundled edition's photographs are on no server this phone can
+    // reach, which is why `editionToTiles` cuts it without them in the first place.
+    source: deviceSource(''),
+  }
 }
 
 /**
@@ -138,6 +148,11 @@ export function nextEditionState(prev: EditionMachine, event: EditionEvent): Edi
               // edition beside it cannot be re-parsed. See `store.ts`'s header.
               wire: event.result.wire,
               edition: event.result.edition,
+              // The same `deviceSource(url)` `useEdition` hands the disk write. This reducer is
+              // the device plane's and only ever the device plane's: `event.url` is what
+              // `editionUrl` resolved, so the entry it builds carries no credential by
+              // construction rather than by a check.
+              source: deviceSource(event.url),
             },
             refreshing: false,
             error: null,
