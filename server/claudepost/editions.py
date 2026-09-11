@@ -41,6 +41,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from . import notes, tiles
@@ -129,6 +130,20 @@ REASON_IMMEDIATE = "immediate"
 REASON_DUE = "due"
 REASON_PROMOTED = "promoted"
 REASON_UNCHANGED = "unchanged: identical to the edition already current"
+REASON_PAPER = "filed: a paper for {s}; neither pointer moved"
+REASON_UNCHANGED_PAPER = "duplicate: identical to the newest paper for {s}"
+
+#: What a commit is for. ``board`` is the newspaper that goes on the glass and
+#: is every bit of today's behaviour; ``paper`` is the one the desk keeps for a
+#: company whether or not it is the one being printed.
+#:
+#: A named pair rather than a boolean because the difference is not "publish or
+#: not" -- a board commit that stages has not published either -- it is *which
+#: state the edition is being filed into*, and a `publish=False` would read as
+#: the first.
+TARGET_BOARD = "board"
+TARGET_PAPER = "paper"
+COMMIT_TARGETS: tuple[str, ...] = (TARGET_BOARD, TARGET_PAPER)
 
 # ``\Z`` and not ``$`` in all three of the regexes below, and this is the
 # reason: ``$`` also matches before a trailing newline, and every one of these
@@ -148,12 +163,54 @@ _EID_RE = re.compile(r"^[0-9a-f]{16}\Z")
 #: came to advertise a ``.bmp`` the sheet route then refused.
 SHEET_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\.(?:png|bmp)\Z")
 
+#: What an edition's ``lang`` is when the payload does not say, or says
+#: something that is not a language tag. The device's own rule, from
+#: ``docs/news-contract.md``: "absent or malformed means ``en``". The meta has
+#: to agree with what is actually printed rather than recording "unknown",
+#: because the phone draws this field as the paper's language.
+DEFAULT_LANG = "en"
+
+#: A ``subject.symbol`` as the index will key on it. Eight characters because
+#: that is the device's buffer and the validator's cap; anything else is an
+#: edition the index simply cannot key, which is not an error -- gate 1 decides
+#: what an edition is, and this decides what a *paper* is.
+#:
+#: **The same pattern as :data:`~claudepost.store.COMMAND_SYMBOL_RE`, lookahead
+#: and all**, and the agreement is the point rather than the clause. There is a
+#: real argument for leaving this one looser: it describes what an *edition's*
+#: subject may be, where the lookahead is a rule about what a *command* may
+#: carry. The rotation and a publish by symbol both check the symbol they are
+#: about to act on against the command's own regex before they do anything
+#: with it, so neither could ever have reached a punctuation-only key like
+#: ``"..."``. ``/api/papers`` is different: it draws its rows from the
+#: watchlist document, and :data:`~claudepost.watchlist.SYMBOL_RE` carries no
+#: lookahead, so that listing was not gated the same way. A watchlist row
+#: named ``"..."`` beside an edition whose ``subject.symbol`` was ``"..."``
+#: would have produced a real, populated row there -- the exposure from the
+#: gap was small, not nil, and the listing is where it lived. That makes
+#: agreement the stronger case, not the weaker one: two regexes answering
+#: "what is a symbol" differently by one subtle clause is the discrepancy a
+#: later reader loses an afternoon to, and this time it would not even have
+#: been harmless. So ``"..."``, ``"-"`` and ``"."`` derive ``symbol: None``
+#: here: the edition commits and is served like any other, and is a paper for
+#: nobody.
+SUBJECT_SYMBOL_RE = re.compile(r"^(?=.*[A-Z0-9])[A-Z0-9.\-]{1,8}\Z")
+
+#: A BCP-47 primary subtag, the wire's own shape from ``docs/news-contract.md``.
+#: Not :data:`~claudepost.settings.LANGS`: this field describes the text that
+#: is actually in the payload, and the desk deliberately does not cross-check
+#: an edition's language against the setting.
+LANG_RE = re.compile(r"^[a-z]{2,3}\Z")
+
 
 @dataclass(frozen=True)
 class CommitResult:
     """What became of a commit: the edition, its state, and why.
 
-    ``state`` is one of ``"published"``, ``"staged"`` or ``"unchanged"``.
+    ``state`` is one of ``"published"``, ``"staged"``, ``"unchanged"`` or
+    ``"paper"``. ``"paper"`` is an edition that was filed for the index and
+    not for the glass: it passed every gate but the schedule one, which does
+    not apply to it, and neither pointer moved.
     ``reason`` is prose for a person -- the HTTP layer passes it through to
     whoever filed the draft, and an agent that was told "quiet" can decide to
     wait rather than to file again.
@@ -404,7 +461,9 @@ class EditionStore:
         return eid
 
     # -- the commit --------------------------------------------------------
-    def commit(self, draft_id: str, schedule: Schedule, now: float) -> CommitResult:
+    def commit(self, draft_id: str, schedule: Schedule, now: float,
+               target: str = TARGET_BOARD,
+               symbol: str | None = None) -> CommitResult:
         """Take a draft through every gate and, if it passes them, file it.
 
         The five gates in order: the draft exists and holds a payload, gate 1
@@ -419,20 +478,42 @@ class EditionStore:
         its own copy, and throwing the draft away would make it re-upload every
         tile to change a headline.
 
+        ``target`` picks which of the two things is being filed.
+        :data:`TARGET_BOARD` is the paragraph above, unchanged.
+        :data:`TARGET_PAPER` files the day's newspaper *about a company* --
+        four of the five gates, with the schedule one skipped because nothing
+        is about to appear on any wall, and with the fingerprint compared
+        against that company's own newest paper rather than against
+        ``current``. Neither pointer is written.
+
+        ``symbol`` is required by, and only meaningful to, a paper commit. It
+        is checked against the draft's own ``subject.symbol`` and a
+        disagreement is a ``Conflict``: the index is derived from the payload,
+        so a model that drifted to another company would otherwise file its
+        paper under the name the desk asked for and nothing downstream would
+        ever see the two disagree.
+
         Raises:
             NotFound: no such draft.
-            Conflict: that draft is already inside a commit.
-            BadRequest: no payload, or a gate refused it. The gate's own output
-                is in the message, because that output is the whole product of
-                a failed gate.
+            Conflict: that draft is already inside a commit, or
+                ``commit_symbol_mismatch`` -- the draft is about a different
+                company than the one this commit names.
+            BadRequest: no payload, a gate refused it, an unknown ``target``,
+                or ``commit_needs_symbol`` -- a paper commit that named no
+                company. The gate's own output is in the message, because that
+                output is the whole product of a failed gate.
         """
+        if target not in COMMIT_TARGETS:
+            raise BadRequest(message="target is one of: "
+                                     + ", ".join(COMMIT_TARGETS))
         draft_dir = self._require_draft(draft_id)
         with self._lock:
             if draft_id in self._busy:
                 raise Conflict(message=f"draft {draft_id} is already being committed")
             self._busy.add(draft_id)
         try:
-            return self._commit(draft_id, draft_dir, schedule, now)
+            return self._commit(draft_id, draft_dir, schedule, now,
+                                target, symbol)
         finally:
             with self._lock:
                 self._busy.discard(draft_id)
@@ -617,13 +698,53 @@ class EditionStore:
         return _sheet_names(os.path.join(self._edition_dir(edition_id), PROOF_DIR))
 
     def edition_meta(self, edition_id: str) -> dict:
-        """An edition's ``meta.json`` -- its birth certificate, never rewritten.
+        """An edition's ``meta.json`` -- its birth certificate, rewritten only
+        on the paper re-filing path.
+
+        Born with the edition and then left alone, with exactly one exception:
+        an edition filed again as a company's *paper* has its ``created_at``
+        moved to that filing, because the paper index has no pointer and picks
+        by date. ``created_at`` is the only field that moves, and it moves only
+        there -- on that path's ordinary route every other field, including
+        ``published_at``, is carried over byte for byte.
+
+        **One path, not one occasion.** :meth:`_commit`'s ``unchanged``
+        short-circuit fires only when this edition is *already* that company's
+        newest paper, so a company whose coverage goes X, Y, X re-dates X on
+        the second filing of it, and can do so any number of times. There is no
+        once-only guard and there should not be: each re-filing is the newest
+        word the desk has about that company, and the index picks by date.
+
+        One narrower case rewrites more than that field, and it is a repair
+        rather than a move: when a re-filed edition's ``meta.json`` has become
+        unreadable, :meth:`_redate` writes this commit's own freshly built
+        document in its place, which can cost a ``published_at`` the corrupt
+        file once held. The store row keeps that value regardless -- it is
+        COALESCEd -- and there was nothing readable on disk to preserve. See
+        :meth:`_redate`, which argues both routes, and the call site in
+        :meth:`_commit`.
 
         Raises:
             NotFound: unknown id, missing directory, or metadata that will not
                 parse. An empty dict would blur "no such edition" into "an
                 edition with nothing recorded", and those want different
                 answers from the operator reading them.
+        """
+        return self._filled(edition_id, self._raw_meta(edition_id))
+
+    def _raw_meta(self, edition_id: str) -> dict:
+        """``meta.json`` exactly as it is filed -- no derived field added.
+
+        The parser both :meth:`edition_meta` (which hands this to
+        :meth:`_filled`) and :meth:`_redate` read through, so there is exactly
+        one place that turns bytes on disk into a document. `_redate`'s
+        ordinary path never writes back `_filled`'s derived copy of a document
+        it could read fine here; its repair path, for the rarer case where
+        this raises, is a separate decision documented at `_redate` itself.
+
+        Raises:
+            NotFound: unknown id, missing directory, or metadata that will not
+                parse -- the same conditions :meth:`edition_meta` raises under.
         """
         path = os.path.join(self._require_edition(edition_id), META_NAME)
         raw = read_bytes(path)
@@ -637,14 +758,127 @@ class EditionStore:
             raise NotFound(message=f"edition {edition_id} has unreadable metadata")
         return doc
 
+    def _subject_of(self, edition_id: str) -> tuple[str | None, str, str | None]:
+        """An edition's company, language and lead headline, off its stored payload."""
+        payload = self.read_payload(edition_id)
+        return (_subject_symbol(payload), _payload_lang(payload),
+                _lead_headline(payload))
+
+    def _filled(self, edition_id: str, doc: dict) -> dict:
+        """``doc`` with ``symbol`` and ``lang`` on it however old the edition is.
+
+        The migration that does not run. ``meta.json`` is an edition's birth
+        certificate, and the one rewrite there moves a re-filed paper's
+        ``created_at`` -- it never adds ``symbol`` or ``lang`` to the document
+        on disk, however old the edition -- so an edition filed before these
+        two existed gets them derived from its own stored payload on every
+        read instead, which is what makes a pre-change edition a paper for its
+        company rather than an edition about nobody. :meth:`_redate` reads and
+        writes the raw, unfilled document (:meth:`_raw_meta`) precisely so
+        that what this method derives here is never the thing persisted: what
+        is on disk stays on disk, what is derived stays derived on every call.
+
+        Membership and not truthiness: an edition filed *after* this change
+        about a payload with no usable subject records ``"symbol": null``, and
+        that is an answer rather than an omission. Re-deriving it every time
+        would read the payload to learn what the meta already says.
+        """
+        if "symbol" in doc and "lang" in doc:
+            return doc
+        symbol, lang, _headline = self._subject_of(edition_id)
+        doc.setdefault("symbol", symbol)
+        doc.setdefault("lang", lang)
+        return doc
+
+    def headline(self, edition_id: str) -> str | None:
+        """The lead story's headline, for a reader choosing between papers.
+
+        ``None`` for an edition with no stories, and for one that is not there
+        at all -- the serving path's rule, because both mean the same thing to
+        a pager drawing a row.
+        """
+        return self._subject_of(edition_id)[2]
+
+    def papers(self, symbols: Sequence[str]) -> dict[str, dict | None]:
+        """The newest edition about each requested company, or ``None``.
+
+        A **read, not a cache**: the editions on disk are the truth, and a
+        second record of "which is the newest paper for S" would be a thing to
+        keep in step with retention, with a promotion, and with a commit that
+        crashed between the build and the record.
+
+        Every requested symbol gets a key, ``None`` and all. A key that was
+        simply missing would make "this company has no paper yet" and "you
+        misspelled the symbol" the same answer to a pager, and the first of
+        those is a row it has to draw.
+        """
+        newest = self._newest_by_symbol()
+        return {symbol: newest.get(symbol) for symbol in symbols}
+
+    def _newest_by_symbol(self) -> dict[str, dict]:
+        """``{symbol: meta}`` for every company with an edition on disk.
+
+        Off the DISK rather than off the editions table, and that is the
+        safety argument rather than a preference: a store row outlives the
+        directory ``prune`` deleted, so an index built from the table would
+        hand a reader an edition id whose payload 404s. Walking the disk also
+        bounds the cost at retention depth -- a few dozen small ``meta.json``
+        reads -- where the table grows forever.
+
+        Ties on ``created_at`` are broken by the id, so two editions filed in
+        the same second resolve the same way on every call. Without it the
+        answer would depend on ``os.listdir`` order, and a pager would appear
+        to flip between two papers at random.
+        """
+        newest: dict[str, tuple[float, str, dict]] = {}
+        for eid in self._edition_ids():
+            try:
+                meta = self.edition_meta(eid)
+            except NotFound:
+                # A directory that lost its meta.json, or one deleted between
+                # the listing and the read. Not an edition anybody can serve.
+                continue
+            symbol = meta.get("symbol")
+            if not symbol:
+                continue
+            try:
+                at = float(meta.get("created_at") or 0.0)
+            except (TypeError, ValueError):
+                at = 0.0
+            key = (at, eid)
+            if symbol not in newest or key > newest[symbol][:2]:
+                newest[symbol] = (at, eid, meta)
+        return {symbol: meta for symbol, (_at, _eid, meta) in newest.items()}
+
+    def list_editions(self, limit: int = 50) -> list[dict]:
+        """The history, each row carrying its company and its language.
+
+        Here rather than in :meth:`~claudepost.store.Store.list_editions`
+        because the fill reads a payload off the disk, which is this module's
+        territory and not the database's -- and because a row from the store
+        and a row from :meth:`edition_meta` answering "which company is this"
+        differently is exactly the bug the shared :meth:`_filled` prevents.
+        """
+        return [self._filled(row["id"], row)
+                for row in self._store.list_editions(limit)]
+
     # -- retention ---------------------------------------------------------
-    def prune(self, keep: int | None = None) -> int:
+    def prune(self, keep: int | None = None,
+              symbols: Sequence[str] = ()) -> int:
         """Delete old editions, keeping the newest ``keep`` of them, and count them.
 
         ``current`` and ``staged`` survive however old they are: retention must
         never be able to delete the page on the wall. Leftover ``.build-*``
         directories go too, but they are not editions and are not counted --
         this number is how much history was dropped, not how much rubbish.
+
+        ``symbols`` is the companies whose papers must survive -- the desk's
+        printable watchlist. The newest edition of each is protected however
+        old it is, for the same reason ``current`` is: a paper pruned out from
+        under the pager is a row that goes blank with nothing on the desk to
+        explain it. An edition for a company no longer on that list loses the
+        protection and ages out normally, which is what makes removing a
+        symbol from the watchlist the way to stop keeping its paper.
         """
         depth = self._keep if keep is None else max(0, int(keep))
         with self._lock:
@@ -663,6 +897,15 @@ class EditionStore:
             known.sort(key=self._created_at, reverse=True)
             protected.update(known[:depth])
 
+            # After the depth, not before: a paper inside the newest `depth`
+            # is already protected and this adds nothing, and a paper outside
+            # it is exactly the case this exists for.
+            if symbols:
+                newest = self._newest_by_symbol()
+                protected.update(meta["id"] for meta in
+                                 (newest.get(s) for s in symbols)
+                                 if meta is not None)
+
             gone = 0
             for eid in known[depth:]:
                 if eid in protected:
@@ -675,7 +918,8 @@ class EditionStore:
 
     # -- internals ---------------------------------------------------------
     def _commit(self, draft_id: str, draft_dir: str, schedule: Schedule,
-                now: float) -> CommitResult:
+                now: float, target: str = TARGET_BOARD,
+                symbol: str | None = None) -> CommitResult:
         """:meth:`commit`, with the draft already claimed in ``_busy``."""
         raw = self._draft_payload(draft_dir)
         if raw is None:
@@ -698,34 +942,83 @@ class EditionStore:
 
         eid, stored, dropped = _fingerprint_draft(draft_dir, raw)
         tile_ids = _tile_ids(os.path.join(draft_dir, TILES_DIR))
+        subject = _subject_symbol(stored)
+        is_paper = target == TARGET_PAPER
 
-        if eid == self.current_id():
-            # The bytes are already on the glass and already on disk as an
-            # immutable edition, so the draft has nowhere left to go. No pointer
-            # write and no publish row: an unchanged commit is not a publish and
-            # must not restart the minimum gap.
-            self._store.audit("commit", {"edition": eid, "state": "unchanged",
-                                         "draft": draft_id})
-            self._drop_draft(draft_id)
-            return CommitResult(eid, "unchanged", REASON_UNCHANGED)
+        if is_paper:
+            if not symbol:
+                raise BadRequest("commit_needs_symbol",
+                                 "a paper commit names the company it is for")
+            if subject != symbol:
+                # THE WALL. The index is keyed by the payload's own subject, so
+                # filing this would put a newspaper about one company under
+                # another company's name -- and nothing downstream could ever
+                # see the two disagree, because downstream only ever reads the
+                # index. Refusing here is what makes a drifted run a failed
+                # command with a reason in the queue instead.
+                raise Conflict("commit_symbol_mismatch",
+                               f"this draft is about {subject or 'no company'}, "
+                               f"not about {symbol}")
+            if eid == self._newest_paper_id(symbol):
+                self._store.audit("commit", {"edition": eid,
+                                             "state": "unchanged",
+                                             "draft": draft_id,
+                                             "symbol": symbol})
+                self._drop_draft(draft_id)
+                return CommitResult(eid, "unchanged",
+                                    REASON_UNCHANGED_PAPER.format(s=symbol))
+            # No schedule gate: a paper appears on nobody's wall, so a quiet
+            # window, a hold and the minimum gap all have nothing to say about
+            # it. `ok` is False so the meta below records no published_at, and
+            # the tail files rather than stages.
+            ok, reason = False, REASON_PAPER.format(s=symbol)
+        else:
+            if eid == self.current_id():
+                # The bytes are already on the glass and already on disk as an
+                # immutable edition, so the draft has nowhere left to go. No
+                # pointer write and no publish row: an unchanged commit is not
+                # a publish and must not restart the minimum gap.
+                self._store.audit("commit", {"edition": eid,
+                                             "state": "unchanged",
+                                             "draft": draft_id})
+                self._drop_draft(draft_id)
+                return CommitResult(eid, "unchanged", REASON_UNCHANGED)
 
-        ok, reason = self._schedule_gate(schedule, now, now)
+            ok, reason = self._schedule_gate(schedule, now, now)
 
-        if eid == self.staged_id():
-            # Already waiting, and waiting is idempotent. Rewriting the pointer
-            # would only move an mtime; publishing is publish_due's decision and
-            # it runs every few seconds.
-            self._store.audit("commit", {"edition": eid, "state": "staged",
-                                         "draft": draft_id})
-            self._drop_draft(draft_id)
-            return CommitResult(eid, "staged", reason)
+            if eid == self.staged_id():
+                # Already waiting, and waiting is idempotent. Rewriting the
+                # pointer would only move an mtime; publishing is publish_due's
+                # decision and it runs every few seconds.
+                self._store.audit("commit", {"edition": eid, "state": "staged",
+                                             "draft": draft_id})
+                self._drop_draft(draft_id)
+                return CommitResult(eid, "staged", reason)
 
         # The gate runs before the build so that meta.json is born with the
-        # right published_at. It is written once and never rewritten.
+        # right published_at. It is rewritten on one path only -- the one
+        # below, when a paper is filed again -- and on that path as often as
+        # that happens, which the `unchanged` short-circuit above bounds only
+        # for a re-filing of the company's *current* newest paper. The ordinary
+        # route there moves created_at and carries every other field over
+        # untouched, published_at included. The
+        # one exception is that route's repair path, where meta.json has become
+        # unreadable and `_redate` writes this dict in its place -- see
+        # `edition_meta` and `_redate`, which tell the same story, and which
+        # note that the store row's published_at is COALESCEd and survives it.
+        #
+        # `symbol` and `lang` are the payload's own, copied here rather than
+        # left to be re-derived: they are what the paper index keys on, and an
+        # index that re-parsed 300 KB of JSON per row per request would be a
+        # phone refresh costing more than the edition it draws. Both are
+        # nullable-by-shape rather than by absence -- see `_filled`, which is
+        # the reader for every edition filed before they existed.
         meta = {"id": eid,
                 "created_at": now,
                 "published_at": now if ok else None,
                 "source": draft_id,
+                "symbol": _subject_symbol(stored),
+                "lang": _payload_lang(stored),
                 "validate": _clip(verdict.output),
                 "render": _clip(render.output),
                 "dropped_producer_policy": dropped,
@@ -740,21 +1033,52 @@ class EditionStore:
         with self._lock:
             self._building.add(dest)
         try:
-            if not self._build_edition(dest, draft_dir, stored, meta):
-                # It was filed before. meta.json is that edition's birth
-                # certificate and is never rewritten, so the store gets the
-                # copy on disk rather than this commit's -- two records of one
-                # immutable edition disagreeing about when it was born would
-                # put the history (ordered from the store) and retention
-                # (ordered from disk) in different orders. Re-recording rather
-                # than skipping also repairs a crash between build and record.
+            built = self._build_edition(dest, draft_dir, stored, meta)
+            if not built:
+                # It was filed before, so the store gets the copy on disk
+                # rather than this commit's -- two records of one immutable
+                # edition disagreeing about when it was born would put the
+                # history (ordered from the store) and retention (ordered from
+                # disk) in different orders. Re-recording rather than skipping
+                # also repairs a crash between build and record.
                 try:
                     meta = self.edition_meta(eid)
                 except NotFound:
                     pass          # unreadable: this commit's copy beats none
-            self._store.record_edition(eid, meta)
+
+            if is_paper and not built:
+                # A paper filed again becomes that company's paper again, and
+                # the asymmetry with the board is the whole argument for
+                # rewriting a date that is otherwise never rewritten. The board
+                # says which edition is the board's with two pointers, so
+                # `created_at` decides nothing there and an edition filed again
+                # keeps the day it was born. The paper index has no pointer:
+                # `_newest_by_symbol` picks by `created_at`, so recency *is* the
+                # index. Leave the date alone here and the desk answers "paper
+                # A" to the worker that just filed A while `/api/papers` goes on
+                # showing B -- the desk contradicting itself about what it did a
+                # millisecond ago. A re-filing is the newest word the desk has
+                # about that company.
+                #
+                # Disk and store move together and under one lock, because the
+                # paragraph above is still binding: what `meta.json` says is
+                # exactly what reaches `record_edition`, so history and
+                # retention keep the same order however many re-filings race.
+                # That holds even when `meta.json` cannot be read at all --
+                # `_redate` falls back to writing `meta` (this commit's own
+                # freshly built dict) to disk in that case, rather than
+                # leaving the store to record a date disk never got. Passing
+                # `meta` through is what makes that possible: it is always the
+                # thing to fall back to, on disk and in the store alike.
+                with self._lock:
+                    meta = self._redate(eid, meta, now)
+                    self._store.record_edition(eid, meta)
+            else:
+                self._store.record_edition(eid, meta)
 
             with self._lock:
+                if is_paper:
+                    return self._file_paper(eid, symbol, reason, draft_id)
                 if ok:
                     return self._publish(eid, now, reason, draft_id=draft_id)
                 return self._stage(eid, now, reason, draft_id=draft_id)
@@ -793,6 +1117,24 @@ class EditionStore:
         if draft_id is not None:
             self._drop_draft(draft_id)
         return CommitResult(edition_id, "staged", reason)
+
+    def _file_paper(self, edition_id: str, symbol: str, reason: str,
+                    draft_id: str) -> CommitResult:
+        """Record a paper. Called with the lock held.
+
+        The shortest of the three tails, and deliberately: there is no pointer
+        to write, no publish row to add and no gap to restart. The edition is
+        already on disk and already in the store by the time this runs, so all
+        that is left is the audit line and the draft.
+        """
+        self._store.audit("paper", {"edition": edition_id, "symbol": symbol})
+        self._drop_draft(draft_id)
+        return CommitResult(edition_id, "paper", reason)
+
+    def _newest_paper_id(self, symbol: str) -> str | None:
+        """The edition this company's paper currently is, or ``None``."""
+        meta = self._newest_by_symbol().get(symbol)
+        return meta["id"] if meta else None
 
     def _schedule_gate(self, schedule: Schedule, now: float,
                        staged_at: float) -> tuple[bool, str]:
@@ -915,6 +1257,71 @@ class EditionStore:
 
         fsync_dir(self._editions_root)
         return True
+
+    def _redate(self, edition_id: str, fallback: dict, now: float) -> dict:
+        """Move an already-filed edition's ``created_at`` to ``now``. Lock held.
+
+        The only rewrite of a birth certificate this module performs, and only
+        for a paper -- the argument for it is at the call site, in
+        :meth:`_commit`. Everything else in the document is carried over
+        untouched, ``published_at`` above all: an edition that has been on the
+        glass has been on the glass, and that is a fact about the past rather
+        than about this filing.
+
+        **The ordinary path** reads :meth:`_raw_meta` -- never
+        :meth:`edition_meta` -- and writes back exactly that document with only
+        ``created_at`` replaced. ``edition_meta`` runs the document through
+        :meth:`_filled`, which adds ``symbol``/``lang`` *derived from the
+        stored payload* for an edition that predates them. Writing that filled
+        copy back would freeze a value nobody ever recorded onto disk, and a
+        payload that happened to be unreadable at this instant would freeze
+        ``symbol: null`` there forever -- ``_filled``'s own membership check
+        (``"symbol" in doc``) would then treat that ``null`` as recorded and
+        stop deriving, dropping the edition out of the paper index for good,
+        with nothing in the document to say why. What is on disk is what gets
+        written back; what is derived stays derived on every read.
+
+        **The repair path** runs only when :meth:`_raw_meta` itself fails --
+        ``meta.json`` is missing, truncated, or will not parse, where it
+        previously would have read fine. There is nothing on disk worth
+        preserving there, and this module has already made that judgment once
+        in the very same situation: :meth:`_commit`'s own ``if not built:``
+        branch falls back to its freshly built ``meta`` dict with the comment
+        "unreadable: this commit's copy beats none". ``fallback`` *is* that
+        dict, so this is the same call, not a second one. Its ``symbol`` and
+        ``lang`` are safe to write here where the filled copy above is not: an
+        edition id is its content fingerprint, so the draft bytes behind
+        ``fallback`` are byte-identical to this edition's own stored payload --
+        those two values are derived from bytes this commit is holding, not
+        guessed at because a file failed to read moments ago.
+
+        One thing a repair costs and does not try to avoid: it drops a
+        ``published_at`` the corrupt file might once have recorded, since the
+        file that held it could not be read. Accepted, considered rather than
+        missed -- ``Store.record_edition`` COALESCEs ``published_at``, so the
+        store row keeps the real value regardless of what lands in this
+        rewritten ``meta.json``, and the disk copy was already unreadable.
+
+        Written the way every pointer here is written -- a temporary file in
+        the same directory and one ``os.replace`` -- so a reader inside
+        :meth:`edition_meta` at this instant gets the whole old document or the
+        whole new one. A truncated ``meta.json`` would not be a wrong date, it
+        would be a :class:`NotFound` that takes ``/api/papers`` and retention
+        down with it.
+
+        Disk and store always take the same document, with no exception: the
+        document returned is the one just written to disk, byte for byte, and
+        the caller records *that* -- the two must not be assembled separately,
+        on the ordinary path or on the repair path.
+        """
+        try:
+            doc = self._raw_meta(edition_id)
+        except NotFound:
+            doc = dict(fallback)
+        doc["created_at"] = now
+        atomic_write(os.path.join(self._edition_dir(edition_id), META_NAME),
+                     _canonical(doc).encode("utf-8"))
+        return doc
 
     def _open_build_dir(self) -> str:
         """A registered ``.build-*`` directory to assemble an edition in.
@@ -1204,6 +1611,77 @@ def _stored_payload(raw: bytes) -> tuple[bytes, bool]:
     doc.pop("policy", None)
     return json.dumps(doc, separators=(",", ":"),
                       ensure_ascii=False).encode("utf-8"), True
+
+
+def _payload_doc(payload: bytes | None) -> dict:
+    """A stored payload as a dict, or an empty one however it failed.
+
+    Every way of failing is the same answer here -- no payload, a payload that
+    is not JSON, a payload that is JSON but not an object -- because every one
+    of them means the same thing to the index: there is nothing to key on.
+    ``read_payload``'s rule, one level up.
+    """
+    if not payload:
+        return {}
+    try:
+        doc = json.loads(payload)
+    except ValueError:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _subject_symbol(payload: bytes | None) -> str | None:
+    """The company an edition is about, as the index keys on it, or ``None``.
+
+    Upper-cased before it is matched, so ``"sndk"`` and ``"SNDK"`` are one
+    paper -- the same rule :func:`~claudepost.watchlist._symbol` and
+    :func:`~claudepost.store._checked_symbol` follow, and the reason a commit
+    can compare the two directly.
+    """
+    subject = _payload_doc(payload).get("subject")
+    symbol = subject.get("symbol") if isinstance(subject, dict) else None
+    if not isinstance(symbol, str):
+        return None
+    symbol = symbol.strip().upper()
+    return symbol if SUBJECT_SYMBOL_RE.match(symbol) else None
+
+
+def _payload_lang(payload: bytes | None) -> str:
+    """The language an edition is written in. Never ``None``; see :data:`DEFAULT_LANG`."""
+    lang = _payload_doc(payload).get("lang")
+    if isinstance(lang, str) and LANG_RE.match(lang):
+        return lang
+    return DEFAULT_LANG
+
+
+def _lead_headline(payload: bytes | None) -> str | None:
+    """The lead story's headline, for a reader choosing between papers.
+
+    The lead is the LOWEST-ranked story and not ``stories[0]``, because the
+    wire carries a rank and nothing about order -- ``docs/news-contract.md``'s
+    "``stories[]`` keeps the N lowest ranks" is the device's own rule and this
+    is the same one. A story with no usable rank sorts last rather than first,
+    so a producer that omitted the field cannot displace one that filed it.
+    Ties go to the earlier entry, which is the only tiebreak the payload
+    offers.
+    """
+    stories = _payload_doc(payload).get("stories")
+    if not isinstance(stories, list):
+        return None
+    best: tuple[tuple[float, int], str] | None = None
+    for i, story in enumerate(stories):
+        if not isinstance(story, dict):
+            continue
+        headline = story.get("headline")
+        if not isinstance(headline, str) or not headline.strip():
+            continue
+        rank = story.get("rank")
+        if isinstance(rank, bool) or not isinstance(rank, (int, float)):
+            rank = float("inf")
+        key = (float(rank), i)
+        if best is None or key < best[0]:
+            best = (key, headline)
+    return best[1] if best else None
 
 
 def _content_of(stored: bytes) -> bytes:

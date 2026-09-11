@@ -487,6 +487,546 @@ class FingerprintTest(EditionTestCase):
         self.assertEqual(self.es.fingerprint(plain), self.es.fingerprint(blocked))
 
 
+class SubjectMetaTest(EditionTestCase):
+    """What an edition records about the company it is about.
+
+    The paper index is derived from this and from nothing else, so the two
+    things it has to survive are a producer that filed a payload before this
+    field existed, and a payload whose subject is not usable as an index key.
+    """
+
+    def a_company(self, symbol="SNDK", n=1, **top):
+        """A draft whose payload names a company, committed."""
+        d = self.es.open_draft()
+        doc = {"edition": "2026-08-19", "serial": n,
+               "subject": {"symbol": symbol, "name": "Sandisk Corp."},
+               "stories": [{"rank": 0, "headline": f"Story {n}"}]}
+        doc.update(top)
+        self.es.put_payload(d, json.dumps(doc).encode())
+        return self.es.commit(d, IMMEDIATE, self.clock.now())
+
+    def test_a_commit_records_the_symbol_and_the_language(self):
+        eid = self.a_company("SNDK", lang="ko").edition_id
+        meta = self.es.edition_meta(eid)
+        self.assertEqual(meta["symbol"], "SNDK")
+        self.assertEqual(meta["lang"], "ko")
+
+    def test_a_payload_with_no_language_is_recorded_as_english(self):
+        # `docs/news-contract.md`: absent or malformed means `en`, and the
+        # device applies the same rule -- so the meta must agree with what is
+        # actually printed rather than saying "unknown".
+        meta = self.es.edition_meta(self.a_company("ACME").edition_id)
+        self.assertEqual(meta["lang"], "en")
+
+    def test_a_lower_case_ticker_is_recorded_upper_case(self):
+        meta = self.es.edition_meta(self.a_company("sndk").edition_id)
+        self.assertEqual(meta["symbol"], "SNDK")
+
+    def test_a_payload_with_no_usable_symbol_records_none(self):
+        # Not an error and not a refusal: gate 1 is what decides whether a
+        # payload is an edition, and an edition the index cannot key is simply
+        # not a paper for anybody.
+        #
+        # `"..."`, `"."` and `"-"` are the punctuation-only cases, and they are
+        # here because `SUBJECT_SYMBOL_RE` did NOT refuse them until
+        # 2026-09-11: they fit the character class and are not tickers. The
+        # rotation and the publish route both check the symbol they act on
+        # against `store.COMMAND_SYMBOL_RE`, which has always had the
+        # lookahead, so neither could ever have reached one -- but
+        # `/api/papers` draws its rows from the watchlist document, whose own
+        # regex carries no lookahead, so a watchlist row named `"..."` beside
+        # an edition keyed the same way would have produced a real, populated
+        # row on that listing. The exposure was small, not nil, and the
+        # listing is where it lived -- which argues for agreement, not against
+        # it: two regexes answering "what is a symbol" differently by one
+        # clause is the discrepancy a later reader loses an afternoon to. They
+        # agree now.
+        for bad in (None, "", "WAY-TOO-LONG-SYMBOL", "A B", 17,
+                    "...", ".", "-", "--.-"):
+            with self.subTest(symbol=bad):
+                d = self.es.open_draft()
+                self.es.put_payload(d, json.dumps(
+                    {"serial": repr(bad), "subject": {"symbol": bad}}).encode())
+                r = self.es.commit(d, IMMEDIATE, self.clock.now())
+                # The edition itself is filed and readable, exactly like any
+                # other -- this is a key the index cannot hold, not a refusal.
+                self.assertIsNotNone(self.es.read_payload(r.edition_id))
+                self.assertIsNone(self.es.edition_meta(r.edition_id)["symbol"])
+                if isinstance(bad, str) and bad:
+                    # And it is a paper for nobody: asking the index for the
+                    # string the payload actually carried finds nothing, so
+                    # `/api/papers` would draw a row of nulls for it and the
+                    # rotation would treat it as a company never written about.
+                    self.assertEqual(self.es.papers([bad.upper()]),
+                                     {bad.upper(): None})
+
+    def test_an_edition_filed_before_these_fields_is_filled_from_its_payload(self):
+        # The migration that does not run. An edition's meta.json is its birth
+        # certificate, and the one rewrite there is moves a re-filed paper's
+        # created_at and adds no field to anything, so the two fields are
+        # derived on the way out instead -- which is also why a pre-change
+        # edition is still a paper for its company.
+        eid = self.a_company("NVDA", lang="ko").edition_id
+        path = os.path.join(self.root, "editions", eid, "meta.json")
+        with open(path, "r+", encoding="utf-8") as f:
+            doc = json.load(f)
+            doc.pop("symbol")
+            doc.pop("lang")
+            f.seek(0)
+            json.dump(doc, f)
+            f.truncate()
+
+        meta = self.es.edition_meta(eid)
+        self.assertEqual(meta["symbol"], "NVDA")
+        self.assertEqual(meta["lang"], "ko")
+
+    def test_the_history_carries_the_two_fields_on_both_paths(self):
+        # `edition_meta` reads a file and `list_editions` reads a database.
+        # Two readers answering "which company is this" differently is the
+        # bug this test exists to prevent.
+        eid = self.a_company("SNDK", lang="ko").edition_id
+        [row] = [r for r in self.es.list_editions() if r["id"] == eid]
+        self.assertEqual((row["symbol"], row["lang"]),
+                         (self.es.edition_meta(eid)["symbol"],
+                          self.es.edition_meta(eid)["lang"]))
+
+    def test_the_lead_headline_is_the_lowest_ranked_story(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({
+            "subject": {"symbol": "SNDK"},
+            "stories": [{"rank": 30, "headline": "A brief"},
+                        {"rank": 10, "headline": "The lead"},
+                        {"rank": 20, "headline": "A second"}]}).encode())
+        r = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertEqual(self.es.headline(r.edition_id), "The lead")
+
+    def test_an_edition_with_no_stories_has_no_headline(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({"subject": {"symbol": "SNDK"}}).encode())
+        r = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertIsNone(self.es.headline(r.edition_id))
+
+    def test_an_edition_that_is_not_there_has_no_headline(self):
+        self.assertIsNone(self.es.headline("0" * 16))
+
+
+class PapersTest(SubjectMetaTest):
+    """Which edition is the paper for a company, and what retention may not take.
+
+    Inherits `SubjectMetaTest`'s `a_company` helper rather than repeating it --
+    a second spelling of "a draft that names a company" would be a second thing
+    to keep in step with the payload shape.
+    """
+
+    def test_the_newest_edition_for_a_symbol_is_its_paper(self):
+        old = self.a_company("SNDK", n=1).edition_id
+        self.clock.set(T0 + 3600)
+        new = self.a_company("SNDK", n=2).edition_id
+
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], new)
+        self.assertNotEqual(old, new)
+
+    def test_each_symbol_gets_its_own_newest(self):
+        sndk = self.a_company("SNDK", n=1).edition_id
+        self.clock.set(T0 + 60)
+        acme = self.a_company("ACME", n=2).edition_id
+        self.clock.set(T0 + 120)
+        sndk2 = self.a_company("SNDK", n=3).edition_id
+
+        found = self.es.papers(["SNDK", "ACME"])
+        self.assertEqual(found["SNDK"]["id"], sndk2)
+        self.assertEqual(found["ACME"]["id"], acme)
+        self.assertNotEqual(sndk, sndk2)
+
+    def test_a_symbol_with_no_edition_answers_none_rather_than_being_dropped(self):
+        # The pager draws a "not written yet" row from this, so a key that is
+        # missing and a key that is None are different answers to it.
+        self.a_company("SNDK")
+        found = self.es.papers(["SNDK", "NVDA"])
+        self.assertIn("NVDA", found)
+        self.assertIsNone(found["NVDA"])
+
+    def test_asking_for_nothing_answers_nothing(self):
+        self.a_company("SNDK")
+        self.assertEqual(self.es.papers([]), {})
+
+    def test_an_edition_the_index_cannot_key_belongs_to_no_symbol(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({"serial": 9, "subject": {}}).encode())
+        self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertIsNone(self.es.papers([""])[""])
+
+    def test_retention_never_takes_a_watched_company_s_paper(self):
+        # The pager's whole promise. Without this the newest edition about a
+        # company on the watchlist ages out behind the board's own run of
+        # editions, and the row goes blank with nothing to explain it.
+        sndk = self.a_company("SNDK", n=0).edition_id
+        for n in range(1, 6):
+            self.clock.set(T0 + n * 60)
+            self.a_company("ACME", n=n)
+
+        self.assertEqual(self.es.prune(keep=1, symbols=["SNDK", "ACME"]), 4)
+        self.assertIsNotNone(self.es.read_payload(sndk))
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], sndk)
+
+    def test_a_company_that_left_the_watchlist_ages_out_normally(self):
+        sndk = self.a_company("SNDK", n=0).edition_id
+        for n in range(1, 6):
+            self.clock.set(T0 + n * 60)
+            self.a_company("ACME", n=n)
+
+        # ACME only. SNDK's paper has lost its protection and is old history.
+        self.assertEqual(self.es.prune(keep=1, symbols=["ACME"]), 5)
+        self.assertIsNone(self.es.read_payload(sndk))
+
+    def test_protecting_nothing_is_what_prune_did_before(self):
+        for n in range(5):
+            self.clock.set(T0 + n * 60)
+            self.a_company("ACME", n=n)
+        self.assertEqual(self.es.prune(keep=2), 3)
+
+
+class PaperCommitTest(SubjectMetaTest):
+    """Filing a newspaper that is not for the glass.
+
+    Everything the board's own commit does, minus the schedule gate and both
+    pointer writes. The one new refusal is the wall: the index is keyed by the
+    payload's own subject, so a model that drifted to another company would
+    file its paper under the name the desk asked for and nobody would ever see
+    the two disagree.
+    """
+
+    def paper(self, symbol="SNDK", n=1, commit_as=None, **top):
+        """A draft naming ``symbol``, committed as a paper for ``commit_as``."""
+        d = self.es.open_draft()
+        doc = {"edition": "2026-08-19", "serial": n,
+               "subject": {"symbol": symbol, "name": "Sandisk Corp."},
+               "stories": [{"rank": 0, "headline": f"Story {n}"}]}
+        doc.update(top)
+        self.es.put_payload(d, json.dumps(doc).encode())
+        return self.es.commit(d, IMMEDIATE, self.clock.now(),
+                              target="paper",
+                              symbol=commit_as or symbol)
+
+    def test_a_paper_commit_files_an_edition_and_says_so(self):
+        r = self.paper()
+        self.assertEqual(r.state, "paper")
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], r.edition_id)
+        self.assertIsNotNone(self.es.read_payload(r.edition_id))
+
+    def test_it_writes_neither_pointer(self):
+        board = self.a_company("ACME", n=0).edition_id
+        r = self.paper("SNDK", n=1)
+        self.assertEqual(self.es.current_id(), board)
+        self.assertIsNone(self.es.staged_id())
+        self.assertNotEqual(r.edition_id, board)
+
+    def test_it_is_not_a_publish_and_does_not_restart_the_minimum_gap(self):
+        # A paper never reaches the glass, so counting it as a publish would
+        # make the board's own next edition wait behind a page nobody saw.
+        self.paper()
+        self.assertIsNone(self.es._store.last_publish_at())
+
+    def test_it_records_no_published_at(self):
+        r = self.paper()
+        self.assertIsNone(self.es.edition_meta(r.edition_id)["published_at"])
+
+    def test_the_schedule_gate_does_not_apply(self):
+        # The one gate a paper skips. A quiet window is about what may appear
+        # on the wall, and a paper appears on nobody's wall.
+        quiet = sched(quiet=[{"from": "00:00", "to": "23:59"}], wake=[],
+                      publish={"policy": "manual", "min_gap_minutes": 600})
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"serial": 7, "subject": {"symbol": "SNDK"}}).encode())
+        r = self.es.commit(d, quiet, self.clock.now(),
+                           target="paper", symbol="SNDK")
+        self.assertEqual(r.state, "paper")
+
+    def test_a_failing_gate_still_refuses_a_paper(self):
+        self.gates.validate_ok = False
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"subject": {"symbol": "SNDK"}}).encode())
+        with self.assertRaises(BadRequest) as caught:
+            self.es.commit(d, IMMEDIATE, self.clock.now(),
+                           target="paper", symbol="SNDK")
+        self.assertEqual(caught.exception.code, "gate_failed")
+
+    def test_an_unchanged_paper_is_unchanged(self):
+        first = self.paper("SNDK", n=1)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "unchanged")
+        self.assertEqual(again.edition_id, first.edition_id)
+
+    def test_the_fingerprint_gate_looks_at_the_symbol_and_not_at_the_board(self):
+        # The board is showing SNDK. A paper about SNDK with different copy is
+        # a change; the comparison that matters is against SNDK's own newest
+        # paper, not against whatever happens to be on the glass.
+        board = self.a_company("ACME", n=0).edition_id
+        first = self.paper("SNDK", n=1)
+        second = self.paper("SNDK", n=2)
+        self.assertEqual(second.state, "paper")
+        self.assertNotEqual(second.edition_id, first.edition_id)
+        self.assertEqual(self.es.current_id(), board)
+
+    def test_a_paper_identical_to_what_is_on_the_board_is_unchanged(self):
+        # Same bytes, same id, already on disk: there is nowhere for the draft
+        # to go, whichever pointer happens to name it.
+        d = self.es.open_draft()
+        raw = json.dumps({"serial": 4, "subject": {"symbol": "SNDK"}}).encode()
+        self.es.put_payload(d, raw)
+        board = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertEqual(board.state, "published")
+
+        d2 = self.es.open_draft()
+        self.es.put_payload(d2, raw)
+        again = self.es.commit(d2, IMMEDIATE, self.clock.now(),
+                               target="paper", symbol="SNDK")
+        self.assertEqual(again.state, "unchanged")
+        self.assertEqual(again.edition_id, board.edition_id)
+
+    def test_a_draft_about_another_company_is_refused(self):
+        with self.assertRaises(Conflict) as caught:
+            self.paper(symbol="ACME", commit_as="SNDK")
+        self.assertEqual(caught.exception.code, "commit_symbol_mismatch")
+        self.assertIn("ACME", caught.exception.message)
+        self.assertIn("SNDK", caught.exception.message)
+
+    def test_a_refused_paper_files_nothing(self):
+        board = self.a_company("SNDK", n=0).edition_id
+        with self.assertRaises(Conflict):
+            self.paper(symbol="ACME", commit_as="SNDK")
+        self.assertIsNone(self.es.papers(["ACME"])["ACME"])
+        self.assertEqual(self.es.current_id(), board)
+
+    def test_a_draft_with_no_usable_subject_is_refused_as_a_mismatch(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps({"serial": 3}).encode())
+        with self.assertRaises(Conflict) as caught:
+            self.es.commit(d, IMMEDIATE, self.clock.now(),
+                           target="paper", symbol="SNDK")
+        self.assertEqual(caught.exception.code, "commit_symbol_mismatch")
+
+    def test_a_paper_commit_with_no_symbol_is_refused(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"subject": {"symbol": "SNDK"}}).encode())
+        with self.assertRaises(BadRequest) as caught:
+            self.es.commit(d, IMMEDIATE, self.clock.now(), target="paper")
+        self.assertEqual(caught.exception.code, "commit_needs_symbol")
+
+    def test_an_unknown_target_is_refused(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, payload(1))
+        with self.assertRaises(BadRequest):
+            self.es.commit(d, IMMEDIATE, self.clock.now(), target="glass")
+
+    def test_the_board_target_is_exactly_what_a_commit_did_before(self):
+        by_default = self.file(1)
+        self.assertEqual(by_default.state, "published")
+        d = self.es.open_draft()
+        self.es.put_payload(d, payload(2))
+        self.es.put_tile(d, "pic", b"\x01\x02\x03\x04")
+        named = self.es.commit(d, IMMEDIATE, self.clock.now(), target="board")
+        self.assertEqual(named.state, "published")
+        self.assertEqual(self.es.current_id(), named.edition_id)
+
+    def test_a_successful_paper_consumes_its_draft(self):
+        d = self.es.open_draft()
+        self.es.put_payload(d, json.dumps(
+            {"serial": 5, "subject": {"symbol": "SNDK"}}).encode())
+        self.es.commit(d, IMMEDIATE, self.clock.now(),
+                       target="paper", symbol="SNDK")
+        with self.assertRaises(NotFound):
+            self.es.draft_info(d)
+
+    def test_re_filing_an_older_paper_makes_it_the_paper_again(self):
+        # The index has no pointer -- it picks by created_at -- so a re-filing
+        # that kept its original date would leave the desk answering "paper A"
+        # to the worker that just filed A while the index went on showing B.
+        a = self.paper("SNDK", n=1)
+        self.clock.set(T0 + 60)
+        b = self.paper("SNDK", n=2)
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], b.edition_id)
+
+        self.clock.set(T0 + 120)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, a.edition_id)
+        self.assertEqual(self.es.papers(["SNDK"])["SNDK"]["id"], a.edition_id)
+
+        # Disk and store agree about the new date, which is what keeps the
+        # history and retention in the same order.
+        self.assertEqual(
+            self.es.edition_meta(a.edition_id)["created_at"], T0 + 120)
+        self.assertEqual(
+            self.store.get_edition(a.edition_id)["created_at"], T0 + 120)
+
+    def test_a_redate_does_not_freeze_a_derived_field_onto_disk(self):
+        # `edition_meta` fills `symbol`/`lang` in from the stored payload for
+        # an edition that predates those fields -- a read, not a write. A
+        # `_redate` that wrote that filled copy back would turn a payload that
+        # merely happened to be unreadable at this instant into a permanent
+        # `"symbol": null`, which `_filled`'s own membership check would then
+        # treat as recorded forever, dropping the edition out of the paper
+        # index for good.
+        first = self.paper("SNDK", n=1)
+        path = os.path.join(self.root, "editions", first.edition_id, "meta.json")
+        with open(path, "r+", encoding="utf-8") as f:
+            doc = json.load(f)
+            doc.pop("symbol")
+            doc.pop("lang")
+            f.seek(0)
+            json.dump(doc, f)
+            f.truncate()
+
+        # A second paper for SNDK, so re-filing the first below is a change
+        # against SNDK's current newest rather than the `unchanged` path --
+        # exactly the shape `test_re_filing_an_older_paper_makes_it_the_paper_
+        # again` uses, and the one that actually reaches `_redate`.
+        self.clock.set(T0 + 60)
+        self.paper("SNDK", n=2)
+
+        self.clock.set(T0 + 120)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, first.edition_id)
+
+        # The re-date happened -- `created_at` moved -- but it wrote back
+        # exactly the (stripped) document that was on disk, not the filled one.
+        with open(path, encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertNotIn("symbol", on_disk)
+        self.assertNotIn("lang", on_disk)
+        self.assertEqual(on_disk["created_at"], T0 + 120)
+
+        # The lazy fill still runs on the way out.
+        meta = self.es.edition_meta(first.edition_id)
+        self.assertEqual(meta["symbol"], "SNDK")
+
+    def test_a_redate_repairs_a_meta_json_that_will_not_parse(self):
+        # `meta.json` unreadable at the moment of a re-file is not merely
+        # "no derived field to write" -- it is nothing on disk worth
+        # preserving at all. `_redate`'s fallback then writes this commit's
+        # own freshly built document (byte-identical in content to the
+        # edition it is redating, because an edition id is its content
+        # fingerprint) so disk and store move together instead of disk
+        # keeping the old date while the store takes the new one.
+        first = self.paper("SNDK", n=1)
+        path = os.path.join(self.root, "editions", first.edition_id, "meta.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("not json at all {{{")
+
+        self.clock.set(T0 + 60)
+        self.paper("SNDK", n=2)
+
+        self.clock.set(T0 + 120)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, first.edition_id)
+
+        # Disk and store agree -- that is the property under test, not either
+        # value in particular.
+        with open(path, encoding="utf-8") as f:
+            on_disk = json.load(f)
+        row = self.store.get_edition(first.edition_id)
+        self.assertEqual(on_disk["created_at"], row["created_at"])
+        self.assertEqual(on_disk["created_at"], T0 + 120)
+
+        # The repair also recovers the edition's symbol from bytes this
+        # commit already holds, rather than leaving it unreadable forever.
+        self.assertEqual(self.es.edition_meta(first.edition_id)["symbol"],
+                         "SNDK")
+
+    def test_a_re_dated_paper_keeps_the_fact_that_it_reached_the_glass(self):
+        # published_at is a fact about the past. Re-filing changes which paper
+        # is newest, not whether this edition was ever on the wall.
+        d = self.es.open_draft()
+        raw = json.dumps({"serial": 8, "subject": {"symbol": "SNDK"}}).encode()
+        self.es.put_payload(d, raw)
+        board = self.es.commit(d, IMMEDIATE, self.clock.now())
+        self.assertEqual(
+            self.es.edition_meta(board.edition_id)["published_at"], T0)
+
+        # Another paper for SNDK, so re-filing the first is a change rather
+        # than the `duplicate` path.
+        self.clock.set(T0 + 60)
+        self.paper("SNDK", n=9)
+
+        self.clock.set(T0 + 120)
+        d2 = self.es.open_draft()
+        self.es.put_payload(d2, raw)
+        again = self.es.commit(d2, IMMEDIATE, self.clock.now(),
+                               target="paper", symbol="SNDK")
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, board.edition_id)
+
+        meta = self.es.edition_meta(board.edition_id)
+        self.assertEqual(meta["created_at"], T0 + 120)
+        self.assertEqual(meta["published_at"], T0)
+        self.assertEqual(
+            self.store.get_edition(board.edition_id)["published_at"], T0)
+
+    def test_the_board_path_does_not_re_date_an_edition_filed_again(self):
+        # The other half of the asymmetry. `current` and `staged` say which
+        # edition is the board's, so a date decides nothing there and an
+        # edition filed again keeps the day it was born.
+        first = self.file(1)
+        self.file(2, now=self.jump(T0 + 60))
+        again = self.es.commit(self.draft(1), IMMEDIATE, self.jump(T0 + 120))
+        self.assertEqual(again.edition_id, first.edition_id)
+        self.assertEqual(again.state, "published")
+        self.assertEqual(
+            self.es.edition_meta(first.edition_id)["created_at"], T0)
+        self.assertEqual(
+            self.store.get_edition(first.edition_id)["created_at"], T0)
+
+
+class ReasonKeywordTest(unittest.TestCase):
+    """The invariant the REASON block states about itself, asserted.
+
+    "Each carries its own keyword and none contains another's" is what makes
+    `assertIn("quiet", r.reason)` further down a real assertion rather than a
+    coincidence, and it is the kind of claim a comment loses quietly: the next
+    reason somebody writes opens with a word already in one of these and every
+    test still passes. Swept off the module rather than written as a list, so
+    a reason added without reading this is checked anyway.
+    """
+
+    def reasons(self) -> dict:
+        return {name: getattr(E, name) for name in dir(E)
+                if name.startswith("REASON_")}
+
+    def keyword(self, text: str) -> str:
+        """A reason's keyword: what it says before the colon, or all of it."""
+        return text.split(":")[0].strip()
+
+    def test_the_sweep_finds_the_block(self):
+        # A floor rather than a count, so adding a reason does not edit this
+        # test -- but a sweep that silently matched nothing would make every
+        # assertion below vacuously true.
+        found = self.reasons()
+        self.assertGreater(len(found), 8)
+        self.assertIn("REASON_PAPER", found)
+        self.assertIn("REASON_UNCHANGED_PAPER", found)
+
+    def test_every_reason_has_a_keyword(self):
+        for name, text in self.reasons().items():
+            self.assertTrue(self.keyword(text), f"{name} has no keyword")
+
+    def test_no_keyword_appears_inside_another_reason(self):
+        found = self.reasons()
+        for name, text in found.items():
+            word = self.keyword(text)
+            for other, other_text in found.items():
+                if other == name:
+                    continue
+                self.assertNotIn(
+                    word, other_text,
+                    f"{name}'s keyword {word!r} is inside {other}")
+
+
 # --------------------------------------------------------------------------
 # Gate 5 — the swap, and what a failure must not touch
 # --------------------------------------------------------------------------
@@ -636,10 +1176,11 @@ class CommitTest(EditionTestCase):
         self.assertEqual(self.es.read_payload(first.edition_id), payload(1))
 
         # And the store's copy is the same birth certificate as the disk's.
-        # meta.json is written once and never rewritten, so a store row that
-        # took the *second* filing's created_at would make the history
-        # (ordered from the store) and retention (ordered from disk) disagree
-        # about which edition is the oldest.
+        # On this path meta.json is written once and never rewritten -- only a
+        # paper filed again moves a created_at, and this is the board -- so a
+        # store row that took the *second* filing's created_at would make the
+        # history (ordered from the store) and retention (ordered from disk)
+        # disagree about which edition is the oldest.
         on_disk = self.es.edition_meta(first.edition_id)
         self.assertEqual(on_disk["created_at"], T0)
         self.assertEqual(self.store.get_edition(first.edition_id)["created_at"], T0)

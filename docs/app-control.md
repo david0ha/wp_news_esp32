@@ -608,6 +608,52 @@ moment too late; both paths are de-duplicated by the notification's own
 The design is
 [docs/superpowers/specs/2026-09-10-ask-the-desk-design.md](superpowers/specs/2026-09-10-ask-the-desk-design.md).
 
+**The phone also pages through the papers, and that is new.** The desk keeps
+one newspaper per company on the watchlist beside the single edition on the
+glass, and the app reads them through four more routes on the same token it
+already has. Three are `producer`; only the publish is `operator`, exactly as
+`/api/publish` is.
+
+| Method | Path | Body | What the phone does with it |
+|---|---|---|---|
+| GET | `/api/papers` | — | the pager's whole model: one row per company, in watchlist order |
+| GET | `/api/editions/<eid>/news.json` | — | one paper's payload, ETag-conditional, cached per edition id |
+| GET | `/api/editions/<eid>/tiles/<id>.bin` | — | that paper's tiles |
+| POST | `/api/papers/<SYMBOL>/publish` | — | put that company's paper on the glass |
+
+Four things a client has to get right:
+
+- **A row of nulls is a page, not an error.** `{symbol, name, edition_id: null,
+  created_at: null, lang: null, headline: null, on_board: false, stale: true}`
+  is a company the desk watches and has not written about yet. The pager draws
+  it as "not written yet" rather than skipping it.
+- **`/api/editions/<eid>/news.json` is byte-identical to what `/news.json`
+  would serve** if that edition were current — the `policy` block is spliced in
+  the same way. So the Today reader parses one shape whichever route fed it,
+  and a second parser on the phone is never needed.
+- **An edition id is a content fingerprint**, so the *stored* payload under one
+  never changes: a cache keyed by edition id can hold the story, the figures and
+  the tile ids indefinitely and needs no expiry for them. The bytes on the wire
+  are not quite that, because of the bullet above — the `policy` block is
+  spliced in per request, and its two numbers are step functions of the clock,
+  so they move at a schedule transition and the ETag moves with them. Hence
+  **revalidate rather than trust the cache forever**: send the `If-None-Match`
+  the route gives you and take the 304, which is what an ordinary poll gets
+  within a window. Nothing the pager draws comes out of `policy` — it is the
+  board's cadence — so a phone that skipped the revalidation would render the
+  same page, but it would be relying on which half of the document it happened
+  to read. The other thing that changes is *which* id a company's paper is, and
+  that comes from `/api/papers`.
+- **`404 no_paper` on the publish is a state, not a failure** — that company has
+  no edition yet — and a retry does not fix it. It joins the three 404s above
+  that `desk.ts` answers `null` for rather than throwing. The same code answers
+  a path segment that is not a ticker at all, so a client need not tell the two
+  apart.
+
+The routes above are read at `producer` scope, which the app's stored token may
+or may not have: a `producer` token pages through papers and cannot publish
+one, and gets a 403 on the last row with the sentence saying so.
+
 **Two tokens, and the split is real.** `producer` reads everything below and
 may queue an instruction or file a note; `operator` additionally changes what
 the desk does with nothing in front of it — the schedule, the standing
@@ -623,13 +669,15 @@ rules.
 | `GET /api/editions` · `GET /api/editions/<id>` | the editorial history, and one edition's record |
 | `GET /api/editions/<id>/proof/<name>` | that edition's own proof sheets |
 | `GET /api/editions/<id>/notes.md` | the dossier filed with it, if there is one |
+| `GET /api/editions/<id>/news.json` · `GET /api/editions/<id>/tiles/<id>.bin` | one edition's payload and tiles, the shape `/news.json` serves — what the pager reads a paper through |
+| `GET /api/papers` | one row per printable watchlist company: its newest paper, or nulls |
 | `GET /api/commands` · `POST /api/commands` | the queue, and asking it for something — including `{"kind": "ask"}`, a message typed on the phone |
 | `GET /api/commands/<id>` | one instruction, with `has_notes` — what the Ask screen polls while a thread is open |
 | `GET/PUT /api/commands/<id>/notes.md` | the note on one instruction, which for an `ask` is the answer itself |
 | `GET /api/directives` | the standing rules in force — adding one is `operator` |
 | `GET /api/schedule` · `GET /api/schedule/next` | the schedule, and what it does next — editing it is `operator` |
 | `GET /api/watchlist` | the vault's grades, reasons and thesis notes — editing it is `operator` |
-| `GET /api/settings` | the desk's own preferences — today, the language the edition is written in. Changing it is `operator` |
+| `GET /api/settings` | the desk's own preferences — the language the edition is written in, and how often a paper is refreshed. Changing them is `operator` |
 | `GET /api/quotes?symbols=…` | last price, day's change and a sparkline, proxied so the phone never holds the Alpaca key |
 | `GET /api/positions` | what the owner holds — writing it is `operator` |
 | `GET /api/calendar` | the event book: ranked dates, each annotated against a position. The `PUT` beside it is the agent's, not a phone's |
@@ -654,7 +702,8 @@ phone would offer:
 | `POST /api/directives` · `DELETE /api/directives/<id>` | add or remove a standing rule |
 | `PUT /api/schedule` | change when the desk may publish |
 | `PUT /api/watchlist` | rewrite the vault's document |
-| `PUT /api/settings` | set the language the edition is written in — `{"lang": "ko"}`, and an unknown key is refused whole with `bad_settings` |
+| `PUT /api/settings` | set the language the edition is written in and the paper cadence — `{"lang": "ko", "paper_refresh_hours": 12}`, and an unknown key is refused whole with `bad_settings` |
+| `POST /api/papers/<SYMBOL>/publish` | put that company's newest paper on the glass now; `404 no_paper` when it has none |
 | `PUT /api/positions` | rewrite what the owner holds |
 | `GET /api/push/devices` · `POST /api/push/devices` · `DELETE /api/push/devices/<token>` | the phones the desk notifies |
 | `POST /api/publish` · `POST /api/hold` | put a staged edition up now, or hold the wall — the ask flow calls the first one itself; see [above](#the-desk-from-the-phone) |

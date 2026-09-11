@@ -287,11 +287,24 @@ the desk forgets it and the owner concludes the system ignored them. So
 directives are their own store — additive, removable, and rendered into every
 worker run's prompt until deleted.
 
-The queue itself is ordinary: priority then FIFO, a thirty-minute lease, three
+The queue itself is ordinary: priority then FIFO, a ninety-minute lease, three
 attempts, and a deadline past which a pending command expires rather than
 surfacing three days late. The claim is a single `UPDATE … RETURNING`, because
 two statements is a race that surfaces as one instruction filing two editions
 and a wall that flashes twice.
+
+**The lease is ninety minutes and not thirty**, which is longer than any run
+the worker actually makes: a paper is 25–40 minutes when its proof clears first
+time and longer when it needs a revision turn, and on 2026-09-11 the desk put a
+claimed order back to `pending` at minute 39 while the worker was still writing
+it. With one worker that was harmless — `finish_command` accepts a report on a
+pending row — and it is not harmless to the two readers this release adds: a
+second worker would claim the row and write the same edition twice, and the
+rotation below reads `pending` as "the worker is idle". There is no heartbeat,
+deliberately: that would be a second protocol to keep alive, with its own
+failure mode, where a lease longer than any run is a wall. The cost of erring
+this way is bounded and dull — a dead worker's command waits ninety minutes
+instead of thirty before its retry.
 
 **A fifth kind, `ask`, is a message somebody typed on a phone.** It carries two
 nullable columns the other four never use — `reply_to`, the command id of the
@@ -313,6 +326,42 @@ a phone that never learns why. `lang` is checked against `settings.LANGS` —
 state rather than an omission: a typed message carries its own language, and
 this field exists only to break a tie the model cannot, a ticker on its own,
 say.
+
+**A sixth kind, `paper`, is a newspaper about a company the desk names.** It
+carries a seventh column the other five never use — `symbol`, the ticker — and
+that column is **required** on a `paper` and **refused on every other kind**.
+Both halves are one rule: the symbol is the whole instruction on a paper run,
+and on any other kind it is a field nothing reads and a promise nothing keeps.
+
+```json
+{ "kind": "paper", "symbol": "SNDK", "priority": 9, "source": "rotation",
+  "text": "Refresh the paper for SNDK. The company is given; research it and write both pages." }
+```
+
+The symbol is upper-cased and matched against `^(?=.*[A-Z0-9])[A-Z0-9.\-]{1,8}\Z`
+— **eight characters and not the watchlist's twelve**, because it is compared
+against an edition's own `subject.symbol`, which the validator caps at eight. A
+nine-character symbol here would name a command no draft could ever satisfy,
+and every run for it would end in a 409 nobody could fix. The lookahead is the
+other half: `"..."` fits the character class and is not a ticker, and this
+symbol goes on to become a URL path segment at
+`POST /api/papers/<SYMBOL>/publish`.
+
+**The edition side is the same pattern**, and it was not always. `editions.py`'s
+`SUBJECT_SYMBOL_RE` had no lookahead until 2026-09-11, so a payload whose
+`subject.symbol` was `"..."` committed and was indexed under that key. The
+rotation and the publish route both check the symbol they act on against the
+command's own regex before they do anything with it, so neither could ever
+have reached it. `/api/papers` could: it draws its rows from the watchlist
+document, whose own `SYMBOL_RE` carries no lookahead, so a watchlist row named
+`"..."` beside an edition keyed the same way would have produced a real,
+populated row on that listing rather than a null one. The gap's exposure was
+small, not nil, and the listing is exactly where it lived — which is the
+stronger reason to close it, not a weaker one. They agree now: two regexes
+answering "what is a symbol" differently by one subtle clause is the
+discrepancy a later reader loses an afternoon to, and this one was not even
+harmless. Such an edition is filed and served like any other and is simply a
+paper for nobody.
 
 **There is no server-side thread object.** `reply_to` is the thread. The phone
 keeps its own list of turns and the desk keeps the rows; nothing here joins
@@ -454,10 +503,12 @@ whole document, thesis notes included, to find out.
 ## The settings
 
 `GET /api/settings` and `PUT /api/settings` carry the desk's own preferences.
-Today there is exactly one:
+Today there are exactly two — `lang`, below, and `paper_refresh_hours`, which
+is how often the rotation refreshes a company's paper and is argued in
+[The papers](#the-papers):
 
 ```json
-{ "lang": "en" }
+{ "lang": "en", "paper_refresh_hours": 12 }
 ```
 
 `lang` is the language **the edition is written in** — headlines, decks,
@@ -478,13 +529,16 @@ is `operator`, because which language the paper prints in is the owner's own
 call rather than a remote worker's. `PUT` validates through
 [`settings.py`](../server/claudepost/settings.py)'s `parse_settings`, writes
 `<data>/settings.json`, and echoes the stored document with the `source` it
-is now in force from. It is audited as `settings`, carrying the tag.
+is now in force from. It is audited as `settings`, carrying the whole
+normalised document rather than a hand-listed field — naming one was already a
+field behind the moment `paper_refresh_hours` arrived, and `parse_settings`
+guarantees the document holds nothing else.
 
 A document that fails validation is refused `400 bad_settings` whole and the
-language in force is untouched, the same rule `PUT /api/schedule` follows.
+settings in force are untouched, the same rule `PUT /api/schedule` follows.
 An unknown key is part of that refusal, and here the argument is the
 watchlist's rather than the schedule's typo guard turned to a different
-purpose: this is the document a later release adds a second setting to, so a
+purpose: this is the document a later release adds a third setting to, so a
 phone app one version ahead of the desk has to be told no at the door instead
 of being left believing it changed something.
 
@@ -502,6 +556,144 @@ payload; refusing a Korean edition because the operator flipped the setting an
 hour ago would keep the wrong sheet on the glass for nothing. Gate 1 needs no
 new code either — it already runs the validator, and the validator now knows
 `lang`.
+
+## The papers
+
+A **paper** is *the newest edition whose subject is S*. Nothing new is stored
+that could be derived: an edition already carries its company inside its own
+payload, so `meta.json` records `symbol` and `lang` at commit and the index is
+one pass over the editions on disk. An edition filed before those two fields
+existed has them derived from its stored payload on the way out — no migration
+runs, and a pre-change edition is still a paper for its company.
+
+**The index reads the disk and not the editions table.** A store row outlives
+the directory `prune` deleted, so an index built from the table would hand a
+reader an edition id whose payload 404s. Walking the disk also bounds the cost
+at retention depth, where the table grows forever.
+
+**`prune()` gains a fourth protected set** beside `current`, `staged` and the
+in-flight builds: the newest edition of every **printable** watchlist symbol,
+however old it is. A paper pruned out from under the pager is a row that goes
+blank with nothing on the desk to explain it. A company removed from the
+watchlist loses that protection and ages out normally, which is what makes
+editing the watchlist the way to stop keeping a paper.
+
+### A commit target
+
+`POST /api/drafts/<d>/commit` takes an optional body:
+
+```json
+{ "target": "paper", "symbol": "SNDK" }
+```
+
+No body, an empty object, or one without a `target` is `board` — **exactly**
+what this route has always done, so a worker a release behind the desk goes on
+filing editions. A **paper commit** runs the same gates with one exception and
+one change:
+
+- **The schedule gate does not apply.** A quiet window, an operator's hold and
+  the minimum gap are all about what may appear on the wall, and a paper
+  appears on nobody's wall.
+- **The fingerprint is compared against that company's own newest paper**,
+  not against `current`. An unchanged paper is `unchanged`, exactly as an
+  unchanged board edition is.
+
+Neither pointer is written and no publish row is added — a paper is not a
+publish and must not restart the minimum gap. `CommitResult.state` is `paper`.
+
+**A draft about another company is refused `409 commit_symbol_mismatch`.** This
+is the wall. The index is derived from the payload's own `subject.symbol`, so a
+model that drifted to a second company would file its paper under the name the
+desk asked for, and nothing downstream could ever see the two disagree —
+downstream only ever reads the index. Refusing at the door makes a drifted run
+a failed command with a reason in the queue instead. A `target: "paper"` with
+no symbol is `400 commit_needs_symbol`.
+
+An edition filed again as a company's paper has its `created_at` moved to that
+filing, and that is the one field in a `meta.json` anything ever rewrites. The
+paper index has no pointer — it picks by date — so a re-filing that kept its
+old date would leave the desk answering "paper A" to the worker that just filed
+A while `/api/papers` went on showing B. `published_at` is carried over
+untouched, because an edition that has been on the glass has been on the glass.
+
+### The rotation
+
+On every housekeeping pass, after `publish_due`, in four rules:
+
+1. **Nothing while the queue holds anything**, pending or claimed, of any kind.
+   That is what makes the rotation idempotent with no meta key, no timestamp
+   and nothing held in memory: the order it just filed is what stops the next
+   pass filing a second. It is also what keeps a typed `ask` from waiting
+   behind a run of thirty to forty minutes.
+2. **The stalest company first.** A company with no paper is older than any
+   paper; ties go to the watchlist's own order.
+3. **Nothing before the cadence.**
+4. **Priority 9**, the lowest the queue has, so the morning order and anything
+   typed on a phone — both 5 — are claimed ahead of a paper that is merely
+   pending. Only a paper already *claimed* makes anything wait, and that cost
+   was accepted with open eyes.
+
+Quiet hours deliberately do not apply: a paper never touches the board, and the
+night is the cheapest time to write one. A failed run is finished `failed` like
+any command, and the next pass orders the stalest again — the same company,
+unless another has aged past it.
+
+A watchlist symbol a command cannot carry — longer than eight characters, or
+punctuation with no letter or digit in it — is **skipped and warned about once**
+rather than ordered. The rotation runs at the end of the housekeeping block, so
+raising there would take the reap, the draft sweep, the prune and the owed
+answers down with it every ten minutes forever. The company keeps its row on
+the pager with `stale` true, which is honest: the desk really is not going to
+refresh it.
+
+### The setting
+
+`settings.json` gains `paper_refresh_hours`, an integer `1..72`, default `12`:
+
+```json
+{ "lang": "en", "paper_refresh_hours": 12 }
+```
+
+Twelve rather than the six first asked for, because a paper costs the worker
+thirty to forty minutes and six hours across five companies does not fit in a
+day beside the board's own runs. The floor is one hour because zero is not a
+cadence but a worker that never stops; the ceiling is three days because past
+it "the newest edition about S" stops being a current newspaper and the pager
+is showing history with nothing to say so.
+
+### The routes
+
+| Method | Path | Scope | What it answers |
+|---|---|---|---|
+| GET | `/api/papers` | producer | `{ok, papers: [row…], board}` — one row per printable watchlist company, in watchlist order |
+| GET | `/api/editions/<eid>/news.json` | producer | that edition's payload, policy block spliced in exactly as `/news.json` does, with an ETag and a 304 |
+| GET | `/api/editions/<eid>/tiles/<id>.bin` | producer | that edition's tile, verbatim |
+| POST | `/api/papers/<SYMBOL>/publish` | operator | `promote()` behind a symbol lookup; `404 no_paper` when the company has none |
+
+A row is `{symbol, name, edition_id, created_at, lang, headline, on_board,
+stale}`. A company with no paper is **a row of nulls rather than an absence**,
+because "not written yet" is a page the pager draws — skipping it would be a
+company the owner watches and the app never mentions. `headline` is the lead
+story's, which is the **lowest-ranked** story and not `stories[0]`: the wire
+carries a rank and nothing about order.
+
+The symbol in the publish path is matched case-insensitively and upper-cased by
+the handler, so a phone holding a lower-case ticker is not told there is no
+paper when what it spelled was the case. A segment that is not a ticker at all
+— `".."`, `"."`, `"-"` — takes the same `404 no_paper`, deliberately: a thing
+that is not a ticker has no paper, and that is one code path and a true
+sentence rather than a second refusal to keep in step.
+
+**All four are behind a token.** The device plane is three paths and none of
+these is one of them — a per-edition read that leaked onto it would put every
+paper the desk holds, including companies the board never prints, behind no
+credential at all. `/api/papers/<SYMBOL>/publish` is `operator` for `promote`'s
+own reason, and it ignores every schedule gate for `promote`'s own reason: the
+owner asked for it by hand. The next scheduled wake's edition publishes over it
+in the ordinary way.
+
+**The board never learns that papers exist.** It polls `/news.json` and prints
+whatever is `current`. Nothing on the wire it reads moved.
 
 ## Quotes
 
@@ -1264,7 +1456,11 @@ on it is set larger than a deck, a photograph that halftoned to mush.
 Two revisions, then it reports the failure with the validator's own words.
 
 **`kind` decides where the turn's `notes.md` goes, and two of the five kinds
-decide it from the disk rather than from themselves.** `"file_edition"` always
+below decide it from the disk rather than from themselves.**
+There are **six** kinds on the queue — the sixth, `"paper"`, is
+[the rotation's own](#the-papers) and is described below — and the five here
+are `"file_edition"`, `"research"`, `"custom"`, `"calendar"` and `"ask"`.
+`"file_edition"` always
 takes the draft path above, and if the run left a `notes.md` in its workdir it
 rides beside the draft (`PUT .../notes.md`) — the dossier behind the page,
 filed the same way whether or not one seemed worth writing. `"research"`
@@ -1303,6 +1499,10 @@ asked for the paper to change, and then the ordinary five gates apply
 unchanged. The result reads `answered`, `revised <edition id>` or `staged
 <edition id>`. A revision that fails a gate fails the command and the current
 edition stays current.
+
+**`"paper"` is the sixth**, and the worker handles it on the `file_edition`
+path, with the company given rather than chosen and the commit targeted at the
+paper — the desk's side of which is above, under [The papers](#the-papers).
 
 ## Cloudflare
 
