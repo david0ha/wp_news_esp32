@@ -224,6 +224,90 @@ class BuildPromptTest(unittest.TestCase):
         self.assertIn("NVDA today", text)
 
 
+class PaperTailTest(unittest.TestCase):
+    """The tail for a command whose company the desk already chose.
+
+    Every other tail is a constant because every other tail is the same for
+    every command of its kind. This one names a company, so it is a function --
+    `ask_section` is the same shape for the same reason.
+
+    What it has to do is contradict the contract above it, which is why it
+    exists at all: `PROMPT.md`'s "Which company" section is written as "read
+    watchlist.json, take the next symbol", and on this run there is no
+    watchlist.json in the directory at all. Saying so plainly, last, is
+    cheaper than hoping the model notices the absence.
+    """
+
+    CONTRACT = "# The contract\n\nHow anybody writes a producer.\n"
+
+    def _prompt(self, symbol="SNDK", **kw):
+        # A neutral instruction on purpose: the real order text names the
+        # company itself ("Refresh the paper for SNDK"), so a test written
+        # against that text would pass with no tail at all.
+        return prompt.build_prompt(self.CONTRACT, [], [], "go",
+                                   kind="paper", symbol=symbol, **kw)
+
+    def test_the_company_is_named_in_the_tail(self):
+        out = self._prompt()
+        self.assertIn("SNDK", out)
+        self.assertTrue(out.endswith(prompt.paper_tail("SNDK")))
+
+    def test_the_rotation_is_stood_down_by_name(self):
+        # Not "ignore the watchlist" -- the contract's own section title, so
+        # the model can tell which paragraph it is being told not to follow.
+        out = self._prompt()
+        self.assertIn("Which company", out)
+        self.assertIn("does not apply", out)
+        self.assertIn("watchlist.json", out)
+
+    def test_the_desks_refusal_is_said_out_loud(self):
+        # The 409 is the wall, but a turn that hears about it only after 40
+        # minutes of research has already spent the money. This is the cheap
+        # half of the same rule.
+        out = self._prompt()
+        self.assertIn("subject.symbol", out)
+        self.assertIn("refuses", out)
+
+    def test_it_is_still_a_filing_run(self):
+        # The paper paragraph goes in FRONT of the ordinary tail rather than in
+        # place of it: a paper is a complete newspaper through the same gates,
+        # so the instruction about what to write and not to publish is the same
+        # instruction, character for character.
+        out = self._prompt()
+        self.assertTrue(out.endswith(prompt._TAIL))
+        self.assertIn("news.json LAST", out)
+        self.assertIn("Do not try to publish", out)
+
+    def test_the_contract_still_comes_first_and_whole(self):
+        out = self._prompt()
+        self.assertTrue(out.startswith(self.CONTRACT))
+
+    def test_a_korean_paper_still_gets_the_editions_language_section(self):
+        # `lang` is the desk's setting and has nothing to do with which company
+        # was chosen. A paper in Korean is a Korean edition, by the same
+        # section the morning order gets.
+        out = self._prompt(lang="ko")
+        self.assertIn("# The edition's language", out)
+        self.assertIn("Write every reader-facing string in Korean", out)
+
+    def test_a_paper_with_no_symbol_falls_back_to_the_ordinary_tail(self):
+        # Defensive, and it must fall back to the SAFE side: `loop.handle`
+        # refuses such a command before it ever builds a prompt, so the only
+        # way here is a caller that forgot the argument -- and the ordinary
+        # filing tail is a prompt that works, where a tail naming "None" is a
+        # newspaper about a company called None.
+        out = prompt.build_prompt(self.CONTRACT, [], [], "go", kind="paper")
+        self.assertTrue(out.endswith(prompt._TAIL))
+        self.assertNotIn("does not apply", out)
+        self.assertNotIn("given rather than chosen", out)
+
+    def test_no_other_kind_is_told_a_company(self):
+        for kind in ("file_edition", "research", "custom", "calendar", "ask"):
+            out = prompt.build_prompt(self.CONTRACT, [], [], "t", kind=kind,
+                                      symbol="SNDK")
+            self.assertNotIn("SNDK", out, kind)
+
+
 class ContractNameTest(unittest.TestCase):
     """Which of the two shipped contracts a kind of command is written against.
 
