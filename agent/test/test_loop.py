@@ -1715,6 +1715,18 @@ class HandlePaperTest(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["last"], "AAAA")
 
+    def test_the_workdir_gets_a_tiles_directory(self):
+        # A paper is a complete newspaper with photographs, not a text-only
+        # dossier -- `workdir if calendar else .../tiles` is the one place a
+        # fourth kind could silently land in the calendar's photograph-less
+        # branch, and a paper without `tiles/` would file text-only pages
+        # while every other test here stayed green.
+        self._patch_run_claude(self._files_a_page())
+        cid = "6" * 32
+        loop.handle(self.cfg, self.Desk(), self._command(cid=cid), {})
+        workdir = os.path.join(self.tmp, cid)
+        self.assertTrue(os.path.isdir(os.path.join(workdir, "tiles")))
+
     def test_the_commit_carries_the_target_and_the_company(self):
         self._patch_run_claude(self._files_a_page())
         desk = self.Desk()
@@ -1906,6 +1918,16 @@ class ArgvTest(unittest.TestCase):
         self.assertIn("answering one message about the newspaper", note)
         self.assertNotIn("filing one newspaper edition", note)
         self.assertIn("Do not dispatch subagents", note)
+
+    def test_a_paper_run_is_told_it_is_filing_a_newspaper(self):
+        # `system_note()` has no branch for "paper" -- a paper IS a newspaper,
+        # so it is meant to reach the fall-through and get the same note a
+        # plain filing run gets. Nothing pinned that before this: a kind-
+        # specific branch added here later would still pass every other test
+        # in the suite.
+        argv = loop.claude_argv(loop.Settings.from_env({}), "/work", "paper")
+        note = argv[argv.index("--append-system-prompt") + 1]
+        self.assertEqual(note, loop.SYSTEM_NOTE)
 
     def test_the_child_may_not_delegate(self):
         # The third live run failed here and produced nothing but a skeleton:

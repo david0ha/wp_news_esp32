@@ -124,10 +124,12 @@ ASK_KIND = "ask"
 #: `file_edition`'s path with three differences -- see :func:`handle`.
 PAPER_KIND = "paper"
 
-#: What a ``paper`` command's ``symbol`` may be: the desk's own rule
-#: (uppercase, one to eight of letter, digit, dot or hyphen), restated here
-#: for :data:`TILE_ID_RE`'s reason. This value is written into a prompt and
-#: into a commit body, and the two ends of a bearer token are two programs: a
+#: What a ``paper`` command's ``symbol`` may be: the spec's rule for
+#: ``POST /api/commands`` (uppercase, one to eight of letter, digit, dot or
+#: hyphen) -- narrower than the desk's own three ``SYMBOL_RE``, which allow
+#: twelve; see ``agent/README.md`` for why. Restated here for
+#: :data:`TILE_ID_RE`'s reason. This value is written into a prompt and into
+#: a commit body, and the two ends of a bearer token are two programs: a
 #: worker that trusted whatever arrived under that key would put it in front
 #: of a model and then on the wire.
 PAPER_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,8}\Z")
@@ -1338,6 +1340,13 @@ def handle(cfg: Settings, desk: DeskClient, command: dict, agent_env: dict) -> N
     # `isinstance` rather than `str()`: a JSON number under that key is a
     # malformed command, and `str(7)` is "7", which matches the pattern below
     # and would file a paper for a company called 7.
+    #
+    # The order below is load-bearing, not incidental: `.upper()` runs before
+    # the match, and Unicode case-folding can EXPAND a character rather than
+    # just recase it -- "ſ".upper() is "S", "ß".upper() is "SS", "ﬁ".upper()
+    # is "FI" -- so a non-ASCII symbol can turn into a well-formed one.
+    # Matching on the result rather than the input means whatever the
+    # expansion produces still has to satisfy the pattern.
     symbol = symbol.strip().upper() if isinstance(symbol, str) else None
     if paper and not (symbol and PAPER_SYMBOL_RE.match(symbol)):
         # Before the workdir and before the turn, because the whole of a paper
