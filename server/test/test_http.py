@@ -1165,15 +1165,18 @@ class SettingsTest(DeskTestCase):
 
     def test_settings_default_to_english_and_an_operator_can_change_them(self):
         status, doc = self.api("GET", "/api/settings", scope="producer")
-        self.assertEqual((status, doc["settings"]), (200, {"lang": "en"}))
+        self.assertEqual((status, doc["settings"]),
+                         (200, {"lang": "en", "paper_refresh_hours": 12}))
         status, doc = self.api("PUT", "/api/settings", {"lang": "ko"})
-        self.assertEqual((status, doc["settings"], doc["source"]), (200, {"lang": "ko"}, "file"))
+        self.assertEqual((status, doc["settings"], doc["source"]),
+                         (200, {"lang": "ko", "paper_refresh_hours": 12}, "file"))
         status, _ = self.api("PUT", "/api/settings", {"lang": "ko"}, scope="producer")
         self.assertEqual(status, 403)
         status, doc = self.api("PUT", "/api/settings", {"lang": "ko", "x": 1})
         self.assertEqual((status, doc["error"]), (400, "bad_settings"))
         status, doc = self.api("GET", "/api/settings", scope="producer")
-        self.assertEqual(doc["settings"], {"lang": "ko"})       # the bad PUT changed nothing
+        self.assertEqual(doc["settings"],
+                         {"lang": "ko", "paper_refresh_hours": 12})  # the bad PUT changed nothing
 
     def test_a_language_the_board_cannot_print_is_refused_by_name(self):
         # `ja` is a well-formed BCP-47 primary subtag and the firmware has no
@@ -1186,7 +1189,8 @@ class SettingsTest(DeskTestCase):
         self.assertEqual((status, doc["error"]), (400, "bad_settings"))
         self.assertIn("en, ko", doc["detail"])
         status, doc = self.api("GET", "/api/settings", scope="producer")
-        self.assertEqual(doc["settings"], {"lang": "en"})       # nothing changed
+        self.assertEqual(doc["settings"],
+                         {"lang": "en", "paper_refresh_hours": 12})  # nothing changed
 
     def test_an_edited_setting_survives_a_restart(self):
         # The point of the file, and the same one the schedule's own restart
@@ -1204,7 +1208,7 @@ class SettingsTest(DeskTestCase):
         second = Desk(self.cfg, clock=self.clock, gates=self.gates)
         self.addCleanup(second.close)
         self.assertEqual(second.settings_source, "file")
-        self.assertEqual(second.settings, {"lang": "ko"})
+        self.assertEqual(second.settings, {"lang": "ko", "paper_refresh_hours": 12})
 
     def test_a_boot_says_in_the_log_which_language_it_came_up_on(self):
         # The same argument `_load_watchlist` makes: a desk that came up

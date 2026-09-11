@@ -41,13 +41,55 @@ logging.getLogger("claudepost.settings").addHandler(logging.NullHandler())
 class Parse(unittest.TestCase):
     """What the validator takes, and what it refuses whole."""
 
-    def test_the_default_is_english(self):
-        self.assertEqual(settings.DEFAULT, {"lang": "en"})
+    def test_the_defaults_are_english_and_twice_a_day(self):
+        self.assertEqual(settings.DEFAULT,
+                         {"lang": "en", "paper_refresh_hours": 12})
+
+    def test_a_document_that_says_only_the_language_still_gets_a_cadence(self):
+        self.assertEqual(settings.parse_settings({"lang": "ko"}),
+                         {"lang": "ko", "paper_refresh_hours": 12})
+
+    def test_a_document_that_says_only_the_cadence_still_gets_a_language(self):
+        self.assertEqual(settings.parse_settings({"paper_refresh_hours": 6}),
+                         {"lang": "en", "paper_refresh_hours": 6})
+
+    def test_the_cadence_is_an_hour_count_in_range(self):
+        for good in (1, 6, 12, 72):
+            with self.subTest(hours=good):
+                self.assertEqual(
+                    settings.parse_settings({"paper_refresh_hours": good})
+                    ["paper_refresh_hours"], good)
+
+    def test_a_cadence_outside_the_range_is_refused(self):
+        # Zero is a worker that never stops writing papers; 73 is more than
+        # three days, by which point "the newest edition about S" is not a
+        # current newspaper and the pager is showing history.
+        for bad in (0, -1, 73, 100000):
+            with self.subTest(hours=bad):
+                with self.assertRaises(BadRequest):
+                    settings.parse_settings({"paper_refresh_hours": bad})
+
+    def test_a_cadence_that_is_not_a_whole_number_of_hours_is_refused(self):
+        # `True` is an int to Python and is not an hour count to anybody else.
+        for bad in (12.0, "12", None, True, [12]):
+            with self.subTest(hours=bad):
+                with self.assertRaises(BadRequest):
+                    settings.parse_settings({"paper_refresh_hours": bad})
+
+    def test_the_cadence_refusal_names_the_field_and_the_range(self):
+        with self.assertRaises(BadRequest) as caught:
+            settings.parse_settings({"paper_refresh_hours": 0})
+        self.assertEqual(caught.exception.code, "bad_settings")
+        self.assertIn("paper_refresh_hours", caught.exception.message)
+        self.assertIn("1", caught.exception.message)
+        self.assertIn("72", caught.exception.message)
 
     def test_the_languages_are_the_two_the_board_has_faces_for(self):
         for good in settings.LANGS:
-            self.assertEqual(settings.parse_settings({"lang": good}), {"lang": good})
-        self.assertEqual(settings.parse_settings({"lang": "ko"}), {"lang": "ko"})
+            self.assertEqual(settings.parse_settings({"lang": good}),
+                             {"lang": good, "paper_refresh_hours": 12})
+        self.assertEqual(settings.parse_settings({"lang": "ko"}),
+                         {"lang": "ko", "paper_refresh_hours": 12})
 
     def test_a_well_formed_tag_the_board_cannot_print_is_refused(self):
         # `ja` matches every shape rule a language tag has and there is no
@@ -115,7 +157,8 @@ class File(unittest.TestCase):
         # a warning on every start-up of every default desk is a warning
         # nobody reads by the time one of them means something.
         with self.assertNoLogs("claudepost.settings", level="WARNING"):
-            self.assertEqual(settings.load(p), ({"lang": "en"}, "default"))
+            self.assertEqual(settings.load(p),
+                             ({"lang": "en", "paper_refresh_hours": 12}, "default"))
         # Reading must not write. The default is what a desk runs on until
         # somebody chooses otherwise, and a file laid down at first boot would
         # pin every future desk to this release's default.
@@ -123,7 +166,8 @@ class File(unittest.TestCase):
 
     def test_a_bad_file_is_ignored_with_the_default_and_left_in_place(self):
         p = self.write('{"lang": "Korean"}')
-        self.assertEqual(settings.load(p), ({"lang": "en"}, "default"))
+        self.assertEqual(settings.load(p),
+                         ({"lang": "en", "paper_refresh_hours": 12}, "default"))
         self.assertTrue(os.path.exists(p))
 
     def test_a_file_that_will_not_open_says_so_and_keeps_the_default(self):
@@ -143,19 +187,22 @@ class File(unittest.TestCase):
         p = os.path.join(self.tmp, "settings.json")
         os.mkdir(p)
         with self.assertLogs("claudepost.settings", level="WARNING") as caught:
-            self.assertEqual(settings.load(p), ({"lang": "en"}, "default"))
+            self.assertEqual(settings.load(p),
+                             ({"lang": "en", "paper_refresh_hours": 12}, "default"))
         self.assertEqual(len(caught.output), 1)
         self.assertIn(p, caught.output[0])
 
     def test_a_file_that_is_not_json_leaves_the_default_in_force(self):
         p = self.write("{ not json at all")
-        self.assertEqual(settings.load(p), ({"lang": "en"}, "default"))
+        self.assertEqual(settings.load(p),
+                         ({"lang": "en", "paper_refresh_hours": 12}, "default"))
         self.assertTrue(os.path.exists(p))
 
     def test_save_then_load_round_trips(self):
         p = os.path.join(self.tmp, "settings.json")
         settings.save(p, {"lang": "ko"})
-        self.assertEqual(settings.load(p), ({"lang": "ko"}, "file"))
+        self.assertEqual(settings.load(p),
+                         ({"lang": "ko", "paper_refresh_hours": 12}, "file"))
 
     def test_a_successful_save_leaves_no_temporary_behind(self):
         settings.save(os.path.join(self.tmp, "settings.json"), {"lang": "ko"})
@@ -176,13 +223,21 @@ class File(unittest.TestCase):
             raw = f.read()
         self.assertEqual(raw, '{\n  "lang": "ko"\n}\n')
 
+    def test_a_file_with_only_a_language_comes_back_with_both(self):
+        # A desk configured before this release. Its settings.json holds one
+        # key, and the rotation needs a number whatever that file says.
+        doc, source = settings.load(self.write('{"lang": "ko"}\n'))
+        self.assertEqual(source, "file")
+        self.assertEqual(doc, {"lang": "ko", "paper_refresh_hours": 12})
+
     def test_the_default_handed_back_is_not_the_module_s_own(self):
         # `load` answers with a fresh document every time. A caller that held
         # the module constant and edited it would change what every later
         # desk in the process came up on.
         doc, _ = settings.load(os.path.join(self.tmp, "settings.json"))
         doc["lang"] = "ko"
-        self.assertEqual(settings.DEFAULT, {"lang": "en"})
+        self.assertEqual(settings.DEFAULT,
+                         {"lang": "en", "paper_refresh_hours": 12})
 
 
 if __name__ == "__main__":
