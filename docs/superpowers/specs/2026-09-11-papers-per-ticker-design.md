@@ -148,6 +148,17 @@ paper yet is a row with nulls, so the pager can show "not written yet" rather th
 schedule gate, as `promote` does today, because the operator asked for it by hand. The next
 scheduled wake's edition, or tomorrow's order, publishes over it in the normal way.
 
+### 3.8 The lease matches a run
+
+`store.LEASE_SECONDS` is 1800. A run that clears its proof first time takes 25–40 minutes;
+one that needs a revision turn takes longer, and on 2026-09-11 the desk put a claimed order
+back to `pending` at minute 39 while the worker was still writing it. With one worker that
+is harmless — `finish_command` accepts a report on a pending row — but a second worker, or
+the rotation's "queue is empty" test, would read that row wrongly. The lease becomes
+**5400 seconds** (ninety minutes), and the rotation counts a `pending` *or* `claimed` row as
+the worker being busy, as §3.5 already says. Heartbeats are not added; a lease longer than
+any run is the simpler wall.
+
 ## 4. Worker
 
 `agent/loop.py` handles `paper` as `file_edition` with three differences:
