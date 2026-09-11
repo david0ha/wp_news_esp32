@@ -61,6 +61,13 @@ HOUSEKEEPING_SECONDS = 600
 #: and nothing anywhere that says why.
 PHONE_SOURCE = "app"
 
+#: What the rotation writes on a paper order. The worker's prompt reads the
+#: company off the command's ``symbol`` column and not out of this sentence --
+#: this is what an operator sees in the queue, and what the model is told the
+#: run is for.
+PAPER_ORDER = ("Refresh the paper for {s}. The company is given; "
+               "research it and write both pages.")
+
 #: How far back the answer pass looks, and how far back its ledger read goes.
 #: Derived rather than chosen: the longest a quiet window can hold an answer is
 #: a minute short of a day (`push._quiet` refuses a window with no width), and
@@ -576,6 +583,75 @@ class Desk:
         st.save(self.settings_path, doc)
         self.settings = doc
         self.settings_source = "file"
+
+    def printable_symbols(self) -> list[str]:
+        """The companies the desk keeps a paper for, in the watchlist's order.
+
+        ``printable`` and not every item: the watchlist carries companies the
+        owner is only watching, and a paper costs the worker thirty to forty
+        minutes. The order is the document's own, because it is the order the
+        pager draws and the tiebreak the rotation uses -- an order decided
+        here rather than there would be two answers to "which is first".
+
+        ``[]`` on a desk with no watchlist, which is a real state: the vault
+        pushes that document every morning and a desk brought up before the
+        first push has none.
+        """
+        if not self.watchlist:
+            return []
+        return [item["symbol"] for item in self.watchlist["items"]
+                if item["printable"]]
+
+    def paper_cadence_seconds(self) -> int:
+        """How old a paper may get before it is rewritten, in seconds.
+
+        One function, because three callers ask -- the rotation's staleness
+        test, the deadline it files with, and the ``stale`` flag the pager
+        draws. Three spellings of ``hours * 3600`` is how a phone comes to
+        badge a paper stale that the desk has no intention of refreshing.
+        """
+        return int(self.settings.get("paper_refresh_hours",
+                                     st.DEFAULT["paper_refresh_hours"])) * 3600
+
+    def papers(self, t: float | None = None) -> list[dict]:
+        """One row per printable company, whether or not it has a paper.
+
+        The row is the phone's whole model of a paper: which company, which
+        edition, when it was written, what it is called, whether it is the one
+        on the glass and whether it is due. A company with no paper is a row of
+        nulls rather than an absence, because "not written yet" is a page the
+        pager draws.
+        """
+        now = self.clock.now() if t is None else t
+        cadence = self.paper_cadence_seconds()
+        current = self.editions.current_id()
+        items = [item for item in (self.watchlist["items"] if self.watchlist
+                                   else [])
+                 if item["printable"]]
+        found = self.editions.papers([item["symbol"] for item in items])
+
+        rows = []
+        for item in items:
+            meta = found.get(item["symbol"])
+            eid = meta["id"] if meta else None
+            try:
+                created = float(meta["created_at"]) if meta else None
+            except (KeyError, TypeError, ValueError):
+                created = None
+            rows.append({
+                "symbol": item["symbol"],
+                "name": item["name"],
+                "edition_id": eid,
+                "created_at": created,
+                "lang": meta.get("lang") if meta else None,
+                "headline": self.editions.headline(eid) if eid else None,
+                "on_board": eid is not None and eid == current,
+                # A company with no paper is stale by definition -- there is
+                # nothing to be current -- which is also what puts it first in
+                # the rotation's ordering.
+                "stale": created is None or now - created >= cadence,
+            })
+        return rows
 
     def utc_now(self) -> datetime.datetime:
         """The desk's clock as an aware instant, for the validators that take one.

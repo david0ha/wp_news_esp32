@@ -56,6 +56,10 @@ from .app import COMMAND_ID_RE, Desk, as_int, utc_stamp
 from .auth import require, scope_from_header
 from .editions import COMMIT_TARGETS, TARGET_BOARD, CommitResult, SHEET_RE
 from .errors import BadRequest, Conflict, DeskError, Internal, NotFound, TooLarge, epoch_seconds
+# From `store` rather than respelled here: the pattern that says what a ticker
+# is has one home, the same argument `COMMAND_ID_RE` above is imported under.
+# `h_publish_paper` checks a URL path segment against it.
+from .store import COMMAND_SYMBOL_RE
 
 LOG = logging.getLogger("claudepost.http")
 
@@ -625,6 +629,90 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def h_promote(self, match, _query) -> None:
         self._send_commit(self.desk.editions.promote(match.group("eid")))
+
+    def h_edition_payload(self, match, _query) -> None:
+        """One edition's payload, by id, with the policy block spliced in.
+
+        The same bytes ``/news.json`` would serve if this edition were current,
+        and deliberately so: the phone's reader is the board's reader, and a
+        second shape here would be a second parser on the phone. The splice is
+        what makes them identical -- see :mod:`~claudepost.policy` for why the
+        block is computed per request and never stored.
+
+        ``producer`` scope and not the device plane. The device plane is three
+        paths, and a per-edition read that leaked onto it would put every paper
+        the desk holds -- including companies the board never prints -- behind
+        no credential at all.
+        """
+        desk = self.desk
+        payload = desk.editions.read_payload(match.group("eid"))
+        if payload is None:
+            raise NotFound()
+        body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
+        tag = _etag(body)
+        # get_all(), not get(): a repeated field may arrive as several lines
+        # (RFC 9110 5.3), the same reason `_serve_edition` reads it this way.
+        if _if_none_match(", ".join(self.headers.get_all("If-None-Match") or []),
+                          tag):
+            self._send_not_modified(tag)
+            return
+        self._send_bytes(200, body, "application/json", etag=tag)
+
+    def h_edition_tile(self, match, _query) -> None:
+        """One tile of one edition, verbatim.
+
+        A 404 rather than an empty body for a tile that is not there, which is
+        the device plane's rule for the same reason: the module reflows without
+        the picture and the page still prints.
+        """
+        data = self.desk.editions.read_tile(match.group("eid"),
+                                            match.group("tile"))
+        if data is None:
+            raise NotFound()
+        self._send_bytes(200, data, "application/octet-stream")
+
+    # -- handlers: the papers ---------------------------------------------
+    def h_papers(self, _match, _query) -> None:
+        """Every company's paper, and which edition is on the glass.
+
+        ``board`` is beside the rows rather than folded into them because it is
+        one fact about the desk and not a fact about a company: a client
+        drawing "on the board" gets it from the flag, and a client that wants
+        to know what the board is showing when none of these papers is on it
+        gets it from here.
+        """
+        desk = self.desk
+        self._send_json(200, {"ok": True, "papers": desk.papers(),
+                              "board": desk.editions.current_id()})
+
+    def h_publish_paper(self, match, _query) -> None:
+        """Put a company's newest paper on the glass, now.
+
+        :meth:`~claudepost.editions.EditionStore.promote` behind a symbol
+        lookup, which means it ignores every schedule gate exactly as promote
+        does -- the operator asked for this by hand, and a rule you cannot
+        override is a rule somebody ends up editing at midnight. The next
+        scheduled wake's edition publishes over it in the ordinary way.
+        """
+        desk = self.desk
+        symbol = match.group("symbol").upper()
+        # The route's pattern is a character class, so `".."`, `"."` and `"-"`
+        # all match it and arrive here. This value is a URL *path segment*, and
+        # `".."` is one the desk refuses to treat as a company name at every
+        # layer rather than relying on the paper index happening to hold
+        # nothing under that key. `COMMAND_SYMBOL_RE` is imported rather than
+        # respelled so the regex that says what a ticker is has exactly one
+        # home. A thing that is not a ticker has no paper, so it takes the same
+        # answer as a company nothing has been written about -- one code path,
+        # and a true sentence.
+        if not COMMAND_SYMBOL_RE.match(symbol):
+            raise NotFound("no_paper",
+                           f"no edition has been filed about {symbol:.16}")
+        meta = desk.editions.papers([symbol])[symbol]
+        if meta is None:
+            raise NotFound("no_paper",
+                           f"no edition has been filed about {symbol}")
+        self._send_commit(desk.editions.promote(meta["id"]))
 
     # -- handlers: the queue ----------------------------------------------
     def h_enqueue(self, _match, _query) -> None:
@@ -1285,10 +1373,23 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_get_edition)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/notes\.md\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_edition_notes)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/news\.json\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_payload)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_tile)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/proof/(?P<name>[^/]{1,60})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_edition_sheet)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_promote)}),
+
+    # The symbol in the path is matched case-insensitively and upper-cased by
+    # the handler, the way `watchlist._symbol` accepts `"acme"`: a phone that
+    # kept a lower-case ticker should not get a 404 that looks like "there is
+    # no paper" when what it means is "you spelled it in the wrong case".
+    (re.compile(r"^/api/papers\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_papers)}),
+    (re.compile(r"^/api/papers/(?P<symbol>[A-Za-z0-9.\-]{1,8})/publish\Z"), {
+        "POST": ("operator", DeskHTTPRequestHandler.h_publish_paper)}),
 
     (re.compile(r"^/api/commands\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_list_commands),

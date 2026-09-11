@@ -88,6 +88,18 @@ SAMPLES = {
     r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/proof/(?P<name>[^/]{1,60})\Z":
         f"/api/editions/{EID}/proof/A1.png",
     r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote\Z": f"/api/editions/{EID}/promote",
+    # The per-edition reads a phone uses to open a paper. They are the same
+    # documents the device plane serves for the *current* edition, which is
+    # exactly why they are listed here: on that plane they would put every
+    # paper the desk holds, companies the board never prints included, behind
+    # no credential at all.
+    r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/news\.json\Z":
+        f"/api/editions/{EID}/news.json",
+    r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID:
+        f"/api/editions/{EID}/tiles/pic.bin",
+
+    r"^/api/papers\Z": "/api/papers",
+    r"^/api/papers/(?P<symbol>[A-Za-z0-9.\-]{1,8})/publish\Z": "/api/papers/SNDK/publish",
 
     r"^/api/commands\Z": "/api/commands",
     r"^/api/commands/next\Z": "/api/commands/next",
