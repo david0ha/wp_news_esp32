@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from '@jest/globals'
 import {
   clampPaperIndex,
+  isPaperRowDisabled,
   orderPapers,
   paperAgeLabel,
   paperKey,
@@ -165,5 +166,23 @@ describe('paperKey', () => {
     expect(paperKey(paper({ symbol: 'MU', editionId: null }))).not.toBe(
       paperKey(paper({ symbol: 'TSLA', editionId: null })),
     )
+  })
+})
+
+describe('isPaperRowDisabled', () => {
+  it('is disabled for a symbol with no paper', () => {
+    expect(isPaperRowDisabled(paper({ editionId: null }), null)).toBe(true)
+  })
+
+  it('is disabled for the paper already on the board', () => {
+    expect(isPaperRowDisabled(paper({ onBoard: true }), null)).toBe(true)
+  })
+
+  it('is disabled for every row while a publish is in flight, not only the one publishing', () => {
+    expect(isPaperRowDisabled(paper({ symbol: 'MU' }), 'SNDK')).toBe(true)
+  })
+
+  it('is enabled for an ordinary tappable row', () => {
+    expect(isPaperRowDisabled(paper(), null)).toBe(false)
   })
 })

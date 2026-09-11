@@ -8,7 +8,7 @@ import { getDeskToken } from '../../lib/deskToken'
 import { getDeskBaseUrl } from '../../lib/store'
 import { markEditionStale } from '../../lib/edition/invalidate'
 import { loadPapers, usePapers } from '../../lib/papers/list'
-import { orderPapers, paperAgeLabel } from '../../lib/papers/order'
+import { isPaperRowDisabled, orderPapers, paperAgeLabel } from '../../lib/papers/order'
 import { runPaperPublish } from '../../lib/papers/publish'
 import { fill, useStrings } from '../../i18n'
 import { colors, fonts, layout, space, tabular } from '../../theme'
@@ -96,18 +96,19 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
         {papers.map((paper, i) => {
           const age = paperAgeLabel(paper.createdAt, now)
           const none = paper.editionId === null
+          const disabled = isPaperRowDisabled(paper, busy)
           return (
             <Pressable
               key={paper.symbol}
               accessibilityRole="button"
-              accessibilityState={{ disabled: none || paper.onBoard || busy !== null, selected: paper.onBoard }}
+              accessibilityState={{ disabled, selected: paper.onBoard }}
               accessibilityLabel={fill(
                 paper.onBoard ? t.papers.board.a11y.onBoard : t.papers.board.a11y.row,
                 { name: paper.name || paper.symbol, age: age ?? '' },
               )}
               // A row with no paper is DRAWN AND DEAD. Dropping it would make a company that is on
               // the owner's watchlist absent from a list titled after their watchlist.
-              disabled={none || paper.onBoard || busy !== null}
+              disabled={disabled}
               onPress={() => confirm(paper)}
               style={[styles.row, i < papers.length - 1 && styles.bordered]}
             >

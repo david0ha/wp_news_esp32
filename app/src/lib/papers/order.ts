@@ -100,3 +100,19 @@ export function clampPaperIndex(index: number, count: number): number {
 export function paperKey(paper: Paper): string {
   return `${paper.symbol}:${paper.editionId ?? ''}`
 }
+
+/**
+ * Whether the Board tab's row for this paper may be tapped.
+ *
+ * ONE FUNCTION FOR BOTH THE VISUAL AND THE ANNOUNCED STATE. `PaperSection` reads this for its
+ * `Pressable`'s `disabled` prop AND for `accessibilityState.disabled` — the two must never read two
+ * separately-typed-out copies of the same rule, because that is exactly how they drifted the first
+ * time: the row that is already on the board was disabled to a sighted tapper but announced as
+ * enabled to a screen reader. A row is dead when there is no paper to publish, when it is already
+ * the one on the board, or while any publish for this section is in flight — `busy` is the symbol
+ * currently publishing, not a boolean, but any non-null value here freezes every row, this one
+ * included, so a second tap cannot race the first.
+ */
+export function isPaperRowDisabled(paper: Paper, busy: string | null): boolean {
+  return paper.editionId === null || paper.onBoard || busy !== null
+}
