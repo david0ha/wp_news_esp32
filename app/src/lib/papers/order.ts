@@ -136,6 +136,12 @@ export function isPaperRowDisabled(paper: Paper, busy: string | null): boolean {
  * `a11y` is the sentence read aloud for a NORMAL row (not the one on the board — that keeps its
  * own `a11y.onBoard` phrasing, which was never broken). It reuses the exact same words as `text`
  * rather than inventing a second way to say "not written yet".
+ *
+ * There are THREE states here, not two, and the third is the one that reads worst aloud: a paper
+ * that exists whose `created_at` the desk did not give. Its visible line is fine — `page.noAge`
+ * follows the name and a separator — but pouring that same string into `{age}` produced
+ * "…paper written Written at an unknown time", two sentences welded together, so the spoken form
+ * takes its own key (`a11y.rowNoAge`) with its own grammar.
  */
 export function paperStatusLine(
   paper: Paper,
@@ -146,7 +152,17 @@ export function paperStatusLine(
   if (paper.editionId === null) {
     return { text: t.papers.board.noPaper, a11y: [name, t.papers.board.noPaper].join(', ') }
   }
-  const age = paperAgeLabel(paper.createdAt, now) ?? t.papers.page.noAge
+  const age = paperAgeLabel(paper.createdAt, now)
+  if (age === null) {
+    // A paper that exists and whose timestamp the desk did not give. THREE states, not two, and
+    // this is the third: `a11y` takes its own finished sentence rather than pouring `page.noAge`
+    // into `{age}`, which glued two phrases into "…paper written Written at an unknown time".
+    // The VISIBLE line is unaffected — after a name and a separator, `page.noAge` reads correctly.
+    return {
+      text: [paper.name, t.papers.page.noAge].filter(Boolean).join(' · '),
+      a11y: fill(t.papers.board.a11y.rowNoAge, { name }),
+    }
+  }
   return {
     text: [paper.name, age].filter(Boolean).join(' · '),
     a11y: fill(t.papers.board.a11y.row, { name, age }),

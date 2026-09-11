@@ -1004,6 +1004,14 @@ export const en = {
       failed: 'That didn’t go on the board. {detail}',
       a11y: {
         row: '{name}, paper written {age}',
+        /**
+         * The same row when the paper exists but the desk sent no `created_at`. ONE SENTENCE, not
+         * `row` with `page.noAge` poured into `{age}` — that concatenation read aloud as
+         * "…paper written Written at an unknown time", two phrases glued together. The visible
+         * line still uses `page.noAge`, where it follows the name and a separator and reads
+         * correctly; only the spoken sentence needs its own grammar.
+         */
+        rowNoAge: '{name}, paper written at an unknown time',
         onBoard: '{name}, on the board now',
       },
     },

@@ -236,6 +236,43 @@ describe('paperStatusLine', () => {
     const row = paper({ createdAt: null })
     expect(paperStatusLine(row, NOW, en).text).toBe('SanDisk · Written at an unknown time')
   })
+
+  // The a11y sentence for that same row used to be built by pouring `page.noAge` into `{age}`,
+  // which welded two phrases together: "SanDisk, paper written Written at an unknown time".
+  // One state, one phrasing — so this case gets its own key rather than a concatenation.
+  it('speaks one finished sentence for a paper whose timestamp is missing, not two glued together', () => {
+    const row = paper({ createdAt: null })
+    const spoken = paperStatusLine(row, NOW, en).a11y
+    expect(spoken).toBe('SanDisk, paper written at an unknown time')
+    // The welded form contained `page.noAge` verbatim, capital and all, mid-sentence.
+    expect(spoken).not.toContain(en.papers.page.noAge)
+    expect(spoken.match(/written/gi)).toHaveLength(1)
+  })
+
+  it('speaks that same state in Korean, through the catalogue and not a second translation', () => {
+    const row = paper({ createdAt: null })
+    expect(paperStatusLine(row, NOW, ko).a11y).toBe(
+      ko.papers.board.a11y.rowNoAge.replace('{name}', 'SanDisk'),
+    )
+    expect(paperStatusLine(row, NOW, ko).a11y).not.toBe(paperStatusLine(row, NOW, en).a11y)
+  })
+
+  it('falls back to the symbol in that state too', () => {
+    const row = paper({ name: '', createdAt: null })
+    expect(paperStatusLine(row, NOW, en).a11y).toBe('SNDK, paper written at an unknown time')
+    // `text` has no name to join, so it is the age phrase alone rather than a leading separator.
+    expect(paperStatusLine(row, NOW, en).text).toBe('Written at an unknown time')
+  })
+
+  it('keeps the three states distinct from one another', () => {
+    // No paper / paper with no timestamp / paper with an age: three different spoken sentences.
+    const spoken = [
+      paper({ editionId: null, createdAt: null }),
+      paper({ createdAt: null }),
+      paper({ createdAt: NOW - 6 * 3600_000 }),
+    ].map((row) => paperStatusLine(row, NOW, en).a11y)
+    expect(new Set(spoken).size).toBe(3)
+  })
 })
 
 describe('paperHeaderChips', () => {

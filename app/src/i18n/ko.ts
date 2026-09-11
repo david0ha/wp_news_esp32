@@ -830,6 +830,7 @@ export const ko: Strings = {
       failed: '보드에 걸지 못했어요. {detail}',
       a11y: {
         row: '{name}, {age} 작성',
+        rowNoAge: '{name}, 작성 시각을 알 수 없음',
         onBoard: '{name}, 지금 보드에 걸려 있음',
       },
     },
