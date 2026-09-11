@@ -61,8 +61,14 @@ function client(replies: Reply[], token = TOKEN) {
   return { ...f, client: createDeskClient({ baseUrl: BASE, token, fetchFn: f.fetchImpl }) }
 }
 
-const okBody = (lang: string) =>
-  JSON.stringify({ ok: true, source: 'file', settings: { lang } })
+// The desk's settings document, as a current desk answers it. `paper_refresh_hours` joined it
+// with the papers feature; passing `null` for `hours` is what an older desk still answers.
+const okBody = (lang: string, hours: number | null = 12) =>
+  JSON.stringify({
+    ok: true,
+    source: 'file',
+    settings: hours === null ? { lang } : { lang, paper_refresh_hours: hours },
+  })
 
 const header = (init: RequestInit | undefined, name: string): string | undefined =>
   (init?.headers as Record<string, string> | undefined)?.[name]
@@ -70,7 +76,7 @@ const header = (init: RequestInit | undefined, name: string): string | undefined
 describe('deskClient.getSettings', () => {
   it('GETs /api/settings with the operator token as a bearer', async () => {
     const { client: c, calls } = client([{ text: okBody('ko') }])
-    expect(await c.getSettings()).toEqual({ lang: 'ko' })
+    expect(await c.getSettings()).toEqual({ lang: 'ko', paperRefreshHours: 12 })
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe('https://desk.example.dev/api/settings')
     expect(calls[0].init?.method).toBe('GET')
@@ -88,25 +94,70 @@ describe('deskClient.getSettings', () => {
     // The selector shows no segment for it, which is the honest draw. Substituting 'en' here
     // would tell the operator their paper is in English when the desk says it is in French.
     const { client: c } = client([{ text: okBody('fr') }])
-    expect(await c.getSettings()).toEqual({ lang: 'fr' })
+    expect(await c.getSettings()).toEqual({ lang: 'fr', paperRefreshHours: 12 })
   })
 })
 
 describe('deskClient.putSettings', () => {
-  it('PUTs exactly {"lang":"ko"} and answers with the desk’s settings', async () => {
+  it('PUTs the language and cadence and answers with the desk’s settings', async () => {
     const { client: c, calls } = client([{ text: okBody('ko') }])
-    expect(await c.putSettings({ lang: 'ko' })).toEqual({ lang: 'ko' })
+    expect(await c.putSettings({ lang: 'ko', paperRefreshHours: 12 })).toEqual({
+      lang: 'ko',
+      paperRefreshHours: 12,
+    })
     expect(calls[0].init?.method).toBe('PUT')
     // The body is asserted as bytes, not as a parsed object: the desk refuses an unknown key
     // whole (`bad_settings`), so a client that helpfully sent `source` back would be refused.
-    expect(calls[0].init?.body).toBe('{"lang":"ko"}')
+    expect(calls[0].init?.body).toBe('{"lang":"ko","paper_refresh_hours":12}')
     expect(header(calls[0].init, 'Content-Type')).toBe('application/json')
     expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
   })
 
-  it('answers with what the desk put in force, not with what was asked for', async () => {
-    const { client: c } = client([{ text: okBody('en') }])
-    expect(await c.putSettings({ lang: 'ko' })).toEqual({ lang: 'en' })
+  it('answers with what is IN FORCE, not with what was asked for', async () => {
+    const { client: c } = client([{ text: okBody('en', 6) }])
+    expect(await c.putSettings({ lang: 'ko', paperRefreshHours: 1 })).toEqual({
+      lang: 'en',
+      paperRefreshHours: 6,
+    })
+  })
+
+  it('sends both fields when it holds both', async () => {
+    const { client: c, calls } = client([{ text: okBody('ko', 24) }])
+    await c.putSettings({ lang: 'ko', paperRefreshHours: 24 })
+    expect(calls[0].init?.body).toBe('{"lang":"ko","paper_refresh_hours":24}')
+  })
+
+  it('omits the key rather than send a null the desk must refuse over the whole document', async () => {
+    // `settings.py` validates `paper_refresh_hours` as an integer in 1..72 and refuses the WHOLE
+    // document on a bad value — a literal `null` in the body would be one. Omitting the key is the
+    // only send that can never trip that refusal, which is why the gate is "do we hold a number"
+    // rather than anything about what a previous GET reported.
+    const { client: c, calls } = client([{ text: okBody('ko', null) }])
+    await c.putSettings({ lang: 'ko', paperRefreshHours: null })
+    expect(calls[0].init?.body).toBe('{"lang":"ko"}')
+  })
+})
+
+describe('deskClient settings — the paper cadence', () => {
+  it('reads the cadence beside the language', async () => {
+    const { client: c } = client([{ text: okBody('ko', 6) }])
+    expect(await c.getSettings()).toEqual({ lang: 'ko', paperRefreshHours: 6 })
+  })
+
+  it('reads a desk that does not carry the field as null, not as a default', async () => {
+    // NOT 12. A default invented here would draw a chip the desk never agreed to, on a desk that
+    // has no such setting at all — and the row's own note is the honest thing to show instead.
+    const { client: c } = client([{ text: okBody('en', null) }])
+    expect(await c.getSettings()).toEqual({ lang: 'en', paperRefreshHours: null })
+  })
+
+  it('reads a value outside 1..72, or a fractional one, as null rather than clamping it', async () => {
+    for (const bad of [0, 73, 12.5, -1]) {
+      const { client: c } = client([
+        { text: JSON.stringify({ ok: true, settings: { lang: 'en', paper_refresh_hours: bad } }) },
+      ])
+      expect((await c.getSettings()).paperRefreshHours).toBeNull()
+    }
   })
 })
 
@@ -124,7 +175,7 @@ describe('the failures', () => {
     const { client: c } = client([
       { status: 403, text: JSON.stringify({ ok: false, error: 'forbidden' }) },
     ])
-    await expect(c.putSettings({ lang: 'ko' })).rejects.toMatchObject({
+    await expect(c.putSettings({ lang: 'ko', paperRefreshHours: null })).rejects.toMatchObject({
       code: 'unauthorized',
       status: 403,
     })
@@ -141,7 +192,9 @@ describe('the failures', () => {
         }),
       },
     ])
-    const e = await c.putSettings({ lang: 'Korean' }).catch((x: unknown) => x)
+    const e = await c
+      .putSettings({ lang: 'Korean', paperRefreshHours: null })
+      .catch((x: unknown) => x)
     expect(e).toBeInstanceOf(DeskError)
     expect(e).toMatchObject({ code: 'http', status: 400, error: 'bad_settings' })
     expect((e as DeskError).detail).toBe("lang: must be one of: en, ko -- got 'Korean'")

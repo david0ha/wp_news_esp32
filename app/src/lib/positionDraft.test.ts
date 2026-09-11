@@ -448,8 +448,8 @@ const held: Position = {
 
 function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
   return {
-    getSettings: async () => ({ lang: 'en' }),
-    putSettings: async () => ({ lang: 'en' }),
+    getSettings: async () => ({ lang: 'en', paperRefreshHours: null }),
+    putSettings: async () => ({ lang: 'en', paperRefreshHours: null }),
     positions: async () => book([held]),
     putPositions: async (doc) => doc,
     // Nothing in this file reads the event book or the registered phones; they are here because

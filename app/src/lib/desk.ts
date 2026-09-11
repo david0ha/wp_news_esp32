@@ -52,10 +52,22 @@ import { paperSource, type EditionSource } from './edition/source'
 /** Long enough for a cold tunnel, short enough that a tap on a selector still feels like one. */
 export const DESK_TIMEOUT_MS = 15_000
 
-/** The desk's settings document, as this app uses it. One field today; the route owns the shape. */
+/** The lowest and highest cadence the desk takes, `settings.py`'s own range. */
+export const PAPER_REFRESH_MIN = 1
+export const PAPER_REFRESH_MAX = 72
+
+/** The desk's settings document, as this app uses it. Two fields; the route owns the shape. */
 export interface DeskSettings {
   /** BCP-47 primary subtag — `en`, `ko`, or anything else the desk has been set to. */
   lang: string
+  /**
+   * How often the desk refreshes each company's paper, in hours, 1..72.
+   *
+   * `null` MEANS THE DESK DID NOT REPORT ONE — an older release, or a hand-written
+   * `settings.json` — and NOT "not read yet", which is `DeskSettings | null` at the call site.
+   * The distinction decides whether `putSettings` may send the key at all: see its comment.
+   */
+  paperRefreshHours: number | null
 }
 
 /**
@@ -519,10 +531,17 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
   // Every 2xx on this route answers the same document, so one reader serves both calls.
   async function settingsOf(res: Response): Promise<DeskSettings> {
     if (!res.ok) throw await refusal(res, 'settings')
+    // Read once: a `Response` body can only be consumed once, and the fake in the tests is more
+    // forgiving about that than a real one would be.
+    const text = await res.text()
     let lang: unknown
+    let raw: unknown
     try {
-      const body = JSON.parse(await res.text()) as { settings?: { lang?: unknown } }
+      const body = JSON.parse(text) as {
+        settings?: { lang?: unknown; paper_refresh_hours?: unknown }
+      }
       lang = body?.settings?.lang
+      raw = body?.settings?.paper_refresh_hours
     } catch {
       throw new DeskError('bad_json', 'settings did not answer JSON', res.status)
     }
@@ -533,7 +552,18 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
     if (typeof lang !== 'string' || lang === '') {
       throw new DeskError('bad_json', 'settings answered without a language', res.status)
     }
-    return { lang }
+    // Absent, out of range, or fractional all read the same way: this desk has no cadence this
+    // app can draw. Clamping would put a chip on screen the desk never agreed to, and the row
+    // would then offer to "change" the cadence to the value it already claims — the same argument
+    // the `lang` arm above makes about a language this app does not offer.
+    const paperRefreshHours =
+      typeof raw === 'number' &&
+      Number.isInteger(raw) &&
+      raw >= PAPER_REFRESH_MIN &&
+      raw <= PAPER_REFRESH_MAX
+        ? raw
+        : null
+    return { lang, paperRefreshHours }
   }
 
   // The same job for the other document, and the same reason it is one function rather than two:
@@ -668,10 +698,19 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // carrying a key it does not know, whole, with `bad_settings` — so echoing back the `source`
       // and `ok` that came with a read would be refused, and passing a caller's object through
       // would make that failure depend on where the object had been.
+      //
+      // `paper_refresh_hours` goes in whenever this caller holds a NUMBER, and is left out when it
+      // is `null`. `settings.py` validates it as an integer in 1..72 and refuses the whole document
+      // on a bad value, so a literal `null` in the body would be refused — omitting the key is the
+      // only choice that can never send something the desk must reject.
+      const wire: Record<string, unknown> = { lang: settings.lang }
+      if (settings.paperRefreshHours !== null) {
+        wire.paper_refresh_hours = settings.paperRefreshHours
+      }
       const res = await send('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lang: settings.lang }),
+        body: JSON.stringify(wire),
       })
       // The answer is what is IN FORCE, which is not always what was asked for — the desk
       // normalises, and a later release may refuse a value while keeping the old one. The caller
