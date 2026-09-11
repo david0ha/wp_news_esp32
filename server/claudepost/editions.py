@@ -693,6 +693,20 @@ class EditionStore:
                 edition with nothing recorded", and those want different
                 answers from the operator reading them.
         """
+        return self._filled(edition_id, self._raw_meta(edition_id))
+
+    def _raw_meta(self, edition_id: str) -> dict:
+        """``meta.json`` exactly as it is filed -- no derived field added.
+
+        The parser both :meth:`edition_meta` (which hands this to
+        :meth:`_filled`) and :meth:`_redate` (which must never write a derived
+        field back to disk) read through, so there is exactly one place that
+        turns bytes on disk into a document.
+
+        Raises:
+            NotFound: unknown id, missing directory, or metadata that will not
+                parse -- the same conditions :meth:`edition_meta` raises under.
+        """
         path = os.path.join(self._require_edition(edition_id), META_NAME)
         raw = read_bytes(path)
         if raw is None:
@@ -703,7 +717,7 @@ class EditionStore:
             raise NotFound(message=f"edition {edition_id} has unreadable metadata") from None
         if not isinstance(doc, dict):
             raise NotFound(message=f"edition {edition_id} has unreadable metadata")
-        return self._filled(edition_id, doc)
+        return doc
 
     def _subject_of(self, edition_id: str) -> tuple[str | None, str, str | None]:
         """An edition's company, language and lead headline, off its stored payload."""
@@ -1003,9 +1017,15 @@ class EditionStore:
                 # paragraph above is still binding: what `meta.json` says is
                 # exactly what reaches `record_edition`, so history and
                 # retention keep the same order however many re-filings race.
+                # `_redate` hands back `None` on a raw read that failed where
+                # it used to succeed -- best-effort, so `meta`'s untouched
+                # `created_at` (read before this lock, still what is on disk)
+                # is what gets recorded instead. The two never disagree either
+                # way: one is what `_redate` just wrote, the other is what was
+                # already there.
                 with self._lock:
-                    meta = self._redate(eid, meta, now)
-                    self._store.record_edition(eid, meta)
+                    redated = self._redate(eid, now)
+                    self._store.record_edition(eid, redated if redated is not None else meta)
             else:
                 self._store.record_edition(eid, meta)
 
@@ -1191,7 +1211,7 @@ class EditionStore:
         fsync_dir(self._editions_root)
         return True
 
-    def _redate(self, edition_id: str, meta: dict, now: float) -> dict:
+    def _redate(self, edition_id: str, now: float) -> dict | None:
         """Move an already-filed edition's ``created_at`` to ``now``. Lock held.
 
         The only rewrite of a birth certificate this module performs, and only
@@ -1201,6 +1221,19 @@ class EditionStore:
         glass has been on the glass, and that is a fact about the past rather
         than about this filing.
 
+        Reads :meth:`_raw_meta` -- never :meth:`edition_meta` -- and writes
+        back exactly that document with only ``created_at`` replaced.
+        ``edition_meta`` runs the document through :meth:`_filled`, which adds
+        ``symbol``/``lang`` *derived from the stored payload* for an edition
+        that predates them. Writing that filled copy back would freeze a
+        value nobody ever recorded onto disk, and a payload that happened to
+        be unreadable at this instant would freeze ``symbol: null`` there
+        forever -- ``_filled``'s own membership check (``"symbol" in doc``)
+        would then treat that ``null`` as recorded and stop deriving, dropping
+        the edition out of the paper index for good, with nothing in the
+        document to say why. What is on disk is what gets written back; what
+        is derived stays derived on every read.
+
         Written the way every pointer here is written -- a temporary file in
         the same directory and one ``os.replace`` -- so a reader inside
         :meth:`edition_meta` at this instant gets the whole old document or the
@@ -1208,10 +1241,22 @@ class EditionStore:
         would be a :class:`NotFound` that takes ``/api/papers`` and retention
         down with it.
 
-        The document returned is the one on disk, byte for byte, and the caller
-        records *that* -- the two must not be assembled separately.
+        ``None`` when the raw read itself fails where it previously would have
+        succeeded -- the edition's directory or ``meta.json`` went missing
+        under us between the commit noticing this is a re-file and taking the
+        lock to act on it. The re-date is best-effort: the edition's content
+        is already correct and only its recency in the paper index is at
+        stake, so the caller leaves ``created_at`` exactly where it was rather
+        than write a partial document.
+
+        The document returned, when not ``None``, is the one on disk, byte for
+        byte, and the caller records *that* -- the two must not be assembled
+        separately.
         """
-        doc = dict(meta)
+        try:
+            doc = self._raw_meta(edition_id)
+        except NotFound:
+            return None
         doc["created_at"] = now
         atomic_write(os.path.join(self._edition_dir(edition_id), META_NAME),
                      _canonical(doc).encode("utf-8"))

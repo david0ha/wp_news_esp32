@@ -837,6 +837,48 @@ class PaperCommitTest(SubjectMetaTest):
         self.assertEqual(
             self.store.get_edition(a.edition_id)["created_at"], T0 + 120)
 
+    def test_a_redate_does_not_freeze_a_derived_field_onto_disk(self):
+        # `edition_meta` fills `symbol`/`lang` in from the stored payload for
+        # an edition that predates those fields -- a read, not a write. A
+        # `_redate` that wrote that filled copy back would turn a payload that
+        # merely happened to be unreadable at this instant into a permanent
+        # `"symbol": null`, which `_filled`'s own membership check would then
+        # treat as recorded forever, dropping the edition out of the paper
+        # index for good.
+        first = self.paper("SNDK", n=1)
+        path = os.path.join(self.root, "editions", first.edition_id, "meta.json")
+        with open(path, "r+", encoding="utf-8") as f:
+            doc = json.load(f)
+            doc.pop("symbol")
+            doc.pop("lang")
+            f.seek(0)
+            json.dump(doc, f)
+            f.truncate()
+
+        # A second paper for SNDK, so re-filing the first below is a change
+        # against SNDK's current newest rather than the `unchanged` path --
+        # exactly the shape `test_re_filing_an_older_paper_makes_it_the_paper_
+        # again` uses, and the one that actually reaches `_redate`.
+        self.clock.set(T0 + 60)
+        self.paper("SNDK", n=2)
+
+        self.clock.set(T0 + 120)
+        again = self.paper("SNDK", n=1)
+        self.assertEqual(again.state, "paper")
+        self.assertEqual(again.edition_id, first.edition_id)
+
+        # The re-date happened -- `created_at` moved -- but it wrote back
+        # exactly the (stripped) document that was on disk, not the filled one.
+        with open(path, encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertNotIn("symbol", on_disk)
+        self.assertNotIn("lang", on_disk)
+        self.assertEqual(on_disk["created_at"], T0 + 120)
+
+        # The lazy fill still runs on the way out.
+        meta = self.es.edition_meta(first.edition_id)
+        self.assertEqual(meta["symbol"], "SNDK")
+
     def test_a_re_dated_paper_keeps_the_fact_that_it_reached_the_glass(self):
         # published_at is a fact about the past. Re-filing changes which paper
         # is newest, not whether this edition was ever on the wall.
