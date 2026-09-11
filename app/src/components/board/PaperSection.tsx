@@ -3,12 +3,18 @@ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from 'expo-router'
 import { Card } from '../Card'
+import { Chip } from '../Chip'
 import { createDeskClient, type Paper } from '../../lib/desk'
 import { getDeskToken } from '../../lib/deskToken'
 import { getDeskBaseUrl } from '../../lib/store'
 import { markEditionStale } from '../../lib/edition/invalidate'
 import { loadPapers, usePapers } from '../../lib/papers/list'
-import { isPaperRowDisabled, orderPapers, paperStatusLine } from '../../lib/papers/order'
+import {
+  isPaperRowDisabled,
+  orderPapers,
+  paperHeaderChips,
+  paperStatusLine,
+} from '../../lib/papers/order'
 import {
   publishNoteText,
   publishNoteTone,
@@ -103,15 +109,26 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
         {papers.map((paper, i) => {
           const status = paperStatusLine(paper, now, t)
           const disabled = isPaperRowDisabled(paper, busy)
+          // THE DESK'S OWN JUDGEMENT, through the same helper the pager's header uses, so the two
+          // surfaces cannot come to different conclusions about the same row. It is `stale` and
+          // not "older than the cadence" because the phone does not know the cadence; and
+          // `paperHeaderChips` is what holds the rule that a row with NO PAPER gets no marker at
+          // all — "due a refresh" is a claim about a paper that exists.
+          const chips = paperHeaderChips(paper)
+          const spoken = paper.onBoard
+            ? fill(t.papers.board.a11y.onBoard, { name: paper.name || paper.symbol })
+            : status.a11y
           return (
             <Pressable
               key={paper.symbol}
               accessibilityRole="button"
               accessibilityState={{ disabled, selected: paper.onBoard }}
+              // The chip is inside an accessible `Pressable` with a label of its own, so its text
+              // is not announced on its own — it has to join the label or it is a marker only a
+              // sighted owner gets. The same `, ` join `paperStatusLine` already uses, and the
+              // same catalogue phrase the chip is drawn from: one wording, two renderings.
               accessibilityLabel={
-                paper.onBoard
-                  ? fill(t.papers.board.a11y.onBoard, { name: paper.name || paper.symbol })
-                  : status.a11y
+                chips.stale ? [spoken, t.papers.page.stale].join(', ') : spoken
               }
               // A row with no paper is DRAWN AND DEAD. Dropping it would make a company that is on
               // the owner's watchlist absent from a list titled after their watchlist.
@@ -120,7 +137,12 @@ export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) |
               style={[styles.row, i < papers.length - 1 && styles.bordered]}
             >
               <View style={styles.rowText}>
-                <Text style={styles.symbol}>{paper.symbol}</Text>
+                <View style={styles.symbolRow}>
+                  <Text style={styles.symbol}>{paper.symbol}</Text>
+                  {chips.stale ? (
+                    <Chip label={t.papers.page.stale} icon="time" tone="warn" style={styles.chip} />
+                  ) : null}
+                </View>
                 <Text style={styles.meta} numberOfLines={1}>
                   {status.text}
                 </Text>
@@ -155,7 +177,11 @@ const styles = StyleSheet.create({
   },
   bordered: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   rowText: { flexShrink: 1, gap: 2 },
+  symbolRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   symbol: { fontFamily: fonts.semibold, fontSize: 15, color: colors.text, ...tabular },
+  // Tighter than the page header's chip: this one sits on a 12px row beside a 15px symbol, not
+  // above a masthead, and the default pill would set the row's height on its own.
+  chip: { paddingHorizontal: 8, paddingVertical: 3 },
   meta: { fontFamily: fonts.regular, fontSize: 13, color: colors.textFaint },
   note: { fontFamily: fonts.regular, fontSize: 13, color: colors.textFaint },
   error: { color: colors.down },
