@@ -39,7 +39,7 @@ export interface EditionSubject {
 }
 
 export interface EditionPhoto {
-  /** Resolves to `<news URL's directory>/tiles/<id>.bin` — see `client.ts`'s `tileUrl`. */
+  /** Resolved by the edition's own `EditionSource.tileUrl` — see `source.ts`. */
   id: string
   w: number
   h: number

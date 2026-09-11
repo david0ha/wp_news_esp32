@@ -32,7 +32,7 @@ handler does *not* retry. Taking the write lock up front is what makes
 
 Times are epoch seconds as REAL, taken from the injected
 :class:`~claudepost.clock.Clock` rather than from SQLite's own ``strftime``,
-so a test can move a lease boundary without waiting half an hour to cross it.
+so a test can move a lease boundary without waiting ninety minutes to cross it.
 """
 
 from __future__ import annotations
@@ -51,9 +51,24 @@ from .errors import BadRequest, Conflict, NotFound, epoch_seconds
 from .settings import LANGS
 
 #: How long a claim is good for. A worker that dies mid-edition costs one
-#: retry, not a lost day -- but thirty minutes is long enough that a slow
-#: research turn is not reaped out from under a worker still doing it.
-LEASE_SECONDS: int = 1800
+#: retry, not a lost day -- so this is a wall against a dead worker, and it has
+#: to be longer than any live one takes.
+#:
+#: NINETY MINUTES, up from thirty. A paper run is 25-40 minutes when its proof
+#: clears first time and longer when it needs a revision turn, and on
+#: 2026-09-11 the desk put a claimed order back to `pending` at minute 39 while
+#: the worker was still writing it. With one worker that was harmless --
+#: `finish_command` accepts a report on a pending row -- but two readers do not
+#: survive it: a second worker would claim the row and write the same edition
+#: twice, and the rotation reads `pending` as "the worker is idle" and would
+#: order a second paper on top of the one in flight.
+#:
+#: No heartbeat. A worker that reported in every minute would be a second
+#: protocol to keep alive, with its own failure mode -- a run that is working
+#: but not heartbeating -- and a lease longer than any run is the simpler wall.
+#: The cost of getting it wrong in this direction is bounded and dull: a dead
+#: worker's command waits ninety minutes instead of thirty before a retry.
+LEASE_SECONDS: int = 5400
 
 #: Three claims and the command is failed rather than returned. Something that
 #: kills three workers in a row will kill the fourth, and a queue that retries
@@ -67,6 +82,23 @@ MAX_ATTEMPTS: int = 3
 #: imports `store`. `app.py` re-exports it, so the one spelling is still the
 #: only spelling.
 COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
+
+#: A ticker as a command may carry one. Eight characters rather than the
+#: watchlist's twelve, deliberately: this symbol is compared against an
+#: edition's own ``subject.symbol``, which the validator caps at eight (see
+#: ``tools/mock_news_server.py``'s length table), so a nine-character symbol
+#: here would name a command no draft could ever satisfy and every paper run
+#: for it would end in a 409 nobody could fix.
+#:
+#: The lookahead requires at least one letter or digit. A ticker is always
+#: made of at least one of those -- ``"."``, ``".."`` and ``"........"`` are
+#: not tickers, they are punctuation that happens to fit the character class
+#: below them. Without the lookahead they would pass, and this symbol goes on
+#: to become a URL path segment at ``POST /api/papers/<SYMBOL>/publish``, where
+#: ``".."`` is not a value anything downstream should ever have to think about.
+#: So the desk refuses the shape here, at the one place that decides what a
+#: symbol is, rather than trusting every route that takes one to remember.
+COMMAND_SYMBOL_RE = re.compile(r"^(?=.*[A-Z0-9])[A-Z0-9.\-]{1,8}\Z")
 
 #: Advisory: it tells a worker whether the expected outcome is an edition. The
 #: desk never acts on a command itself, so this is never dispatch.
@@ -82,8 +114,14 @@ COMMAND_ID_RE = re.compile(r"^[0-9a-f]{8,64}\Z")
 #: kind rather than a `custom` with a convention because two things downstream
 #: read it: the worker's prompt, and the finish path that decides whether
 #: anybody's phone rings.
+#:
+#: ``paper`` is the rotation's own kind -- a complete newspaper about a company
+#: the desk names, filed for the index rather than for the glass. It is a kind
+#: rather than a `file_edition` with a symbol because two things downstream
+#: branch on it: the worker's prompt, which must suspend the contract's "which
+#: company" rule, and the commit, which writes neither pointer.
 COMMAND_KINDS: tuple[str, ...] = ("file_edition", "research", "custom",
-                                  "calendar", "ask")
+                                  "calendar", "ask", "paper")
 
 #: An instruction in the owner's own words, not a document.
 MAX_COMMAND_TEXT: int = 2000
@@ -116,7 +154,12 @@ CREATE TABLE IF NOT EXISTS commands (
     -- read. Both nullable, which is also what makes them addable by ALTER
     -- TABLE below without rewriting a row.
     reply_to    TEXT,
-    lang        TEXT
+    lang        TEXT,
+    -- Which company a `paper` is about. NULL on every other kind, which is
+    -- what makes it addable by ALTER TABLE below without rewriting a row.
+    -- The desk decides the company for a paper and the model does not, so
+    -- this is the instruction rather than a hint about it.
+    symbol      TEXT
 );
 -- The claim's subquery is exactly this order, and it runs on every long poll.
 CREATE INDEX IF NOT EXISTS commands_queue
@@ -184,7 +227,8 @@ CREATE TABLE IF NOT EXISTS audit (
 
 _COMMAND_COLUMNS = ("id", "kind", "text", "priority", "status", "source",
                     "created_at", "deadline_at", "claimed_by", "claimed_at",
-                    "finished_at", "attempts", "result", "reply_to", "lang")
+                    "finished_at", "attempts", "result", "reply_to", "lang",
+                    "symbol")
 
 #: Columns added to a table after this desk first shipped, as
 #: ``(table, column, declaration)``.
@@ -201,6 +245,7 @@ _COMMAND_COLUMNS = ("id", "kind", "text", "priority", "status", "source",
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("commands", "reply_to", "TEXT"),
     ("commands", "lang", "TEXT"),
+    ("commands", "symbol", "TEXT"),
 )
 
 #: The claim, and the reason it is one statement.
@@ -306,7 +351,8 @@ class Store:
     def add_command(self, kind: str, text: str, priority: int = 5,
                     deadline_at: float | None = None, source: str = "",
                     reply_to: str | None = None,
-                    lang: str | None = None) -> dict:
+                    lang: str | None = None,
+                    symbol: str | None = None) -> dict:
         """File an intent for a worker to act on. Returns the command.
 
         The desk does not execute it. It holds it until something claims it,
@@ -328,13 +374,14 @@ class Store:
             raise BadRequest(message="priority is 0..9, 0 first")
         reply_to = self._checked_reply_to(reply_to)
         lang = _checked_lang(lang)
+        symbol = _checked_symbol(kind, symbol)
         now = self._clock.now()
         row = {"id": _new_id(), "kind": kind, "text": text, "priority": priority,
                "status": "pending", "source": source or "", "created_at": now,
                "deadline_at": epoch_seconds(deadline_at, "deadline_at"),
                "claimed_by": None, "claimed_at": None, "finished_at": None,
                "attempts": 0, "result": "",
-               "reply_to": reply_to, "lang": lang}
+               "reply_to": reply_to, "lang": lang, "symbol": symbol}
         with self._write():
             self._db.execute(
                 "INSERT INTO commands ({}) VALUES ({})".format(
@@ -355,7 +402,7 @@ class Store:
         claim two statements again to save a pass that runs anyway. That the
         pass is ten minutes apart rather than five seconds costs this nothing:
         the claim's own subquery already skips a command past its deadline, so
-        what waits for the reap is a lapsed lease -- which is half an hour old
+        what waits for the reap is a lapsed lease -- which is ninety minutes old
         by then and belongs to a worker that is not coming back.
         """
         now = self._clock.now()
@@ -793,6 +840,37 @@ def _checked_lang(lang: object) -> str | None:
     if not isinstance(lang, str) or lang not in LANGS:
         raise BadRequest(message=f"lang: must be one of: {', '.join(LANGS)}")
     return lang
+
+
+def _checked_symbol(kind: str, symbol: object) -> str | None:
+    """The company a command is about, or ``None`` for the kinds that have none.
+
+    Required on a ``paper`` and refused on everything else, which is two rules
+    in one function because they are the same rule: the symbol *is* the paper's
+    instruction, and on any other kind it is a field nothing reads. A
+    ``file_edition`` carrying one would look to an operator like a board
+    edition pinned to a company, which is precisely what it would not be.
+
+    Upper-cased before it is matched, the way
+    :func:`~claudepost.watchlist._symbol` does it, so this is the one place
+    that decides what canonical means for a queue row.
+    """
+    if symbol is None:
+        if kind == "paper":
+            raise BadRequest(message="a paper command needs a symbol: "
+                                     "the desk names the company, not the model")
+        return None
+    if kind != "paper":
+        raise BadRequest(message=f"only a paper command carries a symbol, "
+                                 f"not a {kind!r}")
+    if not isinstance(symbol, str) or isinstance(symbol, bool):
+        raise BadRequest(message="symbol is a ticker")
+    sym = symbol.upper()
+    if not COMMAND_SYMBOL_RE.match(sym):
+        raise BadRequest(message=f"{symbol!r:.32} is not a symbol "
+                                 f"(letters, digits, '.', '-', 1-8 characters, "
+                                 f"at least one letter or digit)")
+    return sym
 
 
 def _edition_dict(row: sqlite3.Row) -> dict:

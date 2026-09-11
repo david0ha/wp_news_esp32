@@ -1,5 +1,5 @@
 """The desk's settings as a file under the data root: what the paper is
-written in, and nothing else yet.
+written in, and how often each company's paper is rewritten.
 
 ``PUT /api/settings`` is the only thing that writes ``<data>/settings.json``,
 and this is the only module that touches it. It is the fourth operator
@@ -70,14 +70,30 @@ LOG = logging.getLogger("claudepost.settings")
 #: in, and the phone's ``EDITION_LANGUAGES`` draws its two segments in it.
 LANGS = ("en", "ko")
 
-#: What a desk nobody has told prints in. A complete setting rather than a
-#: placeholder, the same way :data:`~claudepost.schedule.DEFAULT_SCHEDULE` is
-#: a complete schedule -- there is no state in which the paper has no
-#: language. Handed out by copy (see :func:`load`), never by reference.
-DEFAULT = {"lang": "en"}
+#: HOW OFTEN A PAPER IS REWRITTEN, in hours, at the ends of the range.
+#:
+#: The floor is one hour rather than zero because zero is not a cadence, it is
+#: a worker that never stops: a paper costs thirty to forty minutes of model
+#: time, so anything under an hour is a queue that is never empty and an `ask`
+#: that never gets claimed. The ceiling is three days because past it "the
+#: newest edition about S" stops being a current newspaper -- the pager would
+#: be showing history with no badge to say so, which is the one failure on this
+#: document that produces no error anywhere.
+PAPER_REFRESH_HOURS_MIN = 1
+PAPER_REFRESH_HOURS_MAX = 72
 
-#: Every key the document may carry. One, so far.
-_KEYS = frozenset({"lang"})
+#: What a desk nobody has told prints in, and how often it rewrites a paper. A
+#: complete setting rather than a placeholder, the same way
+#: :data:`~claudepost.schedule.DEFAULT_SCHEDULE` is a complete schedule --
+#: there is no state in which the paper has no language and no state in which
+#: the rotation has no cadence. Twelve hours rather than the six first asked
+#: for: a paper costs the worker thirty to forty minutes, and six hours across
+#: five companies does not fit in a day beside the board's own runs. Handed out
+#: by copy (see :func:`load`), never by reference.
+DEFAULT = {"lang": "en", "paper_refresh_hours": 12}
+
+#: Every key the document may carry. Two, now.
+_KEYS = frozenset({"lang", "paper_refresh_hours"})
 
 
 def parse_settings(doc: object) -> dict:
@@ -109,7 +125,12 @@ def parse_settings(doc: object) -> dict:
                          "settings: unknown key(s) "
                          + ", ".join(repr(k) for k in extra))
 
-    return {"lang": _lang(doc["lang"]) if "lang" in doc else DEFAULT["lang"]}
+    return {
+        "lang": _lang(doc["lang"]) if "lang" in doc else DEFAULT["lang"],
+        "paper_refresh_hours": (
+            _hours(doc["paper_refresh_hours"]) if "paper_refresh_hours" in doc
+            else DEFAULT["paper_refresh_hours"]),
+    }
 
 
 def load(path: str) -> tuple[dict, str]:
@@ -201,6 +222,33 @@ def _lang(value: object) -> str:
         raise BadRequest("bad_settings",
                          f"lang: must be one of: {', '.join(LANGS)} "
                          f"-- got {value!r}")
+    return value
+
+
+def _hours(value: object) -> int:
+    """A whole number of hours inside the range, or a refusal naming both ends.
+
+    ``bool`` is excluded explicitly because Python says ``True`` is an ``int``
+    and nobody else does: ``{"paper_refresh_hours": true}`` would otherwise be
+    accepted as a one-hour cadence, which is a worker that never stops, filed
+    by a client that meant to send a flag.
+
+    A float is refused rather than rounded, including ``12.0``. JSON has one
+    number type, so a client that sent ``12.0`` meant hours and would be
+    served by rounding -- but the same leniency takes ``12.5``, and this
+    number is multiplied by 3600 and compared against a deadline. An integer
+    in, an integer out, and the refusal says which.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise BadRequest("bad_settings",
+                         f"paper_refresh_hours: a whole number of hours, "
+                         f"{PAPER_REFRESH_HOURS_MIN}..{PAPER_REFRESH_HOURS_MAX}"
+                         f" -- got {value!r}")
+    if not PAPER_REFRESH_HOURS_MIN <= value <= PAPER_REFRESH_HOURS_MAX:
+        raise BadRequest("bad_settings",
+                         f"paper_refresh_hours: must be "
+                         f"{PAPER_REFRESH_HOURS_MIN}..{PAPER_REFRESH_HOURS_MAX}"
+                         f" -- got {value!r}")
     return value
 
 

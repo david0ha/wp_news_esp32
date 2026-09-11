@@ -160,6 +160,48 @@ _ASK_TAIL = (
 _TAILS = {"research": _RESEARCH_TAIL, "calendar": _CALENDAR_TAIL, "ask": _ASK_TAIL}
 
 
+def paper_tail(symbol: str) -> str:
+    """The tail for a ``"paper"`` command: the company, then the filing tail.
+
+    Args:
+        symbol: the company the desk named, uppercase. ``loop.handle`` has
+            already refused a command that did not carry one, so this is never
+            empty -- :func:`build_prompt` still falls back to :data:`_TAIL`
+            rather than formatting ``None`` into a sentence, because a prompt
+            that works beats a prompt about a company called None.
+
+    Returns:
+        A paragraph naming the company, followed by :data:`_TAIL` itself.
+
+    In front of the ordinary tail rather than in place of it, and that is the
+    whole design of this kind: a paper is a complete newspaper through the same
+    gates as the board's edition, so the instruction about what to write and
+    what not to publish must be the *same* instruction rather than a second
+    copy that drifts.
+
+    What the paragraph has to do is contradict the contract above it. The
+    contract's "Which company" section is written as "read watchlist.json, take
+    the next symbol after ``last``, unless something outranks the rotation" --
+    and on this run there is no watchlist.json in the edition directory at all,
+    because :func:`loop.seed_watchlist` does not run for a paper. Saying that
+    plainly, at the place a model reads last, is cheaper than hoping it notices
+    an absence.
+
+    The desk's refusal is said out loud for the same reason. The 409 on a
+    mismatched subject is the wall and it holds whatever this paragraph says,
+    but a turn that hears about it only after forty minutes of research has
+    already spent the money.
+    """
+    return (
+        f"\nThis is the paper for {symbol}, and the company is given rather than chosen.\n"
+        "The contract's \"Which company\" section does not apply to this run: there is no\n"
+        "rotation to advance and no watchlist.json in the edition directory to read.\n"
+        f"Write the edition for {symbol} and for no other company, whatever else moved\n"
+        f"today. `subject.symbol` must be {symbol}: the desk refuses a commit whose subject\n"
+        "is another company, and that refusal ends the run with the research already spent.\n"
+    ) + _TAIL
+
+
 def contract_name(kind: str) -> str:
     """The file in ``tools/edition/`` this kind of command is written against.
 
@@ -347,7 +389,8 @@ def ask_section(ask_lang: str | None = None) -> str:
 def build_prompt(contract: str, context: list[tuple[str, str]],
                  directives: list[dict], command_text: str,
                  kind: str = "file_edition", lang: str = "en",
-                 ask_lang: str | None = None) -> str:
+                 ask_lang: str | None = None,
+                 symbol: str | None = None) -> str:
     """Assemble one turn's prompt.
 
     Args:
@@ -377,6 +420,13 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
             is what the paper is written in, this is what the conversation is
             in, and a message typed in English about a Korean paper must not
             turn the paper into an English one.
+        symbol: for ``"paper"`` only -- the company the desk named, which
+            :func:`paper_tail` writes into the tail. Ignored by every other
+            kind, and a ``"paper"`` without one falls back to the ordinary
+            filing tail rather than naming nothing: the refusal for a paper
+            command that carries no company lives in ``loop.handle``, before a
+            prompt is built at all, and a second refusal here would be a second
+            place to look.
 
     Returns:
         The contract first, then the language section when there is one, then
@@ -409,7 +459,8 @@ def build_prompt(contract: str, context: list[tuple[str, str]],
         parts.append(ask_section(ask_lang))
 
     parts.append("\n---\n\n# Today's instruction\n\n%s\n" % command_text)
-    parts.append(_TAILS.get(kind, _TAIL))
+    parts.append(paper_tail(symbol) if kind == "paper" and symbol
+                 else _TAILS.get(kind, _TAIL))
     return "".join(parts)
 
 

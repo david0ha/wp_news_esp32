@@ -34,7 +34,7 @@ from .notes import NoteStore
 # built from it, so the route's pattern, the note store's and the queue's are one
 # regex. It moved to `store` because `add_command` now checks a `reply_to`
 # against it, and `store` cannot import `app` -- `app` imports `store`.
-from .store import COMMAND_ID_RE, Store
+from .store import COMMAND_ID_RE, COMMAND_SYMBOL_RE, Store
 
 LOG = logging.getLogger("claudepost.app")
 
@@ -60,6 +60,13 @@ HOUSEKEEPING_SECONDS = 600
 #: finish path reads it. A typo in either is a notification that never arrives
 #: and nothing anywhere that says why.
 PHONE_SOURCE = "app"
+
+#: What the rotation writes on a paper order. The worker's prompt reads the
+#: company off the command's ``symbol`` column and not out of this sentence --
+#: this is what an operator sees in the queue, and what the model is told the
+#: run is for.
+PAPER_ORDER = ("Refresh the paper for {s}. The company is given; "
+               "research it and write both pages.")
 
 #: How far back the answer pass looks, and how far back its ledger read goes.
 #: Derived rather than chosen: the longest a quiet window can hold an answer is
@@ -248,6 +255,13 @@ class Desk:
 
         self._last_housekeeping = 0.0
 
+        #: Watchlist symbols the rotation has already refused to order, so the
+        #: reason is logged once rather than once every ten minutes forever.
+        #: In memory, on `push_failures`' reasoning: it is a fact about this
+        #: process's log rather than about the household, and a restart is
+        #: exactly when the line should be said again.
+        self._unorderable: set[str] = set()
+
         self._load_schedule()
         self._load_watchlist()
         self._load_settings()
@@ -293,7 +307,7 @@ class Desk:
         if t - self._last_housekeeping >= HOUSEKEEPING_SECONDS:
             self._last_housekeeping = t
             # The reap goes here rather than on every tick because what it
-            # measures is slow: a lease is half an hour and a deadline is
+            # measures is slow: a lease is ninety minutes and a deadline is
             # hour-scale, so a write transaction every five seconds to ask
             # whether either has passed is a transaction that finds nothing
             # all day -- on the same connection the publish path writes.
@@ -301,7 +315,10 @@ class Desk:
             if expired:
                 did.append("reaped:%d" % expired)
             swept = self.editions.sweep_drafts()
-            pruned = self.editions.prune()
+            # The printable watchlist, so retention never takes the paper the
+            # pager is about to draw. `papers()` and this read the same list
+            # for the same reason.
+            pruned = self.editions.prune(symbols=self.printable_symbols())
             # The delivery ledger ages out here rather than in a sweep of its
             # own: sixty days is the slowest thing this desk measures, and a
             # second periodic pass to watch it would be a second thing to keep
@@ -318,6 +335,15 @@ class Desk:
             owed = self._fire_owed_answers(t)
             if owed:
                 did.append("answers:%d" % owed)
+
+            # Last in the pass, deliberately: it is the only step that adds
+            # work rather than clearing it, and the queue it reads must be the
+            # one the reap above has already settled -- a lapsed lease still
+            # counted as `claimed` would stand the rotation down for the next
+            # ten minutes for nothing.
+            ordered = self._order_stale_paper(t)
+            if ordered:
+                did.append("paper:" + ordered)
 
         return did
 
@@ -576,6 +602,75 @@ class Desk:
         st.save(self.settings_path, doc)
         self.settings = doc
         self.settings_source = "file"
+
+    def printable_symbols(self) -> list[str]:
+        """The companies the desk keeps a paper for, in the watchlist's order.
+
+        ``printable`` and not every item: the watchlist carries companies the
+        owner is only watching, and a paper costs the worker thirty to forty
+        minutes. The order is the document's own, because it is the order the
+        pager draws and the tiebreak the rotation uses -- an order decided
+        here rather than there would be two answers to "which is first".
+
+        ``[]`` on a desk with no watchlist, which is a real state: the vault
+        pushes that document every morning and a desk brought up before the
+        first push has none.
+        """
+        if not self.watchlist:
+            return []
+        return [item["symbol"] for item in self.watchlist["items"]
+                if item["printable"]]
+
+    def paper_cadence_seconds(self) -> int:
+        """How old a paper may get before it is rewritten, in seconds.
+
+        One function, because three callers ask -- the rotation's staleness
+        test, the deadline it files with, and the ``stale`` flag the pager
+        draws. Three spellings of ``hours * 3600`` is how a phone comes to
+        badge a paper stale that the desk has no intention of refreshing.
+        """
+        return int(self.settings.get("paper_refresh_hours",
+                                     st.DEFAULT["paper_refresh_hours"])) * 3600
+
+    def papers(self, t: float | None = None) -> list[dict]:
+        """One row per printable company, whether or not it has a paper.
+
+        The row is the phone's whole model of a paper: which company, which
+        edition, when it was written, what it is called, whether it is the one
+        on the glass and whether it is due. A company with no paper is a row of
+        nulls rather than an absence, because "not written yet" is a page the
+        pager draws.
+        """
+        now = self.clock.now() if t is None else t
+        cadence = self.paper_cadence_seconds()
+        current = self.editions.current_id()
+        items = [item for item in (self.watchlist["items"] if self.watchlist
+                                   else [])
+                 if item["printable"]]
+        found = self.editions.papers([item["symbol"] for item in items])
+
+        rows = []
+        for item in items:
+            meta = found.get(item["symbol"])
+            eid = meta["id"] if meta else None
+            try:
+                created = float(meta["created_at"]) if meta else None
+            except (KeyError, TypeError, ValueError):
+                created = None
+            rows.append({
+                "symbol": item["symbol"],
+                "name": item["name"],
+                "edition_id": eid,
+                "created_at": created,
+                "lang": meta.get("lang") if meta else None,
+                "headline": self.editions.headline(eid) if eid else None,
+                "on_board": eid is not None and eid == current,
+                # A company with no paper is stale by definition -- there is
+                # nothing to be current -- which is also what puts it first in
+                # the rotation's ordering.
+                "stale": created is None or now - created >= cadence,
+            })
+        return rows
 
     def utc_now(self) -> datetime.datetime:
         """The desk's clock as an aware instant, for the validators that take one.
@@ -869,6 +964,108 @@ class Desk:
         LOG.info("wake at %d: enqueued a filing", int(last))
         return True
 
+    def _orderable_symbols(self) -> list[str]:
+        """The printable companies the queue could actually carry a command for.
+
+        The watchlist's validator is the looser one, and deliberately so:
+        :func:`~claudepost.watchlist._symbol` takes one to twelve characters
+        of ``[A-Z0-9.-]``, where :data:`~claudepost.store.COMMAND_SYMBOL_RE`
+        takes one to eight and wants at least one letter or digit among them.
+        A watchlist is a document the owner keeps; a command is an instruction
+        the desk has to be able to see satisfied.
+
+        **Two reasons to skip such a symbol, and they are about different
+        things.** The first is that the command could never be satisfied:
+        :data:`~claudepost.editions.SUBJECT_SYMBOL_RE` is now the same pattern
+        as the command's, lookahead and all, so a symbol either one refuses is
+        a symbol no draft's ``subject.symbol`` can ever carry either -- every
+        run for it would end in a ``409 commit_symbol_mismatch`` nobody could
+        fix, and the command would fail, be retried and fail again. That
+        argument covers both shapes now that the two regexes agree; while they
+        differed it reached only the nine-to-twelve-character case, and
+        ``"..."`` rested on the second reason alone.
+
+        The second is about *this* function rather than about the command, and
+        it is why the answer here is a skip rather than a raise:
+        `Desk.enqueue` raises `BadRequest` on such
+        a symbol, and this runs at the end of the housekeeping block -- an
+        exception here would take the reap, the draft sweep, the prune, the
+        delivery ageing and the owed answers down with it, every ten minutes
+        forever, over one row in a document the vault pushes every morning. A
+        company that silently never gets a paper is a row the pager still
+        draws, with ``stale`` true forever, which is honest: the desk really is
+        not going to refresh it. `papers()` is not filtered for exactly that
+        reason.
+
+        Logged once per symbol rather than once per pass, because a line every
+        ten minutes forever would bury everything else in the log.
+        """
+        good = []
+        for symbol in self.printable_symbols():
+            if COMMAND_SYMBOL_RE.match(symbol):
+                good.append(symbol)
+            elif symbol not in self._unorderable:
+                self._unorderable.add(symbol)
+                LOG.warning("rotation: %.32r is on the watchlist but is not a "
+                            "symbol a command can carry (1-8 characters, at "
+                            "least one letter or digit); it will never get a "
+                            "paper", symbol)
+        return good
+
+    def _order_stale_paper(self, t: float) -> str | None:
+        """Order a refresh of the stalest paper, when there is nothing else to do.
+
+        Four rules, in this order, and the first is the one that makes the
+        other three safe:
+
+        1. **Nothing while the queue holds anything**, of any kind. That is
+           what makes this idempotent without a meta key, a timestamp or
+           anything held in memory -- the order it just filed is what stops the
+           next pass filing a second. It is also what keeps a typed `ask` from
+           waiting behind a run that takes thirty to forty minutes: an `ask`
+           posted while the worker is idle is claimed on its next poll, and
+           this pass stands down until it finishes.
+        2. **The stalest company first.** A company with no paper at all is
+           older than any paper, because there is nothing for the pager to
+           draw; ties go to the watchlist's own order, which ``min`` over a
+           list gives for free by returning the first minimum.
+        3. **Nothing before the cadence.** A paper younger than
+           ``paper_refresh_hours`` is current.
+        4. **Priority 9**, the lowest the queue has, so the morning order and
+           anything typed on a phone -- both 5 -- are claimed ahead of a paper
+           that is merely pending. Only a paper already *claimed* makes
+           anything wait, and that is the cost accepted in the design.
+
+        Quiet hours deliberately do not apply: a paper never touches the board,
+        and the night is the cheapest time to write one.
+
+        Returns the symbol ordered, or ``None``.
+        """
+        symbols = self._orderable_symbols()
+        if not symbols:
+            return None
+
+        # Two reads rather than one query with an IN clause: this runs every
+        # ten minutes, both are index scans that stop at the first row, and a
+        # query built here would be a second place that knows the status
+        # vocabulary.
+        for status in ("pending", "claimed"):
+            if self.store.list_commands(status=status, limit=1):
+                return None
+
+        found = self.editions.papers(symbols)
+        symbol = min(symbols, key=lambda s: _paper_age_key(found.get(s)))
+        meta = found.get(symbol)
+        cadence = self.paper_cadence_seconds()
+        if meta is not None and t - _paper_age_key(meta) < cadence:
+            return None
+
+        self.enqueue("paper", PAPER_ORDER.format(s=symbol),
+                     priority=9, source="rotation",
+                     deadline_at=t + cadence, symbol=symbol)
+        LOG.info("rotation: ordered a paper for %s", symbol)
+        return symbol
+
     def _fire_due_alerts(self, t: float) -> str | None:
         """Tell the phones what is about to happen. Returns a ``did`` entry.
 
@@ -1021,14 +1218,40 @@ class Desk:
     def enqueue(self, kind: str, text: str, priority: int = 5,
                 deadline_at: float | None = None, source: str = "api",
                 reply_to: str | None = None,
-                lang: str | None = None) -> dict:
+                lang: str | None = None,
+                symbol: str | None = None) -> dict:
         """Add a command and wake anything parked on a long poll."""
         command = self.store.add_command(kind, text, priority=priority,
                                          deadline_at=deadline_at, source=source,
-                                         reply_to=reply_to, lang=lang)
+                                         reply_to=reply_to, lang=lang,
+                                         symbol=symbol)
         with self.queue_event:
             self.queue_event.notify_all()
         return command
+
+
+def _paper_age_key(meta: dict | None) -> float:
+    """When a paper was written, for ordering. No paper sorts oldest of all.
+
+    ``-inf`` rather than ``0`` so that a symbol with no paper cannot be tied
+    with one written at the epoch by a desk whose clock was wrong -- and so
+    that the answer does not depend on the epoch being a time nobody files at.
+
+    That separates *no paper* from every paper, and no further. A paper whose
+    ``created_at`` is missing or will not parse still falls back to ``0.0``,
+    so two of those tie with each other and with one genuinely written at the
+    epoch. Deliberate, and not worth a second sentinel: the tiebreak below is
+    the watchlist's own order, which is a defined answer rather than an
+    arbitrary one, and ``0.0`` is the same fallback
+    :func:`~claudepost.editions._newest_by_symbol` sorts by, so the two agree
+    about which edition is newest.
+    """
+    if meta is None:
+        return float("-inf")
+    try:
+        return float(meta.get("created_at") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _last_wake_at(s: sched.Schedule, t: float) -> float | None:

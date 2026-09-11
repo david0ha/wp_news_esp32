@@ -72,6 +72,13 @@ percent, an acquisition. A newspaper covers what happened. Update `last` when yo
 The board never chooses. It prints the company the payload names, which is the same rule the rest
 of this system runs on: the server decides what is important, the device decides what fits.
 
+**Unless the order names the company.** A `paper` order — "Refresh the paper for
+SNDK" — is the desk asking for that company and no other, and this section does not apply
+to that run: there is no `watchlist.json` in the edition directory, there is no cursor to
+advance, and a company that did something more interesting today is still not the subject.
+`subject.symbol` must be the symbol the order named; the desk refuses the commit when it is
+not, and the refusal arrives after the research rather than before it.
+
 ## The minimum research checklist
 
 The dossier rail down the side of A1 and the whole of A2 come from this list. **If your data source
@@ -417,7 +424,8 @@ into something rather than to file a page, `notes.md` is the only thing you prod
 - **`generated_at` carries the edition's stamp, not the clock's.** It is fingerprinted and never
   printed, so moving it on every run reprints the whole sheet on every poll for nothing a reader
   can see. `indices[].spark` changed only if the tape did.
-- `watchlist.json`'s `last` updated to the company you filed.
+- `watchlist.json`'s `last` updated to the company you filed — not for a `paper` order, which
+  has no `watchlist.json` to update.
 - `notes.md` written beside `news.json` — what you found, every source's URL, what you left out
   and why, ≤ 2,000 words.
 - A one-screen summary: the company, the lead, what you could not find out, and what the render

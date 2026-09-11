@@ -2,6 +2,7 @@ import { describe, it, expect } from '@jest/globals'
 import { columnWidth, editionKey, photoBoxHeight, resolveChip, COLUMN_GAP } from './feedLayout'
 import { emptyEdition } from './parse'
 import { type Chip } from './tiles'
+import { deviceSource } from './source'
 import { type CachedEdition } from './store'
 import { type EditionPhoto } from './types'
 
@@ -15,6 +16,7 @@ const cached = (generatedAt: string, fetchedAt: number): CachedEdition => ({
   // one is built directly rather than parsed from a body.
   wire: { generated_at: generatedAt },
   edition: { ...emptyEdition(), generatedAt },
+  source: deviceSource('http://desk.local:8123/news.json'),
 })
 
 function photo(w: number, h: number): EditionPhoto {

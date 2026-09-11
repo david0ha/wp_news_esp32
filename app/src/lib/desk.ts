@@ -46,14 +46,28 @@
 import { fill, strings } from '../i18n'
 import { parsePositionsDoc, positionsBody, type PositionsDoc } from './positions'
 import { parseCalendarDoc, type CalendarDoc } from './schedule'
+import { createEditionClient, editionClient, type EditionFetch } from './edition/client'
+import { paperSource, type EditionSource } from './edition/source'
 
 /** Long enough for a cold tunnel, short enough that a tap on a selector still feels like one. */
 export const DESK_TIMEOUT_MS = 15_000
 
-/** The desk's settings document, as this app uses it. One field today; the route owns the shape. */
+/** The lowest and highest cadence the desk takes, `settings.py`'s own range. */
+export const PAPER_REFRESH_MIN = 1
+export const PAPER_REFRESH_MAX = 72
+
+/** The desk's settings document, as this app uses it. Two fields; the route owns the shape. */
 export interface DeskSettings {
   /** BCP-47 primary subtag — `en`, `ko`, or anything else the desk has been set to. */
   lang: string
+  /**
+   * How often the desk refreshes each company's paper, in hours, 1..72.
+   *
+   * `null` MEANS THE DESK DID NOT REPORT ONE — an older release, or a hand-written
+   * `settings.json` — and NOT "not read yet", which is `DeskSettings | null` at the call site.
+   * The distinction decides whether `putSettings` may send the key at all: see its comment.
+   */
+  paperRefreshHours: number | null
 }
 
 /**
@@ -239,6 +253,72 @@ export function deskLanguageView(input: {
 }
 
 /**
+ * The cadences the phone offers, in the order the chips are drawn.
+ *
+ * SIX POINTS IN A RANGE, NOT THE RANGE. The desk takes any integer from 1 to 72; these are the
+ * answers worth one tap. Twelve is the desk's own default and the spec's — a paper costs the
+ * worker thirty to forty minutes, so six hours does not fit in a day beside the board's own runs
+ * for a watchlist of any size. Three is there for a one-symbol watchlist, and seventy-two for
+ * somebody who wants the papers kept warm and little else.
+ */
+export const PAPER_REFRESH_PRESETS: readonly number[] = [3, 6, 12, 24, 48, 72]
+
+export type PaperRefreshNote = 'needs_setup' | 'absent' | 'custom' | null
+
+export interface PaperRefreshView {
+  /** Index into `PAPER_REFRESH_PRESETS`, or `-1` for "no chip is the answer". */
+  selectedIndex: number
+  disabled: boolean
+  note: PaperRefreshNote
+  /** What the desk says is in force, for the `custom` note to quote. */
+  hours: number | null
+}
+
+/**
+ * What the cadence row draws.
+ *
+ * `deskLanguageView`'s shape, with ONE STATE THAT ROW DOES NOT HAVE: a desk that answered
+ * perfectly well and carries no `paper_refresh_hours` at all — every desk one release behind this
+ * app. Drawn as `absent` and disabled, because there is nothing a write could reach; drawn as
+ * "nothing selected" it would look like a control that had broken.
+ *
+ * `settings === null` is "not read yet", which is why the whole document is the input rather than
+ * the number: `hours === null` inside a document that arrived means something entirely different
+ * from no document at all, and one nullable number cannot say both.
+ */
+export function paperRefreshView(input: {
+  address: string | null
+  token: string | null
+  settings: DeskSettings | null
+  busy: boolean
+  loaded: boolean
+}): PaperRefreshView {
+  const ready = Boolean(input.address) && Boolean(input.token)
+  const hours = input.settings?.paperRefreshHours ?? null
+  const selectedIndex = hours === null ? -1 : PAPER_REFRESH_PRESETS.indexOf(hours)
+  // Absent disables — there is nothing on the other end to write to. `custom` does NOT: tapping a
+  // chip is exactly how somebody leaves a hand-set value, so a control that refused to be touched
+  // would strand them on it.
+  const absent = input.settings !== null && hours === null
+  return {
+    selectedIndex,
+    disabled: !ready || input.busy || absent,
+    note: !input.loaded
+      ? null
+      : !ready
+        ? 'needs_setup'
+        : input.busy
+          ? null
+          : absent
+            ? 'absent'
+            : selectedIndex < 0 && hours !== null
+              ? 'custom'
+              : null,
+    hours,
+  }
+}
+
+/**
  * The queue's six statuses, exactly as `store.py` spells them.
  *
  * A closed union and not a string, unlike `PushDevice`'s `prefs`, and the asymmetry is
@@ -292,6 +372,75 @@ export interface AskBody {
 
 /** What `POST /api/publish` did. A 404 is a state, not a failure — see `publishNow`. */
 export type PublishOutcome = 'published' | 'nothing_staged'
+
+/**
+ * One company's current newspaper, as `GET /api/papers` reports it.
+ *
+ * A PAPER IS NOT A THING THE DESK STORES. It is the newest edition whose subject is this symbol,
+ * derived on every read from the editions table (spec §2). So a row is a snapshot of an answer and
+ * not an object with an identity: two fetches a minute apart can name two different `editionId`s
+ * for the same symbol, and the pager is expected to follow.
+ *
+ * `editionId` is `null` for a symbol on the watchlist the desk has not written yet — a row of
+ * nulls rather than an absent row, so the pager can say "not written yet" rather than silently
+ * being one page shorter than the watchlist.
+ */
+export interface Paper {
+  /** Uppercase, 1–8 characters. The key everything else is looked up by. */
+  symbol: string
+  /** From the watchlist item, not from the edition. `''` when the desk sent none. */
+  name: string
+  editionId: string | null
+  /**
+   * MILLISECONDS. The wire carries unix SECONDS and `parsePaper` multiplies once — every other
+   * numeric stamp in this app is milliseconds, and mixing the two renders 1970.
+   */
+  createdAt: number | null
+  lang: string | null
+  /** The lead story's headline, for the row on the Board tab. */
+  headline: string | null
+  /** This is the edition currently on the glass. */
+  onBoard: boolean
+  /** Older than the desk's own `paper_refresh_hours`. The DESK decides this, not the phone. */
+  stale: boolean
+}
+
+/** Every printable watchlist symbol, in watchlist order, and what is on the board. */
+export interface PapersDoc {
+  papers: Paper[]
+  /** The current edition's id, or `null` for a desk that has published none. */
+  board: string | null
+}
+
+/** What `POST /api/papers/<S>/publish` did. `no_paper` is a state — see the implementation. */
+export type PublishPaperOutcome =
+  | { kind: 'published'; editionId: string; state: string }
+  | { kind: 'no_paper' }
+
+/**
+ * One row, or `null` for one this client cannot type.
+ *
+ * Only `symbol` is required, because it is what every lookup downstream is keyed on and there is
+ * no honest default for it. Everything else falls back, because a row missing its `headline` is
+ * still a paper worth paging to.
+ */
+function parsePaper(raw: unknown): Paper | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.symbol !== 'string' || o.symbol === '') return null
+  const created =
+    typeof o.created_at === 'number' && Number.isFinite(o.created_at) ? o.created_at * 1000 : null
+  return {
+    symbol: o.symbol,
+    name: typeof o.name === 'string' ? o.name : '',
+    editionId: typeof o.edition_id === 'string' && o.edition_id !== '' ? o.edition_id : null,
+    createdAt: created,
+    lang: typeof o.lang === 'string' && o.lang !== '' ? o.lang : null,
+    headline: typeof o.headline === 'string' && o.headline !== '' ? o.headline : null,
+    onBoard: o.on_board === true,
+    stale: o.stale === true,
+  }
+}
 
 function isCommandStatus(v: unknown): v is CommandStatus {
   return typeof v === 'string' && (COMMAND_STATUSES as readonly string[]).includes(v)
@@ -364,12 +513,44 @@ export interface DeskClient {
   commandNotes(id: string): Promise<string | null>
   /** Force the staged edition out. `nothing_staged` is an outcome; see the implementation. */
   publishNow(): Promise<PublishOutcome>
+  /**
+   * Every printable watchlist symbol's current paper, in watchlist order.
+   *
+   * The ORDER IS THE DESK'S and is carried through untouched — `orderPapers` in
+   * `lib/papers/order.ts` is the only thing allowed to move a row, and it moves exactly one.
+   */
+  papers(): Promise<PapersDoc>
+  /** Put one symbol's newest edition on the glass. `no_paper` is an outcome, not a throw. */
+  publishPaper(symbol: string): Promise<PublishPaperOutcome>
+  /**
+   * How to reach one stored edition — its payload, its pictures, and the header both need.
+   *
+   * Handed to the reader as a value so nothing below the screen has to know which plane it is
+   * rendering: `lib/edition/source.ts` explains why that is a value and not a string.
+   *
+   * NOT A ROUTE. This is a client-side helper that builds a `paperSource` from this client's own
+   * base URL and token — there is no `/api/editions/<eid>/source` on the desk to ask instead.
+   */
+  editionSource(editionId: string): EditionSource
+  /**
+   * One stored edition, read exactly as the device plane's is.
+   *
+   * Answers `EditionFetch` and throws `EditionError`, not `DeskError`, and that is deliberate:
+   * this route serves the same document as `/news.json` under the same 320 KB cap, and the Today
+   * screen already has a sentence for every way that can fail (`humanEditionError`).
+   */
+  editionPayload(editionId: string, etag?: string | null): Promise<EditionFetch>
 }
 
 export function createDeskClient(opts: DeskClientOptions): DeskClient {
   const baseUrl = opts.baseUrl.replace(/\/+$/, '')
   const fetchFn = opts.fetchFn ?? fetch
   const timeoutMs = opts.timeoutMs ?? DESK_TIMEOUT_MS
+  // `editionClient` is a module singleton built around the global `fetch`, so a test's injected
+  // `fetchFn` would never reach it. Build this client's own when one was given; only the app-wide
+  // singleton reads the real network.
+  const editions =
+    opts.fetchFn === undefined ? editionClient : createEditionClient({ fetchFn: opts.fetchFn, timeoutMs })
 
   // Our own deadline firing and the network refusing are one code here, unlike `esp32.ts` where a
   // timeout is a statement about a sleeping board. A desk is a server that is meant to be awake,
@@ -416,10 +597,17 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
   // Every 2xx on this route answers the same document, so one reader serves both calls.
   async function settingsOf(res: Response): Promise<DeskSettings> {
     if (!res.ok) throw await refusal(res, 'settings')
+    // Read once: a `Response` body can only be consumed once, and the fake in the tests is more
+    // forgiving about that than a real one would be.
+    const text = await res.text()
     let lang: unknown
+    let raw: unknown
     try {
-      const body = JSON.parse(await res.text()) as { settings?: { lang?: unknown } }
+      const body = JSON.parse(text) as {
+        settings?: { lang?: unknown; paper_refresh_hours?: unknown }
+      }
       lang = body?.settings?.lang
+      raw = body?.settings?.paper_refresh_hours
     } catch {
       throw new DeskError('bad_json', 'settings did not answer JSON', res.status)
     }
@@ -430,7 +618,18 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
     if (typeof lang !== 'string' || lang === '') {
       throw new DeskError('bad_json', 'settings answered without a language', res.status)
     }
-    return { lang }
+    // Absent, out of range, or fractional all read the same way: this desk has no cadence this
+    // app can draw. Clamping would put a chip on screen the desk never agreed to, and the row
+    // would then offer to "change" the cadence to the value it already claims — the same argument
+    // the `lang` arm above makes about a language this app does not offer.
+    const paperRefreshHours =
+      typeof raw === 'number' &&
+      Number.isInteger(raw) &&
+      raw >= PAPER_REFRESH_MIN &&
+      raw <= PAPER_REFRESH_MAX
+        ? raw
+        : null
+    return { lang, paperRefreshHours }
   }
 
   // The same job for the other document, and the same reason it is one function rather than two:
@@ -529,6 +728,32 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
     return row
   }
 
+  // The paper list. A row this client cannot type is DROPPED, `pushOf`'s rule and for `pushOf`'s
+  // reason: the list is mostly about other companies, and refusing the document over one bad entry
+  // would take the whole pager down. A missing `papers` array is different and does refuse — that
+  // is a desk not speaking this contract, and an empty pager drawn from it would say "no
+  // companies" about a watchlist with five.
+  async function papersOf(res: Response): Promise<PapersDoc> {
+    if (!res.ok) throw await refusal(res, 'papers')
+    let payload: unknown
+    try {
+      payload = JSON.parse(await res.text())
+    } catch {
+      throw new DeskError('bad_json', 'papers did not answer JSON', res.status)
+    }
+    const envelope = payload as { papers?: unknown; board?: unknown } | null
+    if (!Array.isArray(envelope?.papers)) {
+      throw new DeskError('bad_json', 'papers answered a list this app cannot read', res.status)
+    }
+    const rows: Paper[] = []
+    for (const raw of envelope.papers) {
+      const row = parsePaper(raw)
+      if (row !== null) rows.push(row)
+    }
+    const board = envelope.board
+    return { papers: rows, board: typeof board === 'string' && board !== '' ? board : null }
+  }
+
   return {
     async getSettings(): Promise<DeskSettings> {
       return settingsOf(await send('/api/settings', { method: 'GET' }))
@@ -539,10 +764,19 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       // carrying a key it does not know, whole, with `bad_settings` — so echoing back the `source`
       // and `ok` that came with a read would be refused, and passing a caller's object through
       // would make that failure depend on where the object had been.
+      //
+      // `paper_refresh_hours` goes in whenever this caller holds a NUMBER, and is left out when it
+      // is `null`. `settings.py` validates it as an integer in 1..72 and refuses the whole document
+      // on a bad value, so a literal `null` in the body would be refused — omitting the key is the
+      // only choice that can never send something the desk must reject.
+      const wire: Record<string, unknown> = { lang: settings.lang }
+      if (settings.paperRefreshHours !== null) {
+        wire.paper_refresh_hours = settings.paperRefreshHours
+      }
       const res = await send('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lang: settings.lang }),
+        body: JSON.stringify(wire),
       })
       // The answer is what is IN FORCE, which is not always what was asked for — the desk
       // normalises, and a later release may refuse a value while keeping the old one. The caller
@@ -657,6 +891,55 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
       if (res.status === 404) return 'nothing_staged'
       if (!res.ok) throw await refusal(res, 'publish')
       return 'published'
+    },
+
+    async papers(): Promise<PapersDoc> {
+      return papersOf(await send('/api/papers', { method: 'GET' }))
+    },
+
+    async publishPaper(symbol: string): Promise<PublishPaperOutcome> {
+      const res = await send(`/api/papers/${encodeURIComponent(symbol)}/publish`, {
+        method: 'POST',
+      })
+      // THE 404 RULE AGAIN, over the narrowest fact this client has: the list said there was a
+      // paper and by the time the tap landed there was not — pruned, or the symbol dropped off the
+      // watchlist between the fetch and the finger. The row redraws as "no paper yet"; a thrown
+      // error would put a network banner over a desk that answered perfectly well.
+      if (res.status === 404) return { kind: 'no_paper' }
+      // Its own label: this is `/api/papers/<SYMBOL>/publish`, not `/api/papers`, and a refusal
+      // that says "papers responded 403" reads like the list failed rather than the publish.
+      if (!res.ok) throw await refusal(res, 'paper publish')
+      let payload: unknown
+      try {
+        payload = JSON.parse(await res.text())
+      } catch {
+        throw new DeskError('bad_json', 'publish did not answer JSON', res.status)
+      }
+      const o = payload as { edition_id?: unknown; state?: unknown } | null
+      // Without an edition id there is nothing to say went on the glass, and the Board row would
+      // tick itself against an answer that named nothing.
+      if (typeof o?.edition_id !== 'string' || o.edition_id === '') {
+        throw new DeskError('bad_json', 'publish answered without an edition', res.status)
+      }
+      return {
+        kind: 'published',
+        editionId: o.edition_id,
+        state: typeof o.state === 'string' ? o.state : '',
+      }
+    },
+
+    editionSource(editionId: string): EditionSource {
+      return paperSource({ deskBaseUrl: baseUrl, editionId, token: opts.token })
+    },
+
+    async editionPayload(editionId: string, etag: string | null = null): Promise<EditionFetch> {
+      // NOT `send()`. `send` is the control plane's envelope reader and this route does not answer
+      // an envelope — it answers an edition, and the one thing in this app that knows what a valid
+      // edition is lives in `edition/client.ts`. What this method contributes is the address and
+      // the credential; the cap, the deadline, the conditional GET and the parse are that client's,
+      // unchanged, so a paper and the board's own edition are read by the same code.
+      const src = paperSource({ deskBaseUrl: baseUrl, editionId, token: opts.token })
+      return editions.fetch(src.payloadUrl, etag, src.headers)
     },
   }
 }

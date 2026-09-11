@@ -10,6 +10,7 @@ import {
   type EditionMachine,
 } from './editionState'
 import { parseEdition } from './parse'
+import { deviceSource } from './source'
 import { type CachedEdition } from './store'
 import {
   createEditionClient,
@@ -30,6 +31,7 @@ const cache = (over: Partial<CachedEdition> = {}): CachedEdition => ({
   fetchedAt: 1000,
   wire: wire('SNDK'),
   edition: edition('SNDK'),
+  source: deviceSource(URL),
   ...over,
 })
 
@@ -185,7 +187,11 @@ describe('nextEditionState — a fetch that succeeded', () => {
       { type: 'fetched', result: ok('MU', 'W/"two"'), url: URL, fetchedAt: 5000 },
     )
     if (m.state.status !== 'ready') throw new Error('unreachable')
-    expect(m.state.cached).toEqual({
+    // `source` is lifted out of the deep equality rather than compared inside it: it holds a
+    // closure, and `toEqual` compares two functions by reference, so no literal written here
+    // could ever match one the reducer built. What it resolves to is asserted below instead.
+    const { source, ...content } = m.state.cached
+    expect(content).toEqual({
       url: URL,
       etag: 'W/"two"',
       fetchedAt: 5000,
@@ -194,6 +200,11 @@ describe('nextEditionState — a fetch that succeeded', () => {
       wire: wire('MU'),
       edition: edition('MU'),
     })
+    // The device plane, addressed at the URL the fetch was answered for, and carrying nothing that
+    // could authenticate anything. This reducer never builds any other kind of source.
+    expect(source.payloadUrl).toBe(URL)
+    expect(source.tileUrl('a')).toBe('http://desk.local:8123/tiles/a.bin')
+    expect(source.headers).toEqual({})
     // And the two halves agree: the entry's edition is what its wire parses to, which is the
     // invariant every reader of the cache relies on.
     expect(m.state.cached.edition).toEqual(parseEdition(m.state.cached.wire))
@@ -421,7 +432,14 @@ describe('demoCache and isDemo', () => {
   it('reads the demo off the entry itself, so the two can never disagree', () => {
     expect(isDemo(demoCache())).toBe(true)
     expect(
-      isDemo({ url: URL, etag: null, fetchedAt: 1, wire: demoCache().wire, edition: demoCache().edition }),
+      isDemo({
+        url: URL,
+        etag: null,
+        fetchedAt: 1,
+        wire: demoCache().wire,
+        edition: demoCache().edition,
+        source: deviceSource(URL),
+      }),
     ).toBe(false)
   })
 })

@@ -20,6 +20,7 @@ import {
   type Shape,
 } from './positionDraft'
 import { createDeskClient, DeskError, type DeskClient } from './desk'
+import { NO_SOURCE } from './edition/source'
 import { positionsBody, strategyLabel, type Position, type PositionsDoc } from './positions'
 import { en } from '../i18n/en'
 import { ko } from '../i18n/ko'
@@ -447,8 +448,8 @@ const held: Position = {
 
 function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
   return {
-    getSettings: async () => ({ lang: 'en' }),
-    putSettings: async () => ({ lang: 'en' }),
+    getSettings: async () => ({ lang: 'en', paperRefreshHours: null }),
+    putSettings: async () => ({ lang: 'en', paperRefreshHours: null }),
     positions: async () => book([held]),
     putPositions: async (doc) => doc,
     // Nothing in this file reads the event book or the registered phones; they are here because
@@ -464,6 +465,13 @@ function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
     command: async () => null,
     commandNotes: async () => null,
     publishNow: async () => 'nothing_staged',
+    // Nothing in this file reads the paper list either; see the comment above.
+    papers: async () => ({ papers: [], board: null }),
+    publishPaper: async () => ({ kind: 'no_paper' }),
+    editionSource: () => NO_SOURCE,
+    editionPayload: async () => {
+      throw new Error('not used in this file')
+    },
     ...over,
   }
 }

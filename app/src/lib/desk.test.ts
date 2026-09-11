@@ -1,4 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import {
   createDeskClient,
   deskLanguageView,
@@ -6,16 +8,30 @@ import {
   EDITION_LANGUAGES,
   humanDeskError,
   redactPushTokens,
+  PAPER_REFRESH_PRESETS,
+  PAPER_REFRESH_MIN,
+  PAPER_REFRESH_MAX,
+  paperRefreshView,
 } from './desk'
 import { setActiveLanguage } from '../i18n'
 
 const BASE = 'https://desk.example.dev'
 const TOKEN = 'operator-token-for-tests'
 
+const EDITION_FIXTURE = join(
+  __dirname,
+  '../../../components/news_core/test/host/fixtures/news.json',
+)
+
 // A fake `fetch` that replays a queue of responses, or throws a queued Error for a refused
 // connection. Every call is recorded, because the things this client has to get right are all
 // properties of the REQUEST: the method, the path, the bearer header and the exact body.
-type Reply = { status?: number; text?: string } | Error
+//
+// `headers` and `arrayBuffer` are here for `editionClient`'s sake — `editionPayload` reads one
+// through `edition/client.ts`, which needs `res.headers.get()` (case-insensitively, for the ETag)
+// and `res.arrayBuffer()` rather than `res.text()`. Widened in place rather than duplicated: two
+// fakes in this file would be two answers to "what does a response look like here".
+type Reply = { status?: number; text?: string; headers?: Record<string, string> } | Error
 
 function fakeFetch(replies: Reply[]) {
   const calls: Array<{ url: string; init?: RequestInit }> = []
@@ -26,10 +42,19 @@ function fakeFetch(replies: Reply[]) {
     i++
     if (r instanceof Error) throw r
     const status = r.status ?? 200
+    const headers = r.headers ?? {}
+    const text = r.text ?? ''
     return {
       ok: status >= 200 && status < 300,
       status,
-      text: async () => r.text ?? '',
+      headers: {
+        get: (k: string) => {
+          const hit = Object.keys(headers).find((h) => h.toLowerCase() === k.toLowerCase())
+          return hit === undefined ? null : headers[hit]
+        },
+      },
+      text: async () => text,
+      arrayBuffer: async () => new TextEncoder().encode(text).buffer,
     } as unknown as Response
   }) as unknown as typeof fetch
   return { fetchImpl, calls }
@@ -40,8 +65,14 @@ function client(replies: Reply[], token = TOKEN) {
   return { ...f, client: createDeskClient({ baseUrl: BASE, token, fetchFn: f.fetchImpl }) }
 }
 
-const okBody = (lang: string) =>
-  JSON.stringify({ ok: true, source: 'file', settings: { lang } })
+// The desk's settings document, as a current desk answers it. `paper_refresh_hours` joined it
+// with the papers feature; passing `null` for `hours` is what an older desk still answers.
+const okBody = (lang: string, hours: number | null = 12) =>
+  JSON.stringify({
+    ok: true,
+    source: 'file',
+    settings: hours === null ? { lang } : { lang, paper_refresh_hours: hours },
+  })
 
 const header = (init: RequestInit | undefined, name: string): string | undefined =>
   (init?.headers as Record<string, string> | undefined)?.[name]
@@ -49,7 +80,7 @@ const header = (init: RequestInit | undefined, name: string): string | undefined
 describe('deskClient.getSettings', () => {
   it('GETs /api/settings with the operator token as a bearer', async () => {
     const { client: c, calls } = client([{ text: okBody('ko') }])
-    expect(await c.getSettings()).toEqual({ lang: 'ko' })
+    expect(await c.getSettings()).toEqual({ lang: 'ko', paperRefreshHours: 12 })
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe('https://desk.example.dev/api/settings')
     expect(calls[0].init?.method).toBe('GET')
@@ -67,25 +98,70 @@ describe('deskClient.getSettings', () => {
     // The selector shows no segment for it, which is the honest draw. Substituting 'en' here
     // would tell the operator their paper is in English when the desk says it is in French.
     const { client: c } = client([{ text: okBody('fr') }])
-    expect(await c.getSettings()).toEqual({ lang: 'fr' })
+    expect(await c.getSettings()).toEqual({ lang: 'fr', paperRefreshHours: 12 })
   })
 })
 
 describe('deskClient.putSettings', () => {
-  it('PUTs exactly {"lang":"ko"} and answers with the desk’s settings', async () => {
+  it('PUTs the language and cadence and answers with the desk’s settings', async () => {
     const { client: c, calls } = client([{ text: okBody('ko') }])
-    expect(await c.putSettings({ lang: 'ko' })).toEqual({ lang: 'ko' })
+    expect(await c.putSettings({ lang: 'ko', paperRefreshHours: 12 })).toEqual({
+      lang: 'ko',
+      paperRefreshHours: 12,
+    })
     expect(calls[0].init?.method).toBe('PUT')
     // The body is asserted as bytes, not as a parsed object: the desk refuses an unknown key
     // whole (`bad_settings`), so a client that helpfully sent `source` back would be refused.
-    expect(calls[0].init?.body).toBe('{"lang":"ko"}')
+    expect(calls[0].init?.body).toBe('{"lang":"ko","paper_refresh_hours":12}')
     expect(header(calls[0].init, 'Content-Type')).toBe('application/json')
     expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
   })
 
-  it('answers with what the desk put in force, not with what was asked for', async () => {
-    const { client: c } = client([{ text: okBody('en') }])
-    expect(await c.putSettings({ lang: 'ko' })).toEqual({ lang: 'en' })
+  it('answers with what is IN FORCE, not with what was asked for', async () => {
+    const { client: c } = client([{ text: okBody('en', 6) }])
+    expect(await c.putSettings({ lang: 'ko', paperRefreshHours: 1 })).toEqual({
+      lang: 'en',
+      paperRefreshHours: 6,
+    })
+  })
+
+  it('sends both fields when it holds both', async () => {
+    const { client: c, calls } = client([{ text: okBody('ko', 24) }])
+    await c.putSettings({ lang: 'ko', paperRefreshHours: 24 })
+    expect(calls[0].init?.body).toBe('{"lang":"ko","paper_refresh_hours":24}')
+  })
+
+  it('omits the key rather than send a null the desk must refuse over the whole document', async () => {
+    // `settings.py` validates `paper_refresh_hours` as an integer in 1..72 and refuses the WHOLE
+    // document on a bad value — a literal `null` in the body would be one. Omitting the key is the
+    // only send that can never trip that refusal, which is why the gate is "do we hold a number"
+    // rather than anything about what a previous GET reported.
+    const { client: c, calls } = client([{ text: okBody('ko', null) }])
+    await c.putSettings({ lang: 'ko', paperRefreshHours: null })
+    expect(calls[0].init?.body).toBe('{"lang":"ko"}')
+  })
+})
+
+describe('deskClient settings — the paper cadence', () => {
+  it('reads the cadence beside the language', async () => {
+    const { client: c } = client([{ text: okBody('ko', 6) }])
+    expect(await c.getSettings()).toEqual({ lang: 'ko', paperRefreshHours: 6 })
+  })
+
+  it('reads a desk that does not carry the field as null, not as a default', async () => {
+    // NOT 12. A default invented here would draw a chip the desk never agreed to, on a desk that
+    // has no such setting at all — and the row's own note is the honest thing to show instead.
+    const { client: c } = client([{ text: okBody('en', null) }])
+    expect(await c.getSettings()).toEqual({ lang: 'en', paperRefreshHours: null })
+  })
+
+  it('reads a value outside 1..72, or a fractional one, as null rather than clamping it', async () => {
+    for (const bad of [0, 73, 12.5, -1]) {
+      const { client: c } = client([
+        { text: JSON.stringify({ ok: true, settings: { lang: 'en', paper_refresh_hours: bad } }) },
+      ])
+      expect((await c.getSettings()).paperRefreshHours).toBeNull()
+    }
   })
 })
 
@@ -103,7 +179,7 @@ describe('the failures', () => {
     const { client: c } = client([
       { status: 403, text: JSON.stringify({ ok: false, error: 'forbidden' }) },
     ])
-    await expect(c.putSettings({ lang: 'ko' })).rejects.toMatchObject({
+    await expect(c.putSettings({ lang: 'ko', paperRefreshHours: null })).rejects.toMatchObject({
       code: 'unauthorized',
       status: 403,
     })
@@ -120,7 +196,9 @@ describe('the failures', () => {
         }),
       },
     ])
-    const e = await c.putSettings({ lang: 'Korean' }).catch((x: unknown) => x)
+    const e = await c
+      .putSettings({ lang: 'Korean', paperRefreshHours: null })
+      .catch((x: unknown) => x)
     expect(e).toBeInstanceOf(DeskError)
     expect(e).toMatchObject({ code: 'http', status: 400, error: 'bad_settings' })
     expect((e as DeskError).detail).toBe("lang: must be one of: en, ko -- got 'Korean'")
@@ -535,5 +613,279 @@ describe('deskClient.publishNow', () => {
   it('turns a 403 into unauthorized, like every other route', async () => {
     const { client: c } = client([{ status: 403, text: '{"ok":false,"error":"forbidden"}' }])
     await expect(c.publishNow()).rejects.toMatchObject({ code: 'unauthorized', status: 403 })
+  })
+})
+
+const paperRow = (over: Record<string, unknown> = {}) => ({
+  symbol: 'SNDK',
+  name: 'SanDisk',
+  edition_id: 'a1b2c3d4e5f60718',
+  created_at: 1_757_000_000,
+  lang: 'en',
+  headline: 'The guide, not the buyback',
+  on_board: true,
+  stale: false,
+  ...over,
+})
+
+const papersBody = (papers: unknown[], board: unknown = 'a1b2c3d4e5f60718') =>
+  JSON.stringify({ ok: true, papers, board })
+
+describe('deskClient.papers', () => {
+  it('GETs /api/papers with the bearer and reads the rows in the order given', async () => {
+    const { client: c, calls } = client([
+      {
+        text: papersBody([
+          paperRow(),
+          paperRow({ symbol: 'TSLA', name: 'Tesla', on_board: false }),
+        ]),
+      },
+    ])
+    const doc = await c.papers()
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers')
+    expect(calls[0].init?.method).toBe('GET')
+    expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(doc.board).toBe('a1b2c3d4e5f60718')
+    expect(doc.papers.map((p) => p.symbol)).toEqual(['SNDK', 'TSLA'])
+    expect(doc.papers[0]).toEqual({
+      symbol: 'SNDK',
+      name: 'SanDisk',
+      editionId: 'a1b2c3d4e5f60718',
+      // SECONDS ON THE WIRE, MILLISECONDS IN THE MODEL. Everything else this app holds as a
+      // number is a millisecond stamp, and one that is not renders as 1970.
+      createdAt: 1_757_000_000_000,
+      lang: 'en',
+      headline: 'The guide, not the buyback',
+      onBoard: true,
+      stale: false,
+    })
+  })
+
+  it('reads a symbol with no paper as a row of nulls, not as an absent row', async () => {
+    // The pager draws a page for it saying the desk has not written one yet. Skipping it would
+    // make a company disappear from the phone because it is new to the watchlist.
+    const { client: c } = client([
+      {
+        text: papersBody([
+          paperRow({
+            symbol: 'MU',
+            name: 'Micron',
+            edition_id: null,
+            created_at: null,
+            lang: null,
+            headline: null,
+            on_board: false,
+            stale: true,
+          }),
+        ]),
+      },
+    ])
+    const doc = await c.papers()
+    expect(doc.papers[0]).toMatchObject({
+      symbol: 'MU',
+      editionId: null,
+      createdAt: null,
+      headline: null,
+      onBoard: false,
+      stale: true,
+    })
+  })
+
+  it('drops a row it cannot type instead of refusing the whole list', async () => {
+    // Four companies must not vanish because the fifth has a broken row. `pushOf`'s rule.
+    const { client: c } = client([
+      { text: papersBody([{ name: 'no symbol here' }, paperRow({ symbol: 'TSLA' })]) },
+    ])
+    expect((await c.papers()).papers.map((p) => p.symbol)).toEqual(['TSLA'])
+  })
+
+  it('reads a desk with no current edition as board: null', async () => {
+    const { client: c } = client([{ text: papersBody([paperRow({ on_board: false })], null) }])
+    expect((await c.papers()).board).toBeNull()
+  })
+
+  it('refuses a 200 that carries no papers array at all', async () => {
+    // A captive portal answering 200 for everything, or a desk not speaking this contract. An
+    // empty pager drawn from it would say "no companies" about a watchlist with five.
+    const { client: c } = client([{ text: '{"ok":true}' }])
+    await expect(c.papers()).rejects.toMatchObject({ code: 'bad_json' })
+  })
+
+  it('passes a refusal through with the desk’s own reason', async () => {
+    const { client: c } = client([{ status: 403, text: '{"ok":false,"error":"forbidden"}' }])
+    await expect(c.papers()).rejects.toMatchObject({ code: 'unauthorized' })
+  })
+})
+
+describe('deskClient.publishPaper', () => {
+  it('POSTs to the symbol’s publish route and reads what was promoted', async () => {
+    const { client: c, calls } = client([
+      { text: '{"ok":true,"edition_id":"a1b2c3d4e5f60718","state":"published"}' },
+    ])
+    expect(await c.publishPaper('SNDK')).toEqual({
+      kind: 'published',
+      editionId: 'a1b2c3d4e5f60718',
+      state: 'published',
+    })
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers/SNDK/publish')
+    expect(calls[0].init?.method).toBe('POST')
+  })
+
+  it('reads “that paper is already on the board” without inventing a failure', async () => {
+    const { client: c } = client([{ text: '{"ok":true,"edition_id":"e1","state":"unchanged"}' }])
+    expect(await c.publishPaper('SNDK')).toEqual({
+      kind: 'published',
+      editionId: 'e1',
+      state: 'unchanged',
+    })
+  })
+
+  it('reads a 404 as “there is no paper for this symbol”, a state and not a failure', async () => {
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"no_paper"}' }])
+    expect(await c.publishPaper('MU')).toEqual({ kind: 'no_paper' })
+  })
+
+  it('percent-encodes the symbol into the path', async () => {
+    // 'BRK.B' has no character `encodeURIComponent` touches, and the desk's own symbol charset
+    // (`[A-Z0-9.-]`) never produces one either — this only proves the dot survives untouched. The
+    // real proof of encoding is the next test, over a character the desk never validated (R-4).
+    const { client: c, calls } = client([
+      { text: '{"ok":true,"edition_id":"e","state":"published"}' },
+    ])
+    await c.publishPaper('BRK.B')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers/BRK.B/publish')
+  })
+
+  it('percent-encodes a symbol carrying a character the desk never validated', async () => {
+    const { client: c, calls } = client([
+      { text: '{"ok":true,"edition_id":"e","state":"published"}' },
+    ])
+    await c.publishPaper('AB/CD')
+    expect(calls[0].url).toBe('https://desk.example.dev/api/papers/AB%2FCD/publish')
+  })
+
+  it('refuses a 200 with no edition id — there is nothing to say went on the glass', async () => {
+    const { client: c } = client([{ text: '{"ok":true,"state":"published"}' }])
+    await expect(c.publishPaper('SNDK')).rejects.toMatchObject({ code: 'bad_json' })
+  })
+})
+
+describe('deskClient.editionSource', () => {
+  it('addresses one edition, payload and pictures, with the bearer on both', () => {
+    const { client: c } = client([])
+    const s = c.editionSource('a1b2c3d4e5f60718')
+    expect(s.payloadUrl).toBe(
+      'https://desk.example.dev/api/editions/a1b2c3d4e5f60718/news.json',
+    )
+    expect(s.tileUrl('sndk_fab')).toBe(
+      'https://desk.example.dev/api/editions/a1b2c3d4e5f60718/tiles/sndk_fab.bin',
+    )
+    expect(s.headers).toEqual({ Authorization: `Bearer ${TOKEN}` })
+  })
+})
+
+describe('deskClient.editionPayload', () => {
+  it('GETs the edition through the edition client, bearer and Accept together', async () => {
+    const { client: c, calls } = client([
+      { text: readFileSync(EDITION_FIXTURE, 'utf8'), headers: { ETag: '"e1"' } },
+    ])
+    const got = await c.editionPayload('a1b2c3d4e5f60718')
+    expect(calls[0].url).toBe(
+      'https://desk.example.dev/api/editions/a1b2c3d4e5f60718/news.json',
+    )
+    expect(header(calls[0].init, 'Authorization')).toBe(`Bearer ${TOKEN}`)
+    expect(header(calls[0].init, 'Accept')).toBe('application/json')
+    expect(got.status).toBe('ok')
+    if (got.status !== 'ok') throw new Error('unreachable')
+    expect(got.etag).toBe('"e1"')
+    // THE SAME PARSE THE DEVICE PLANE GETS, and the same wire body carried beside it — the cache
+    // stores wire bodies, not parsed editions (`edition/store.ts`'s header). A paper read by a
+    // second parser would be a second newspaper maintained as one.
+    expect(got.edition.subject.symbol).not.toBe('')
+    expect(got.wire).toEqual(JSON.parse(readFileSync(EDITION_FIXTURE, 'utf8')))
+  })
+
+  it('asks the conditional question when it holds a tag, and reads the 304', async () => {
+    const { client: c, calls } = client([{ status: 304 }])
+    expect(await c.editionPayload('e1', '"e1"')).toEqual({ status: 'not_modified' })
+    expect(header(calls[0].init, 'If-None-Match')).toBe('"e1"')
+  })
+
+  it('fails as an EditionError, not a DeskError — Today already draws those sentences', async () => {
+    const { client: c } = client([{ status: 404, text: '{"ok":false,"error":"not_found"}' }])
+    await expect(c.editionPayload('gone')).rejects.toMatchObject({
+      name: 'EditionError',
+      code: 'http',
+      status: 404,
+    })
+  })
+})
+
+const paperRefreshSettings = (hours: number | null) => ({ lang: 'en', paperRefreshHours: hours })
+
+describe('paperRefreshView', () => {
+  const on = { address: 'https://d', token: 'tok', busy: false, loaded: true }
+
+  it('offers six choices across the desk’s whole range', () => {
+    expect([...PAPER_REFRESH_PRESETS]).toEqual([3, 6, 12, 24, 48, 72])
+  })
+
+  it('lights the chip the desk is set to', () => {
+    expect(paperRefreshView({ ...on, settings: paperRefreshSettings(12) })).toEqual({
+      selectedIndex: 2,
+      disabled: false,
+      note: null,
+      hours: 12,
+    })
+  })
+
+  it('says nothing while storage has not answered, rather than telling a set-up phone to set up', () => {
+    expect(
+      paperRefreshView({ address: null, token: null, settings: null, busy: false, loaded: false }),
+    ).toMatchObject({ note: null, disabled: true })
+  })
+
+  it('asks for an address and a token when there are none', () => {
+    expect(
+      paperRefreshView({ address: null, token: null, settings: null, busy: false, loaded: true }),
+    ).toMatchObject({ note: 'needs_setup', disabled: true, selectedIndex: -1 })
+  })
+
+  it('is dead and quiet while a read or a write is out', () => {
+    expect(paperRefreshView({ ...on, busy: true, settings: paperRefreshSettings(12) })).toMatchObject({
+      disabled: true,
+      note: null,
+    })
+  })
+
+  it('says the desk has no such setting when it answered without one', () => {
+    // NOT "nothing is selected", which reads as a broken control over a desk that answered
+    // perfectly well. This is the state of every desk one release behind.
+    expect(paperRefreshView({ ...on, settings: paperRefreshSettings(null) })).toMatchObject({
+      note: 'absent',
+      disabled: true,
+      selectedIndex: -1,
+    })
+  })
+
+  it('says so when the desk is on a value none of the chips names', () => {
+    // 1..72 is the desk's RANGE; the chips are six points in it. A cadence set by hand is legal
+    // and has to be drawn honestly rather than rounded to the nearest chip.
+    expect(
+      paperRefreshView({ ...on, settings: { lang: 'en', paperRefreshHours: 9 } }),
+    ).toMatchObject({
+      note: 'custom',
+      hours: 9,
+      selectedIndex: -1,
+      // Still usable: tapping a chip is how you leave a custom value.
+      disabled: false,
+    })
+  })
+
+  it('stays within the desk’s own range', () => {
+    for (const h of PAPER_REFRESH_PRESETS) {
+      expect(h).toBeGreaterThanOrEqual(PAPER_REFRESH_MIN)
+      expect(h).toBeLessThanOrEqual(PAPER_REFRESH_MAX)
+    }
   })
 })

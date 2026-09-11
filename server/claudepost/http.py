@@ -54,8 +54,12 @@ from . import (calendar as cal, notes, policy, positions as pos, push,
                tiles, watchlist as wl)
 from .app import COMMAND_ID_RE, Desk, as_int, utc_stamp
 from .auth import require, scope_from_header
-from .editions import CommitResult, SHEET_RE
+from .editions import COMMIT_TARGETS, TARGET_BOARD, CommitResult, SHEET_RE
 from .errors import BadRequest, Conflict, DeskError, Internal, NotFound, TooLarge, epoch_seconds
+# From `store` rather than respelled here: the pattern that says what a ticker
+# is has one home, the same argument `COMMAND_ID_RE` above is imported under.
+# `h_publish_paper` checks a URL path segment against it.
+from .store import COMMAND_SYMBOL_RE
 
 LOG = logging.getLogger("claudepost.http")
 
@@ -414,10 +418,10 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def _serve_edition(self, _match, head: bool) -> None:
         """The current edition, with the policy block spliced in at serve time.
 
-        Computed per request rather than stored because ``next_change`` is an
-        instant: baked into a file, it is wrong the moment the schedule changes.
-        It costs one parse and one serialise of a document the device caps at
-        320 KB, against a board that asks every fifteen minutes.
+        Which edition, and nothing else: everything from the stored bytes to
+        the response is :meth:`_send_edition_payload`, which the control
+        plane's read-by-id calls as well so that the two answers cannot drift
+        apart.
         """
         desk = self.desk
         eid = desk.editions.current_id()
@@ -428,26 +432,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             # it handles an unreachable server: it keeps whatever is on the
             # glass and badges it.
             raise NotFound(message="no edition has been filed yet")
-
-        body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
-
-        # Over the spliced bytes rather than over the stored payload, so the
-        # tag answers the only question the board is asking -- is what I have
-        # what you would send me -- and moves when the cadence in the policy
-        # block moves. Within a schedule window those bytes are constant (both
-        # numbers are step functions of the clock, and `next_change` is
-        # truncated to a whole second), so an ordinary poll is a 304 and a
-        # schedule transition is a full edition. That is the mechanism a
-        # sleeping board's cadence rests on: a 304 across a transition would
-        # leave it polling at the wrong rate until something else changed.
-        tag = _etag(body)
-        # get_all(), not get(): a repeated field may arrive as several lines
-        # (RFC 9110 5.3) and `Message.get` returns only the first, so a proxy
-        # that split the list would cost the board a full edition per poll.
-        if _if_none_match(", ".join(self.headers.get_all("If-None-Match") or []), tag):
-            self._send_not_modified(tag)
-            return
-        self._send_bytes(200, body, "application/json", head=head, etag=tag)
+        self._send_edition_payload(payload, head=head)
 
     def _serve_tile(self, match, head: bool) -> None:
         desk = self.desk
@@ -571,13 +556,38 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(200, data, _SHEET_TYPES[os.path.splitext(name)[1]])
 
     def h_commit(self, match, _query) -> None:
+        """File a draft, for the board or as a company's paper.
+
+        The body is **optional**, and that is the compatibility promise: no
+        body, an empty object, or one with no ``target`` is exactly the board
+        commit this route has always been. A worker one release behind the desk
+        goes on filing editions.
+        """
         desk = self.desk
+        doc = self._json_body(required=False)
+        target = doc.get("target", TARGET_BOARD)
+        if target not in COMMIT_TARGETS:
+            raise BadRequest(message="target is one of: "
+                                     + ", ".join(COMMIT_TARGETS))
+        symbol = doc.get("symbol")
+        if symbol is not None:
+            # Shape here, meaning in `editions.commit`: a non-string cannot be
+            # upper-cased, and everything past that -- whether it matches the
+            # draft's own subject -- is the commit's decision and not a route's.
+            if not isinstance(symbol, str) or isinstance(symbol, bool):
+                raise BadRequest(message="symbol is a ticker")
+            symbol = symbol.upper()
         self._send_commit(desk.editions.commit(match.group("draft"), desk.schedule,
-                                               desk.clock.now()))
+                                               desk.clock.now(),
+                                               target=target, symbol=symbol))
 
     # -- handlers: editions -----------------------------------------------
     def h_list_editions(self, _match, _query) -> None:
-        self._send_json(200, {"ok": True, "editions": self.desk.store.list_editions(),
+        # `editions.list_editions` and not `store.list_editions`: the company
+        # and the language are filled off the payload for an edition that
+        # predates them, and that fill is the edition store's.
+        self._send_json(200, {"ok": True,
+                              "editions": self.desk.editions.list_editions(),
                               "current": self.desk.editions.current_id(),
                               "staged": self.desk.editions.staged_id()})
 
@@ -601,21 +611,99 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
     def h_promote(self, match, _query) -> None:
         self._send_commit(self.desk.editions.promote(match.group("eid")))
 
+    def h_edition_payload(self, match, _query) -> None:
+        """One edition's payload, by id, with the policy block spliced in.
+
+        The same bytes ``/news.json`` would serve if this edition were current
+        -- not as a promise but as one call: both routes end in
+        :meth:`_send_edition_payload`, which is the whole of the answer. That
+        is what lets the phone's reader be the board's reader instead of a
+        second parser written against a shape that might drift.
+
+        ``producer`` scope and not the device plane. The device plane is three
+        paths, and a per-edition read that leaked onto it would put every paper
+        the desk holds -- including companies the board never prints -- behind
+        no credential at all.
+        """
+        payload = self.desk.editions.read_payload(match.group("eid"))
+        if payload is None:
+            raise NotFound()
+        self._send_edition_payload(payload)
+
+    def h_edition_tile(self, match, _query) -> None:
+        """One tile of one edition, verbatim.
+
+        A 404 rather than an empty body for a tile that is not there, which is
+        the device plane's rule for the same reason: the module reflows without
+        the picture and the page still prints.
+        """
+        data = self.desk.editions.read_tile(match.group("eid"),
+                                            match.group("tile"))
+        if data is None:
+            raise NotFound()
+        self._send_bytes(200, data, "application/octet-stream")
+
+    # -- handlers: the papers ---------------------------------------------
+    def h_papers(self, _match, _query) -> None:
+        """Every company's paper, and which edition is on the glass.
+
+        ``board`` is beside the rows rather than folded into them because it is
+        one fact about the desk and not a fact about a company: a client
+        drawing "on the board" gets it from the flag, and a client that wants
+        to know what the board is showing when none of these papers is on it
+        gets it from here.
+        """
+        desk = self.desk
+        self._send_json(200, {"ok": True, "papers": desk.papers(),
+                              "board": desk.editions.current_id()})
+
+    def h_publish_paper(self, match, _query) -> None:
+        """Put a company's newest paper on the glass, now.
+
+        :meth:`~claudepost.editions.EditionStore.promote` behind a symbol
+        lookup, which means it ignores every schedule gate exactly as promote
+        does -- the operator asked for this by hand, and a rule you cannot
+        override is a rule somebody ends up editing at midnight. The next
+        scheduled wake's edition publishes over it in the ordinary way.
+        """
+        desk = self.desk
+        symbol = match.group("symbol").upper()
+        # The route's pattern is a character class, so `".."`, `"."` and `"-"`
+        # all match it and arrive here. This value is a URL *path segment*, and
+        # `".."` is one the desk refuses to treat as a company name at every
+        # layer rather than relying on the paper index happening to hold
+        # nothing under that key. `COMMAND_SYMBOL_RE` is imported rather than
+        # respelled so the regex that says what a ticker is has exactly one
+        # home. A thing that is not a ticker has no paper, so it takes the same
+        # answer as a company nothing has been written about -- one code path,
+        # and a true sentence.
+        if not COMMAND_SYMBOL_RE.match(symbol):
+            raise NotFound("no_paper",
+                           f"no edition has been filed about {symbol:.16}")
+        meta = desk.editions.papers([symbol])[symbol]
+        if meta is None:
+            raise NotFound("no_paper",
+                           f"no edition has been filed about {symbol}")
+        self._send_commit(desk.editions.promote(meta["id"]))
+
     # -- handlers: the queue ----------------------------------------------
     def h_enqueue(self, _match, _query) -> None:
         doc = self._json_body()
         text = doc.get("text")
         if not isinstance(text, str) or not text.strip():
             raise BadRequest(message="a command needs text")
-        # `reply_to` and `lang` are passed through as they arrived, `None` and
-        # all: `store.add_command` is where both are checked, so the shape a
-        # `curl` can file and the shape the phone can file are one rule.
+        # `reply_to`, `lang` and `symbol` are passed through as they arrived,
+        # `None` and all: `store.add_command` is where all three are checked,
+        # so the shape a `curl` can file and the shape the phone can file are
+        # one rule. `symbol` in particular is checked *against the kind* there,
+        # which a route cannot do without duplicating the kind table.
         command = self.desk.enqueue(
             doc.get("kind", "custom"), text,
             priority=_int_field(doc, "priority", 5, 0, 9),
             deadline_at=_epoch_field(doc, "deadline_at"),
             source=str(doc.get("source", "api"))[:64],
-            reply_to=doc.get("reply_to"), lang=doc.get("lang"))
+            reply_to=doc.get("reply_to"), lang=doc.get("lang"),
+            symbol=doc.get("symbol"))
         self._send_json(200, {"ok": True, "command": command})
 
     def h_claim(self, _match, query) -> None:
@@ -776,11 +864,14 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
 
         :meth:`h_put_schedule`'s shape exactly, including the refusal: a
         document carrying a key this desk does not know is refused whole with
-        ``bad_settings`` and leaves the language in force untouched. That
-        matters more here than the single field suggests -- this is the
+        ``bad_settings`` and leaves the settings in force untouched. That
+        matters more here than its two fields suggest -- this is the
         document a later release adds a setting to, so a phone app one
         version ahead of the desk has to be told no rather than left
-        believing it changed something.
+        believing it changed something. The audit records the whole
+        normalised document for the same reason: naming a field by hand was
+        already one behind the moment ``paper_refresh_hours`` arrived, and
+        ``parse_settings`` guarantees ``doc`` holds nothing but ``_KEYS``.
 
         Read at ``producer`` scope and written at ``operator``: the agent and
         the phone both need to know what the paper is written in, but which
@@ -789,7 +880,7 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         """
         doc = st.parse_settings(self._json_body())
         self.desk.set_settings(doc)
-        self.desk.store.audit("settings", {"lang": doc["lang"]})
+        self.desk.store.audit("settings", dict(doc))
         self._send_json(200, {"ok": True, "source": self.desk.settings_source,
                               "settings": self.desk.settings})
 
@@ -1107,6 +1198,50 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
             raise BadRequest("bad_json", "the body must be a JSON object")
         return doc
 
+    def _send_edition_payload(self, payload: bytes, head: bool = False) -> None:
+        """One edition's stored bytes, as both planes answer with them.
+
+        Everything that happens to a payload between the disk and the wire:
+        splice the policy block, derive the validator from the spliced bytes,
+        honour ``If-None-Match``, send the 304 or the edition. Two routes end
+        here -- the device plane's current edition and the control plane's
+        read of one by id -- and that is what this exists for. The phone's
+        reader is the board's reader, so those two answers must be the same
+        bytes under the same tag; two spellings of this sequence would be a
+        promise instead of a mechanism, and the day one drifted from the other
+        nothing would fail.
+
+        It knows nothing about scopes or about which route called it. Which
+        edition, and who may ask for it, are the caller's two decisions and its
+        only two.
+
+        The policy block is computed per request rather than stored because
+        ``next_change`` is an instant: baked into a file, it is wrong the
+        moment the schedule changes. It costs one parse and one serialise of a
+        document the device caps at 320 KB, against a board that asks every
+        fifteen minutes.
+        """
+        desk = self.desk
+        body = policy.splice_policy(payload, desk.schedule, desk.clock.now())
+
+        # Over the spliced bytes rather than over the stored payload, so the
+        # tag answers the only question the board is asking -- is what I have
+        # what you would send me -- and moves when the cadence in the policy
+        # block moves. Within a schedule window those bytes are constant (both
+        # numbers are step functions of the clock, and `next_change` is
+        # truncated to a whole second), so an ordinary poll is a 304 and a
+        # schedule transition is a full edition. That is the mechanism a
+        # sleeping board's cadence rests on: a 304 across a transition would
+        # leave it polling at the wrong rate until something else changed.
+        tag = _etag(body)
+        # get_all(), not get(): a repeated field may arrive as several lines
+        # (RFC 9110 5.3) and `Message.get` returns only the first, so a proxy
+        # that split the list would cost the board a full edition per poll.
+        if _if_none_match(", ".join(self.headers.get_all("If-None-Match") or []), tag):
+            self._send_not_modified(tag)
+            return
+        self._send_bytes(200, body, "application/json", head=head, etag=tag)
+
     def _send_commit(self, result: CommitResult) -> None:
         """What became of an edition, in the one shape its three doors answer in.
 
@@ -1257,10 +1392,23 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_get_edition)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/notes\.md\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_edition_notes)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/news\.json\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_payload)}),
+    (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/tiles/(?P<tile>%s)\.bin\Z" % _TILE_ID), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_edition_tile)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/proof/(?P<name>[^/]{1,60})\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_edition_sheet)}),
     (re.compile(r"^/api/editions/(?P<eid>[0-9a-f]{8,64})/promote\Z"), {
         "POST": ("operator", DeskHTTPRequestHandler.h_promote)}),
+
+    # The symbol in the path is matched case-insensitively and upper-cased by
+    # the handler, the way `watchlist._symbol` accepts `"acme"`: a phone that
+    # kept a lower-case ticker should not get a 404 that looks like "there is
+    # no paper" when what it means is "you spelled it in the wrong case".
+    (re.compile(r"^/api/papers\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_papers)}),
+    (re.compile(r"^/api/papers/(?P<symbol>[A-Za-z0-9.\-]{1,8})/publish\Z"), {
+        "POST": ("operator", DeskHTTPRequestHandler.h_publish_paper)}),
 
     (re.compile(r"^/api/commands\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_list_commands),

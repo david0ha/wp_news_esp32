@@ -107,6 +107,10 @@ function makeFakeClient() {
     command,
     commandNotes,
     publishNow,
+    papers: notImplemented('papers'),
+    publishPaper: notImplemented('publishPaper'),
+    editionSource: notImplemented('editionSource'),
+    editionPayload: notImplemented('editionPayload'),
   }
   return { client, postCommand, command, commandNotes, publishNow }
 }

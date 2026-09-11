@@ -12,6 +12,7 @@ import {
 } from './store'
 import { parseEdition } from './parse'
 import { demoEdition, demoWire } from './demo'
+import { deviceSource } from './source'
 
 beforeEach(async () => {
   await AsyncStorage.clear()
@@ -30,6 +31,7 @@ const entry = (over: Partial<CachedEdition> = {}): CachedEdition => ({
   // The two halves of a real entry: the body as served, and what the reader derives from it.
   wire: demoWire(),
   edition: demoEdition(),
+  source: deviceSource(URL),
   ...over,
 })
 
@@ -132,7 +134,17 @@ describe('the on-disk edition cache', () => {
     expect(got?.etag).toBe('W/"abc"')
     expect(got?.fetchedAt).toBe(1_700_000_000_000)
     expect(got?.edition.subject.symbol).toBe('SNDK')
-    expect(Object.keys(got ?? {}).sort()).toEqual(['edition', 'etag', 'fetchedAt', 'url', 'wire'])
+    // Six and not five: `source` joined them, and it is the one key here that was never on the
+    // disk at all. `sanitize` rebuilds it from `url` on every read, so it is as immune to a
+    // stored field as the rest — a `source` written by a newer build would be dropped too.
+    expect(Object.keys(got ?? {}).sort()).toEqual([
+      'edition',
+      'etag',
+      'fetchedAt',
+      'source',
+      'url',
+      'wire',
+    ])
   })
 
   it('reads a corrupt value as nothing cached', async () => {
@@ -237,7 +249,47 @@ describe('the in-memory current edition', () => {
 
   it('holds an edition parsed anywhere, not only one off disk', () => {
     const wire = { subject: { symbol: 'X' } }
-    setCurrentEdition({ url: '', etag: null, fetchedAt: 0, wire, edition: parseEdition(wire) })
+    setCurrentEdition({
+      url: '',
+      etag: null,
+      fetchedAt: 0,
+      wire,
+      edition: parseEdition(wire),
+      source: deviceSource(''),
+    })
     expect(getCurrentEdition()?.edition.subject.symbol).toBe('X')
+  })
+})
+
+describe('the source on a cache entry', () => {
+  it('is rebuilt from the stored URL on a read', async () => {
+    await AsyncStorage.setItem(
+      EDITION_CACHE_KEY,
+      JSON.stringify({ url: 'http://d/news.json', etag: '"a"', fetchedAt: 5, wire: demoWire() }),
+    )
+    __resetEditionStoreForTests()
+    const entry = await readCachedEdition()
+    expect(entry?.source.payloadUrl).toBe('http://d/news.json')
+    expect(entry?.source.tileUrl('a')).toBe('http://d/tiles/a.bin')
+    expect(entry?.source.headers).toEqual({})
+  })
+
+  it('NEVER reaches the disk, because a paper’s source carries a bearer token', async () => {
+    // The one rule `desk.ts` is built around: the operator token is in one header and in nothing
+    // that is written down. A paper's entry carries it in `source.headers`, and this write path is
+    // the only thing between that object and AsyncStorage.
+    await writeCachedEdition(
+      entry({
+        source: {
+          payloadUrl: 'https://d/api/editions/e1/news.json',
+          tileUrl: (id: string) => `https://d/api/editions/e1/tiles/${id}.bin`,
+          headers: { Authorization: 'Bearer operator-token' },
+        },
+      }),
+    )
+    const raw = (await AsyncStorage.getItem(EDITION_CACHE_KEY)) ?? ''
+    expect(Object.keys(JSON.parse(raw)).sort()).toEqual(['etag', 'fetchedAt', 'url', 'wire'])
+    expect(raw).not.toContain('operator-token')
+    expect(raw).not.toContain('Authorization')
   })
 })

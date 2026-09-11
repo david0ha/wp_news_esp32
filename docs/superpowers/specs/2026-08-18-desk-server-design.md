@@ -276,6 +276,15 @@ long-polls up to N seconds (capped at 90) and claims atomically with a single
 30-minute lease; an expired lease returns the command to `pending` and increments `attempts`. Three
 attempts fails it. A worker that dies mid-edition therefore costs one retry, not a lost day.
 
+> **2026-09-11 — the lease is no longer thirty minutes.** `store.LEASE_SECONDS` is **5400**
+> (ninety minutes). Thirty was designed against a worker that files an edition; a *paper* run is
+> 25–40 minutes clean and longer with a revision turn, and the desk was seen putting a claimed
+> order back to `pending` at minute 39 while the worker was still writing it. Everything else
+> above — the lifecycle, the single `UPDATE … RETURNING`, three attempts, the dead-worker
+> argument — is unchanged and still the reasoning of record.
+> [docs/desk-server.md](../../desk-server.md) carries the current figure and the full argument,
+> including why there is no heartbeat.
+
 ## 6. Directives — the store that is not the queue
 
 This is the distinction most easily got wrong, and getting it wrong is silent.

@@ -1,0 +1,188 @@
+import { useCallback, useState } from 'react'
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
+import { useFocusEffect } from 'expo-router'
+import { Card } from '../Card'
+import { Chip } from '../Chip'
+import { createDeskClient, type Paper } from '../../lib/desk'
+import { getDeskToken } from '../../lib/deskToken'
+import { getDeskBaseUrl } from '../../lib/store'
+import { markEditionStale } from '../../lib/edition/invalidate'
+import { loadPapers, usePapers } from '../../lib/papers/list'
+import {
+  isPaperRowDisabled,
+  orderPapers,
+  paperHeaderChips,
+  paperStatusLine,
+} from '../../lib/papers/order'
+import {
+  publishNoteText,
+  publishNoteTone,
+  runPaperPublish,
+  type PublishNote,
+} from '../../lib/papers/publish'
+import { fill, useStrings } from '../../i18n'
+import { colors, fonts, layout, space, tabular } from '../../theme'
+
+/**
+ * Every company's current paper, and which one is on the glass.
+ *
+ * It is the Board tab's only section that does not talk to the board. The desk owns which edition
+ * is `current`; the board polls and prints whatever that is. So a tap here is a desk call, and the
+ * board is told afterwards only so the glass catches up now rather than at its next interval —
+ * `runPaperPublish` holds that order and its argument.
+ *
+ * DRAWS NOTHING WITHOUT A DESK. Not an empty card: `usePapers` answers `ready: false` for a phone
+ * with no address or no token, and a "no papers yet" card on the Board tab of a phone that has
+ * never heard of a desk is an explanation of a feature nobody asked about.
+ */
+export function PaperSection({ pollBoard }: { pollBoard: (() => Promise<void>) | null }) {
+  const t = useStrings()
+  const { ready, doc } = usePapers()
+  const [busy, setBusy] = useState<string | null>(null)
+  // THE OUTCOME, NOT ITS SENTENCE — see `publishNoteText`. A resolved string here would keep
+  // speaking whatever language was active at the moment of the publish.
+  const [note, setNote] = useState<PublishNote | null>(null)
+
+  // The list rides this tab's focus as well as Today's. `loadPapers` reads its own throttle, so
+  // the second caller costs one storage read inside the window.
+  useFocusEffect(
+    useCallback(() => {
+      void loadPapers()
+    }, []),
+  )
+
+  const publish = useCallback(
+    async (paper: Paper) => {
+      if (busy !== null) return
+      const [address, token] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+      if (!address || !token) return
+      setBusy(paper.symbol)
+      setNote(null)
+      const result = await runPaperPublish(paper.symbol, {
+        client: createDeskClient({ baseUrl: address, token }),
+        invalidate: markEditionStale,
+        reloadPapers: loadPapers,
+        pollBoard,
+      })
+      setBusy(null)
+      if (result.kind === 'published') {
+        setNote({ kind: 'published', symbol: paper.symbol })
+      } else if (result.kind === 'no_paper') {
+        setNote({ kind: 'no_paper', symbol: paper.symbol })
+      } else {
+        setNote({ kind: 'failed', detail: result.error })
+      }
+    },
+    [busy, pollBoard],
+  )
+
+  const confirm = useCallback(
+    (paper: Paper) => {
+      // A CONFIRMATION, because this spends twenty-five seconds of a panel that has no partial
+      // refresh — the one cost in this app that is measured in half-minutes of hardware rather
+      // than in a request. `Alert` is the platform's own and the first in this app; there is no
+      // in-app dialog to reuse, and inventing one for a single yes/no would be a component with
+      // no second caller.
+      Alert.alert(
+        fill(t.papers.board.confirmTitle, { symbol: paper.symbol }),
+        t.papers.board.confirmBody,
+        [
+          { text: t.papers.board.cancel, style: 'cancel' },
+          { text: t.papers.board.confirm, onPress: () => void publish(paper) },
+        ],
+      )
+    },
+    [publish, t],
+  )
+
+  if (ready !== true || doc === null) return null
+  const papers = orderPapers(doc)
+  if (papers.length === 0) return null
+
+  const now = Date.now()
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{t.papers.board.title}</Text>
+      <Card style={styles.rows}>
+        {papers.map((paper, i) => {
+          const status = paperStatusLine(paper, now, t)
+          const disabled = isPaperRowDisabled(paper, busy)
+          // THE DESK'S OWN JUDGEMENT, through the same helper the pager's header uses, so the two
+          // surfaces cannot come to different conclusions about the same row. It is `stale` and
+          // not "older than the cadence" because the phone does not know the cadence; and
+          // `paperHeaderChips` is what holds the rule that a row with NO PAPER gets no marker at
+          // all — "due a refresh" is a claim about a paper that exists.
+          const chips = paperHeaderChips(paper)
+          const spoken = paper.onBoard
+            ? fill(t.papers.board.a11y.onBoard, { name: paper.name || paper.symbol })
+            : status.a11y
+          return (
+            <Pressable
+              key={paper.symbol}
+              accessibilityRole="button"
+              accessibilityState={{ disabled, selected: paper.onBoard }}
+              // The chip is inside an accessible `Pressable` with a label of its own, so its text
+              // is not announced on its own — it has to join the label or it is a marker only a
+              // sighted owner gets. The same `, ` join `paperStatusLine` already uses, and the
+              // same catalogue phrase the chip is drawn from: one wording, two renderings.
+              accessibilityLabel={
+                chips.stale ? [spoken, t.papers.page.stale].join(', ') : spoken
+              }
+              // A row with no paper is DRAWN AND DEAD. Dropping it would make a company that is on
+              // the owner's watchlist absent from a list titled after their watchlist.
+              disabled={disabled}
+              onPress={() => confirm(paper)}
+              style={[styles.row, i < papers.length - 1 && styles.bordered]}
+            >
+              <View style={styles.rowText}>
+                <View style={styles.symbolRow}>
+                  <Text style={styles.symbol}>{paper.symbol}</Text>
+                  {chips.stale ? (
+                    <Chip label={t.papers.page.stale} icon="time" tone="warn" style={styles.chip} />
+                  ) : null}
+                </View>
+                <Text style={styles.meta} numberOfLines={1}>
+                  {status.text}
+                </Text>
+              </View>
+              {paper.onBoard ? (
+                <Ionicons name="checkmark-circle" size={20} color={colors.accent} />
+              ) : null}
+            </Pressable>
+          )
+        })}
+      </Card>
+      <Text style={styles.note}>{t.papers.board.help}</Text>
+      {note !== null ? (
+        <Text style={[styles.note, publishNoteTone(note) === 'error' && styles.error]}>
+          {publishNoteText(note, t)}
+        </Text>
+      ) : null}
+    </View>
+  )
+}
+
+const styles = StyleSheet.create({
+  section: { paddingHorizontal: layout.gutter, paddingTop: space.xl, gap: space.sm },
+  sectionTitle: { fontFamily: fonts.bold, fontSize: 13, letterSpacing: 0.8, color: colors.textDim },
+  rows: { paddingVertical: 0 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    gap: space.sm,
+  },
+  bordered: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  rowText: { flexShrink: 1, gap: 2 },
+  symbolRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  symbol: { fontFamily: fonts.semibold, fontSize: 15, color: colors.text, ...tabular },
+  // Tighter than the page header's chip: this one sits on a 12px row beside a 15px symbol, not
+  // above a masthead, and the default pill would set the row's height on its own.
+  chip: { paddingHorizontal: 8, paddingVertical: 3 },
+  meta: { fontFamily: fonts.regular, fontSize: 13, color: colors.textFaint },
+  note: { fontFamily: fonts.regular, fontSize: 13, color: colors.textFaint },
+  error: { color: colors.down },
+})
