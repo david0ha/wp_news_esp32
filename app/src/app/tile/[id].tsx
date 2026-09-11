@@ -5,7 +5,7 @@ import { Screen } from '../../components/Screen'
 import { BackButton } from '../../components/BackButton'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masonry } from '../../components/edition/Masonry'
-import { EditionUrlProvider } from '../../components/edition/editionUrl'
+import { EditionSourceProvider } from '../../components/edition/editionSource'
 import { EditionTypeProvider } from '../../components/edition/typeRamp'
 import { TileDetail } from '../../components/edition/detail/TileDetail'
 import { isDemo } from '../../lib/edition/editionState'
@@ -160,7 +160,7 @@ export default function TileDetailRoute() {
       {/* This page's photographs come from the edition on screen, which may be the one read off
           disk by a cold deep link rather than the tab's — so the address is this entry's own, and
           so is the language everything below is set in. */}
-      <EditionUrlProvider url={cached.url}>
+      <EditionSourceProvider source={cached.source}>
         <EditionTypeProvider lang={cached.edition.lang}>
           <ScrollView contentContainerStyle={styles.scroll}>
             <TileDetail
@@ -180,7 +180,7 @@ export default function TileDetailRoute() {
             ) : null}
           </ScrollView>
         </EditionTypeProvider>
-      </EditionUrlProvider>
+      </EditionSourceProvider>
     </Screen>
   )
 }

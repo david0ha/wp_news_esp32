@@ -27,7 +27,7 @@ import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { AppState } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { getDeskBaseUrl, getNewsUrl } from '../store'
-import { editionUrl } from './source'
+import { deviceSource, editionUrl } from './source'
 import { editionClient, humanEditionError } from './client'
 import { takeEditionStale } from './invalidate'
 import {
@@ -91,6 +91,7 @@ export function useEdition(): {
           fetchedAt,
           wire: result.wire,
           edition: result.edition,
+          source: deviceSource(url),
         })
         dispatch({ type: 'fetched', result, url, fetchedAt })
         await written

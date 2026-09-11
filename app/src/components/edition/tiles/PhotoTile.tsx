@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { Image, InteractionManager, StyleSheet, Text, View } from 'react-native'
 import { colors, radius } from '../../../theme'
 import { TILE_PADDING, type Tile } from '../../../lib/edition/tiles'
-import { editionClient, tileUrl } from '../../../lib/edition/client'
+import { editionClient } from '../../../lib/edition/client'
 import { decodeTile, getCachedTilePng, putCachedTilePng } from '../../../lib/edition/photo'
-import { useEditionUrl } from '../editionUrl'
+import { useEditionSource } from '../editionSource'
 import { useEditionType } from '../typeRamp'
 import { useStrings } from '../../../i18n'
 
@@ -24,7 +24,10 @@ import { useStrings } from '../../../i18n'
  *
  * THE ADDRESS COMES FROM CONTEXT, not from a prop. This is the only component that needs to know
  * where the edition was served from, and it sits three levels below the screen that holds it —
- * see `../editionUrl.tsx` for why the string stopped being passed hand to hand.
+ * see `../editionSource.tsx` for why it stopped being passed hand to hand. What comes through is
+ * an `EditionSource` and not a URL, because a paper's picture is behind a bearer token at a path
+ * no directory join can reach: this component asks the source for the address rather than deriving
+ * one, and sends the source's headers with the fetch.
  *
  * THIS COMPONENT DOES NOT NOTICE A NEW EDITION BY ITSELF, and it is not supposed to. Its effect
  * keys on the tile URL and the geometry, and both of those repeat across days: the ids are the
@@ -44,7 +47,8 @@ export function PhotoTile({
   const t = useStrings()
   const ty = useEditionType()
   const { photo } = tile
-  const url = tileUrl(useEditionUrl(), photo.id)
+  const src = useEditionSource()
+  const url = src.tileUrl(photo.id)
   // Seeded from the session cache so a tile scrolled back into view paints on its first frame
   // rather than flashing the placeholder while a decode it already did runs again.
   const [png, setPng] = useState<string | null>(() => (url === '' ? null : getCachedTilePng(url)))
@@ -60,7 +64,7 @@ export function PhotoTile({
     let alive = true
     void (async () => {
       try {
-        const bytes = await editionClient.fetchTile(url, photo.w, photo.h)
+        const bytes = await editionClient.fetchTile(url, photo.w, photo.h, src.headers)
         if (!alive) return
         // THE DECODE WAITS FOR THE HANDS TO STOP. Unpacking the nibbles, deflating and base64ing
         // a tile is a few milliseconds of pure JS with no yield in it, and the tiles of one
@@ -88,6 +92,10 @@ export function PhotoTile({
     return () => {
       alive = false
     }
+    // `src.headers` IS DELIBERATELY NOT HERE. The source object is rebuilt on every render of the
+    // provider's parent, so a new `headers` identity arrives constantly and keying on it would
+    // re-fetch every photograph on the page on every render. It is also unnecessary: a credential
+    // only ever changes together with the edition it addresses, and `url` already moves then.
   }, [url, photo.w, photo.h])
 
   return (

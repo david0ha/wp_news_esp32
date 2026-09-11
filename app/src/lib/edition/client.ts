@@ -85,36 +85,13 @@ export interface EditionClientOptions {
 }
 
 export interface EditionClient {
-  fetch(url: string, etag: string | null): Promise<EditionFetch>
-  fetchTile(url: string, w: number, h: number): Promise<Uint8Array>
-}
-
-/**
- * Where a photo tile lives: the news URL's DIRECTORY plus `tiles/<id>.bin`.
- *
- * The directory is everything up to and including the last `/`, with the query and the fragment
- * removed first — a `?v=2` on the payload does not belong on a picture, and a URL that carried
- * one would 404 on every tile. The id is percent-encoded because it is the producer's string and
- * a `../` in it would resolve to a path this app never meant to ask for.
- *
- * Returns `''` for anything with no directory to resolve beside; the caller treats that as "no
- * picture", which is the same outcome as a failed fetch and needs no second branch.
- */
-export function tileUrl(newsUrl: string, id: string): string {
-  const path = newsUrl.split('#')[0].split('?')[0]
-  const cut = path.lastIndexOf('/')
-  // A bare `news.json` with no slash at all, or an empty string: nothing to resolve against.
-  if (cut < 0) return ''
-  // THE TRAP: a URL with no path at all — a bare authority like `http://host.local:8123` — still
-  // has slashes, the scheme's own `//`. `lastIndexOf('/')` finds the second one of those, and
-  // cutting there drops the host entirely: `http://tiles/id.bin`. Detect that case by checking
-  // whether the cut point falls inside the scheme separator itself (index of '://' , +2 for its
-  // two slashes) rather than in an actual path segment, and resolve directly after the authority.
-  const schemeEnd = path.indexOf('://')
-  if (schemeEnd >= 0 && cut === schemeEnd + 2) {
-    return `${path}/tiles/${encodeURIComponent(id)}.bin`
-  }
-  return `${path.slice(0, cut + 1)}tiles/${encodeURIComponent(id)}.bin`
+  fetch(url: string, etag: string | null, headers?: Record<string, string>): Promise<EditionFetch>
+  fetchTile(
+    url: string,
+    w: number,
+    h: number,
+    headers?: Record<string, string>,
+  ): Promise<Uint8Array>
 }
 
 export function createEditionClient(opts: EditionClientOptions = {}): EditionClient {
@@ -154,10 +131,16 @@ export function createEditionClient(opts: EditionClientOptions = {}): EditionCli
     return new Uint8Array(buf)
   }
 
-  async function fetchEdition(url: string, etag: string | null): Promise<EditionFetch> {
+  async function fetchEdition(
+    url: string,
+    etag: string | null,
+    extra: Record<string, string> = {},
+  ): Promise<EditionFetch> {
     if (url.trim() === '') throw new EditionError('no_url', 'no edition URL configured')
 
-    const headers: Record<string, string> = { Accept: 'application/json' }
+    // The source's headers FIRST, so nothing a caller passes can displace `Accept` or the
+    // conditional question this function is responsible for asking correctly.
+    const headers: Record<string, string> = { ...extra, Accept: 'application/json' }
     // Whether this request asks the conditional question at all. An empty tag is no tag: it is
     // what a cache written before the desk sent an ETag carries, and sending `If-None-Match: ''`
     // would ask a question with no subject.
@@ -199,9 +182,14 @@ export function createEditionClient(opts: EditionClientOptions = {}): EditionCli
     return { status: 'ok', edition, wire: json, etag: res.headers.get('etag') }
   }
 
-  async function fetchTile(url: string, w: number, h: number): Promise<Uint8Array> {
+  async function fetchTile(
+    url: string,
+    w: number,
+    h: number,
+    extra: Record<string, string> = {},
+  ): Promise<Uint8Array> {
     if (url.trim() === '') throw new EditionError('no_url', 'no tile URL')
-    const res = await get(url, {})
+    const res = await get(url, extra)
     if (!res.ok) throw new EditionError('http', `tile server answered ${res.status}`, res.status)
     // `tileByteLength` and not a second `(w * h) / 2`: the length this refuses and the length
     // `decodeTile` unpacks are the same fact, and two spellings of it can drift.

@@ -6,7 +6,7 @@ import { ScreenMessage } from '../../components/ScreenMessage'
 import { Masthead } from '../../components/edition/Masthead'
 import { ChipRow } from '../../components/edition/ChipRow'
 import { Masonry } from '../../components/edition/Masonry'
-import { EditionUrlProvider } from '../../components/edition/editionUrl'
+import { EditionSourceProvider } from '../../components/edition/editionSource'
 import { EditionTypeProvider } from '../../components/edition/typeRamp'
 import { PhotoTile } from '../../components/edition/tiles/PhotoTile'
 import { getDeskToken } from '../../lib/deskToken'
@@ -142,7 +142,7 @@ export default function EditionScreen() {
           what language it is in, named once for the face everything below is set in. The second
           is the EDITION's language and not the reader's: a Korean edition on an English phone is
           still Korean, and Inter cannot set it. See `typeRamp.tsx`. */}
-      <EditionUrlProvider url={state.cached.url}>
+      <EditionSourceProvider source={state.cached.source}>
         <EditionTypeProvider lang={state.cached.edition.lang}>
           <ScrollView
             contentContainerStyle={styles.scroll}
@@ -197,7 +197,7 @@ export default function EditionScreen() {
             </View>
           </ScrollView>
         </EditionTypeProvider>
-      </EditionUrlProvider>
+      </EditionSourceProvider>
     </Screen>
   )
 }
