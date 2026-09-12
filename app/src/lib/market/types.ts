@@ -111,7 +111,23 @@ export interface OptionChain {
 // Errors.
 // ---------------------------------------------------------------------------
 
-export type MarketErrorCode = 'transport' | 'http' | 'rate_limited' | 'crumb' | 'parse' | 'not_found'
+/**
+ * `crumb` kept its name after the gated calls moved to the desk, because it still names the same
+ * state to a reader: detailed data is unavailable and the rest of the tab works. What changed is
+ * who is failing — a desk built without `curl_cffi` rather than a bootstrap on this phone.
+ *
+ * `no_desk` is separate for the one reason that matters: the remedy differs. "Wait for Yahoo to
+ * relent" is wrong advice for a phone that simply has no desk paired, and Settings is where that
+ * is fixed.
+ */
+export type MarketErrorCode =
+  | 'transport'
+  | 'http'
+  | 'rate_limited'
+  | 'crumb'
+  | 'parse'
+  | 'not_found'
+  | 'no_desk'
 
 export class MarketError extends Error {
   constructor(
@@ -143,6 +159,8 @@ export function marketHumanError(e: unknown): string {
         return m.parse
       case 'not_found':
         return m.notFound
+      case 'no_desk':
+        return m.noDesk
     }
   }
   return m.unknown

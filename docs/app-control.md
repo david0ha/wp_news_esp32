@@ -705,6 +705,7 @@ rules.
 | `GET /api/watchlist` | the vault's grades, reasons and thesis notes — editing it is `operator` |
 | `GET /api/settings` | the desk's own preferences — the language the edition is written in, and how often a paper is refreshed. Changing them is `operator` |
 | `GET /api/quotes?symbols=…` | last price, day's change and a sparkline, proxied so the phone never holds the Alpaca key |
+| `GET /api/market/summary?symbol=&modules=` · `GET /api/market/options?symbol=` | Yahoo's crumb-gated profile, calendar and option chain, fetched by the desk because Yahoo gates them on the TLS fingerprint and no phone can present a browser's |
 | `GET /api/positions` | what the owner holds — writing it is `operator` |
 | `GET /api/calendar` | the event book: ranked dates, each annotated against a position. The `PUT` beside it is the agent's, not a phone's |
 | `GET /api/econ?from=&to=` | investing.com's calendar for a window, cached, both dates required and `YYYY-MM-DD` |

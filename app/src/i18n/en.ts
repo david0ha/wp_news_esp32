@@ -484,15 +484,18 @@ export const en = {
       badJson: 'That address answered, but not like a desk. Check it and try again.',
       unknown: 'Something went wrong talking to the desk.',
     },
-    // `market/types.ts` — Yahoo Finance. `crumb` is deliberately gentle: from EU IPs the cookie
-    // bootstrap failing is a normal outcome and most of the tab keeps working.
+    // `market/types.ts`. Prices, the chart and news come straight from Yahoo; the profile,
+    // calendar and option chain come through the desk, because Yahoo gates those on the TLS
+    // fingerprint and a phone cannot present a browser's. `crumb` stays deliberately gentle —
+    // it is the degraded state, and the rest of the tab keeps working through it.
     market: {
       transport: 'Couldn’t reach Yahoo Finance. Check your connection.',
       http: 'Yahoo Finance answered with an error. Try again in a moment.',
       rateLimited: 'Yahoo is rate-limiting requests. Try again in a minute.',
-      crumb: 'Yahoo is limiting detailed data right now. Prices and news still work.',
+      crumb: 'Your desk can’t fetch detailed data right now. Prices and news still work.',
       parse: 'Yahoo answered with something this app doesn’t understand.',
       notFound: 'No data for that symbol.',
+      noDesk: 'Add your desk address and token in Settings to see this.',
       unknown: 'Something went wrong talking to Yahoo Finance.',
     },
   },

@@ -3,12 +3,29 @@
 // nulls/''/[] rather than a throw; only a missing top-level envelope is a MarketError('parse').
 //
 // Unofficial API, so the failure vocabulary matters as much as the happy path:
-//   network throw/abort → 'transport'; 429 → 'rate_limited'; 401/403 on crumb-gated endpoints →
-//   the §4.2 retry contract (invalidate → re-bootstrap once → retry once) then 'crumb'; 404 or an
-//   empty result array → 'not_found'; other non-2xx → 'http'; bad JSON or a missing envelope →
-//   'parse'.
+//   network throw/abort → 'transport'; 429 → 'rate_limited'; 404 or an empty result array →
+//   'not_found'; other non-2xx → 'http'; bad JSON or a missing envelope → 'parse'.
+//
+// TWO TRANSPORTS, and which call uses which is not a style choice.
+//
+// `quote`, `chart`, `search` and `news` go straight to Yahoo, as they always have. They are
+// ungated and they work from a phone.
+//
+// `keyStatsAndProfile`, `calendar` and `options` go to the DESK, which fetches them from Yahoo
+// on this phone's behalf. Yahoo gates those two endpoints behind a cookie and a crumb, and it
+// decides who may have a crumb by looking at the TLS handshake — the JA3/JA4 fingerprint —
+// rather than at the User-Agent or the address. Measured on one machine, one address, one
+// minute: a plain client got 429 on every one of them and a browser-impersonating client got
+// 200 on every one. React Native's `fetch` is NSURLSession on iOS and OkHttp on Android, and
+// neither fingerprint can be changed from JavaScript; no Node library does what `curl_cffi`
+// does for Python, so `yahoo-finance2` has the same problem. The crumb bootstrap that used to
+// live in this directory could not have been fixed — it was asking for something this runtime
+// is not allowed to have. `server/claudepost/market.py` is where those calls went.
+//
+// The mappers below did not change when they moved, and that is the point: the desk forwards
+// Yahoo's own `result[0]` untouched, so this file remains the only place that knows a Yahoo
+// field name. `test_market.py` holds the desk to that; `deskGated.test.ts` holds this half.
 
-import { createCrumbProvider, YAHOO_BROWSER_HEADERS } from './crumb'
 import { createTtlCache } from './cache'
 import { TIMEFRAME_PARAMS, type Timeframe } from './timeframes'
 import {
@@ -31,6 +48,42 @@ import {
 const BASE = 'https://query1.finance.yahoo.com'
 const TIMEOUT_MS = 10_000
 
+/**
+ * The headers every DIRECT Yahoo request sends. Yahoo blocks the default okhttp User-Agent, so
+ * omitting these fails on Android every time.
+ *
+ * They are not enough for the gated endpoints and never were — that refusal happens below HTTP,
+ * at the TLS handshake — which is why those three calls go to the desk instead. These headers
+ * still earn their place on the four calls that do reach Yahoo from here.
+ */
+export const YAHOO_BROWSER_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  Accept: 'application/json',
+}
+
+/** The desk this phone is paired with, or `null` when Settings has not been filled in. */
+export interface DeskTarget {
+  baseUrl: string
+  token: string
+}
+
+/**
+ * The paired desk, read from the same two places every screen reads them.
+ *
+ * The imports are deferred to the call so that this module stays importable by the host tests,
+ * which have no SecureStore and no AsyncStorage — the same reason `deskGated.test.ts` injects a
+ * `desk` of its own rather than mocking a native module.
+ */
+async function defaultDesk(): Promise<DeskTarget | null> {
+  const [{ getDeskBaseUrl }, { getDeskToken }] = await Promise.all([
+    import('../store'),
+    import('../deskToken'),
+  ])
+  const [baseUrl, token] = await Promise.all([getDeskBaseUrl(), getDeskToken()])
+  return baseUrl && token ? { baseUrl, token } : null
+}
+
 // Cache TTLs (§4.5's table). The quote/1D-chart TTL sits BELOW the 30 s row poll so every poll
 // actually fetches; `fresh` (pull-to-refresh) bypasses whatever is left.
 const QUOTE_TTL_MS = 25_000
@@ -51,15 +104,20 @@ function arr(v: unknown): unknown[] {
 export interface YahooClientOptions {
   fetchFn?: typeof fetch
   now?: () => number
-  crumb?: ReturnType<typeof createCrumbProvider> // injectable for tests
   cache?: ReturnType<typeof createTtlCache>
+  /**
+   * Where the gated calls go. Read fresh on each call rather than captured once, because the
+   * owner can pair a desk in Settings while a detail screen is already mounted, and a client
+   * that had resolved `null` at construction would go on saying "no desk" until a reload.
+   */
+  desk?: () => Promise<DeskTarget | null>
 }
 
 export function createYahooClient(opts: YahooClientOptions = {}) {
   const fetchFn = opts.fetchFn ?? fetch
   const now = opts.now ?? Date.now
-  const crumb = opts.crumb ?? createCrumbProvider({ fetchFn, now })
   const cache = opts.cache ?? createTtlCache(now)
+  const deskOf = opts.desk ?? defaultDesk
 
   function normalize(symbol: string): string {
     return symbol.trim().toUpperCase()
@@ -99,22 +157,66 @@ export function createYahooClient(opts: YahooClientOptions = {}) {
     return bodyOf(res)
   }
 
-  // Crumb-gated GET. makeUrl receives the already-encoded crumb token. 401/403 means Yahoo no
-  // longer honours the crumb: invalidate, re-bootstrap ONCE, retry ONCE; a second refusal is
-  // MarketError('crumb') — the section's degraded card, not a retry loop.
-  async function getJsonGated(makeUrl: (crumbToken: string) => string): Promise<Record<string, unknown>> {
-    const first = await crumb.getCrumb()
-    let res = await httpGet(makeUrl(encodeURIComponent(first)))
-    if (res.status === 401 || res.status === 403) {
-      await crumb.invalidate()
-      const second = await crumb.getCrumb()
-      res = await httpGet(makeUrl(encodeURIComponent(second)))
-      if (res.status === 401 || res.status === 403) {
-        throw new MarketError('crumb', `Yahoo refused the crumb twice (${res.status})`)
-      }
+  // The desk's own refusal codes, mapped to the vocabulary the tab already draws sentences for.
+  // `market_unavailable` — a desk built without curl_cffi — becomes 'crumb' on purpose: it is the
+  // same degraded state the tab has always had a gentle card for, and the cause is the owner's to
+  // fix on the desk rather than the reader's to understand on the phone.
+  function deskError(status: number, code: string | undefined): MarketError {
+    if (code === 'no_symbol') return new MarketError('not_found', 'the desk lists nothing for that symbol')
+    if (code === 'rate_limited') return new MarketError('rate_limited', 'the desk is being rate-limited by Yahoo')
+    if (code === 'market_unavailable') return new MarketError('crumb', 'this desk cannot fetch detailed data')
+    if (status === 404) return new MarketError('not_found', 'the desk lists nothing for that symbol')
+    return new MarketError('http', `the desk responded ${status}`)
+  }
+
+  /**
+   * One gated question, asked of the desk. Returns Yahoo's own `result` object, so every mapper
+   * below reads exactly the fields it read when this call went to Yahoo directly.
+   *
+   * A phone with no desk paired is `no_desk` and makes no request — a distinct fact with a
+   * distinct remedy, which is why it is not folded into the gentle 'crumb' card.
+   */
+  async function deskGet(path: string, params: Record<string, string>): Promise<Record<string, unknown>> {
+    const desk = await deskOf()
+    if (desk === null) {
+      throw new MarketError('no_desk', 'no desk is paired with this phone')
     }
-    if (!res.ok) throw statusError(res.status)
-    return bodyOf(res)
+    const query = new URLSearchParams(params).toString()
+    const url = `${desk.baseUrl.replace(/\/+$/, '')}${path}?${query}`
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    let res: Response
+    try {
+      res = await fetchFn(url, {
+        headers: { Authorization: `Bearer ${desk.token}`, Accept: 'application/json' },
+        signal: controller.signal,
+      })
+    } catch (e) {
+      throw new MarketError('transport', e instanceof Error ? e.message : 'network error')
+    } finally {
+      clearTimeout(timer)
+    }
+
+    if (!res.ok) {
+      // Best-effort: a tunnel or a proxy in front of the desk answers HTML, and a 502 with no
+      // envelope in it is still a 502. The status is what is left to say.
+      let code: string | undefined
+      try {
+        const refused = obj(await res.json())
+        if (typeof refused.error === 'string') code = refused.error
+      } catch {
+        // not the desk's envelope
+      }
+      throw deskError(res.status, code)
+    }
+
+    const body = await bodyOf(res)
+    const result = body.result
+    if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+      throw new MarketError('parse', 'the desk answered without a result object')
+    }
+    return result as Record<string, unknown>
   }
 
   // ----- /v8/finance/chart — one request powers quote() AND chart(s, tf) -----
@@ -273,17 +375,7 @@ export function createYahooClient(opts: YahooClientOptions = {}) {
     )
   }
 
-  // ----- /v10/finance/quoteSummary — crumb-gated -----
-
-  function quoteSummaryResult(body: Record<string, unknown>, symbol: string): Record<string, unknown> {
-    if (body.quoteSummary === undefined) throw new MarketError('parse', 'quoteSummary envelope missing')
-    const result = obj(body.quoteSummary).result
-    if (!Array.isArray(result)) throw new MarketError('parse', 'quoteSummary result missing')
-    if (result.length === 0 || result[0] == null) {
-      throw new MarketError('not_found', `no summary data for ${symbol}`)
-    }
-    return obj(result[0])
-  }
+  // ----- quoteSummary, by way of the desk -----
 
   async function keyStatsAndProfile(
     symbol: string,
@@ -294,11 +386,10 @@ export function createYahooClient(opts: YahooClientOptions = {}) {
       `stats:${sym}`,
       STATS_TTL_MS,
       async () => {
-        const body = await getJsonGated(
-          (c) =>
-            `${BASE}/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=assetProfile,summaryDetail,defaultKeyStatistics&crumb=${c}`,
-        )
-        const r0 = quoteSummaryResult(body, sym)
+        const r0 = await deskGet('/api/market/summary', {
+          symbol: sym,
+          modules: 'assetProfile,summaryDetail,defaultKeyStatistics',
+        })
         const sd = obj(r0.summaryDetail)
         const ks = obj(r0.defaultKeyStatistics)
         const ap = obj(r0.assetProfile)
@@ -345,11 +436,10 @@ export function createYahooClient(opts: YahooClientOptions = {}) {
       `calendar:${sym}`,
       CALENDAR_TTL_MS,
       async () => {
-        const body = await getJsonGated(
-          (c) =>
-            `${BASE}/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=calendarEvents,earningsHistory&crumb=${c}`,
-        )
-        const r0 = quoteSummaryResult(body, sym)
+        const r0 = await deskGet('/api/market/summary', {
+          symbol: sym,
+          modules: 'calendarEvents,earningsHistory',
+        })
         const ce = obj(r0.calendarEvents)
 
         const earningsDates = arr(obj(ce.earnings).earningsDate)
@@ -379,7 +469,7 @@ export function createYahooClient(opts: YahooClientOptions = {}) {
     )
   }
 
-  // ----- /v7/finance/options — crumb-gated -----
+  // ----- the option chain, by way of the desk -----
 
   function mapContracts(v: unknown): OptionContract[] {
     const out: OptionContract[] = []
@@ -412,19 +502,13 @@ export function createYahooClient(opts: YahooClientOptions = {}) {
       `options:${sym}:${expiration ?? 'front'}`,
       OPTIONS_TTL_MS,
       async () => {
-        // Both URL forms written out — crumb takes the `?` itself when it is the first param.
-        const body = await getJsonGated((c) =>
+        // `date` is omitted rather than sent empty for the front month: the desk reads its
+        // absence as "the front one", and an empty string would reach its validator as text.
+        const params: Record<string, string> =
           expiration === undefined
-            ? `${BASE}/v7/finance/options/${encodeURIComponent(sym)}?crumb=${c}`
-            : `${BASE}/v7/finance/options/${encodeURIComponent(sym)}?date=${expiration}&crumb=${c}`,
-        )
-        if (body.optionChain === undefined) throw new MarketError('parse', 'optionChain envelope missing')
-        const result = obj(body.optionChain).result
-        if (!Array.isArray(result)) throw new MarketError('parse', 'optionChain result missing')
-        if (result.length === 0 || result[0] == null) {
-          throw new MarketError('not_found', `no options for ${sym}`)
-        }
-        const r0 = obj(result[0])
+            ? { symbol: sym }
+            : { symbol: sym, date: String(expiration) }
+        const r0 = await deskGet('/api/market/options', params)
         const front = obj(arr(r0.options)[0])
         return {
           symbol: sym,

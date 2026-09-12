@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals'
 import { createYahooClient } from './yahoo'
-import { createCrumbProvider, YAHOO_BROWSER_HEADERS, type CrumbStore } from './crumb'
+import { YAHOO_BROWSER_HEADERS } from './yahoo'
 
 // A fake fetch replaying a queue of replies (or throwing a queued Error to simulate the network
 // refusing). Records every call so URLs, order and headers can be asserted.
@@ -35,34 +35,9 @@ function fakeFetch(replies: Reply[]) {
   return { fetchFn, calls }
 }
 
-// A crumb provider stub for the gated happy paths — the retry tests use the real provider.
-function stubCrumb(crumb = 'ck') {
-  let invalidations = 0
-  const provider = {
-    getCrumb: async () => crumb,
-    invalidate: async () => {
-      invalidations++
-    },
-  }
-  return { provider, invalidations: () => invalidations }
-}
-
-function memStore(): CrumbStore {
-  let value: string | null = null
-  return {
-    get: async () => value,
-    set: async (c) => {
-      value = c
-    },
-    clear: async () => {
-      value = null
-    },
-  }
-}
-
-function client(replies: Reply[], crumb = stubCrumb().provider) {
+function client(replies: Reply[]) {
   const f = fakeFetch(replies)
-  return { ...f, yahoo: createYahooClient({ fetchFn: f.fetchFn, now: () => 0, crumb }) }
+  return { ...f, yahoo: createYahooClient({ fetchFn: f.fetchFn, now: () => 0 }) }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,162 +411,11 @@ describe('yahoo — news', () => {
 })
 
 // =====================================================================================
-// Crumb-gated endpoints
+// keyStatsAndProfile, calendar and options are NOT here.
+//
+// They stopped being Yahoo calls: Yahoo gates quoteSummary and the option chain on the TLS
+// fingerprint, which no React Native `fetch` can present, so the desk fetches them and this
+// client asks the desk. Their tests moved with them, to `deskGated.test.ts`. The mappers they
+// run the desk's answer through did not change, which is why the fixtures over there are still
+// Yahoo-shaped.
 // =====================================================================================
-
-describe('yahoo — keyStatsAndProfile', () => {
-  it('appends the crumb, unwraps {raw,fmt} numbers, and splits stats from profile', async () => {
-    const { yahoo, calls } = client([{ body: SUMMARY_FIXTURE }])
-    const { stats, profile } = await yahoo.keyStatsAndProfile('AAPL')
-    expect(calls[0].url).toBe(
-      'https://query1.finance.yahoo.com/v10/finance/quoteSummary/AAPL?modules=assetProfile,summaryDetail,defaultKeyStatistics&crumb=ck',
-    )
-    expect(stats).toEqual({
-      open: 188.0,
-      dayHigh: 190.5,
-      dayLow: 187.1,
-      volume: 52340000,
-      avgVolume: 58000000,
-      wk52High: 199.62,
-      wk52Low: 164.08,
-      marketCap: 2950000000000,
-      trailingPE: 29.5,
-      trailingEps: 6.43,
-      dividendYield: 0.0044,
-      beta: 1.29,
-    })
-    expect(profile).toEqual({
-      sector: 'Technology',
-      industry: 'Consumer Electronics',
-      employees: 161000,
-      website: 'https://www.apple.com',
-      summary: 'Apple Inc. designs, manufactures and markets smartphones.',
-    })
-  })
-
-  it('missing modules yield nulls and empty strings, never a throw', async () => {
-    const { yahoo } = client([{ body: { quoteSummary: { result: [{}] } } }])
-    const { stats, profile } = await yahoo.keyStatsAndProfile('AAPL')
-    expect(stats.open).toBeNull()
-    expect(stats.beta).toBeNull()
-    expect(profile.sector).toBe('')
-    expect(profile.employees).toBeNull()
-  })
-})
-
-describe('yahoo — calendar', () => {
-  it('sorts earnings dates soonest-first and renders human quarter labels, never Yahoo tokens', async () => {
-    const { yahoo } = client([{ body: CALENDAR_FIXTURE }])
-    const cal = await yahoo.calendar('AAPL')
-    expect(cal.earningsDates).toEqual([1761782400, 1761868800])
-    expect(cal.exDividendDate).toBe(1755043200)
-    expect(cal.dividendDate).toBe(1755648000)
-    // most recent first, max 4 — the fifth (oldest) row is dropped
-    expect(cal.history.map((h) => h.quarter)).toEqual(['Q1 2025', 'Q4 2024', 'Q3 2024', 'Q2 2024'])
-    expect(cal.history[0]).toEqual({ quarter: 'Q1 2025', epsActual: 1.65, epsEstimate: 1.62 })
-    for (const row of cal.history) {
-      expect(row.quarter).not.toMatch(/q$/) // '-1q'-style machine tokens must not reach the UI
-    }
-  })
-})
-
-describe('yahoo — options', () => {
-  it('maps the chain: spot, sorted expirations, strike-ascending contracts', async () => {
-    const { yahoo, calls } = client([{ body: OPTIONS_FIXTURE }])
-    const chain = await yahoo.options('AAPL')
-    expect(calls[0].url).toBe('https://query1.finance.yahoo.com/v7/finance/options/AAPL?crumb=ck')
-    expect(chain.symbol).toBe('AAPL')
-    expect(chain.spot).toBe(189.87)
-    expect(chain.expirationDates).toEqual([1757462400, 1758067200, 1760054400])
-    expect(chain.expiration).toBe(1757462400)
-    expect(chain.calls.map((c) => c.strike)).toEqual([185, 190]) // sorted ascending
-    expect(chain.calls[0]).toEqual({
-      strike: 185,
-      lastPrice: 6.0,
-      bid: 5.9,
-      ask: 6.1,
-      volume: 400,
-      openInterest: 5000,
-      impliedVolatility: 0.31,
-      inTheMoney: true,
-    })
-    expect(chain.puts).toHaveLength(1)
-  })
-
-  it('a chosen expiration goes into the URL as ?date=…&crumb=…', async () => {
-    const { yahoo, calls } = client([{ body: OPTIONS_FIXTURE }])
-    await yahoo.options('AAPL', 1758067200)
-    expect(calls[0].url).toBe(
-      'https://query1.finance.yahoo.com/v7/finance/options/AAPL?date=1758067200&crumb=ck',
-    )
-  })
-})
-
-describe('yahoo — the crumb retry contract', () => {
-  // One fetch queue serves both the crumb provider and the client, so the ORDER of the
-  // bootstrap and data requests is itself under test.
-
-  it('401 → invalidate → re-bootstrap once → retry once → success', async () => {
-    const f = fakeFetch([
-      { ok: false, status: 404 }, // 1. fc.yahoo.com (cookie seed)
-      { text: 'c1' }, // 2. getcrumb
-      { ok: false, status: 401, body: {} }, // 3. quoteSummary with c1 — refused
-      { ok: false, status: 404 }, // 4. fc.yahoo.com again
-      { text: 'c2' }, // 5. getcrumb again
-      { body: SUMMARY_FIXTURE }, // 6. retry with c2 — succeeds
-    ])
-    const crumb = createCrumbProvider({ fetchFn: f.fetchFn, now: () => 0, store: memStore() })
-    const yahoo = createYahooClient({ fetchFn: f.fetchFn, now: () => 0, crumb })
-
-    const { stats } = await yahoo.keyStatsAndProfile('AAPL')
-    expect(stats.open).toBe(188.0)
-    expect(f.calls.map((c) => c.url)).toEqual([
-      'https://fc.yahoo.com/',
-      'https://query1.finance.yahoo.com/v1/test/getcrumb',
-      'https://query1.finance.yahoo.com/v10/finance/quoteSummary/AAPL?modules=assetProfile,summaryDetail,defaultKeyStatistics&crumb=c1',
-      'https://fc.yahoo.com/',
-      'https://query1.finance.yahoo.com/v1/test/getcrumb',
-      'https://query1.finance.yahoo.com/v10/finance/quoteSummary/AAPL?modules=assetProfile,summaryDetail,defaultKeyStatistics&crumb=c2',
-    ])
-  })
-
-  it('a second 401 surfaces MarketError(crumb) — exactly one retry, never a loop', async () => {
-    const f = fakeFetch([
-      { ok: false, status: 404 },
-      { text: 'c1' },
-      { ok: false, status: 401, body: {} },
-      { ok: false, status: 404 },
-      { text: 'c2' },
-      { ok: false, status: 401, body: {} },
-    ])
-    const crumb = createCrumbProvider({ fetchFn: f.fetchFn, now: () => 0, store: memStore() })
-    const yahoo = createYahooClient({ fetchFn: f.fetchFn, now: () => 0, crumb })
-
-    await expect(yahoo.keyStatsAndProfile('AAPL')).rejects.toMatchObject({ code: 'crumb' })
-    expect(f.calls).toHaveLength(6) // one bootstrap, one refusal, one re-bootstrap, one retry — stop
-  })
-
-  it('403 takes the same path as 401', async () => {
-    const f = fakeFetch([
-      { ok: false, status: 404 },
-      { text: 'c1' },
-      { ok: false, status: 403, body: {} },
-      { ok: false, status: 404 },
-      { text: 'c2' },
-      { body: OPTIONS_FIXTURE },
-    ])
-    const crumb = createCrumbProvider({ fetchFn: f.fetchFn, now: () => 0, store: memStore() })
-    const yahoo = createYahooClient({ fetchFn: f.fetchFn, now: () => 0, crumb })
-    const chain = await yahoo.options('AAPL')
-    expect(chain.spot).toBe(189.87)
-    expect(f.calls[5].url).toContain('crumb=c2')
-  })
-
-  it('a failed bootstrap surfaces MarketError(crumb) without touching the data endpoint', async () => {
-    const f = fakeFetch([new Error('consent redirect, no cookies')])
-    const crumb = createCrumbProvider({ fetchFn: f.fetchFn, now: () => 0, store: memStore() })
-    const yahoo = createYahooClient({ fetchFn: f.fetchFn, now: () => 0, crumb })
-    await expect(yahoo.calendar('AAPL')).rejects.toMatchObject({ code: 'crumb' })
-    expect(f.calls.every((c) => !c.url.includes('quoteSummary'))).toBe(true)
-  })
-})

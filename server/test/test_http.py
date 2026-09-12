@@ -3034,5 +3034,123 @@ class LostConnectionTest(RawTestCase):
                          "a broken pipe on the 500 reached socketserver.handle_error")
 
 
+class StubMarketService:
+    """A `market.MarketService` double: answers or raises, and remembers.
+
+    `test_market.py` owns the crumb dance, the cache and the parsing. What
+    this class is for is the boundary those tests cannot see: that the route
+    hands the service what the query said, and that it puts the service's
+    answer on the wire whole rather than reshaping it a second time.
+    """
+
+    def __init__(self, result=None, error=None):
+        self.result = {} if result is None else result
+        self.error = error
+        self.summary_calls = []
+        self.options_calls = []
+
+    def quote_summary(self, symbol, modules):
+        self.summary_calls.append((symbol, list(modules)))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    def options(self, symbol, expiration):
+        self.options_calls.append((symbol, expiration))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class MarketTest(DeskTestCase):
+    """`/api/market/*`: Yahoo's gated endpoints, fetched by the desk because a
+    phone's TLS handshake cannot get past Yahoo's fingerprint check. The route
+    is a pipe: `app/src/lib/market/yahoo.ts` is still the mapper, so what these
+    tests hold is that the desk does not become a second one."""
+
+    def test_the_desk_wires_a_real_market_service_not_only_a_stub(self):
+        """Every other test here replaces `self.desk.market` first, which
+        would pass identically if `Desk.__init__` never built one."""
+        from claudepost.market import MarketService
+        self.assertIsInstance(self.desk.market, MarketService)
+
+    def test_the_summary_result_reaches_the_wire_whole(self):
+        profile = {"assetProfile": {"sector": "Technology", "fullTimeEmployees": 150000}}
+        self.desk.market = StubMarketService(result=profile)
+
+        status, doc = self.api(
+            "GET", "/api/market/summary?symbol=AAPL&modules=assetProfile",
+            scope="producer")
+
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["result"], profile)
+        self.assertEqual(self.desk.market.summary_calls, [("AAPL", ["assetProfile"])])
+
+    def test_several_modules_arrive_as_a_list(self):
+        self.desk.market = StubMarketService()
+        self.api("GET",
+                 "/api/market/summary?symbol=AAPL&modules=assetProfile,summaryDetail",
+                 scope="producer")
+        self.assertEqual(self.desk.market.summary_calls,
+                         [("AAPL", ["assetProfile", "summaryDetail"])])
+
+    def test_a_summary_without_a_symbol_is_a_bad_request(self):
+        self.desk.market = StubMarketService()
+        for qs in ("/api/market/summary",
+                   "/api/market/summary?symbol=",
+                   "/api/market/summary?symbol=AAPL"):
+            status, doc = self.api("GET", qs, scope="producer")
+            self.assertEqual(status, 400, doc)
+        self.assertEqual(self.desk.market.summary_calls, [])
+
+    def test_the_option_chain_reaches_the_wire_whole(self):
+        chain = {"expirationDates": [1793059200],
+                 "options": [{"calls": [{"strike": 335.0, "openInterest": 2911}]}]}
+        self.desk.market = StubMarketService(result=chain)
+
+        status, doc = self.api("GET", "/api/market/options?symbol=AAPL",
+                               scope="producer")
+
+        self.assertEqual(status, 200, doc)
+        self.assertEqual(doc["result"], chain)
+        self.assertEqual(self.desk.market.options_calls, [("AAPL", None)])
+
+    def test_an_expiration_arrives_as_an_integer(self):
+        """A string here would reach `market.py`'s validator and 400, so the
+        route is what has to turn the query's text into a number."""
+        self.desk.market = StubMarketService()
+        self.api("GET", "/api/market/options?symbol=AAPL&date=1793059200",
+                 scope="producer")
+        self.assertEqual(self.desk.market.options_calls, [("AAPL", 1793059200)])
+
+    def test_an_expiration_that_is_not_a_number_is_a_bad_request(self):
+        self.desk.market = StubMarketService()
+        status, doc = self.api("GET", "/api/market/options?symbol=AAPL&date=soon",
+                               scope="producer")
+        self.assertEqual(status, 400, doc)
+        self.assertEqual(self.desk.market.options_calls, [])
+
+    def test_an_unknown_symbol_is_a_404_the_tab_can_explain(self):
+        self.desk.market = StubMarketService(error=NotFound("no_symbol"))
+        status, doc = self.api("GET", "/api/market/summary?symbol=NOPE&modules=price",
+                               scope="producer")
+        self.assertEqual(status, 404, doc)
+        self.assertEqual(doc["error"], "no_symbol")
+
+    def test_an_upstream_failure_is_a_502(self):
+        from claudepost.errors import Upstream
+        self.desk.market = StubMarketService(error=Upstream("upstream", "Yahoo responded 500"))
+        status, doc = self.api("GET", "/api/market/summary?symbol=AAPL&modules=price",
+                               scope="producer")
+        self.assertEqual(status, 502, doc)
+
+    def test_the_routes_need_a_token(self):
+        """The market plane is the phone's, not the public device plane's."""
+        for path in ("/api/market/summary?symbol=AAPL&modules=price",
+                     "/api/market/options?symbol=AAPL"):
+            status, _, _ = self.call("GET", path, None, None)
+            self.assertEqual(status, 401, path)
+
+
 if __name__ == "__main__":
     unittest.main()

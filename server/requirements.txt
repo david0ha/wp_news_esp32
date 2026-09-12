@@ -1,0 +1,19 @@
+# The desk's only third-party Python dependency, and it took an argument to add.
+#
+# `server/Dockerfile`'s runtime stage deliberately carries no toolchain -- a C compiler on the
+# far side of a Cloudflare tunnel is a capability nobody needs to be given -- so a dependency
+# that has to be built from source is one this image cannot have. curl_cffi ships `abi3` wheels
+# (one `cp310-abi3` wheel serves every Python from 3.10 up, including the image's 3.14) for
+# manylinux and musllinux on both x86_64 and aarch64, so `pip install` here fetches a binary and
+# builds nothing.
+#
+# What it buys is the one thing nothing in the standard library can do: a TLS handshake that
+# looks like Chrome's. Yahoo gates `/v10/finance/quoteSummary` and `/v7/finance/options` on the
+# JA3/JA4 fingerprint rather than on the User-Agent, so `urllib` is refused with a 429 no matter
+# what headers it sends, and so is every React Native `fetch` -- which is why these calls are on
+# the desk at all. See `claudepost/market.py`.
+#
+# Pinned to a minor range rather than exactly: the impersonation profiles track real browsers and
+# go stale, so patch releases are worth taking, while a major bump changes the profile names this
+# code passes.
+curl_cffi~=0.16.0

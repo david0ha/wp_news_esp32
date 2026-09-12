@@ -760,6 +760,66 @@ rather than per request, so a phone pulling to refresh does not spend the
 upstream's rate limit — see `quotes.py`'s module docstring for the full
 argument.
 
+## The market plane
+
+`GET /api/market/summary?symbol=AAPL&modules=assetProfile,summaryDetail` and
+`GET /api/market/options?symbol=AAPL[&date=<epoch>]` fetch Yahoo Finance's two
+crumb-gated endpoints on the phone's behalf. `producer` scope, like quotes.
+
+**These exist because the phone cannot make the request, not because it would
+be tidier if the desk did.** Yahoo gates `/v10/finance/quoteSummary` and
+`/v7/finance/options` behind a cookie and a crumb, and it decides who may have
+a crumb by looking at the **TLS handshake** — the JA3/JA4 fingerprint — rather
+than at the User-Agent or the address. Measured on one machine, one address,
+one minute: a plain HTTP client was refused on all four of `/v8/finance/chart`,
+`/v1/test/getcrumb`, `quoteSummary` and the option chain, and a
+browser-impersonating client was served all four. The crumb endpoint filters
+hardest, which is why the app's chart and news kept working while its Info,
+Calendar and Options tabs went dark together — a symptom that reads like a
+broken crumb implementation and is really a client that is not allowed to ask.
+
+A React Native `fetch` is NSURLSession on iOS and OkHttp on Android. Neither
+fingerprint can be changed from JavaScript, and Node has no equivalent of
+`curl_cffi`, so `yahoo-finance2` has the same problem and the app's own
+bootstrap could not have been fixed. The desk can wear a browser's handshake,
+so the desk asks.
+
+**The body is forwarded unreshaped.** `app/src/lib/market/yahoo.ts` already
+maps Yahoo's JSON into the app's model, defensively, with its own host tests.
+Reshaping here would mean keeping that mapping twice, in two languages, against
+one upstream — so the answer is Yahoo's own `result[0]` and nothing else:
+
+```json
+{ "ok": true, "asOf": 1755702000,
+  "result": { "assetProfile": { "sector": "Technology", ... },
+              "summaryDetail": { "marketCap": { "raw": 4850000000000 }, ... } } }
+```
+
+`modules` is a whitelist — `assetProfile`, `summaryDetail`,
+`defaultKeyStatistics`, `calendarEvents`, `earningsHistory`, `price` — because
+the module list is the one part of the query a client chooses, and passing it
+through unbounded turns this route into an open proxy for every quoteSummary
+module Yahoo has, the financial statements included. `symbol` is checked
+against a pattern wider than `quotes.py`'s, since Yahoo answers for Korean
+listings and `005930.KS` has to pass.
+
+One crumb serves the whole desk, re-fetched only when Yahoo stops honouring it:
+a 401 or 403 buys exactly one new session and one retry, and a second refusal
+is a `502`. The session matters as much as the crumb, because a crumb is minted
+for a cookie jar — a client that opens a fresh connection per request drops the
+cookie in between and gets a 401 on every call while its bootstrap looks
+healthy in the log. Answers are cached ten minutes for a summary and two for an
+option chain, matching what the app used to cache locally; failures are not
+cached, because the tab has a retry button and a cached `502` would make it do
+nothing. An unknown symbol is `404 no_symbol` whichever way Yahoo says it — a
+200 with an empty `result` from quoteSummary, a bare 404 from the option chain.
+
+This is the desk's one third-party Python dependency (`server/requirements.txt`,
+`curl_cffi`). It ships `abi3` wheels, so no compiler enters the runtime image.
+A desk built without it still starts and still serves the newspaper; these two
+routes answer `502 market_unavailable`, which the app draws as its existing
+"detailed data unavailable" card.
+
 ## What the owner holds
 
 The paper answers *what happened*. Four documents past this point answer *what
