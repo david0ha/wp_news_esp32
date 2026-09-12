@@ -126,6 +126,8 @@ SAMPLES = {
     r"^/api/push/devices/(?P<token>[^/]{1,120})\Z": "/api/push/devices/ExponentPushToken",
 
     r"^/api/quotes\Z": "/api/quotes",
+    r"^/api/market/summary\Z": "/api/market/summary",
+    r"^/api/market/options\Z": "/api/market/options",
     r"^/api/state\Z": "/api/state",
     r"^/api/publish\Z": "/api/publish",
     r"^/api/hold\Z": "/api/hold",

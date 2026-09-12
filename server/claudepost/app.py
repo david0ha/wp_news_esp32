@@ -21,8 +21,8 @@ import threading
 from dataclasses import dataclass
 from typing import Mapping
 
-from . import (alerts, calendar as cal, econ, positions as pos, push,
-               quotes as Q, schedule as sched, schedulefile,
+from . import (alerts, calendar as cal, econ, market as mkt, positions as pos,
+               push, quotes as Q, schedule as sched, schedulefile,
                settings as st, watchlist as wl)
 from .auth import Tokens
 from .clock import Clock
@@ -137,6 +137,14 @@ class Desk:
         #: configuration: `/api/quotes` answers `no_quotes` rather than the
         #: constructor failing.
         self.quotes = Q.QuoteService(Q.Credentials(cfg.alpaca_path), self.clock)
+
+        #: Yahoo's crumb-gated endpoints, fetched by the desk because a phone
+        #: cannot -- see `market.py`'s module docstring. Yahoo gates them on
+        #: the TLS fingerprint, which no React Native `fetch` can change, so
+        #: this is not a convenience proxy like `quotes` but the only place the
+        #: request can be made from at all. No credential and therefore no
+        #: `Config` field: there is nothing to read and nothing to be missing.
+        self.market = mkt.MarketService(self.clock)
 
         #: investing.com, cached, on the desk's own clock. No credential and
         #: therefore no `Config` field: unlike `quotes`, there is nothing to

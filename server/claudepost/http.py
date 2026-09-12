@@ -50,7 +50,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import (calendar as cal, notes, policy, positions as pos, push,
-               quotes as Q, schedule as sched, settings as st,
+               market as mkt, quotes as Q, schedule as sched, settings as st,
                tiles, watchlist as wl)
 from .app import COMMAND_ID_RE, Desk, as_int, utc_stamp
 from .auth import require, scope_from_header
@@ -1126,6 +1126,49 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, "asOf": int(self.desk.clock.now()),
                               "feed": Q.FEED, "quotes": answer})
 
+    # -- handlers: market --------------------------------------------------
+    def h_market_summary(self, _match, query) -> None:
+        """Yahoo's quoteSummary modules, fetched by the desk because the phone
+        cannot get past Yahoo's TLS fingerprint check -- see `market.py`.
+
+        The result is Yahoo's own object, forwarded whole.
+        `app/src/lib/market/yahoo.ts` is still the only mapper; a desk that
+        reshaped this would make it a second one, in another language, against
+        the same upstream.
+        """
+        symbol = _query_str(query, "symbol") or ""
+        modules = [m for m in (_query_str(query, "modules") or "").split(",") if m]
+        if not symbol:
+            raise BadRequest(message="symbol is required")
+        if not modules:
+            raise BadRequest(message="modules is required")
+        result = self.desk.market.quote_summary(symbol, modules)
+        self._send_json(200, {"ok": True, "asOf": int(self.desk.clock.now()),
+                              "result": result})
+
+    def h_market_options(self, _match, query) -> None:
+        """One expiration's option chain, forwarded whole.
+
+        `date` is optional and absent means the front month, which is what the
+        options tab opens on. It becomes an `int` here because `MarketService`
+        refuses a string: a query carries text, somebody has to turn it into a
+        number, and doing it at the door is what makes the 400 name the
+        parameter rather than the service's own validator name a type.
+        """
+        symbol = _query_str(query, "symbol") or ""
+        if not symbol:
+            raise BadRequest(message="symbol is required")
+        expiration = None
+        raw = _query_str(query, "date")
+        if raw:
+            try:
+                expiration = int(raw)
+            except ValueError:
+                raise BadRequest(message="date must be epoch seconds") from None
+        result = self.desk.market.options(symbol, expiration)
+        self._send_json(200, {"ok": True, "asOf": int(self.desk.clock.now()),
+                              "result": result})
+
     # -- handlers: operations ---------------------------------------------
     def h_state(self, _match, _query) -> None:
         self._send_json(200, self.desk.state())
@@ -1466,6 +1509,10 @@ _ROUTES = [
 
     (re.compile(r"^/api/quotes\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_quotes)}),
+    (re.compile(r"^/api/market/summary\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_market_summary)}),
+    (re.compile(r"^/api/market/options\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_market_options)}),
 
     (re.compile(r"^/api/state\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_state)}),

@@ -47,6 +47,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4 tzdata ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# The desk's one third-party Python dependency. It is installed here, in the
+# runtime stage, and it still brings no toolchain with it: curl_cffi ships abi3
+# wheels for manylinux and musllinux, so pip fetches a binary and builds
+# nothing. `--only-binary` makes that a rule rather than a hope -- a release
+# that ever lacked a wheel for this platform would fail the build here, loudly,
+# instead of quietly compiling C inside the image this file exists to keep
+# compiler-free. See server/requirements.txt for what it buys.
+COPY server/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --only-binary :all: -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
 # A fixed uid so the named data volume has stable ownership across rebuilds.
 # The desk never needs root: it binds 8080, not 80.
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin desk
