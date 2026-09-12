@@ -34,6 +34,18 @@ Three things from that page are worth carrying in your head even if you read not
   so the archive's failure vanishes and the export reports "archive not found" instead — a signing
   error described as a missing file.
 
+## Deploying the desk
+
+`server/deploy.sh` — one command, from a checkout nobody edits. It gates on the
+desk's own suite, verifies the app-visible surface against the desk it just
+started, and rolls itself back if that desk is up and wrong.
+
+**Deploy test-first.** `server/test/contract.py --expect-red <group>` run against
+the desk currently in service must FAIL before you deploy; a check seen only
+green proves nothing about the change. `.claude/skills/deploy-desk/SKILL.md` is
+the loop and [docs/deploying.md](docs/deploying.md) is the long form, including
+why there is no continuous deployment.
+
 ## Verifying a change
 
 `CLAUDE.md`'s "Verify before claiming anything works" is the list, in the order that catches the

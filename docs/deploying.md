@@ -50,8 +50,25 @@ deployed. It is a deployment artifact, not a workspace. Nothing is edited there.
    the image predates the market plane. That is precisely the
    deployed-the-wrong-thing failure that otherwise shows up as an empty tab on
    somebody's phone rather than as a failed deploy.
-6. **Roll back** to `claudepost-desk:previous` if any of that fails, then print
+6. **Run the contract suite** — `server/test/contract.py`, every app-visible
+   behaviour, over the same routes and with the same token the phone uses. The
+   smoke checks above prove the desk answers; this proves the Board tab, the
+   Settings tab and the Ask screen still hold, which is the failure a
+   market-plane deploy is most likely to cause and least likely to be looking
+   for. A ref that predates the suite prints `contract: NOT RUN` and is not a
+   failure: what is missing there is the evidence, not the desk.
+7. **Roll back** to `claudepost-desk:previous` if any of that fails, then print
    the last forty log lines and exit non-zero.
+
+### Deploying test-first
+
+`server/test/contract.py --expect-red <group>` inverts a group of checks: the run
+passes only if they **fail**. Run against the desk currently in service, before
+deploying, it is the only way to know a check tests the change you are about to
+make rather than something that was already true — a check seen only green
+proves nothing. `.claude/skills/deploy-desk/SKILL.md` is the loop, and the groups
+are named for the phone's screens rather than for URLs, because "the Options tab
+is dead" is the sentence somebody needs.
 
 `name: claudepost` is pinned inside `compose.yaml`. That is what lets a deploy
 run from a different directory than the last one did and still manage the same
