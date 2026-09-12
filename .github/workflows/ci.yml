@@ -1,0 +1,118 @@
+# The four suites that need neither hardware nor a network, on every push.
+#
+# What this is for, and what it deliberately is not. The desk runs on one Mac
+# behind a Cloudflare tunnel, so no hosted runner can deploy it and this file
+# does not try: deployment is `server/deploy.sh`, pull-based, run on that Mac.
+# What a runner CAN do is the thing that used to be done by remembering to --
+# run the suites before a branch is merged, on a machine with no ESP-IDF, no
+# Xcode and no leftover state, so "works here" and "works" stop being the same
+# claim.
+#
+# `CLAUDE.md`'s verification ladder has five layers. Four of them are here:
+#
+#   0  the desk, the worker, and the phone (jest + tsc)
+#   1  news_core's host tests — the wire format, the compositor, the quantizer
+#   2  provisioning, the reference producer, the language gate, the event book
+#   3  the simulator, which is a TEST: it fails the build on a missing glyph,
+#      on ink outside the margin, on a composition that does not tile the well
+#
+# Layer 4 is `idf.py build`, which wants a 1.5 GB toolchain for a target no
+# runner can flash. It stays on the developer's machine.
+#
+# The jobs are split rather than chained because they fail for unrelated
+# reasons and a reader wants to know which half broke without reading a log.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A branch that gets three pushes in a minute deserves one run, not three.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desk:
+    name: desk and worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: The desk
+        run: sh server/test/run.sh
+      - name: The worker
+        run: sh agent/test/run.sh
+      - name: Provisioning, the reference producer, and the gates it enforces
+        run: |
+          sh components/provisioning/test/run.sh
+          python3 tools/mock_news_server.py --check
+          python3 tools/test_mock_etag.py
+          python3 tools/test_validate_lang.py
+          python3 tools/test_calendar_brief.py
+
+  app:
+    name: the phone
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+
+  core:
+    name: news_core host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S components/news_core/test/host -B build/host
+          cmake --build build/host -j"$(nproc)"
+      - name: Run
+        # Named individually rather than globbed: a test that stops being built
+        # should fail this step, and a glob would quietly run the eleven that
+        # are left.
+        run: |
+          for t in test_news_parse test_news_mock test_news_service test_api_json \
+                   test_palette test_epd6_transpose test_fit test_chart_scale \
+                   test_compose test_power_policy test_format test_lang; do
+            echo "== $t"
+            "build/host/$t"
+          done
+
+  simulator:
+    name: the simulator, which is a test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies the desktop build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake libsdl2-dev libcurl4-openssl-dev
+      - name: Typeset the demo edition and the Korean fixture
+        run: cd sim && ./sim.sh
+      - name: Keep the sheets
+        # The assertions are the gate; the sheets are how a person judges a
+        # layout change without a Mac. Kept on failure too -- an ellipsis in
+        # the middle of a headline is visible in the image and nowhere else.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-sheets
+          path: sim/shots/
+          if-no-files-found: warn
