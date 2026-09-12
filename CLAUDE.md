@@ -525,7 +525,7 @@ agent/                    an example worker that files into the desk, plus the s
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/news-contract.md](docs/news-contract.md) — the JSON the device polls, and how it fails
 - [docs/hosting-cloudflare.md](docs/hosting-cloudflare.md) — serving the edition from a domain instead of a Mac on the LAN: what must be published, what must not, and what changes on the device once the URL is `https://`
-- [docs/deploying.md](docs/deploying.md) — putting the desk on the wall: `server/deploy.sh`, its test gate and its rollback, the GitHub Actions CI, and the poll-based auto-deploy. Also the outage it is built around — eighteen days served from a git worktree that had been deleted
+- [docs/deploying.md](docs/deploying.md) — putting the desk on the wall: `server/deploy.sh`, its test gate and its rollback, and the GitHub Actions CI. Deployment is deliberately a command somebody runs, not a trigger; the page says why. Also the outage it is built around — eighteen days served from a git worktree that had been deleted
 - [docs/desk-server.md](docs/desk-server.md) — the desk server behind the URL the board polls: `server/` serves it and owns every gate, `agent/` files the editions and holds the credentials. Also the four documents the board never sees — the positions, the event book, the economic calendar and the phones — and what must never happen to them
 - [docs/pages.md](docs/pages.md) — A1 and A2, the grid, the bands, the font decision
 - [docs/epaper-13in3.md](docs/epaper-13in3.md) — the dual-UC8179 driver, the refresh policy, the self-test

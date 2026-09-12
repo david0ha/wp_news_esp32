@@ -8,8 +8,11 @@ from that sentence, including the parts that look like they should be simpler.
 server/deploy.sh                    # deploy origin/main, gated and verified
 server/deploy.sh --rollback         # put the previous image back
 server/deploy.sh --dry-run          # print what it would do
-sh server/tools/install-autodeploy.sh   # optional: deploy a merge by itself
 ```
+
+**Deployment is a command somebody runs.** There is no trigger, no timer and no
+runner, and that is a decision rather than an omission — see
+[Why there is no continuous deployment](#why-there-is-no-continuous-deployment).
 
 ## The outage this is built around
 
@@ -80,30 +83,45 @@ machine with no ESP-IDF, no Xcode and no leftover state — so "works here" and
 Layer 4 — `idf.py build` — is not there. It wants a 1.5 GB toolchain for a
 target no runner can flash, and it stays on the developer's machine.
 
-## Continuous deployment, and why it is a poll
+## Why there is no continuous deployment
 
-`server/tools/install-autodeploy.sh` installs a launchd agent that every fifteen
-minutes fetches `origin/main` and, if the tip has moved, runs `deploy.sh` —
-which brings its own gate and its own rollback. If nothing moved it exits
-without touching Docker, so the ordinary case costs one HTTPS request.
+There is CI and there is no CD. A merge to `main` does not reach the wall until
+somebody runs `server/deploy.sh`. Three arguments were had on the way to that,
+and the order matters because the first one was wrong.
 
-A webhook would be faster and is the wrong shape here. It would mean opening a
-second ingress so GitHub can reach this Mac, against a machine whose entire
-security story is *one hostname, one port, token-gated*. A poll needs no ingress
-at all: the Mac asks GitHub, GitHub answers, and nothing new is reachable from
-the internet. Fifteen minutes is well inside how long it takes anybody to notice
-a newspaper is stale.
+**A poll was tried and is not here.** A launchd agent that fetched `origin/main`
+every fifteen minutes and deployed when the tip moved. It was defended on the
+grounds that a webhook would mean opening a second ingress to this Mac. That is
+true of a webhook and irrelevant to the alternative, which is the next
+paragraph.
 
-Installing it does **not** deploy — the first check is one interval away, which
-gives whoever ran the installer time to think.
+**A self-hosted GitHub Actions runner opens no ingress either.** It long-polls
+*outbound* over HTTPS; GitHub never connects in. It would deploy on merge rather
+than up to fifteen minutes later, and it would put the logs, the re-run button
+and the failure notices in the same place as CI. On the merits of plumbing it
+beats a poll outright, and the poll's justification did not survive contact with
+that fact.
 
-```sh
-sh server/tools/install-autodeploy.sh --status      # loaded? and the last 20 log lines
-sh server/tools/install-autodeploy.sh --uninstall
-```
+**What actually rules it out is that this repository is public.** Anyone may
+fork it and open a pull request, and a `pull_request` workflow runs the code
+*from the pull request*. A fork that adds `runs-on: self-hosted` runs on this
+Mac — which holds the desk's operator and producer tokens, the Alpaca key, the
+Cloudflare tunnel's credentials and an Apple distribution certificate. Runner
+jobs are not sandboxed from each other or from the host. The proper containment,
+a runner group restricted to named workflows, is an organization feature and is
+not available on a personal repository; what is left is the fork-approval
+setting, which is a defence that depends on nobody clicking *Approve and run*
+without reading.
 
-The log is `~/.claudepost/autodeploy.log`. Read it before believing the desk is
-current: launchd swallows a failure that the log does not.
+So the choice was: make the repository private and use a runner, keep it public
+and accept a crude poll, or deploy by hand. **Deploying by hand was chosen**, and
+it costs less than it sounds like — `server/deploy.sh` is one command, it gates
+on 929 tests, it verifies what it started, and it rolls itself back. The thing a
+timer would have added is not doing it, and the thing it would have removed is
+somebody deciding that now is a good moment to change what a newspaper says.
+
+If this repository ever goes private, a runner is the right answer and the
+workflow is three lines around the same script.
 
 ## What is still done by hand
 
