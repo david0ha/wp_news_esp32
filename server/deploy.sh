@@ -45,8 +45,9 @@ REF="origin/main"
 DEPLOY_DIR="${DEPLOY_DIR:-$HOME/.claudepost/deploy}"
 REMOTE="${CLAUDEPOST_REMOTE:-git@github.com:david0ha/wp_news_esp32.git}"
 PROJECT="claudepost"
-HEALTH_URL="http://127.0.0.1:8790/healthz"
-MARKET_URL="http://127.0.0.1:8790/api/market/summary?symbol=AAPL&modules=price"
+BASE_URL="http://127.0.0.1:8790"
+HEALTH_URL="$BASE_URL/healthz"
+MARKET_URL="$BASE_URL/api/market/summary?symbol=AAPL&modules=price"
 GATE=1
 DRY=0
 ROLLBACK=0
@@ -164,6 +165,31 @@ if [ "$ok" -eq 1 ]; then
         401|403) say "market plane answers $code without a token — mounted" ;;
         *)       say "market plane answered $code, expected 401"; ok=0 ;;
     esac
+fi
+
+if [ "$ok" -eq 1 ]; then
+    # The smoke checks above prove the desk is answering and that the market
+    # plane is mounted. The contract suite proves the whole app-visible surface
+    # still holds -- the Board tab, the Settings tab and the Ask screen included
+    # -- which is the failure a market-plane deploy is most likely to cause and
+    # least likely to be looking for. It speaks the same routes with the same
+    # token the phone uses.
+    if [ ! -f "$DEPLOY_DIR/server/test/contract.py" ]; then
+        # A ref that predates the contract suite. NOT a failure and above all
+        # not a rollback: the desk answered every smoke check, and refusing a
+        # deploy because the thing being deployed is old enough to lack its own
+        # verifier would make this script unable to deploy exactly the commits
+        # somebody reaches for in a hurry. Say it plainly instead -- what is
+        # missing is the evidence, not the desk.
+        say "contract: NOT RUN — $REF has no server/test/contract.py"
+        say "          the desk passed the smoke checks and nothing more was proved"
+    else
+        say "contract: every app behaviour, against the desk now serving"
+        if ! python3 "$DEPLOY_DIR/server/test/contract.py" --desk "$BASE_URL"; then
+            echo "deploy: the desk is up and wrong" >&2
+            ok=0
+        fi
+    fi
 fi
 
 if [ "$ok" -eq 0 ]; then
