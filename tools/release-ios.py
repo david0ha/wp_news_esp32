@@ -63,7 +63,18 @@ def run(argv, *, cwd=None, env=None, capture=False, log: Path | None = None) -> 
     """One command, checked. A pipeline is never used, because a pipeline's exit status is the
     LAST command's: piping xcodebuild through `tee | tail` once masked an archive failure entirely
     and reported "archive not found" from the export step fifty thousand lines later."""
-    printable = " ".join(str(a) for a in argv[:6]) + (" …" if len(argv) > 6 else "")
+    display = [str(a) for a in argv]
+    secret_values = []
+    if len(display) > 1 and Path(display[0]).name == "security":
+        secret_flags = {
+            "create-keychain": {"-p"}, "unlock-keychain": {"-p"},
+            "import": {"-P"}, "set-key-partition-list": {"-k"},
+        }.get(display[1], set())
+        for i in range(2, len(display) - 1):
+            if display[i] in secret_flags:
+                secret_values.append(display[i + 1])
+                display[i + 1] = "[REDACTED]"
+    printable = " ".join(display[:6]) + (" …" if len(display) > 6 else "")
     print(f"    $ {printable}", flush=True)
     if log is not None:
         with open(log, "wb") as f:
@@ -79,7 +90,11 @@ def run(argv, *, cwd=None, env=None, capture=False, log: Path | None = None) -> 
     )
     if p.returncode != 0:
         if capture and p.stdout:
-            print(p.stdout[-4000:], file=sys.stderr)
+            diagnostic = p.stdout
+            for value in secret_values:
+                if value:
+                    diagnostic = diagnostic.replace(value, "[REDACTED]")
+            print(diagnostic[-4000:], file=sys.stderr)
         raise SystemExit(f"failed ({p.returncode}): {printable}")
     return (p.stdout or "").strip()
 
@@ -237,7 +252,8 @@ class Keychain:
     def __init__(self, private: Path):
         self.path = private / "release.keychain"
         self.password = secrets.token_urlsafe(24)
-        self.original_list: list[str] = []
+        self.original_list: list[str] | None = None
+        self.created = False
 
     def open(self, p12: Path, p12_password: str) -> None:
         self.original_list = [
@@ -247,6 +263,7 @@ class Keychain:
         ]
         subprocess.run(["security", "delete-keychain", str(self.path)], capture_output=True)
         run(["security", "create-keychain", "-p", self.password, str(self.path)])
+        self.created = True
         run(["security", "unlock-keychain", "-p", self.password, str(self.path)])
         # No idle timeout and no lock-on-sleep: an archive takes minutes, and a keychain that
         # relocks half way through fails in exactly the way this class exists to prevent.
@@ -264,12 +281,14 @@ class Keychain:
         run(["security", "list-keychains", "-d", "user", "-s", str(self.path), *self.original_list])
 
     def close(self) -> None:
-        if self.original_list:
-            subprocess.run(
-                ["security", "list-keychains", "-d", "user", *self.original_list],
-                capture_output=True,
-            )
-        subprocess.run(["security", "delete-keychain", str(self.path)], capture_output=True)
+        try:
+            if self.original_list is not None:
+                run(["security", "list-keychains", "-d", "user", "-s", *self.original_list], capture=True)
+                self.original_list = None
+        finally:
+            if self.created:
+                run(["security", "delete-keychain", str(self.path)], capture=True)
+                self.created = False
 
 
 # --------------------------------------------------------------------------- steps
@@ -524,7 +543,7 @@ def main() -> int:
         )
 
     env = eas_env()
-    marketing = json.load(open(APP / "app.json"))["expo"]["version"]
+    marketing = json.loads((APP / "app.json").read_text())["expo"]["version"]
 
     if not args.skip_gates:
         gates()
@@ -561,9 +580,11 @@ def main() -> int:
             # submit is a gap in the sequence for no reason.
             reserve_build_number(env, build_number)
     finally:
-        keychain.close()
-        for name in ("dist.p12", "dist.pw", "profile.mobileprovision"):
-            (private / name).unlink(missing_ok=True)
+        try:
+            keychain.close()
+        finally:
+            for name in ("dist.p12", "dist.pw", "profile.mobileprovision"):
+                (private / name).unlink(missing_ok=True)
 
     print()
     print(f"IPA      {ipa}")
