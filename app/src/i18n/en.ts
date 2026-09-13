@@ -501,6 +501,19 @@ export const en = {
   },
 
   board: {
+    deskPreview: {
+      title: 'Board edition preview',
+      note: 'The desk’s currently published edition, ready for the board’s next connection. This does not confirm what is on the board now.',
+      loading: 'Loading the published sheets…',
+      setup: 'Connect a desk and save its operator token in Settings to preview the board edition.',
+      empty: 'No published sheets are available yet.',
+      failed: 'Couldn’t load the published sheets. Check your desk connection and try again.',
+      imageFailed: 'Couldn’t download this sheet. Try again to reload the preview.',
+      enlarge: 'Enlarge sheet',
+      refresh: 'Refresh preview',
+      close: 'Close',
+      zoom: 'Pinch to zoom in on the sheet.',
+    },
     connecting: 'Connecting…',
     loading: 'Loading…',
     /** The two failures the tab writes itself, when the error is not an `Esp32Error`. */
