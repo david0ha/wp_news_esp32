@@ -55,6 +55,7 @@ jobs:
           python3 tools/test_mock_etag.py
           python3 tools/test_validate_lang.py
           python3 tools/test_calendar_brief.py
+          python3 tools/test_release_ios.py
 
   app:
     name: the phone

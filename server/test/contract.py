@@ -34,8 +34,11 @@ back. The desk it is pointed at is somebody's live newspaper.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
+import math
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -46,7 +49,7 @@ DEFAULT_DESK = "http://127.0.0.1:8790"
 TIMEOUT = 45
 
 #: Which tab each group belongs to, for the summary and for --expect-red.
-GROUPS = ("device", "edition", "board", "markets", "settings", "ask")
+GROUPS = ("device", "edition", "board", "markets", "market", "options", "settings", "ask")
 
 
 class Failure(Exception):
@@ -315,6 +318,72 @@ def _market_module_whitelist(d: Desk, _w):
         raise Failure("the market plane is NOT MOUNTED")
     want(status, 400, "an unlisted module")
     return "400 on a module outside the whitelist"
+
+
+# -- Options tab: Alpaca quotes, Greeks and expiry selection -----------------
+
+@check("device", "Options tab", "Alpaca options require a token")
+def _alpaca_options_closed(d: Desk, _w):
+    path = "/api/market/options/alpaca?symbol=AAPL"
+    status, _ = d.request(path, token=False)
+    want(status, 401, path)
+    return "Alpaca options 401 unauthenticated"
+
+
+@check("options", "Options tab", "Alpaca prices and Greeks follow the selected expiry")
+def _alpaca_options_chain(d: Desk, _w):
+    path = "/api/market/options/alpaca?symbol=AAPL"
+
+    def chain(url, selected=None):
+        status, doc = d.request(url)
+        want(status, 200, url)
+        if not isinstance(doc, dict) or doc.get("ok") is not True:
+            raise Failure("Alpaca options did not answer a successful document")
+        result = doc.get("result")
+        if not isinstance(result, dict) or result.get("symbol") != "AAPL":
+            raise Failure("Alpaca options answered without the requested symbol")
+        if result.get("source") != "alpaca" or result.get("feed") not in ("opra", "indicative"):
+            raise Failure("the Options tab cannot identify its quote source and feed")
+        dates = result.get("expirationDates")
+        if (not isinstance(dates, list) or not dates
+                or any(type(date) is not int or date <= 0 or date % 86400 for date in dates)
+                or dates != sorted(set(dates))):
+            raise Failure("the Options tab cannot build its expiry tabs")
+        if result.get("expiration") not in dates or (selected is not None and result["expiration"] != selected):
+            raise Failure("Alpaca returned a different expiry than the selected tab")
+        for side in ("calls", "puts"):
+            rows = result.get(side)
+            if not isinstance(rows, list) or not rows:
+                raise Failure(f"the selected expiry carried no {side}")
+            for row in rows:
+                if not isinstance(row, dict) or not isinstance(row.get("symbol"), str):
+                    raise Failure("an option contract has no symbol")
+                expiry = dt.datetime.fromtimestamp(result["expiration"], dt.timezone.utc).strftime("%y%m%d")
+                kind = "C" if side == "calls" else "P"
+                if not re.fullmatch("AAPL" + expiry + kind + r"\d{8}", row["symbol"]):
+                    raise Failure("an option contract belongs to a different expiry or side")
+                for key in ("strike", "bid", "ask", "lastPrice", "delta", "gamma", "theta",
+                            "vega", "rho", "impliedVolatility", "multiplier"):
+                    if key not in row:
+                        raise Failure(f"an option contract is missing {key}")
+                    value = row[key]
+                    if value is None and key != "strike":
+                        continue  # Missing upstream measurements must stay unknown, not become zero.
+                    if type(value) not in (int, float) or not math.isfinite(value):
+                        raise Failure(f"an option contract has an invalid {key}")
+                if "quoteTimestamp" not in row or (row["quoteTimestamp"] is not None
+                        and not isinstance(row["quoteTimestamp"], str)):
+                    raise Failure("an option contract has no readable quote timestamp")
+            if not any(row["bid"] is not None and row["ask"] is not None for row in rows):
+                raise Failure(f"no {side} carry both bid and ask; premiums would be blank")
+        return result
+
+    first = chain(path)
+    selected = first["expirationDates"][1 if len(first["expirationDates"]) > 1 else 0]
+    second = chain(path + "&date=" + str(selected), selected)
+    return (f"{len(first['expirationDates'])} expiries, selected {selected}: "
+            f"{len(second['calls'])} calls / {len(second['puts'])} puts, "
+            f"quotes and nullable Greeks present, feed={second['feed']}")
 
 
 # -- the Ask screen ---------------------------------------------------------
