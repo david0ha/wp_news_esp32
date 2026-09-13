@@ -127,6 +127,7 @@ SAMPLES = {
 
     r"^/api/quotes\Z": "/api/quotes",
     r"^/api/market/summary\Z": "/api/market/summary",
+    r"^/api/market/options/alpaca\Z": "/api/market/options/alpaca",
     r"^/api/market/options\Z": "/api/market/options",
     r"^/api/state\Z": "/api/state",
     r"^/api/publish\Z": "/api/publish",

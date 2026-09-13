@@ -24,6 +24,7 @@ from typing import Mapping
 from . import (alerts, calendar as cal, econ, market as mkt, positions as pos,
                push, quotes as Q, schedule as sched, schedulefile,
                settings as st, watchlist as wl)
+from .alpaca_options import OptionService
 from .auth import Tokens
 from .clock import Clock
 from .editions import EditionStore
@@ -137,6 +138,7 @@ class Desk:
         #: configuration: `/api/quotes` answers `no_quotes` rather than the
         #: constructor failing.
         self.quotes = Q.QuoteService(Q.Credentials(cfg.alpaca_path), self.clock)
+        self.alpaca_options = OptionService(Q.Credentials(cfg.alpaca_path), self.clock)
 
         #: Yahoo's crumb-gated endpoints, fetched by the desk because a phone
         #: cannot -- see `market.py`'s module docstring. Yahoo gates them on

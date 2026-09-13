@@ -1,135 +1,83 @@
-import { StyleSheet, Text, View } from 'react-native'
+import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { useStrings } from '../i18n'
 import { colors, fonts, space, tabular, type } from '../theme'
-import { formatCompact, formatIv, formatPrice } from '../lib/market/format'
+import { formatPrice } from '../lib/market/format'
+import { type OptionStrategy } from '../lib/market/optionStrategy'
 import { type OptionContract } from '../lib/market/types'
 
-/**
- * One options-chain row: Strike | Bid / Ask | Vol · OI | IV. Deliberately no Last
- * column — at 390pt it starves Bid/Ask below what a real ITM quote needs. ITM rows
- * take the Cloud Veil wash (`colors.itm`): ITM is a state, so it gets neither the
- * direction pair nor the accent. Every cell is one line so an overlong value
- * ellipsizes instead of shearing the row.
- */
+export const greek = (n: number | null | undefined) => n == null ? '—' : n.toFixed(4)
+
+/** A two-column strike card keeps premium and Greeks readable at phone widths. */
 export function OptionChainRow({
   contract,
   last = false,
+  selected = false,
+  onPress,
+  pair,
 }: {
   contract: OptionContract
   last?: boolean
+  selected?: boolean
+  onPress?: () => void
+  pair?: OptionStrategy
 }) {
+  const t = useStrings().marketDetail.options
+  const legPremium = contract.bid !== null && contract.ask !== null
+    && contract.bid >= 0 && contract.ask > 0 && contract.ask >= contract.bid
+    ? contract.ask : null
+  const premium = pair ? pair.premium : legPremium
+  const total = pair ? pair.premiumTotal : premium === null || contract.multiplier !== 100
+    ? null : premium * contract.multiplier
+
   return (
-    <View style={[styles.row, contract.inTheMoney && styles.itm, !last && styles.bordered]}>
-      <Text style={[styles.strike, tabular]} numberOfLines={1}>
-        {formatPrice(contract.strike)}
-      </Text>
-      <Text style={[styles.bidAsk, tabular]} numberOfLines={1}>
-        {formatPrice(contract.bid)} / {formatPrice(contract.ask)}
-      </Text>
-      <View style={styles.volOi}>
-        <Text style={[styles.volOiLine, tabular]} numberOfLines={1}>
-          {formatCompact(contract.volume)}
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={[
+        styles.row,
+        contract.inTheMoney && styles.itm,
+        selected && styles.selected,
+        !last && styles.bordered,
+      ]}
+    >
+      {pair ? pair.legs.map(leg => (
+        <Text key={leg.contract.strike} style={styles.title}>
+          {t[leg.side]} · {t.strike} {formatPrice(leg.contract.strike)}
         </Text>
-        <Text style={[styles.volOiLine, tabular]} numberOfLines={1}>
-          {formatCompact(contract.openInterest)}
+      )) : (
+        <Text style={styles.title}>
+          {t.strike} {formatPrice(contract.strike)}{selected ? ' ✓' : ''}
         </Text>
+      )}
+      <View style={styles.grid}>
+        <Cell label={pair && premium !== null ? `${t.premium} · ${premium < 0 ? t.credit : t.debit}` : t.premium} value={formatPrice(premium)} />
+        <Cell label={pair ? t.strategyTotal : t.contractTotal} value={formatPrice(total)} />
+        <Cell label={pair ? t.netBid : t.bid} value={formatPrice(pair ? pair.totalBid : contract.bid)} />
+        <Cell label={pair ? t.netAsk : t.ask} value={formatPrice(pair ? pair.totalAsk : contract.ask)} />
+        <Cell label={t.delta} value={greek(pair ? pair.delta : contract.delta)} />
+        <Cell label={t.gamma} value={greek(pair ? pair.gamma : contract.gamma)} />
       </View>
-      <Text style={[styles.iv, tabular]} numberOfLines={1}>
-        {formatIv(contract.impliedVolatility)}
-      </Text>
-    </View>
+    </Pressable>
   )
 }
 
-/** The column captions — the first row of the chain card (nothing is sticky). */
-export function OptionChainHeader() {
-  const t = useStrings().marketDetail.options
+export function Cell({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.headerRow}>
-      <Text style={[styles.caption, styles.flexStrike]} numberOfLines={1}>
-        {t.strike}
-      </Text>
-      <Text style={[styles.caption, styles.captionRight, styles.flexBidAsk]} numberOfLines={1}>
-        {t.bidAsk}
-      </Text>
-      <Text style={[styles.caption, styles.captionRight, styles.flexVolOi]} numberOfLines={1}>
-        {t.volOi}
-      </Text>
-      <Text style={[styles.caption, styles.captionRight, styles.flexIv]} numberOfLines={1}>
-        {t.iv}
-      </Text>
+    <View style={styles.cell}>
+      <Text style={type.caption}>{label}</Text>
+      <Text style={[styles.value, tabular]}>{value}</Text>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  itm: {
-    backgroundColor: colors.itm,
-  },
-  bordered: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.borderStrong,
-  },
-  strike: {
-    flex: 1,
-    fontFamily: fonts.semibold,
-    fontSize: 14,
-    color: colors.text,
-  },
-  bidAsk: {
-    flex: 1.7,
-    fontFamily: fonts.medium,
-    fontSize: 13,
-    color: colors.text,
-    textAlign: 'right',
-  },
-  volOi: {
-    flex: 1.2,
-    alignItems: 'flex-end',
-  },
-  volOiLine: {
-    ...type.caption,
-    textAlign: 'right',
-  },
-  iv: {
-    flex: 0.8,
-    fontFamily: fonts.medium,
-    fontSize: 13,
-    color: colors.text,
-    textAlign: 'right',
-  },
-  caption: {
-    ...type.label,
-  },
-  captionRight: {
-    textAlign: 'right',
-  },
-  flexStrike: {
-    flex: 1,
-  },
-  flexBidAsk: {
-    flex: 1.7,
-  },
-  flexVolOi: {
-    flex: 1.2,
-  },
-  flexIv: {
-    flex: 0.8,
-  },
+  row: { padding: space.lg, gap: space.sm },
+  itm: { backgroundColor: colors.itm },
+  selected: { backgroundColor: colors.accentDim },
+  bordered: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  title: { fontFamily: fonts.semibold, fontSize: 16, color: colors.text },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  cell: { width: '47%', gap: 3 },
+  value: { fontFamily: fonts.medium, fontSize: 15, color: colors.text },
 })
