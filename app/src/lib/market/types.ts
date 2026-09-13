@@ -88,6 +88,15 @@ export interface CalendarEvents {
 }
 
 export interface OptionContract {
+  symbol?: string | null
+  delta?: number | null
+  gamma?: number | null
+  theta?: number | null
+  vega?: number | null
+  rho?: number | null
+  quoteTimestamp?: string | null
+  tradeTimestamp?: string | null
+  multiplier?: number | null
   strike: number
   lastPrice: number | null
   bid: number | null
@@ -99,6 +108,8 @@ export interface OptionContract {
 }
 
 export interface OptionChain {
+  source?: 'alpaca'
+  feed?: 'indicative' | 'opra'
   symbol: string
   spot: number | null
   expirationDates: number[] // epoch seconds, ascending

@@ -3,15 +3,15 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { Ionicons } from '@expo/vector-icons'
 import { Card } from '../Card'
 import { Chip } from '../Chip'
-import { OptionChainHeader, OptionChainRow } from '../OptionChainRow'
+import { OptionChainRow } from '../OptionChainRow'
 import { OptionsSummary } from '../OptionsSummary'
-import { SegmentedControl } from '../SegmentedControl'
+import { OptionStrategyDetail, optionExpiryLabel } from './OptionStrategyDetail'
+import { buildStrategy, type Strategy } from '../../lib/market/optionStrategy'
 import { fill, useStrings } from '../../i18n'
 import { colors, fonts, radius, space, type } from '../../theme'
 import { analyzeChain } from '../../lib/market/analysis'
-import { formatDateShort } from '../../lib/market/format'
 import { marketHumanError, type OptionChain, type OptionContract } from '../../lib/market/types'
-import { yahoo } from '../../lib/market/yahoo'
+import { alpacaOptions } from '../../lib/market/alpaca'
 
 interface DetailSectionProps {
   symbol: string
@@ -24,21 +24,14 @@ type LoadState =
   | { status: 'error'; error: unknown }
   | { status: 'ready'; chain: OptionChain; switching: boolean; switchError: string | null }
 
-/**
- * The detail screen's Options tab: expiry pill selector, the floating analysis card,
- * a Calls/Puts toggle and the four-column chain, fed by the crumb-gated
- * yahoo.options(symbol[, expiry]). Fetched lazily on first activation (front expiry);
- * a failed crumb bootstrap lands in the friendly degraded card with its own retry.
- * While an expiry switch is in flight the selector stays (active on the loaded chain)
- * and only the chain area shows a spinner; a switch that FAILS keeps the loaded chain on
- * screen (stale beats blank) with an inline notice near the pills — the degraded card is
- * only ever a first load's failure. The chain is windowed to the 20 strikes nearest spot,
- * with a ghost show-all/show-fewer toggle at the foot.
- */
 export function OptionsSection({ symbol, active }: DetailSectionProps) {
   const t = useStrings()
   const [state, setState] = useState<LoadState>({ status: 'idle' })
-  const [side, setSide] = useState(0) // 0 calls, 1 puts
+  const [strategy, setStrategy] = useState<Strategy>('long_call')
+  const [selected, setSelected] = useState<OptionContract[]>([])
+  const [detailOpen, setDetailOpen] = useState(false)
+  const side = strategy.includes('put') ? 1 : 0
+  const spread = strategy.endsWith('spread')
   const [showAll, setShowAll] = useState(false)
   const seqRef = useRef(0)
   const stateRef = useRef(state)
@@ -46,7 +39,9 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
   const retryExpiryRef = useRef<number | undefined>(undefined)
 
   const load = useCallback(
-    async (expiration?: number) => {
+    async (expiration?: number, fresh = false) => {
+      setSelected([])
+      setDetailOpen(false)
       const seq = ++seqRef.current
       retryExpiryRef.current = expiration
       const cur = stateRef.current
@@ -56,7 +51,7 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
         setState({ status: 'loading' })
       }
       try {
-        const chain = await yahoo.options(symbol, expiration)
+        const chain = await alpacaOptions(symbol, expiration, { fresh })
         if (seqRef.current !== seq) return
         setState({ status: 'ready', chain, switching: false, switchError: null })
       } catch (e) {
@@ -77,8 +72,19 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
   )
 
   useEffect(() => {
-    if (active && state.status === 'idle') void load()
-  }, [active, state.status, load])
+    seqRef.current++
+    stateRef.current = { status: 'idle' }
+    setState({ status: 'idle' })
+    setSelected([])
+    setDetailOpen(false)
+    setShowAll(false)
+    retryExpiryRef.current = undefined
+    return () => { seqRef.current++ }
+  }, [symbol])
+
+  useEffect(() => {
+    if (active && stateRef.current.status === 'idle') void load()
+  }, [active, load])
 
   const chain = state.status === 'ready' ? state.chain : null
   const analysis = useMemo(() => (chain === null ? null : analyzeChain(chain)), [chain])
@@ -121,6 +127,12 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
 
   return (
     <View style={styles.section}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.expiryRow}>
+        {(['long_call', 'long_put', 'long_call_spread', 'short_call_spread', 'long_put_spread', 'short_put_spread'] as Strategy[]).map(value =>
+          <Chip key={value} label={t.marketDetail.options[value]} active={strategy === value} onPress={() => {
+            setStrategy(value); setSelected([]); setDetailOpen(false); setShowAll(false)
+          }} />)}
+      </ScrollView>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -129,7 +141,7 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
         {loadedChain.expirationDates.map((exp) => (
           <Chip
             key={exp}
-            label={formatDateShort(exp)}
+            label={optionExpiryLabel(exp)}
             active={exp === loadedChain.expiration}
             onPress={() => {
               if (switching || exp === loadedChain.expiration) return
@@ -141,21 +153,18 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
       {state.switchError !== null ? (
         <Text style={styles.switchError}>
           {fill(t.marketDetail.options.switchError, {
-            date: formatDateShort(loadedChain.expiration),
+            date: optionExpiryLabel(loadedChain.expiration),
             reason: state.switchError,
           })}
         </Text>
       ) : null}
       {analysis !== null ? <OptionsSummary analysis={analysis} /> : null}
-      <View style={styles.toggleWrap}>
-        <SegmentedControl
-          segments={[t.marketDetail.options.calls, t.marketDetail.options.puts]}
-          selectedIndex={side}
-          onChange={setSide}
-        />
-      </View>
+      <Text style={type.caption}>{loadedChain.feed === 'opra' ? t.marketDetail.options.opra : loadedChain.feed === 'indicative' ? t.marketDetail.options.indicative : t.marketDetail.options.unknownFeed}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel={t.marketDetail.options.refresh} onPress={() => void load(loadedChain.expiration, true)} disabled={switching}><Text style={styles.ghost}>{t.marketDetail.options.refresh}</Text></Pressable>
+      <Text style={type.caption}>{spread ? selected.length > 0 ? t.marketDetail.options.comparePairs : t.marketDetail.options.selectTwo : t.marketDetail.options.selectOne}</Text>
+      {selected.length === 1 && spread ? <Text style={styles.ghost}>{t.marketDetail.options.selectedStrike}: {selected[0].strike}</Text> : null}
+      {detailOpen && selected.length > 0 ? <OptionStrategyDetail strategy={strategy} contracts={selected} expiration={loadedChain.expiration} feed={loadedChain.feed} onClose={() => setDetailOpen(false)} /> : null}
       <Card style={styles.chainCard}>
-        <OptionChainHeader />
         {switching ? (
           <View style={styles.loadingBox}>
             <ActivityIndicator color={colors.accent} />
@@ -169,7 +178,14 @@ export function OptionsSection({ symbol, active }: DetailSectionProps) {
         ) : (
           <>
             {rows.map((c, i) => (
-              <OptionChainRow key={`${c.strike}:${i}`} contract={c} last={i === rows.length - 1} />
+              <OptionChainRow key={`${c.strike}:${i}`} contract={c} last={i === rows.length - 1}
+                pair={spread && selected[0] && selected[0].strike !== c.strike ? buildStrategy(strategy, selected[0], c) : undefined}
+                selected={selected.some(item => item.strike === c.strike)} onPress={() => {
+                  if (!spread) { setSelected([c]); setDetailOpen(true); return }
+                  if (selected.length === 0) { setSelected([c]); setDetailOpen(false); return }
+                  if (selected[0].strike === c.strike) { setSelected([]); setDetailOpen(false); return }
+                  setSelected([selected[0], c]); setDetailOpen(true)
+                }} />
             ))}
             {canToggle ? (
               <Pressable style={styles.foot} onPress={() => setShowAll(!showAll)} hitSlop={8}>
@@ -221,10 +237,6 @@ const styles = StyleSheet.create({
   expiryRow: {
     gap: space.sm,
     paddingVertical: 2, // room for the chip hairline; the pills own their height
-  },
-  toggleWrap: {
-    // SegmentedControl stretches; give it the full row like the board's A1/A2 toggle
-    alignSelf: 'stretch',
   },
   chainCard: {
     padding: 0,

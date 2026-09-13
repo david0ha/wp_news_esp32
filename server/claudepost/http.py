@@ -1169,6 +1169,22 @@ class DeskHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, "asOf": int(self.desk.clock.now()),
                               "result": result})
 
+    def h_alpaca_options(self, _match, query) -> None:
+        symbol = _query_str(query, "symbol") or ""
+        raw = _query_str(query, "date")
+        expiration = None
+        if raw is not None:
+            try:
+                expiration = int(raw)
+            except ValueError:
+                raise BadRequest(message="date must be epoch seconds") from None
+        fresh = _query_str(query, "fresh")
+        if fresh not in (None, "0", "1"):
+            raise BadRequest(message="fresh must be 0 or 1")
+        result = self.desk.alpaca_options.options(symbol, expiration, fresh=fresh == "1")
+        self._send_json(200, {"ok": True, "asOf": int(self.desk.clock.now()),
+                              "result": result})
+
     # -- handlers: operations ---------------------------------------------
     def h_state(self, _match, _query) -> None:
         self._send_json(200, self.desk.state())
@@ -1511,6 +1527,8 @@ _ROUTES = [
         "GET": ("producer", DeskHTTPRequestHandler.h_quotes)}),
     (re.compile(r"^/api/market/summary\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_market_summary)}),
+    (re.compile(r"^/api/market/options/alpaca\Z"), {
+        "GET": ("producer", DeskHTTPRequestHandler.h_alpaca_options)}),
     (re.compile(r"^/api/market/options\Z"), {
         "GET": ("producer", DeskHTTPRequestHandler.h_market_options)}),
 

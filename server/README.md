@@ -89,6 +89,23 @@ No file is a complete configuration too — `/api/quotes` answers
 if it changes underneath the process, so a key dropped in or rotated later
 takes effect on the next request.
 
+The same credential powers authenticated `GET /api/market/options/alpaca`.
+Pass `symbol` and optionally `date` (UTC-midnight epoch seconds); `fresh=1`
+bypasses the 15-second chain cache. Its `result` contains
+calls and puts, all available expiration dates, quotes, greeks and timestamps.
+Adjusted roots are excluded. Contract sizes are verified against the selected
+expiration through Alpaca contract metadata; unavailable sizes are null, and
+non-100 sizes remain explicit so the app can withhold standard-contract math.
+Metadata tries the paper host first and the live host only on 401/403; both
+requests are read-only and use the same credential. Metadata has its own
+15-second cache and shares the request deadline. Volume and open interest are null because Alpaca
+snapshots do not supply them. The optional underlying spot uses IEX.
+An OPRA permission denial retries the indicative feed, whose trades are delayed
+and whose quotes are modified; the response always identifies the actual feed.
+No credential or contracts returns `404 no_options`, an unavailable expiration
+returns `404 no_expiration`, and an incomplete or failed upstream response
+returns `502 options_upstream`. The existing Yahoo endpoint is independent.
+
 **2. The agent's own credential.** `~/.claudepost/agent.env`, also 0600:
 
 ```sh
