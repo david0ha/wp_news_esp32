@@ -9,6 +9,7 @@ import { InfoRow } from '../../components/InfoRow'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { ScreenMessage } from '../../components/ScreenMessage'
 import { NoBoardYet } from '../../components/NoBoardYet'
+import { DeskPreviewSection } from '../../components/board/DeskPreviewSection'
 import { PaperSection } from '../../components/board/PaperSection'
 import { useDevice } from '../../lib/device'
 import {
@@ -215,8 +216,11 @@ export default function Board() {
         {/* This section is about the DESK, not the board. A phone with no board still has papers
             worth putting on one later, and the publish itself works with nothing attached —
             `pollBoard` is null and `runPaperPublish` skips it. */}
-        <PaperSection pollBoard={null} />
-        <NoBoardYet />
+        <ScrollView contentContainerStyle={styles.scroll}>
+          <DeskPreviewSection />
+          <PaperSection pollBoard={null} />
+          <NoBoardYet />
+        </ScrollView>
       </Screen>
     )
   }
@@ -240,8 +244,11 @@ export default function Board() {
     return (
       <Screen edges={['top']}>
         <Header baseUrl={baseUrl} />
-        <PaperSection pollBoard={() => client.refresh()} />
-        <ScreenMessage loading={!error} error={error} message={t.board.loading} onRetry={retry} />
+        <ScrollView contentContainerStyle={styles.scroll}>
+          <DeskPreviewSection />
+          <PaperSection pollBoard={() => client.refresh()} />
+          <ScreenMessage loading={!error} error={error} message={t.board.loading} onRetry={retry} />
+        </ScrollView>
       </Screen>
     )
   }
@@ -260,6 +267,7 @@ export default function Board() {
           <RefreshControl refreshing={refreshing} onRefresh={onPullRefresh} tintColor={colors.accent} />
         }
       >
+        <DeskPreviewSection />
         {/* Above the device rows: what is on the glass is the first thing this tab is about. */}
         <PaperSection pollBoard={() => client.refresh()} />
 

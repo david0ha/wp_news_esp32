@@ -448,6 +448,7 @@ const held: Position = {
 
 function fakeDesk(over: Partial<DeskClient> = {}): DeskClient {
   return {
+    boardPreview: async () => null,
     getSettings: async () => ({ lang: 'en', paperRefreshHours: null }),
     putSettings: async () => ({ lang: 'en', paperRefreshHours: null }),
     positions: async () => book([held]),

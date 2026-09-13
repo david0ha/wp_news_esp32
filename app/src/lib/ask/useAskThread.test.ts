@@ -95,6 +95,7 @@ function makeFakeClient() {
   const commandNotes: jest.MockedFunction<DeskClient['commandNotes']> = jest.fn()
   const publishNow: jest.MockedFunction<DeskClient['publishNow']> = jest.fn()
   const client: DeskClient = {
+    boardPreview: notImplemented('boardPreview'),
     getSettings: notImplemented('getSettings'),
     putSettings: notImplemented('putSettings'),
     positions: notImplemented('positions'),

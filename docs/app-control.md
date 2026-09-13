@@ -330,6 +330,21 @@ answering but has not finished coming up. It should be unreachable — this serv
 boot path that has already allocated the framebuffer — and it is named rather than assumed away
 because the alternative leaves a client staring at a body it cannot parse.
 
+### Board-tab preview without a connected board
+
+The Board tab also shows the desk's published paper independently of device setup or reachability.
+It reads `current` from authenticated `GET /api/editions`, obtains the sheet names from
+`GET /api/editions/<eid>`, and displays the normal A1 and A2 proofs through
+`GET /api/editions/<eid>/proof/<name>`. Image requests carry the same bearer header as metadata.
+These are the images produced by the firmware's shared typesetter, at 1200 × 1600; PNG and BMP
+are both accepted. Diagnostic STALE/OFFLINE sheets are excluded.
+
+This preview means **what a board using this desk would receive on its next successful fetch**.
+It does not confirm what is on the physical panel. `staged` is deliberately not selected: it has
+not replaced the edition served by `/news.json`. Switching A1/A2 or enlarging the image only
+changes the phone's view and sends no command to the board. The separate live-screen preview
+above still reads the device framebuffer and still requires an awake board.
+
 ## `POST /api/sleep`
 
 ```json

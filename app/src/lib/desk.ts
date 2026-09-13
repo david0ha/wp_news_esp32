@@ -481,7 +481,15 @@ export interface DeskClientOptions {
   timeoutMs?: number
 }
 
+/** The current edition's normal board sheets; headers stay in memory, never in URLs. */
+export interface BoardPreview {
+  editionId: string
+  sheets: Array<{ page: 0 | 1; name: string; uri: string; headers: Record<string, string> }>
+}
+
 export interface DeskClient {
+  /** What a board polling now would receive, independent of its connection status. */
+  boardPreview(): Promise<BoardPreview | null>
   getSettings(): Promise<DeskSettings>
   putSettings(settings: DeskSettings): Promise<DeskSettings>
   /** The book of positions the desk holds. */
@@ -755,6 +763,67 @@ export function createDeskClient(opts: DeskClientOptions): DeskClient {
   }
 
   return {
+    async boardPreview(): Promise<BoardPreview | null> {
+      async function read(path: string): Promise<Record<string, unknown>> {
+        let res: Response
+        try {
+          res = await send(path, { method: 'GET' })
+        } catch {
+          throw new DeskError('transport', 'board preview could not reach the desk')
+        }
+        if (!res.ok) {
+          const error = await refusal(res, 'board preview')
+          const redact = (value: string | undefined) =>
+            opts.token ? value?.split(opts.token).join('<redacted>') : value
+          throw new DeskError(
+            error.code,
+            error.message,
+            error.status,
+            redact(error.error),
+            redact(error.detail),
+          )
+        }
+        try {
+          const body: unknown = JSON.parse(await res.text())
+          if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
+            return body as Record<string, unknown>
+          }
+        } catch {
+          // Never quote a server document in an error shown to the reader.
+        }
+        throw new DeskError('bad_json', 'board preview did not answer a JSON object', res.status)
+      }
+
+      const listing = await read('/api/editions')
+      if (listing.current === null) return null
+      const editionId = listing.current
+      if (typeof editionId !== 'string' || !/^[0-9a-f]{16}$/.test(editionId)) {
+        throw new DeskError('bad_json', 'board preview answered an invalid edition id')
+      }
+      const path = `/api/editions/${editionId}`
+      const detail = await read(path)
+      if (!Array.isArray(detail.sheets)) {
+        throw new DeskError('bad_json', 'board preview answered an invalid sheet list')
+      }
+      const names = detail.sheets
+      const sheets: BoardPreview['sheets'] = []
+      // These are the normal sheets emitted by sim/main_sim.c. Its stale/offline
+      // and sparse test variants must never masquerade as the published page.
+      for (const page of [0, 1] as const) {
+        const stem = page === 0 ? '01_a1_full' : '02_a2_full'
+        const name = [`${stem}.png`, `${stem}.bmp`].find((n) => names.includes(n))
+        if (name) {
+          sheets.push({
+            page,
+            name,
+            uri: `${baseUrl}${path}/proof/${name}`,
+            headers: { Authorization: `Bearer ${opts.token}` },
+          })
+        }
+      }
+      return { editionId, sheets }
+    },
+
     async getSettings(): Promise<DeskSettings> {
       return settingsOf(await send('/api/settings', { method: 'GET' }))
     },
