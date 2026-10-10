@@ -1,16 +1,15 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { colors, fonts, radius, space, type } from '../../theme'
-import { parseMarkdown, type Span } from '../../lib/ask/markdown'
+import { type Block, type Span } from '../../lib/ask/markdown'
 
 /**
- * The desk's answer, drawn.
+ * One message of the desk's answer, drawn: the blocks `bubblesOf` put in one bubble.
  *
  * The type ramp is the APP's — Inter and `theme.ts` — and not the edition's. A Korean answer sets
  * in whatever face the platform falls back to for Hangul, exactly as the rest of this app's chrome
  * does in Korean; `EditionTypeProvider` belongs to the paper and stops at the Today tab.
  */
-export function Answer({ markdown }: { markdown: string }) {
-  const blocks = parseMarkdown(markdown)
+export function Answer({ blocks }: { blocks: Block[] }) {
   return (
     <View style={styles.root}>
       {blocks.map((block, i) => {
@@ -79,14 +78,16 @@ function renderSpan(span: Span, i: number) {
 }
 
 const styles = StyleSheet.create({
-  root: { gap: space.md },
+  root: { gap: space.sm },
   subheading: { ...type.headingSm, fontSize: 15, lineHeight: 20 },
   bold: { fontFamily: fonts.semibold },
   italic: { fontStyle: 'italic' },
   list: { gap: space.xs },
   item: { flexDirection: 'row', gap: space.sm },
   dot: { color: colors.textDim },
-  itemText: { flex: 1 },
+  // `flexShrink` and not `flex: 1`: the bubble shrinks to its content, and an item with no width
+  // of its own was measured at nothing, wrapped early and ran out of the bottom of the bubble.
+  itemText: { flexShrink: 1 },
   codeBlock: {
     backgroundColor: colors.surfaceAlt,
     borderRadius: radius.sm,

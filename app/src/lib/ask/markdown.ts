@@ -137,3 +137,30 @@ export function parseMarkdown(src: string): Block[] {
   closePara()
   return blocks
 }
+
+/**
+ * The blocks of one answer, grouped into the messages it is drawn as.
+ *
+ * ONE BLOCK IS ONE BUBBLE, with two exceptions, and both are about a block that says nothing
+ * without its neighbour: a heading stays with whatever is under it, and a list or a code block
+ * stays with the paragraph that introduces it. Everything else separates, which is what turns a
+ * four-paragraph answer into four short messages rather than one tall one.
+ */
+export function bubblesOf(blocks: Block[]): Block[][] {
+  const out: Block[][] = []
+  for (const block of blocks) {
+    const open = out[out.length - 1]
+    const last = open?.[open.length - 1]
+    const joins =
+      last !== undefined &&
+      (last.kind === 'heading' ||
+        // Only straight after its own lead-in: a second list, or a list after a list's code
+        // block, is a new thought.
+        ((block.kind === 'bullet' || block.kind === 'code') &&
+          last.kind === 'para' &&
+          open.length === 1))
+    if (joins) open.push(block)
+    else out.push([block])
+  }
+  return out
+}

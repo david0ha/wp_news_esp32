@@ -997,8 +997,11 @@ export const en = {
     title: 'Ask the desk',
     /** The Today header's button. One word, because it sits beside a masthead. */
     open: 'Ask',
-    placeholder: 'Ask about today’s paper — or say what you want changed.',
+    /** One line of a pill-shaped field. What the two kinds of message do is `empty`'s to say. */
+    placeholder: 'Message the desk',
     send: 'Send',
+    /** Who the left-hand bubbles are from. */
+    desk: 'Desk',
     newThread: 'New question',
     /** The screen with nothing on it yet. It says what the two kinds of message do. */
     empty:

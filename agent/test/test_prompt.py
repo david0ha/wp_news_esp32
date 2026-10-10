@@ -512,6 +512,16 @@ class AskSectionTest(unittest.TestCase):
         self.assertIn("copy `current/news.json` to `news.json`", out)
         self.assertIn("Do not write\n   `news.json` for an answer-only message.", out)
 
+    def test_the_answer_is_written_as_messages(self):
+        # The phone draws answer.md as chat bubbles, one per paragraph. A reply
+        # written as a report -- a heading, a table, one long block -- arrives as
+        # a single wall of text in a bubble, which is what this rule is for.
+        out = self._prompt()
+        self.assertIn("one bubble per paragraph", out)
+        self.assertIn("headings, no tables, no preamble", out)
+        self.assertLess(out.index("one bubble per paragraph"),
+                        out.index("Decide whether the message asks"))
+
     def test_the_files_it_was_given_are_named(self):
         out = self._prompt()
         self.assertIn("current/news.json", out)

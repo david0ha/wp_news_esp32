@@ -9,11 +9,11 @@ import {
   TextInput,
   View,
 } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Screen } from '../components/Screen'
 import { ScreenMessage } from '../components/ScreenMessage'
 import { BackButton } from '../components/BackButton'
-import { Button } from '../components/Button'
 import { TurnRow } from '../components/ask/TurnRow'
 import { fill, useStrings } from '../i18n'
 import { MAX_COMMAND_TEXT } from '../lib/desk'
@@ -117,6 +117,7 @@ export default function AskScreen() {
   }
 
   const tooLong = draft.trim().length > MAX_COMMAND_TEXT
+  const canSend = draft.trim() !== '' && !tooLong
 
   return (
     <Screen>
@@ -141,27 +142,43 @@ export default function AskScreen() {
               {fill(t.ask.tooLong, { max: String(MAX_COMMAND_TEXT) })}
             </Text>
           ) : null}
-          <TextInput
-            style={styles.input}
-            value={draft}
-            onChangeText={setDraft}
-            placeholder={t.ask.placeholder}
-            placeholderTextColor={colors.textFaint}
-            multiline
-            // The desk's own ceiling, enforced here so a long paste is refused by the composer
-            // rather than by a 400 four seconds later.
-            maxLength={MAX_COMMAND_TEXT}
-          />
-          <Button
-            label={t.ask.send}
-            onPress={onSend}
-            disabled={draft.trim() === '' || tooLong}
-          />
+          {/* A messenger's composer: the field and a round send beside it, on one row, so the
+              conversation keeps the height a full-width button used to take. */}
+          <View style={styles.composerRow}>
+            <TextInput
+              style={styles.input}
+              value={draft}
+              onChangeText={setDraft}
+              placeholder={t.ask.placeholder}
+              placeholderTextColor={colors.textFaint}
+              multiline
+              // The desk's own ceiling, enforced here so a long paste is refused by the composer
+              // rather than by a 400 four seconds later.
+              maxLength={MAX_COMMAND_TEXT}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.ask.send}
+              accessibilityState={{ disabled: !canSend }}
+              disabled={!canSend}
+              onPress={onSend}
+              hitSlop={6}
+              style={({ pressed }) => [
+                styles.send,
+                !canSend && styles.sendDisabled,
+                pressed && styles.sendPressed,
+              ]}
+            >
+              <Ionicons name="arrow-up" size={20} color={colors.ink} />
+            </Pressable>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Screen>
   )
 }
+
+const SEND_SIZE = 42
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
@@ -182,25 +199,41 @@ const styles = StyleSheet.create({
   },
   newThreadPressed: { opacity: 0.7 },
   newThreadLabel: { fontFamily: fonts.semibold, fontSize: 13, color: colors.accent },
-  scroll: { paddingHorizontal: layout.gutter, paddingBottom: space.xl },
+  scroll: { paddingHorizontal: layout.gutter, paddingBottom: space.lg },
   empty: { color: colors.textDim, paddingTop: space.xl },
   composer: {
     gap: space.sm,
     paddingHorizontal: layout.gutter,
-    paddingTop: space.md,
-    paddingBottom: space.lg,
+    paddingTop: space.sm,
+    paddingBottom: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
     backgroundColor: colors.surface,
   },
+  // Bottom-aligned: a draft that grows to five lines keeps the button beside its last one.
+  composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: space.sm },
   input: {
     ...type.body,
+    flex: 1,
     maxHeight: 140,
-    minHeight: 44,
+    minHeight: SEND_SIZE,
     backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.md,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
+    borderRadius: SEND_SIZE / 2,
+    paddingHorizontal: space.lg,
+    // Set on both edges: iOS gives a multiline field a top inset of its own and the single line
+    // sits low in the pill without this.
+    paddingTop: 10,
+    paddingBottom: 10,
   },
+  send: {
+    width: SEND_SIZE,
+    height: SEND_SIZE,
+    borderRadius: SEND_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.navy,
+  },
+  sendPressed: { backgroundColor: colors.navyPressed },
+  sendDisabled: { opacity: 0.35 },
   tooLong: { ...type.caption, color: colors.down, fontFamily: fonts.medium },
 })
