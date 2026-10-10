@@ -842,8 +842,9 @@ export const ko: Strings = {
   ask: {
     title: '데스크에 묻기',
     open: '묻기',
-    placeholder: '오늘 신문에 대해 묻거나, 바꾸고 싶은 것을 적으세요.',
+    placeholder: '데스크에 메시지 보내기',
     send: '보내기',
+    desk: '데스크',
     newThread: '새 질문',
     empty:
       '오늘 신문에 대해 물으면 데스크가 답합니다. “소송을 톱으로”, “CFO 발언을 넣어줘”처럼 바꿔 달라고 하면 신문을 다시 씁니다.',

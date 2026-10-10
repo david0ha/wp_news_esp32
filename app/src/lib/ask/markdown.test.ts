@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals'
-import { parseMarkdown } from './markdown'
+import { bubblesOf, parseMarkdown } from './markdown'
 
 const plain = (text: string) => ({ text, bold: false, italic: false, code: false })
 
@@ -79,5 +79,32 @@ describe('parseMarkdown', () => {
   it('reads an empty answer as no blocks', () => {
     expect(parseMarkdown('')).toEqual([])
     expect(parseMarkdown('   \n\n  ')).toEqual([])
+  })
+})
+
+describe('bubblesOf', () => {
+  const kinds = (src: string) => bubblesOf(parseMarkdown(src)).map((b) => b.map((x) => x.kind))
+
+  it('gives every paragraph a bubble of its own', () => {
+    expect(kinds('one\n\ntwo\n\nthree')).toEqual([['para'], ['para'], ['para']])
+  })
+
+  it('keeps a list in the bubble of the sentence that introduces it', () => {
+    // "Three things moved it:" alone in a bubble, and the three things in the next, reads as two
+    // messages about different subjects.
+    expect(kinds('first\n\nThree things:\n- a\n- b')).toEqual([['para'], ['para', 'bullet']])
+  })
+
+  it('keeps a heading with the block under it', () => {
+    expect(kinds('# Why\n\nbecause\n\nand more')).toEqual([['heading', 'para'], ['para']])
+  })
+
+  it('lets a list or a heading with nothing beside it stand alone', () => {
+    expect(kinds('- a\n- b')).toEqual([['bullet']])
+    expect(kinds('# Why')).toEqual([['heading']])
+  })
+
+  it('reads an empty answer as no bubbles', () => {
+    expect(bubblesOf([])).toEqual([])
   })
 })
